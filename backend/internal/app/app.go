@@ -122,6 +122,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	}
 
 	sched := scheduler.New(db, log, cfg.MaxConcurrentRuns)
+	foreman.Sched = sched
 	foreman.Register(sched)
 
 	srv := httpx.New(cfg, log)

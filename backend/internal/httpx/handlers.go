@@ -1,17 +1,22 @@
 package httpx
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
+	"legos-factory/backend/internal/execenv"
 	"legos-factory/backend/internal/orchestration"
 	"legos-factory/backend/internal/project"
 	"legos-factory/backend/internal/workorder"
 )
+
+func shortUUID() string { return uuid.NewString()[:12] }
 
 // ---- DTOs ----
 
@@ -117,10 +122,12 @@ func (s *Server) handleCreateWorkOrder(c echo.Context) error {
 	}
 	u := currentUser(c)
 	// verify project exists (authorization enforced at workspace boundary)
-	if _, err := s.ProjRepo.Get(c.Request().Context(), req.ProjectID); err != nil {
+	proj, err := s.ProjRepo.Get(c.Request().Context(), req.ProjectID)
+	if err != nil {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", "unknown project_id")
 	}
 	wo := &workorder.WorkOrder{
+		ID:             "wo_" + shortUUID(),
 		ProjectID:      req.ProjectID,
 		Title:          req.Title,
 		Objective:      req.Objective,
@@ -133,6 +140,10 @@ func (s *Server) handleCreateWorkOrder(c echo.Context) error {
 	}
 	if err := s.WORepo.Create(c.Request().Context(), wo); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not create work order")
+	}
+	// isolated workspace: builders never touch the project source dir
+	if _, err := execenv.Prepare(c.Request().Context(), s.Cfg.DataDir, wo.ID, proj.RepoURL); err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "WORKSPACE_FAILED", fmt.Sprintf("could not prepare workspace: %v", err))
 	}
 	return c.JSON(http.StatusCreated, wo)
 }
@@ -302,8 +313,11 @@ func (s *Server) takeWO(c echo.Context) (*workorder.WorkOrder, error) {
 }
 
 func mapDomainError(c echo.Context, err error) error {
-	if workorder.ErrNotFound == err {
+	if errors.Is(err, workorder.ErrNotFound) {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
+	}
+	if errors.Is(err, orchestration.ErrStateConflict) {
+		return errorJSON(c, http.StatusConflict, "INVALID_STATE_TRANSITION", err.Error())
 	}
 	msg := err.Error()
 	if strings.Contains(msg, "INVALID_STATE_TRANSITION") {

@@ -6,6 +6,7 @@ package orchestration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -30,6 +31,15 @@ const (
 
 // MaxRevisionCycles bounds the fix/inspect remediation loop.
 const MaxRevisionCycles = 2
+
+// ErrStateConflict marks domain rejections that indicate an invalid
+// operation for the current state (mapped to HTTP 409).
+var ErrStateConflict = errors.New("STATE_CONFLICT")
+
+func stateConflict(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrStateConflict, fmt.Sprintf(format, args...))
+}
+
 
 type Foreman struct {
 	WO          *workorder.Repository
@@ -198,12 +208,51 @@ func (f *Foreman) handleImplement(ctx context.Context, job scheduler.Job) error 
 			return err
 		}
 	}
+	// first transition in: record the failing baseline before any change,
+	// so verification evidence is revision-specific from the start
+	if err := f.recordBaseline(ctx, wo); err != nil {
+		return err
+	}
 	provider, model := f.Model(agents.RoleBuilder, wo)
 	if _, _, err := f.runAgent(ctx, wo, agents.RoleBuilder, provider, model, implementPrompt(wo, job), nil, job.TaskID); err != nil {
 		return err
 	}
 	f.event(wo.ID, "builder", "task_completed", fmt.Sprintf("Task %s implemented", job.TaskID), nil)
 	return f.maybeAdvanceAfterImplementation(ctx, wo)
+}
+
+// recordBaseline runs the deterministic checks once, before implementation,
+// when no verification evidence exists yet. A passing baseline is recorded
+// as PASS — it still counts as evidence for the original revision.
+func (f *Foreman) recordBaseline(ctx context.Context, wo *workorder.WorkOrder) error {
+	var existing int
+	if err := f.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM quality_checks WHERE wo_id = ?`, wo.ID).Scan(&existing); err != nil {
+		return err
+	}
+	if existing > 0 {
+		return nil
+	}
+	proj, err := f.Proj.Get(ctx, wo.ProjectID)
+	if err != nil {
+		return err
+	}
+	profile, err := quality.ParseProfile(proj.QualityProfile, proj.Language)
+	if err != nil {
+		return err
+	}
+	if len(profile.Checks) == 0 {
+		return nil
+	}
+	f.event(wo.ID, "builder", "baseline_started", "Recording baseline verification (pre-change)", nil)
+	for _, c := range profile.Checks {
+		r := quality.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
+		if err := f.saveCheck(ctx, wo, c, r); err != nil {
+			return err
+		}
+		f.event(wo.ID, "builder", "baseline_"+strings.ToLower(string(r.Outcome)),
+			fmt.Sprintf("baseline %s → %s", c.Name, r.Outcome), map[string]any{"command": c.Command})
+	}
+	return nil
 }
 
 // maybeAdvanceAfterImplementation enqueues newly ready tasks or, when all
@@ -418,7 +467,7 @@ func (f *Foreman) ApprovePlan(ctx context.Context, woID string) error {
 		return err
 	}
 	if len(tasks) == 0 {
-		return fmt.Errorf("plan has no tasks; approve requires a reviewed plan")
+		return stateConflict("plan has no tasks; approve requires a reviewed plan")
 	}
 	if err := f.step(ctx, wo, workorder.StateArchitectReview, workorder.StateQueued, "human", "Plan approved; execution authorized"); err != nil {
 		return err
@@ -453,7 +502,7 @@ func (f *Foreman) AnswerClarification(ctx context.Context, woID, answer string) 
 		return err
 	}
 	if wo.State != workorder.StateWaitingForHuman {
-		return fmt.Errorf("WO %s is not waiting for clarification (state %s)", woID, wo.State)
+		return stateConflict("WO %s is not waiting for clarification (state %s)", woID, wo.State)
 	}
 	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"clarif_answer": answer}); err != nil {
 		return err
@@ -472,7 +521,7 @@ func (f *Foreman) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		return err
 	}
 	if wo.State != workorder.StateNeedsHumanReview {
-		return fmt.Errorf("WO %s is not awaiting a human PR decision (state %s)", woID, wo.State)
+		return stateConflict("WO %s is not awaiting a human PR decision (state %s)", woID, wo.State)
 	}
 	switch decision {
 	case "approve":
@@ -507,7 +556,7 @@ func (f *Foreman) Cancel(ctx context.Context, woID string) error {
 		return err
 	}
 	if wo.State.Terminal() {
-		return fmt.Errorf("WO %s already terminal (%s)", woID, wo.State)
+		return stateConflict("WO %s already terminal (%s)", woID, wo.State)
 	}
 	if err := workorder.MustTransition(wo.State, workorder.StateCancelled); err != nil {
 		return err

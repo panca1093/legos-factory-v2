@@ -51,6 +51,7 @@ func TestConcurrentClaimingNoDoubleExecution(t *testing.T) {
 		}
 		ids = append(ids, id)
 	}
+	_ = ids
 	s.Start(ctx)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -75,8 +76,6 @@ func TestConcurrentClaimingNoDoubleExecution(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	s.Stop()
-	var doubleExec atomic.Int32
-	_ = doubleExec
 	var total int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE state = 'COMPLETED'`).Scan(&total); err != nil || total != 5 {
 		t.Fatalf("expected 5 completed, got %d err=%v", total, err)
