@@ -1,0 +1,25 @@
+# Go
+backend/factory
+backend/tests/integration/*.test
+*.test
+*.out
+
+# Local data
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+
+# IDE
+.idea/
+.DS_Store
+
+# Temporary build artifacts
+/tmp/
