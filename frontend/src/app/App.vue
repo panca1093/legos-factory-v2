@@ -12,8 +12,15 @@ const stop = watch(
     else factory.stopLive();
   },
 );
-onMounted(() => session.bootstrap());
+function unauthorized() {
+  session.expire();
+}
+onMounted(() => {
+  window.addEventListener("factory:unauthorized", unauthorized);
+  void session.bootstrap();
+});
 onBeforeUnmount(() => {
+  window.removeEventListener("factory:unauthorized", unauthorized);
   stop();
   factory.stopLive();
 });

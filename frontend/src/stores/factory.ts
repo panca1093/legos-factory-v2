@@ -33,12 +33,21 @@ export const useFactory = defineStore("factory", {
     loading: false,
     error: "" as string,
     selectedID: "",
+    workspaceEpoch: 0,
     requestID: 0,
     stopStream: null as (() => void) | null,
     liveEvents: [] as LiveEvent[],
     connected: false,
   }),
   actions: {
+    resetWorkspace() {
+      const requestID = this.requestID + 1;
+      const epoch = this.workspaceEpoch + 1;
+      this.stopLive();
+      this.$reset();
+      this.requestID = requestID;
+      this.workspaceEpoch = epoch;
+    },
     startLive() {
       if (this.stopStream) return;
       this.stopStream = subscribe(
@@ -70,21 +79,27 @@ export const useFactory = defineStore("factory", {
       this.error = "";
     },
     async refreshProjects() {
+      const epoch = this.workspaceEpoch;
       const res = await api.get<{ projects: Project[] }>("/api/v1/projects");
-      this.projects = res.projects ?? [];
+      if (epoch === this.workspaceEpoch) this.projects = res.projects ?? [];
     },
     async refreshWorkOrders() {
+      const epoch = this.workspaceEpoch;
       const res = await api.get<{ work_orders: WorkOrder[] }>(
         "/api/v1/work-orders",
       );
-      this.workOrders = res.work_orders ?? [];
+      if (epoch === this.workspaceEpoch)
+        this.workOrders = res.work_orders ?? [];
     },
     async refreshOverview() {
-      this.overview = await api.get<Overview>("/api/v1/overview");
+      const epoch = this.workspaceEpoch;
+      const overview = await api.get<Overview>("/api/v1/overview");
+      if (epoch === this.workspaceEpoch) this.overview = overview;
     },
     async refreshModels() {
+      const epoch = this.workspaceEpoch;
       const res = await api.get<{ models: ModelInfo[] }>("/api/v1/models");
-      this.models = res.models ?? [];
+      if (epoch === this.workspaceEpoch) this.models = res.models ?? [];
     },
     async createProject(input: {
       name: string;

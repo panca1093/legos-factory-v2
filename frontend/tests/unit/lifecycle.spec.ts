@@ -89,3 +89,32 @@ describe("request and stream ownership", () => {
     expect(f.workOrders).toEqual([]);
   });
 });
+
+it("invalidates an expired authenticated session, closes its stream and shows sign-in recovery", async () => {
+  const { mount, flushPromises } = await import("@vue/test-utils");
+  const App = (await import("../../src/app/App.vue")).default;
+  const session = useSession();
+  session.user = { id: "u", name: "User", email: "u@x", role: "OWNER" };
+  session.loading = false;
+  vi.spyOn(session, "bootstrap").mockResolvedValue();
+  const f = useFactory();
+  f.startLive();
+  const w = mount(App, {
+    global: { stubs: { RouterView: { template: "<div />" } } },
+  });
+  fetchMock.mockResolvedValue({
+    ok: false,
+    status: 401,
+    text: async () =>
+      JSON.stringify({
+        error: { code: "UNAUTHENTICATED", message: "Session expired" },
+      }),
+  });
+  await expect(f.refreshOverview()).rejects.toMatchObject({ status: 401 });
+  await flushPromises();
+  expect(session.canWrite).toBe(false);
+  expect(session.isAdmin).toBe(false);
+  expect(sources[0].close).toHaveBeenCalledOnce();
+  expect(w.text()).toContain("Sign in");
+  w.unmount();
+});

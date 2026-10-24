@@ -37,12 +37,13 @@ export const useSession = defineStore("session", {
         this.loading = false;
       }
     },
+    expire() {
+      this.user = null;
+      useFactory().resetWorkspace();
+    },
     async logout() {
       await api.post("/api/v1/auth/logout");
-      this.user = null;
-      const factory = useFactory();
-      factory.stopLive();
-      factory.$reset();
+      this.expire();
     },
   },
 });

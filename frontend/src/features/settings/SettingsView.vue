@@ -43,7 +43,9 @@ const tab = computed(() =>
 const loading = ref(true),
   error = ref(""),
   saved = ref(false),
-  busy = ref(false);
+  busy = ref(false),
+  initialized = ref(false),
+  loadError = ref(false);
 const dollars = computed({
   get: () => config.value.budget_limit_micros / 1000000,
   set: (v: number) => {
@@ -59,22 +61,32 @@ const catalog = computed(() =>
 async function load() {
   loading.value = true;
   error.value = "";
-  try {
-    const [value] = await Promise.all([
-      factory.loadSettings(),
-      factory.refreshModels(),
-      factory.refreshOverview(),
-    ]);
-    config.value = value;
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    loading.value = false;
+  loadError.value = false;
+  const results = await Promise.allSettled([
+    factory.loadSettings(),
+    factory.refreshModels(),
+    factory.refreshOverview(),
+  ]);
+  const settingsResult = results[0];
+  initialized.value = settingsResult.status === "fulfilled";
+  if (settingsResult.status === "fulfilled")
+    config.value = settingsResult.value;
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length) {
+    loadError.value = true;
+    error.value = failures
+      .map((result) =>
+        result.reason instanceof Error
+          ? result.reason.message
+          : String(result.reason),
+      )
+      .join(" · ");
   }
+  loading.value = false;
 }
 onMounted(load);
 async function save() {
-  if (!session.isAdmin || busy.value) return;
+  if (!session.isAdmin || busy.value || !initialized.value) return;
   if (
     !Number.isFinite(config.value.budget_limit_micros) ||
     config.value.budget_limit_micros < 0
@@ -134,11 +146,7 @@ function toggleAllowed(id: string, checked: boolean) {
       <template v-else
         ><div v-if="error" class="error-state" role="alert">
           {{ error
-          }}<button
-            v-if="!config.architect_model && !factory.models.length"
-            class="btn small"
-            @click="load"
-          >
+          }}<button v-if="loadError" class="btn small" @click="load">
             Try again
           </button>
         </div>
@@ -163,7 +171,7 @@ function toggleAllowed(id: string, checked: boolean) {
                 ><select
                   :id="`set-${role}`"
                   v-model="config[`${role}_model`]"
-                  :disabled="!session.isAdmin || busy"
+                  :disabled="!session.isAdmin || busy || !initialized"
                 >
                   <option value="">Backend default</option>
                   <option
@@ -219,7 +227,7 @@ function toggleAllowed(id: string, checked: boolean) {
                       `${m.provider_id}/${m.model_id}`,
                     )
                   "
-                  :disabled="!session.isAdmin || busy"
+                  :disabled="!session.isAdmin || busy || !initialized"
                   @change="
                     toggleAllowed(
                       `${m.provider_id}/${m.model_id}`,
@@ -440,7 +448,7 @@ function toggleAllowed(id: string, checked: boolean) {
                   type="number"
                   min="0"
                   step="0.01"
-                  :disabled="!session.isAdmin || busy"
+                  :disabled="!session.isAdmin || busy || !initialized"
                 />
               </div>
               <div class="form-group">
@@ -466,7 +474,7 @@ function toggleAllowed(id: string, checked: boolean) {
           <button
             class="btn primary"
             data-test="save-settings"
-            :disabled="busy || !session.isAdmin"
+            :disabled="busy || !session.isAdmin || !initialized"
             @click="save"
           >
             <Save class="icon" />{{

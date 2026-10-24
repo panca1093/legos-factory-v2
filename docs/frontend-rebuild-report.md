@@ -27,18 +27,20 @@ Unchanged Go endpoints and cookie credentials support session bootstrap/dev logi
 
 The rebuild owns one global event subscription, closes per-order streams on identity changes and unmount, and prevents old detail responses from overwriting a newer selection. Creation results remain accessible after follow-up planning or list-refresh failures. Viewer/admin/creator boundaries are reflected in controls and preserved at the unchanged API boundary.
 
+Settings initialization cannot save blank defaults on a loading failure; independently loaded settings survive ancillary discovery failures. Authenticated API 401 responses invalidate the session, reset workspace state, close live streams and return the UI to sign-in.
+
 The backend and database migrations were not modified. The archived app remains intact. Nothing was pushed, published or merged.
 
 ## Verification
 
-Final verification results are recorded below after the final browser recapture and code review.
+Final verification on 2026-10-24 after the independent review fixes:
 
-- `npm run typecheck`: strict application/component type checking.
-- `./node_modules/.bin/tsc -p tsconfig.e2e.json --noEmit`: browser-test configuration and fixture type checking.
-- `npm run lint`: ESLint, TypeScript and Vue rules.
-- `npm test`: Vitest plus Vue Test Utils.
-- `npm run build`: type checking and Vite production assets in `frontend/dist`, compatible with the existing build script.
-- `npm run e2e`: Playwright; separate backend on port 18081, separate Vite instance on 15173, separate prototype server on 15174, temporary data and disposable fixture repositories.
+- `npm run typecheck`: passed, strict application/component type checking.
+- `./node_modules/.bin/tsc -p tsconfig.e2e.json --noEmit`: passed, browser-test configuration and fixture type checking.
+- `npm run lint`: passed, ESLint, TypeScript and Vue rules.
+- `npm test`: passed, 15 files / 43 tests, Vitest plus Vue Test Utils.
+- `npm run build`: passed, type checking and Vite production assets in `frontend/dist`, compatible with the existing build script.
+- `npm run e2e`: passed, 9 tests in 28.5 seconds; Playwright; separate backend on port 18081, separate Vite instance on 15173, separate prototype server on 15174, temporary data and disposable fixture repositories.
 
 The live-backend tests use the backend's explicitly labeled scripted mock harness. They exercise real API calls, SQLite state transitions, SSE, filesystem changes and Go verification in disposable repositories. They do not certify a live external model provider or external PR delivery.
 
@@ -52,6 +54,8 @@ Automated checks compare background tokens and sidebar width, pin desktop floor 
 
 Screenshots use API responses exclusively inside the test harness to put both products in corresponding states. Production stores contain no demo records. The comparison manifests identify viewport and image paths for every pair. Data-driven content, task titles/counts and unavailable backend controls differ intentionally; no pixel-identical claim is made for those differences.
 
+The final recaptured graph, mobile graph, evidence dialog and dark Overview were also inspected after the review fixes.
+
 ## Remaining UI/backend gaps
 
 The UI visibly identifies unsupported capabilities instead of simulating execution:
@@ -63,6 +67,10 @@ The UI visibly identifies unsupported capabilities instead of simulating executi
 - Builder run output is available; an authoritative Git diff and external PR publication endpoint are not.
 - Cataloger ingestion, retrieval, freshness and memory curation remain a clearly labeled concept preview.
 - Runtime permission behavior is checked with API fixtures and the existing backend contracts; a live production OIDC provider and external model connection were not exercised.
+
+## Final review
+
+An independent read-only whole-branch review identified two Important recovery issues (Settings initialization and expired sessions), both reproduced with failing regression tests and fixed. The missing prototype execution-control area was also restored as disabled, explained controls rather than simulated execution. The final regression suite and browser tests pass; no review finding remains deferred. Final visual acceptance was completed by the implementing agent after recapture. No external model/provider, production OIDC or external PR verification is implied. Pre-existing Go backend semantics were outside this frontend rebuild.
 
 ## Execution decisions
 

@@ -19,6 +19,7 @@ import BlueprintPanel from "./BlueprintPanel.vue";
 import WorkOrderSidebar from "./WorkOrderSidebar.vue";
 import TaskGraph from "../task-graph/TaskGraph.vue";
 import ActivityPanel from "../runs/ActivityPanel.vue";
+import RunBanner from "../runs/RunBanner.vue";
 import QualityPanel from "../reviews/QualityPanel.vue";
 import ChangesPanel from "../reviews/ChangesPanel.vue";
 const factory = useFactory(),
@@ -251,6 +252,12 @@ function download() {
           role="tabpanel"
           :aria-labelledby="'order-tab-' + tab"
         >
+          <RunBanner
+            v-if="tab === 'graph' || tab === 'activity'"
+            :state="order.state"
+            :tasks="tasks"
+            :runs="runs"
+          />
           <Transition name="view" mode="out-in"
             ><BlueprintPanel
               v-if="tab === 'blueprint'"

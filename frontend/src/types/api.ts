@@ -175,6 +175,15 @@ async function request<T>(
     }
   }
   if (!resp.ok) {
+    if (
+      resp.status === 401 &&
+      path !== "/api/v1/auth/session" &&
+      path !== "/api/v1/auth/dev-login" &&
+      typeof window !== "undefined"
+    ) {
+      window.dispatchEvent(new Event("factory:unauthorized"));
+    }
+
     const err = (data as { error?: { code?: string; message?: string } })
       ?.error;
     throw new ApiError(

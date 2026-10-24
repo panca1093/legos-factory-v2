@@ -222,7 +222,9 @@ for (const viewport of viewports)
     await reference.locator('[data-action="new-next"]').click();
     await app.getByRole("button", { name: "Continue", exact: true }).click();
     await expect(
-      app.getByRole("heading", { name: "Make payment retries idempotent" }),
+      app
+        .getByRole("dialog")
+        .getByRole("heading", { name: "Make payment retries idempotent" }),
     ).toBeVisible();
     await capture("13-new-order-review");
     await freshReference();
@@ -309,4 +311,54 @@ test("browser permissions, unavailable settings, dialog keyboard handling and er
   await expect(page.getByRole("alert").first()).toContainText(
     "Workspace temporarily unavailable",
   );
+});
+
+test("settings initialization failure cannot overwrite saved configuration", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.route("**/api/v1/settings", (route) =>
+    route.fulfill({
+      status: 503,
+      json: {
+        error: {
+          code: "UNAVAILABLE",
+          message: "Settings temporarily unavailable",
+        },
+      },
+    }),
+  );
+  await page.goto("/settings");
+  await expect(page.getByRole("alert")).toContainText(
+    "Settings temporarily unavailable",
+  );
+  await expect(page.locator("#set-architect")).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Save settings", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Try again", exact: true }),
+  ).toBeVisible();
+});
+test("expired authenticated requests return to sign-in and remove mutation controls", async ({
+  page,
+}) => {
+  await fixture(page);
+  await page.goto("/settings");
+  await expect(page.locator("#set-architect")).toBeEnabled();
+  await page.route("**/api/v1/settings", (route) =>
+    route.fulfill({
+      status: 401,
+      json: { error: { code: "UNAUTHENTICATED", message: "Session expired" } },
+    }),
+  );
+  await page
+    .getByRole("button", { name: "Save settings", exact: true })
+    .click();
+  await expect(
+    page.getByRole("link", { name: "Sign in", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Save settings", exact: true }),
+  ).toHaveCount(0);
 });

@@ -80,3 +80,38 @@ it("keeps failed edits and marks unsupported integrations unavailable without wr
   expect(save).toHaveBeenCalledOnce();
   w.unmount();
 });
+
+it("does not edit or save default configuration after an initialization failure and exposes retry", async () => {
+  const f = useFactory();
+  vi.mocked(f.loadSettings).mockRejectedValue(new Error("Settings offline"));
+  const save = vi.spyOn(f, "saveSettings").mockResolvedValue();
+  const { w } = await render();
+  expect(
+    w.find('[data-test="save-settings"]').attributes("disabled"),
+  ).toBeDefined();
+  expect(w.find("#set-architect").attributes("disabled")).toBeDefined();
+  expect(w.text()).toContain("Try again");
+  await w.find('[data-test="save-settings"]').trigger("click");
+  expect(save).not.toHaveBeenCalled();
+  w.unmount();
+});
+it("retains authoritative settings when ancillary model discovery fails", async () => {
+  const f = useFactory();
+  vi.mocked(f.refreshModels).mockRejectedValue(
+    new Error("Model discovery offline"),
+  );
+  const save = vi.spyOn(f, "saveSettings").mockResolvedValue();
+  const { w } = await render();
+  expect((w.find("#set-architect").element as HTMLSelectElement).value).toBe(
+    "test/architect",
+  );
+  await w.find('[data-test="save-settings"]').trigger("click");
+  await flushPromises();
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({
+      budget_limit_micros: 40000000,
+      architect_model: "test/architect",
+    }),
+  );
+  w.unmount();
+});

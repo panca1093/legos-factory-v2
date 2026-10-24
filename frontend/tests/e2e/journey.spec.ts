@@ -95,7 +95,9 @@ test("full work order journey: project → plan → graph → build → quality 
     page.getByRole("heading", { name: "Task contract" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Close dialog" }).click();
-  await expect(page.getByText("PR decision", { exact: true })).toBeVisible({
+  await expect(
+    page.locator(".detail-title").getByText("PR decision", { exact: true }),
+  ).toBeVisible({
     timeout: 120_000,
   });
   await page.getByRole("tab", { name: "Quality", exact: true }).click();

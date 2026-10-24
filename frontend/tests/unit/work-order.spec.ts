@@ -89,3 +89,23 @@ it("submits human revision notes and approval through existing contracts", async
   );
   w.unmount();
 });
+
+it("keeps unsupported prototype execution controls visibly disabled", async () => {
+  const { w } = await render("LF-127");
+  const router = w.vm.$router;
+  await router.replace({ query: { tab: "graph" } });
+  await flushPromises();
+  expect(
+    w.find('[data-test="execution-pause"]').attributes("disabled"),
+  ).toBeDefined();
+  expect(
+    w.find('[data-test="execution-step"]').attributes("disabled"),
+  ).toBeDefined();
+  expect(w.text()).toContain("Manual execution controls are unavailable");
+  await router.replace({ query: { tab: "activity" } });
+  await flushPromises();
+  expect(
+    w.find('[data-test="execution-pause"]').attributes("disabled"),
+  ).toBeDefined();
+  w.unmount();
+});
