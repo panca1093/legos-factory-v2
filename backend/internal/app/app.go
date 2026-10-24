@@ -165,6 +165,9 @@ func (a *App) Start(ctx context.Context) error {
 		return err
 	}
 	a.Sched.Start(ctx)
+	if err := a.Server.Foreman.ResumeOnStart(ctx); err != nil {
+		return err
+	}
 	// apply persisted budget limit to the tracker
 	rows, err := a.Server.Foreman.DB.QueryContext(ctx, `SELECT key, value FROM settings_kv WHERE key = 'budget_limit_micros'`)
 	if err == nil {

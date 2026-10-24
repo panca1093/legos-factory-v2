@@ -209,9 +209,14 @@ func (s *Server) handlePlanGenerate(c echo.Context) error {
 	if err != nil {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
 	}
-	if wo.State != workorder.StateCreated {
+	resumable := map[workorder.State]bool{
+		workorder.StateCreated: true, workorder.StateRequirement: true,
+		workorder.StateDecomposition: true, workorder.StatePlanGeneration: true,
+		workorder.StatePlanning: true,
+	}
+	if !resumable[wo.State] {
 		return errorJSON(c, http.StatusConflict, "INVALID_STATE_TRANSITION",
-			fmt.Sprintf("plan generation requires state CREATED, WO is %s", wo.State))
+			fmt.Sprintf("plan generation requires a pre-execution state, WO is %s", wo.State))
 	}
 	if _, err := s.Foreman.Sched.Enqueue(c.Request().Context(), orchestration.JobPlan, wo.ID, "", map[string]any{}); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not enqueue planning job")

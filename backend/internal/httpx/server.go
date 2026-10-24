@@ -57,6 +57,7 @@ func New(cfg *config.Config, log *slog.Logger) *Server {
 
 	s := &Server{Echo: e, Cfg: cfg, log: log}
 	s.routes()
+	s.mountStatic()
 	return s
 }
 

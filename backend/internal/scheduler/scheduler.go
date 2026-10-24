@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -15,6 +16,10 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// ErrPermanent wraps handler errors that must not be retried (e.g. policy
+// refusals); the scheduler marks the job FAILED immediately.
+var ErrPermanent = errors.New("permanent failure")
 
 type JobState string
 
@@ -225,7 +230,7 @@ func (s *Scheduler) run(ctx context.Context, job Job) {
 	}
 	var attempts int
 	_ = s.db.QueryRowContext(ctx, `SELECT attempts FROM jobs WHERE id = ?`, job.ID).Scan(&attempts)
-	if attempts+1 >= job.MaxAttempts {
+	if attempts+1 >= job.MaxAttempts || errors.Is(err, ErrPermanent) {
 		s.log.Error("job failed permanently", "job", job.ID, "kind", job.Kind, "wo", job.WOID, "attempts", attempts+1, "err", err)
 		s.finish(ctx, job, JobFailed, err.Error())
 	} else {

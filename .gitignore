@@ -23,3 +23,7 @@ frontend/playwright-report/
 
 # Temporary build artifacts
 /tmp/
+
+# production build
+factory-server
+backend/internal/web/dist/

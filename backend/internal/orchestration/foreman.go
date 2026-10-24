@@ -96,9 +96,8 @@ func (f *Foreman) handlePlan(ctx context.Context, job scheduler.Job) error {
 		if err := f.step(ctx, wo, workorder.StatePlanning, workorder.StatePlanGeneration, "foreman", "Re-drafting plan after revision request"); err != nil {
 			return err
 		}
-		if err := f.step(ctx, wo, workorder.StatePlanGeneration, workorder.StateDecomposition, "foreman", "Re-decomposing after revision request"); err != nil {
-			return err
-		}
+	case workorder.StateRequirement, workorder.StateDecomposition, workorder.StatePlanGeneration:
+		// resume: a previous attempt was interrupted mid-planning
 	default:
 		return fmt.Errorf("plan job for WO in state %s", wo.State)
 	}
@@ -135,10 +134,7 @@ func (f *Foreman) handlePlan(ctx context.Context, job scheduler.Job) error {
 			return err
 		}
 		f.event(wo.ID, "architect", "clarification_requested", q, nil)
-		if err := f.step(ctx, wo, workorder.StateDecomposition, workorder.StatePlanGeneration, "foreman", "Generating specification and plan"); err != nil {
-			return err
-		}
-		if err := f.step(ctx, wo, workorder.StatePlanGeneration, workorder.StateArchitectReview, "foreman", "Architect requests clarification"); err != nil {
+		if err := f.toReview(ctx, wo); err != nil {
 			return err
 		}
 		return f.step(ctx, wo, workorder.StateArchitectReview, workorder.StateWaitingForHuman, "foreman", "Waiting for human clarification")
@@ -182,14 +178,22 @@ func (f *Foreman) handlePlan(ctx context.Context, job scheduler.Job) error {
 	}
 	f.event(wo.ID, "architect", "plan_ready", fmt.Sprintf("Plan with %d tasks", len(tasks)),
 		map[string]any{"summary": plan.Summary})
-	if err := f.step(ctx, wo, workorder.StateDecomposition, workorder.StatePlanGeneration, "foreman", "Generating specification and plan"); err != nil {
-		return err
-	}
-	if err := f.step(ctx, wo, workorder.StatePlanGeneration, workorder.StateArchitectReview, "foreman", "Plan drafted; architect review"); err != nil {
+	if err := f.toReview(ctx, wo); err != nil {
 		return err
 	}
 	f.event(wo.ID, "architect", "architect_approved", "Architect review passed", nil)
 	return nil
+}
+
+// toReview advances whichever pre-review planning state the WO is in to
+// ARCHITECT_REVIEW via SPEC_AND_PLAN_GENERATION.
+func (f *Foreman) toReview(ctx context.Context, wo *workorder.WorkOrder) error {
+	if wo.State == workorder.StateDecomposition {
+		if err := f.step(ctx, wo, workorder.StateDecomposition, workorder.StatePlanGeneration, "foreman", "Generating specification and plan"); err != nil {
+			return err
+		}
+	}
+	return f.step(ctx, wo, workorder.StatePlanGeneration, workorder.StateArchitectReview, "foreman", "Plan drafted; architect review")
 }
 
 func (f *Foreman) handleReview(ctx context.Context, job scheduler.Job) error {
@@ -588,10 +592,45 @@ func (f *Foreman) Cancel(ctx context.Context, woID string) error {
 	return nil
 }
 
+// ResumeOnStart re-enqueues planning jobs for work orders interrupted in
+// pre-execution states. Planning is side-effect free (reasoning + DB
+// writes), so automatic resume is safe; execution-phase work orders are
+// NOT auto-resumed and wait for an explicit human action.
+func (f *Foreman) ResumeOnStart(ctx context.Context) error {
+	wos, err := f.WO.List(ctx)
+	if err != nil {
+		return err
+	}
+	resumable := map[workorder.State]bool{
+		workorder.StateCreated: true, workorder.StateRequirement: true,
+		workorder.StateDecomposition: true, workorder.StatePlanGeneration: true,
+		workorder.StatePlanning: true,
+	}
+	for _, wo := range wos {
+		if resumable[wo.State] && !f.hasActiveJob(ctx, wo.ID, "", JobPlan) {
+			if _, err := f.Sched.Enqueue(ctx, JobPlan, wo.ID, "", map[string]any{"reason": "startup_resume"}); err != nil {
+				return err
+			}
+			f.event(wo.ID, "foreman", "resumed", "Planning resumed after restart", nil)
+		}
+	}
+	return nil
+}
+
 // ---- agent run plumbing ----
 
-// runAgent creates a run row, invokes the harness and records usage.
+// runAgent creates a run row, invokes the harness and records usage. A
+// conservative budget reservation is taken before execution so parallel
+// runs cannot over-commit the remaining budget.
 func (f *Foreman) runAgent(ctx context.Context, wo *workorder.WorkOrder, role agents.Role, provider, model, prompt string, extra map[string]string, taskID string) (agents.AgentResult, string, error) {
+	if f.Usage != nil {
+		release, ok := f.Usage.Reserve(50_000) // conservative estimate per agent run
+		if !ok {
+			// policy refusal: never retried, the human must raise the cap
+			return agents.AgentResult{}, "", fmt.Errorf("%w: budget exhausted; the workspace spending cap does not cover another agent run", scheduler.ErrPermanent)
+		}
+		defer f.release(release)
+	}
 	cctx := map[string]string{
 		"objective":  wo.Objective,
 		"acceptance": wo.Acceptance,
@@ -639,6 +678,10 @@ func (f *Foreman) runAgent(ctx context.Context, wo *workorder.WorkOrder, role ag
 	}
 	f.event(wo.ID, string(role), "agent_completed", fmt.Sprintf("%s agent finished", role), nil)
 	return res, runID, nil
+}
+
+func (f *Foreman) release(release func(actual int64)) {
+	release(0)
 }
 
 func (f *Foreman) failRun(ctx context.Context, runID string, err error) {
