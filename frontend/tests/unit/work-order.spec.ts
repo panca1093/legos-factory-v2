@@ -64,12 +64,20 @@ it("submits human revision notes and approval through existing contracts", async
     ...orders[0],
     state: "ARCHITECT_REVIEW" as const,
     clarif_question: "",
+    plan_review: "pending" as const,
   };
   vi.mocked(f.loadDetail).mockImplementation(async () => {
     f.detail = { work_order: review, plan: tasks, runs: [] };
   });
   const decision = vi.spyOn(f, "planDecision").mockResolvedValue();
   const { w } = await render();
+  expect(w.find('[data-test="foreman-reviewing"]').exists()).toBe(true);
+  expect(
+    w.find('[data-test="approve-plan"]').attributes("disabled"),
+  ).toBeDefined();
+  review.plan_review = "approved" as never;
+  f.detail = { work_order: { ...review }, plan: tasks, runs: [] };
+  await flushPromises();
   await w.find('[data-test="approve-plan"]').trigger("click");
   await flushPromises();
   expect(decision).toHaveBeenCalledWith("LF-128", "approve");
@@ -90,22 +98,33 @@ it("submits human revision notes and approval through existing contracts", async
   w.unmount();
 });
 
-it("keeps unsupported prototype execution controls visibly disabled", async () => {
-  const { w } = await render("LF-127");
-  const router = w.vm.$router;
+it("pauses a running order and resumes a guided step from the run banner", async () => {
+  const f = useFactory();
+  const pause = vi.spyOn(f, "pause").mockResolvedValue();
+  const resume = vi.spyOn(f, "resume").mockResolvedValue();
+  const { w, router } = await render("LF-127");
   await router.replace({ query: { tab: "graph" } });
   await flushPromises();
-  expect(
-    w.find('[data-test="execution-pause"]').attributes("disabled"),
-  ).toBeDefined();
-  expect(
-    w.find('[data-test="execution-step"]').attributes("disabled"),
-  ).toBeDefined();
-  expect(w.text()).toContain("Manual execution controls are unavailable");
-  await router.replace({ query: { tab: "activity" } });
+  await w.find('[data-test="execution-pause"]').trigger("click");
   await flushPromises();
-  expect(
-    w.find('[data-test="execution-pause"]').attributes("disabled"),
-  ).toBeDefined();
+  expect(pause).toHaveBeenCalledWith("LF-127");
+  f.detail = {
+    work_order: {
+      ...f.detail!.work_order,
+      autonomy: "guided",
+      paused_at: "2026-10-24T00:00:00Z",
+      pause_reason:
+        "Guided autonomy: build step finished; resume to run the next step",
+    },
+    plan: tasks,
+    runs: [],
+  };
+  await flushPromises();
+  expect(w.find('[data-test="pause-reason"]').text()).toContain("Guided");
+  const step = w.find('[data-test="execution-step"]');
+  expect(step.text()).toContain("Next step");
+  await step.trigger("click");
+  await flushPromises();
+  expect(resume).toHaveBeenCalledWith("LF-127");
   w.unmount();
 });

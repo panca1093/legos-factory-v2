@@ -56,7 +56,7 @@ func (ta *testApp) plan(t *testing.T, woID string) {
 	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+woID+"/plan/generate", ""); status != 202 {
 		t.Fatalf("plan generate: %d %s", status, body)
 	}
-	ta.awaitState(t, woID, "ARCHITECT_REVIEW", 30*time.Second)
+	ta.awaitReviewed(t, woID)
 }
 
 func (ta *testApp) knowledge(t *testing.T, session, query string) (int, []knowledgeRecord) {

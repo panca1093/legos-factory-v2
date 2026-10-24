@@ -80,22 +80,30 @@ const emit = defineEmits<{
     </section>
     <section
       v-else-if="order.state === 'ARCHITECT_REVIEW'"
-      class="callout green"
+      class="callout"
+      :class="{ green: order.plan_review === 'approved' }"
     >
       <div class="row">
-        <BrickBot persona="architect" class="compact" /><strong
-          >Your blueprint is ready for review. Your call.</strong
+        <BrickBot persona="foreman" class="compact" /><strong
+          v-if="order.plan_review === 'approved'"
+          >The Foreman approved the Architect's plan. Your call.</strong
+        ><strong v-else role="status" data-test="foreman-reviewing"
+          >The Foreman is reviewing the Architect's plan…</strong
         >
       </div>
       <p>
         Inspect the outcome, contract and task dependencies before authorizing
         execution.
+        <template v-if="order.review_rounds"
+          >The Foreman sent this plan back for revision
+          {{ order.review_rounds }} time(s).</template
+        >
       </p>
       <div class="row wrap" style="margin-top: 14px">
         <button
           class="btn primary"
           data-test="approve-plan"
-          :disabled="busy || !canWrite"
+          :disabled="busy || !canWrite || order.plan_review !== 'approved'"
           @click="emit('approve')"
         >
           <Check class="icon" />Approve plan</button

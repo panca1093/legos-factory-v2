@@ -26,6 +26,8 @@ func (r *SettingsRepo) Get(ctx context.Context) (*model.Settings, error) {
 		switch k {
 		case "budget_limit_micros":
 			fmt.Sscanf(v, "%d", &s.BudgetLimitMicros)
+		case "foreman_model":
+			s.ForemanModel = v
 		case "architect_model":
 			s.ArchitectModel = v
 		case "builder_model":
@@ -51,6 +53,7 @@ func (r *SettingsRepo) Get(ctx context.Context) (*model.Settings, error) {
 func (r *SettingsRepo) Put(ctx context.Context, s model.Settings) error {
 	writes := map[string]string{
 		"budget_limit_micros": fmt.Sprintf("%d", s.BudgetLimitMicros),
+		"foreman_model":       s.ForemanModel,
 		"architect_model":     s.ArchitectModel,
 		"builder_model":       s.BuilderModel,
 		"inspector_model":     s.InspectorModel,

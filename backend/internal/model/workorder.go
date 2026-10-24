@@ -81,23 +81,29 @@ func AllowedTransitions(s State) []State {
 }
 
 type WorkOrder struct {
-	ID             string    `json:"id"`
-	ProjectID      string    `json:"project_id"`
-	Title          string    `json:"title"`
-	Objective      string    `json:"objective"`
-	Acceptance     string    `json:"acceptance"`
-	State          State     `json:"state"`
-	Autonomy       string    `json:"autonomy"`
-	BuilderModel   string    `json:"builder_model"`
-	InspectorModel string    `json:"inspector_model"`
-	ClarifQuestion string    `json:"clarif_question,omitempty"`
-	ClarifAnswer   string    `json:"clarif_answer,omitempty"`
-	Revision       int       `json:"revision"`
-	CommitSHA      string    `json:"commit_sha,omitempty"`
-	SourceRef      string    `json:"source_ref,omitempty"` // e.g. jira:ABC-12
-	PRURL          string    `json:"pr_url,omitempty"`
-	PRRef          string    `json:"pr_ref,omitempty"`
-	CreatedBy      string    `json:"created_by"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             string     `json:"id"`
+	ProjectID      string     `json:"project_id"`
+	Title          string     `json:"title"`
+	Objective      string     `json:"objective"`
+	Acceptance     string     `json:"acceptance"`
+	State          State      `json:"state"`
+	Autonomy       string     `json:"autonomy"`
+	BuilderModel   string     `json:"builder_model"`
+	InspectorModel string     `json:"inspector_model"`
+	ForemanModel   string     `json:"foreman_model,omitempty"`
+	ArchitectModel string     `json:"architect_model,omitempty"`
+	PlanReview     string     `json:"plan_review,omitempty"` // pending|approved
+	ReviewRounds   int        `json:"review_rounds"`
+	PausedAt       *time.Time `json:"paused_at,omitempty"`
+	PauseReason    string     `json:"pause_reason,omitempty"`
+	ClarifQuestion string     `json:"clarif_question,omitempty"`
+	ClarifAnswer   string     `json:"clarif_answer,omitempty"`
+	Revision       int        `json:"revision"`
+	CommitSHA      string     `json:"commit_sha,omitempty"`
+	SourceRef      string     `json:"source_ref,omitempty"` // e.g. jira:ABC-12
+	PRURL          string     `json:"pr_url,omitempty"`
+	PRRef          string     `json:"pr_ref,omitempty"`
+	CreatedBy      string     `json:"created_by"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }

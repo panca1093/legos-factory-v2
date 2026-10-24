@@ -20,12 +20,18 @@ type WorkOrders struct {
 	Projects     *Projects
 	Sandbox      Sandbox
 	Integrations *Integrations
+	Settings     SettingsReader
 }
 
 func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.CreateWorkOrderRequest) (*model.WorkOrder, error) {
 	proj, err := w.Projects.Get(ctx, u, req.ProjectID)
 	if err != nil {
 		return nil, err
+	}
+	// governance snapshot: later default changes do not alter this order
+	var foreman, architect string
+	if s, err := w.Settings.Get(ctx); err == nil {
+		foreman, architect = s.ForemanModel, s.ArchitectModel
 	}
 	wo := &model.WorkOrder{
 		ID:             "wo_" + uuid.NewString()[:12],
@@ -38,6 +44,8 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 		BuilderModel:   req.BuilderModel,
 		InspectorModel: req.InspectorModel,
 		SourceRef:      req.SourceRef,
+		ForemanModel:   foreman,
+		ArchitectModel: architect,
 		CreatedBy:      u.ID,
 	}
 	if err := w.Store.Create(ctx, wo); err != nil {

@@ -42,7 +42,9 @@ func (r *JobRepo) ClaimNext(ctx context.Context, claimedBy string) (job model.Jo
 	_, _ = tx.ExecContext(ctx, `SELECT 1`) // establish read snapshot
 
 	row := tx.QueryRowContext(ctx, `SELECT id, kind, wo_id, task_id, payload, attempts, max_attempts
-		FROM jobs WHERE state = 'PENDING' AND run_after <= ? ORDER BY created_at LIMIT 1`, time.Now().Unix())
+		FROM jobs WHERE state = 'PENDING' AND run_after <= ?
+		AND wo_id NOT IN (SELECT id FROM work_orders WHERE paused_at IS NOT NULL)
+		ORDER BY created_at LIMIT 1`, time.Now().Unix())
 	var j model.Job
 	var taskID sql.NullString
 	var payload string

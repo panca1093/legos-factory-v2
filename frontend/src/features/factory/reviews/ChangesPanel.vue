@@ -19,9 +19,39 @@ const props = defineProps<{
   prRef?: string;
   sourceRef?: string;
 }>();
+type FindingAction = "confirm" | "dispute" | "resolve" | "escalate";
 const emit = defineEmits<{
   decision: ["approve" | "request_changes" | "decline"];
+  finding: [string, FindingAction, string];
 }>();
+const canDispose = computed(
+  () =>
+    props.canWrite &&
+    !props.busy &&
+    !["READY", "CANCELLED"].includes(props.state),
+);
+function dispose(f: Finding, action: FindingAction) {
+  let note = "";
+  if (action === "dispute" || action === "escalate") {
+    note =
+      window
+        .prompt(
+          action === "dispute"
+            ? `Why is "${f.title}" not a real problem?`
+            : `What decision does "${f.title}" need? The order pauses until you resume it.`,
+        )
+        ?.trim() ?? "";
+    if (!note) return;
+  }
+  emit("finding", f.id, action, note);
+}
+const statusPill: Record<string, string> = {
+  open: "red",
+  confirmed: "red",
+  escalated: "orange",
+  disputed: "",
+  resolved: "green",
+};
 const builders = computed(() => props.runs.filter((r) => r.kind === "builder"));
 const canDecide = computed(
   () => props.canWrite && props.state === "NEEDS_HUMAN_REVIEW" && !props.busy,
@@ -68,16 +98,56 @@ const canDecide = computed(
     </section>
     <section class="panel panel-pad">
       <h2>Review disposition</h2>
-      <article v-for="f in findings" :key="f.id" class="finding">
+      <article
+        v-for="f in findings"
+        :key="f.id"
+        class="finding"
+        :data-finding="f.status"
+      >
         <div class="row wrap">
           <span
             class="pill"
             :class="f.severity === 'blocker' ? 'red' : 'orange'"
             >{{ f.severity }}</span
+          ><span v-if="f.specialty" class="pill purple">{{
+            f.specialty.replace("_", "/")
+          }}</span
           ><strong class="small grow">{{ f.title }}</strong
-          ><span class="pill">{{ f.status }}</span>
+          ><span class="pill" :class="statusPill[f.status]">{{
+            f.status
+          }}</span>
         </div>
         <p class="help">{{ f.detail }}</p>
+        <p v-if="f.note" class="help">
+          <strong>Human note:</strong> {{ f.note }}
+        </p>
+        <div
+          v-if="canDispose && f.status !== 'resolved'"
+          class="row wrap"
+          style="margin-top: 8px"
+        >
+          <button
+            v-if="f.status !== 'confirmed'"
+            class="btn small"
+            @click="dispose(f, 'confirm')"
+          >
+            Confirm</button
+          ><button
+            v-if="f.status !== 'disputed'"
+            class="btn small"
+            @click="dispose(f, 'dispute')"
+          >
+            Dispute</button
+          ><button class="btn small" @click="dispose(f, 'resolve')">
+            Resolve</button
+          ><button
+            v-if="f.status !== 'escalated'"
+            class="btn small"
+            @click="dispose(f, 'escalate')"
+          >
+            Escalate
+          </button>
+        </div>
       </article>
       <div v-if="!findings.length" class="notice section-gap">
         No findings recorded. Inspect Quality for the current revision's

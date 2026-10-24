@@ -23,13 +23,7 @@ defineProps<{ order: WorkOrder; project?: Project; runs: Run[] }>();
         <div>
           <strong style="text-transform: capitalize">{{ role }}</strong>
           <p>
-            {{
-              role === "builder" || role === "inspector"
-                ? order[`${role}_model`] || "Workspace default"
-                : role === "foreman"
-                  ? "Backend orchestration"
-                  : "Snapshot not reported"
-            }}
+            {{ order[`${role}_model`] || "Workspace default" }}
           </p>
         </div>
       </div>

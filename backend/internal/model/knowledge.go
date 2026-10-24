@@ -19,6 +19,8 @@ const (
 	KnowledgePlanRevision       = "plan_revision"
 	KnowledgeClarification      = "clarification"
 	KnowledgeArchitectReview    = "architect_review"
+	KnowledgePlanReview         = "plan_review"
+	KnowledgeFindingDecision    = "finding_disposition"
 	KnowledgeImplementation     = "implementation"
 	KnowledgeVerification       = "verification"
 	KnowledgeFindings           = "findings"

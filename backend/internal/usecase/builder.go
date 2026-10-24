@@ -36,7 +36,16 @@ func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
 		title = fmt.Sprintf("Remediation implemented (revision %d)", wo.Revision)
 	}
 	f.Catalog.Record(ctx, wo, model.KnowledgeImplementation, model.TrustAIInterpretation, "builder", title, res.Text, "run:"+runID)
-	return f.maybeAdvanceAfterImplementation(ctx, wo)
+	if err := f.maybeAdvanceAfterImplementation(ctx, wo); err != nil {
+		return err
+	}
+	if wo.Autonomy == "guided" {
+		// guided autonomy: a human advances every build step
+		if cur, err := f.WO.Get(ctx, wo.ID); err == nil && cur.PausedAt == nil && !cur.State.Terminal() {
+			return f.pause(ctx, cur, "foreman", "Guided autonomy: build step finished; resume to run the next step")
+		}
+	}
+	return nil
 }
 
 // recordBaseline runs the deterministic checks once, before implementation,

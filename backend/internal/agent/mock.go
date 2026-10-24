@@ -21,6 +21,8 @@ type MockHarness struct {
 	next sessionIDGen
 	mu   sync.Mutex
 	ses  map[string]*mockSession
+	// objectives that already received their one scripted invalid reply
+	invalidSent map[string]bool
 }
 
 type sessionIDGen struct{ n atomic.Int64 }
@@ -34,7 +36,7 @@ type mockSession struct {
 }
 
 func NewMock() *MockHarness {
-	return &MockHarness{ses: map[string]*mockSession{}}
+	return &MockHarness{ses: map[string]*mockSession{}, invalidSent: map[string]bool{}}
 }
 
 func (h *MockHarness) Name() string { return "mock" }
@@ -93,10 +95,13 @@ func (h *MockHarness) execute(ctx context.Context, req model.AgentRequest) (mode
 	}
 	switch req.Role {
 	case model.AgentArchitect:
-		if isPlanReview(req) {
-			return h.architectReview(req, res)
+		if h.invalidOnce(req) {
+			res.Text = `Here is the plan: {"decision":"MAYBE"}`
+			return res, nil
 		}
 		return h.architectPlan(req, res)
+	case model.AgentForeman:
+		return h.foremanReview(req, res)
 	case model.AgentBuilder:
 		return h.builder(req, res)
 	case model.AgentInspector:
@@ -109,9 +114,34 @@ func (h *MockHarness) execute(ctx context.Context, req model.AgentRequest) (mode
 	}
 }
 
-func isPlanReview(req model.AgentRequest) bool {
-	_, ok := req.Context["plan_json"]
-	return ok
+// invalidOnce scripts one schema-invalid reply for objectives marked
+// "[invalid-reply]", to exercise the corrective retry.
+func (h *MockHarness) invalidOnce(req model.AgentRequest) bool {
+	obj := req.Context["objective"]
+	if !strings.Contains(obj, "[invalid-reply]") {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.invalidSent[obj] {
+		return false
+	}
+	h.invalidSent[obj] = true
+	return true
+}
+
+// foremanReview approves by default. "[foreman-revise]" requests one
+// revision per review round 0; "[foreman-clarify]" asks a human until a
+// clarification has been answered.
+func (h *MockHarness) foremanReview(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
+	obj := req.Context["objective"]
+	switch {
+	case strings.Contains(obj, "[foreman-clarify]") && req.Context["clarification_answer"] == "":
+		return finishJSON(res, map[string]any{"decision": "CLARIFY", "question_text": "Which retry window should apply?"})
+	case strings.Contains(obj, "[foreman-revise]") && req.Context["review_round"] == "0":
+		return finishJSON(res, map[string]any{"decision": "REVISE", "notes": "Add a task for the failure path."})
+	}
+	return finishJSON(res, map[string]any{"decision": "APPROVE", "notes": "Plan covers the acceptance criteria."})
 }
 
 // architectPlan decomposes the objective into a plan. When the objective
@@ -120,7 +150,7 @@ func isPlanReview(req model.AgentRequest) bool {
 func (h *MockHarness) architectPlan(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
 	obj := req.Context["objective"]
 	acc := req.Context["acceptance"]
-	if hasOpenQuestion(obj) {
+	if hasOpenQuestion(obj) && req.Context["clarification_answer"] == "" {
 		res.Text = fmt.Sprintf(`{"decision":"CLARIFY","question":"Objective contains an unresolved question: %s","question_text":"Please specify the exact expected behavior so the plan can be finalized."}`, jsEscape(firstSentence(obj)))
 		return res, nil
 	}
@@ -147,16 +177,6 @@ func (h *MockHarness) architectPlan(req model.AgentRequest, res model.AgentResul
 		},
 	}
 	return finishJSON(res, plan)
-}
-
-// architectReview re-reviews a recorded plan (and clarification answer).
-func (h *MockHarness) architectReview(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
-	answer := req.Context["clarification_answer"]
-	if answer == "" && req.Context["has_open_question"] == "true" {
-		res.Text = `{"decision":"CLARIFY","question_text":"The recorded clarification has not been answered yet."}`
-		return res, nil
-	}
-	return finishJSON(res, map[string]any{"decision": "APPROVE", "notes": "Plan is complete after clarification."})
 }
 
 // builder performs a real filesystem change in the workspace: it writes the
@@ -194,7 +214,7 @@ func Greet(name string) string {
 // a work order (revision 0), mirroring the prototype's QA story. Later
 // revisions pass once the fix has landed.
 func (h *MockHarness) inspector(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
-	if req.Context["revision"] == "0" {
+	if req.Context["revision"] == "0" && req.Context["specialty"] == "testing" {
 		res.Text = `{"findings":[{"severity":"blocker","title":"Sample regression: acceptance check failed on first revision","detail":"Scripted mock finding to exercise the remediation loop.","location":"greeter/greeter.go"}]}`
 		return res, nil
 	}

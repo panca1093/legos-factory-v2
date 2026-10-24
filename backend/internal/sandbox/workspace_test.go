@@ -103,3 +103,29 @@ func TestRemoteWithoutAuthIsNotCloned(t *testing.T) {
 		t.Fatal("remote repos must only be cloned with a bound connection")
 	}
 }
+
+func TestChangedFilesSinceClone(t *testing.T) {
+	origin := t.TempDir()
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = origin
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s", out)
+		}
+	}
+	l := Local{DataDir: t.TempDir()}
+	dir, err := l.Prepare(context.Background(), "wo_c", origin, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(dir, "api"), 0o755)
+	os.WriteFile(filepath.Join(dir, "api", "auth.go"), []byte("package api\n"), 0o644)
+	if _, err := l.Commit(context.Background(), dir, "c1"); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "view.vue"), []byte("<template/>\n"), 0o644)
+	files, err := l.ChangedFiles(context.Background(), dir)
+	if err != nil || strings.Join(files, ",") != "api/auth.go,view.vue" {
+		t.Fatalf("changed files: %v %v", files, err)
+	}
+}

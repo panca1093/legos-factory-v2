@@ -82,43 +82,51 @@ func (f *Foreman) handleInspect(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
-	provider, modelID := f.Model(model.AgentInspector, wo)
-	res, runID, err := f.runAgent(ctx, wo, model.AgentInspector, provider, modelID, inspectPrompt(wo), nil, "")
+	files, err := f.Sandbox.ChangedFiles(ctx, f.workspaceDir(wo.ID))
 	if err != nil {
-		return err
+		f.event(wo.ID, "inspector", "changed_files_unavailable", err.Error(), nil)
 	}
-	var out struct {
-		Findings []struct {
-			Severity string `json:"severity"`
-			Title    string `json:"title"`
-			Detail   string `json:"detail"`
-			Location string `json:"location"`
-		} `json:"findings"`
+	picks := SelectSpecialists(files)
+	names := make([]string, 0, len(picks))
+	for _, p := range picks {
+		names = append(names, p.Specialty)
 	}
-	if err := parseStructured(res.Text, &out); err != nil {
-		return fmt.Errorf("inspector returned unparseable findings: %w", err)
-	}
-	blockers := 0
-	var summary strings.Builder
-	for _, fd := range out.Findings {
-		fmt.Fprintf(&summary, "[%s] %s — %s (%s)\n", fd.Severity, fd.Title, fd.Detail, fd.Location)
-		id := fmt.Sprintf("fnd_%d", time.Now().UnixNano())
-		if err := f.Findings.Create(ctx, model.Finding{
-			ID: id, RunID: runID, WOID: wo.ID, Severity: fd.Severity, Title: fd.Title,
-			Detail: fd.Detail, Location: fd.Location, Status: "open",
-		}); err != nil {
+	f.event(wo.ID, "foreman", "inspection_specialists",
+		fmt.Sprintf("Specialist review by %s (%d changed files)", strings.Join(names, ", "), len(files)),
+		map[string]any{"specialists": picks})
+
+	blockers, total := 0, 0
+	for _, p := range picks {
+		var out findingsReply
+		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files),
+			map[string]string{"specialty": p.Specialty}, "", &out)
+		if err != nil {
 			return err
 		}
-		f.event(wo.ID, "inspector", "finding", fmt.Sprintf("[%s] %s", fd.Severity, fd.Title), map[string]any{
-			"finding_id": id, "severity": fd.Severity, "location": fd.Location,
-		})
-		if fd.Severity == model.SeverityBlocker {
-			blockers++
+		var summary strings.Builder
+		specBlockers := 0
+		for _, fd := range out.Findings {
+			id := fmt.Sprintf("fnd_%d", time.Now().UnixNano())
+			if err := f.Findings.Create(ctx, model.Finding{
+				ID: id, RunID: runID, WOID: wo.ID, Severity: fd.Severity, Title: fd.Title,
+				Detail: fd.Detail, Location: fd.Location, Status: model.FindingOpen, Specialty: p.Specialty,
+			}); err != nil {
+				return err
+			}
+			fmt.Fprintf(&summary, "[%s] %s — %s (%s)\n", fd.Severity, fd.Title, fd.Detail, fd.Location)
+			f.event(wo.ID, "inspector", "finding", fmt.Sprintf("[%s/%s] %s", p.Specialty, fd.Severity, fd.Title), map[string]any{
+				"finding_id": id, "severity": fd.Severity, "location": fd.Location, "specialty": p.Specialty,
+			})
+			if fd.Severity == model.SeverityBlocker {
+				specBlockers++
+			}
 		}
+		blockers += specBlockers
+		total += len(out.Findings)
+		title := fmt.Sprintf("%s inspection of revision %d: %d finding(s), %d blocker(s)", p.Specialty, wo.Revision, len(out.Findings), specBlockers)
+		f.Catalog.Record(ctx, wo, model.KnowledgeFindings, model.TrustAIInterpretation, "inspector", title, summary.String(), "run:"+runID)
 	}
-
-	title := fmt.Sprintf("Inspection of revision %d: %d finding(s), %d blocker(s)", wo.Revision, len(out.Findings), blockers)
-	f.Catalog.Record(ctx, wo, model.KnowledgeFindings, model.TrustAIInterpretation, "inspector", title, summary.String(), "run:"+runID)
+	f.event(wo.ID, "inspector", "inspection_finished", fmt.Sprintf("%d finding(s), %d blocker(s)", total, blockers), nil)
 
 	if blockers == 0 {
 		// later clean inspection supersedes earlier findings on this WO

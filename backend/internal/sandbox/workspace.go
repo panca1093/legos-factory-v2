@@ -150,3 +150,33 @@ func git(ctx context.Context, dir string, args ...string) (string, error) {
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
+
+// ChangedFiles lists files the work order changed relative to the cloned
+// base (committed or not). A workspace without git history reports none.
+func (Local) ChangedFiles(ctx context.Context, dir string) ([]string, error) {
+	if !isLocalGitRepo(dir) {
+		return nil, nil
+	}
+	base := "HEAD"
+	if out, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"); err == nil && strings.TrimSpace(out) != "" {
+		base = "refs/remotes/origin/HEAD"
+	}
+	seen := map[string]bool{}
+	var files []string
+	for _, args := range [][]string{
+		{"diff", "--name-only", base},
+		{"ls-files", "--others", "--exclude-standard"},
+	} {
+		out, err := git(ctx, dir, args...)
+		if err != nil {
+			return nil, fmt.Errorf("git %s: %v: %s", args[0], err, out)
+		}
+		for _, f := range strings.Split(strings.TrimSpace(out), "\n") {
+			if f != "" && !seen[f] {
+				seen[f] = true
+				files = append(files, f)
+			}
+		}
+	}
+	return files, nil
+}

@@ -52,6 +52,12 @@ export interface WorkOrder {
   clarif_answer?: string;
   revision: number;
   commit_sha?: string;
+  foreman_model?: string;
+  architect_model?: string;
+  plan_review?: "" | "pending" | "approved";
+  review_rounds?: number;
+  paused_at?: string;
+  pause_reason?: string;
   source_ref?: string;
   pr_url?: string;
   pr_ref?: string;
@@ -91,7 +97,10 @@ export interface Finding {
   title: string;
   detail: string;
   location: string;
-  status: "open" | "resolved" | "disputed";
+  status: "open" | "confirmed" | "disputed" | "resolved" | "escalated";
+  specialty?: string;
+  note?: string;
+  decided_by?: string;
   created_at: string;
 }
 
@@ -135,6 +144,7 @@ export interface Overview {
 
 export interface Settings {
   budget_limit_micros: number;
+  foreman_model?: string;
   architect_model: string;
   builder_model: string;
   inspector_model: string;

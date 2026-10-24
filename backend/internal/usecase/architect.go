@@ -8,7 +8,8 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
-// Architect: plan drafting, CLARIFY/APPROVE decision and re-review after clarification.
+// Architect: drafts the plan (or asks a human for a missing decision). It
+// never approves its own plan; the Foreman reviews it in review.go.
 
 func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 	wo, err := f.WO.Get(ctx, job.WOID)
@@ -24,8 +25,8 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 			return err
 		}
 	case model.StatePlanning:
-		// revision loop: human requested a plan revision
-		if err := f.step(ctx, wo, model.StatePlanning, model.StatePlanGeneration, "foreman", "Re-drafting plan after revision request"); err != nil {
+		// re-draft after a clarification, a Foreman REVISE or a human revision request
+		if err := f.step(ctx, wo, model.StatePlanning, model.StatePlanGeneration, "foreman", "Re-drafting plan"); err != nil {
 			return err
 		}
 	case model.StateRequirement, model.StateDecomposition, model.StatePlanGeneration:
@@ -45,26 +46,12 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 			fmt.Sprintf("%d prior project record(s) provided to the Architect", len(prior)), map[string]any{"refs": priorRefs})
 	}
 
-	provider, modelID := f.Model(model.AgentArchitect, wo)
-	res, runID, err := f.runAgent(ctx, wo, model.AgentArchitect, provider, modelID, planPrompt(wo)+knowledgePrompt(prior), nil, "")
+	notes, _ := job.Payload["notes"].(string)
+	var plan planReply
+	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes)+knowledgePrompt(prior),
+		map[string]string{"clarification_answer": wo.ClarifAnswer}, "", &plan)
 	if err != nil {
 		return err
-	}
-	var plan struct {
-		Decision     string `json:"decision"`
-		Question     string `json:"question"`
-		QuestionText string `json:"question_text"`
-		Summary      string `json:"summary"`
-		Tasks        []struct {
-			ID        string   `json:"id"`
-			Title     string   `json:"title"`
-			Objective string   `json:"objective"`
-			Role      string   `json:"role"`
-			Deps      []string `json:"deps"`
-		} `json:"tasks"`
-	}
-	if err := parseStructured(res.Text, &plan); err != nil {
-		return fmt.Errorf("architect returned unparseable plan: %w", err)
 	}
 
 	if plan.Decision == "CLARIFY" {
@@ -72,17 +59,7 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 		if q == "" {
 			q = plan.Question
 		}
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"clarif_question": q}); err != nil {
-			return err
-		}
-		f.event(wo.ID, "architect", "clarification_requested", q, nil)
-		if err := f.toReview(ctx, wo); err != nil {
-			return err
-		}
-		return f.step(ctx, wo, model.StateArchitectReview, model.StateWaitingForHuman, "foreman", "Waiting for human clarification")
-	}
-	if plan.Decision != "APPROVE" && plan.Decision != "" {
-		return fmt.Errorf("unexpected architect decision %q", plan.Decision)
+		return f.askHuman(ctx, wo, "architect", q)
 	}
 
 	// plan task ids from agents are only unique within one plan; namespace
@@ -107,13 +84,17 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 				deps = append(deps, mapped)
 			}
 		}
+		role := t.Role
+		if role == "" {
+			role = "builder"
+		}
 		tasks = append(tasks, model.Task{
 			ID: idMap[ref], WOID: wo.ID, Seq: i, Title: t.Title, Objective: t.Objective,
-			Role: t.Role, Deps: deps,
+			Role: role, Deps: deps,
 		})
 	}
 	if err := model.ValidateDAG(tasks); err != nil {
-		return err
+		return fmt.Errorf("%w: %v", model.ErrPermanent, err)
 	}
 	if err := f.WO.ReplacePlan(ctx, wo.ID, tasks); err != nil {
 		return err
@@ -125,8 +106,27 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 	if err := f.toReview(ctx, wo); err != nil {
 		return err
 	}
-	f.event(wo.ID, "architect", "architect_approved", "Architect review passed", nil)
-	return nil
+	// the Architect never approves its own plan: the Foreman reviews it
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "pending"}); err != nil {
+		return err
+	}
+	return f.enqueue(ctx, JobReview, wo.ID, "foreman_review")
+}
+
+// askHuman records a clarification question and parks the order in
+// WAITING_FOR_HUMAN until AnswerClarification re-drafts the plan.
+func (f *Foreman) askHuman(ctx context.Context, wo *model.WorkOrder, actor, question string) error {
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"clarif_question": question, "clarif_answer": "", "plan_review": ""}); err != nil {
+		return err
+	}
+	wo.ClarifQuestion, wo.ClarifAnswer = question, ""
+	f.event(wo.ID, actor, "clarification_requested", question, nil)
+	if wo.State != model.StateArchitectReview {
+		if err := f.toReview(ctx, wo); err != nil {
+			return err
+		}
+	}
+	return f.step(ctx, wo, model.StateArchitectReview, model.StateWaitingForHuman, "foreman", "Waiting for human clarification")
 }
 
 // toReview advances whichever pre-review planning state the WO is in to
@@ -138,35 +138,6 @@ func (f *Foreman) toReview(ctx context.Context, wo *model.WorkOrder) error {
 		}
 	}
 	return f.step(ctx, wo, model.StatePlanGeneration, model.StateArchitectReview, "foreman", "Plan drafted; architect review")
-}
-
-func (f *Foreman) handleReview(ctx context.Context, job model.Job) error {
-	wo, err := f.WO.Get(ctx, job.WOID)
-	if err != nil {
-		return err
-	}
-	if wo.State != model.StateWaitingForHuman {
-		return fmt.Errorf("review job for WO in state %s", wo.State)
-	}
-	provider, modelID := f.Model(model.AgentArchitect, wo)
-	ctxData := map[string]string{
-		"clarification_answer": wo.ClarifAnswer,
-		"plan_json":            "present",
-	}
-	res, runID, err := f.runAgent(ctx, wo, model.AgentArchitect, provider, modelID, reviewPrompt(wo), ctxData, "")
-	if err != nil {
-		return err
-	}
-	f.Catalog.Record(ctx, wo, model.KnowledgeArchitectReview, model.TrustAIInterpretation, "architect",
-		"Architect re-review after clarification", res.Text, "run:"+runID)
-	f.event(wo.ID, "architect", "architect_approved", "Architect re-review passed after clarification", nil)
-	if err := f.step(ctx, wo, model.StateWaitingForHuman, model.StatePlanning, "foreman", "Plan updated with clarification"); err != nil {
-		return err
-	}
-	if err := f.step(ctx, wo, model.StatePlanning, model.StatePlanGeneration, "foreman", "Finalizing plan"); err != nil {
-		return err
-	}
-	return f.step(ctx, wo, model.StatePlanGeneration, model.StateArchitectReview, "foreman", "Architect review complete")
 }
 
 func taskList(tasks []model.Task) string {

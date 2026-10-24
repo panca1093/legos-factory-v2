@@ -72,7 +72,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		integrations.Secrets = secrets
 	}
 	box := sandbox.Local{DataDir: cfg.DataDir}
-	workOrders := &usecase.WorkOrders{Store: woRepo, Projects: projects, Sandbox: box, Integrations: integrations}
+	workOrders := &usecase.WorkOrders{Store: woRepo, Projects: projects, Sandbox: box, Integrations: integrations, Settings: settingsRepo}
 
 	auth := &usecase.Identity{
 		Users: userRepo,
@@ -106,21 +106,8 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		if ocHarness == nil {
 			return "mock", "mock-local"
 		}
-		switch role {
-		case model.AgentBuilder:
-			if wo.BuilderModel != "" && wo.BuilderModel != "mock-local" {
-				return splitModelRef(wo.BuilderModel)
-			}
-		case model.AgentInspector:
-			if wo.InspectorModel != "" && wo.InspectorModel != "mock-local" {
-				return splitModelRef(wo.InspectorModel)
-			}
-		}
-		def := modelDefaults[string(role)]
-		if def == "" {
-			def = modelDefaults["architect"]
-		}
-		return splitModelRef(def)
+		s, _ := settingsRepo.Get(context.Background())
+		return usecase.SplitModelRef(usecase.ResolveModel(role, wo, s, modelDefaults))
 	}
 
 	foreman := &usecase.Foreman{
@@ -204,14 +191,6 @@ func (a *App) Start(ctx context.Context) error {
 		a.Server.Usage.SetBudgetLimit(s.BudgetLimitMicros)
 	}
 	return nil
-}
-
-func splitModelRef(ref string) (string, string) {
-	parts := strings.SplitN(ref, "/", 2)
-	if len(parts) == 2 {
-		return parts[0], parts[1]
-	}
-	return "", ref
 }
 
 // discoverDefaults picks the first available real model as the workspace

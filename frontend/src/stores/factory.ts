@@ -253,6 +253,29 @@ export const useFactory = defineStore("factory", {
       });
       await this.reloadDetail();
     },
+    async pause(id: string, reason = "") {
+      await api.post(`/api/v1/work-orders/${id}/pause`, { reason });
+      await this.reloadDetail();
+    },
+    async resume(id: string) {
+      await api.post(`/api/v1/work-orders/${id}/resume`);
+      await this.reloadDetail();
+    },
+    async decideFinding(
+      id: string,
+      findingID: string,
+      action: "confirm" | "dispute" | "resolve" | "escalate",
+      note = "",
+    ) {
+      await api.post(
+        `/api/v1/work-orders/${id}/findings/${findingID}/decision`,
+        {
+          action,
+          note,
+        },
+      );
+      await this.reloadDetail();
+    },
     async cancel(id: string) {
       await api.post(`/api/v1/work-orders/${id}/cancel`);
       await this.reloadDetail();

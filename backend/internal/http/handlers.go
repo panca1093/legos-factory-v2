@@ -244,6 +244,12 @@ func mapDomainError(c echo.Context, err error) error {
 	if errors.Is(err, model.ErrWorkOrderNotFound) {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
 	}
+	if usecase.IsNotFound(err) {
+		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", err.Error())
+	}
+	if errors.Is(err, usecase.ErrInvalid) {
+		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+	}
 	if errors.Is(err, model.ErrStateConflict) {
 		return errorJSON(c, http.StatusConflict, "INVALID_STATE_TRANSITION", err.Error())
 	}
@@ -387,4 +393,38 @@ func (s *Server) handlePutSettings(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not reload settings")
 	}
 	return c.JSON(http.StatusOK, out)
+}
+
+func (s *Server) handlePause(c echo.Context) error {
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	_ = c.Bind(&req)
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = "Paused by " + currentUser(c).Name
+	}
+	if err := s.Foreman.Pause(c.Request().Context(), woFrom(c).ID, "human", reason); err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.JSON(http.StatusAccepted, map[string]string{"status": "paused"})
+}
+
+func (s *Server) handleResume(c echo.Context) error {
+	if err := s.Foreman.Resume(c.Request().Context(), woFrom(c).ID, "human"); err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.JSON(http.StatusAccepted, map[string]string{"status": "resumed"})
+}
+
+func (s *Server) handleFindingDecision(c echo.Context) error {
+	var req model.FindingDecisionRequest
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
+	}
+	fd, err := s.Foreman.DecideFinding(c.Request().Context(), woFrom(c).ID, c.Param("finding_id"), currentUser(c).ID, req)
+	if err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.JSON(http.StatusOK, fd)
 }

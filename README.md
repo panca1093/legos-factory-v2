@@ -82,16 +82,17 @@ npm run e2e                      # Playwright journey (needs backend on :8080)
 ## The verified work order journey
 
 ```text
-Create Project → Create Work Order → Foreman planning (Architect draft)
-→ Architect review → (clarification ⇄ human) → human plan approval
+Create Project → Create Work Order → Architect draft
+→ Foreman review (APPROVE / REVISE once / CLARIFY ⇄ human) → human plan approval
+  (delegated autonomy: starts after the Foreman review; guided: pauses after every build step)
 → baseline verification (failing evidence at revision 0) → Builder tasks (DAG)
 → deterministic checks (go test / go vet, really executed)
-→ Inspector review (blocker finding on rev 0) → bounded fix (rev 1)
+→ specialist Inspectors chosen from the changed files (blocker finding on rev 0) → bounded fix (rev 1)
 → re-verify → clean re-inspection → merge readiness → NEEDS_HUMAN_REVIEW
 → human PR decision (approve → READY / request changes / decline)
 ```
 
-Every state transition is validated by a persistent state machine and streamed live to the UI over SSE. Nothing is ever published, pushed or merged — the PR decision is a local disposition.
+Every state transition is validated by a persistent state machine and streamed live to the UI over SSE. Agent replies drive transitions only after passing a schema (one corrective retry, then the step fails). Any running order can be paused after its current step and resumed; findings can be confirmed, disputed (with a reason), resolved or escalated (which pauses the order). Nothing is ever merged. A pull request is opened only for projects bound to a shared git connection, and only after a human approves the PR decision; otherwise the decision is a local disposition.
 
 ## Known limitations (honest boundaries)
 

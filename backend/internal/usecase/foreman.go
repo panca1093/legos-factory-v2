@@ -5,11 +5,9 @@ package usecase
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"regexp"
-	"strings"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -17,7 +15,7 @@ import (
 
 const (
 	JobPlan      = "plan"
-	JobReview    = "review" // architect re-review after clarification
+	JobReview    = "review" // Foreman review of the Architect's draft
 	JobImplement = "implement"
 	JobVerify    = "verify"
 	JobInspect   = "inspect"
@@ -206,8 +204,29 @@ func (f *Foreman) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Ch
 	})
 }
 
-func parseStructured(text string, v any) error {
-	return StructuredJSON(StripFences(text), v)
+// runStructured runs role and decodes its reply into v. An invalid reply is
+// retried once with the schema error; a second failure is permanent, so a
+// malformed answer never drives a transition.
+func (f *Foreman) runStructured(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, prompt string, extra map[string]string, taskID string, v reply) (model.AgentResult, string, error) {
+	provider, modelID := f.Model(role, wo)
+	res, runID, err := f.runAgent(ctx, wo, role, provider, modelID, prompt, extra, taskID)
+	if err != nil {
+		return res, runID, err
+	}
+	derr := decodeReply(res.Text, v)
+	if derr == nil {
+		return res, runID, nil
+	}
+	f.event(wo.ID, string(role), "agent_reply_invalid", fmt.Sprintf("%s reply rejected: %v; asking once more", role, derr), nil)
+	retry := prompt + "\n\nYour previous reply was rejected: " + derr.Error() + "\nReply again with ONLY the JSON object."
+	res, runID, err = f.runAgent(ctx, wo, role, provider, modelID, retry, extra, taskID)
+	if err != nil {
+		return res, runID, err
+	}
+	if derr = decodeReply(res.Text, v); derr != nil {
+		return res, runID, fmt.Errorf("%w: %s reply invalid after retry: %v", model.ErrPermanent, role, derr)
+	}
+	return res, runID, nil
 }
 
 func (f *Foreman) enqueue(ctx context.Context, kind, woID, reason string) error {
@@ -217,30 +236,6 @@ func (f *Foreman) enqueue(ctx context.Context, kind, woID, reason string) error 
 func (f *Foreman) enqueuePayload(ctx context.Context, kind, woID string, payload map[string]any) error {
 	_, err := f.Sched.Enqueue(ctx, kind, woID, "", payload)
 	return err
-}
-
-// StructuredJSON extracts the first JSON object/array from agent text and
-// unmarshals it into v. Agent replies are prose+JSON; this normalizes the
-// extraction. Callers must still validate semantics before acting on it.
-func StructuredJSON(text string, v any) error {
-	start := strings.Index(text, "{")
-	if start < 0 {
-		return fmt.Errorf("no JSON object found in agent response")
-	}
-	// find matching closing brace from start
-	depth := 0
-	for i := start; i < len(text); i++ {
-		switch text[i] {
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return json.Unmarshal([]byte(text[start:i+1]), v)
-			}
-		}
-	}
-	return fmt.Errorf("unterminated JSON object in agent response")
 }
 
 var jsonFence = regexp.MustCompile("(?s)```(?:json)?\\s*")

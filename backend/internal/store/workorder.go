@@ -17,7 +17,8 @@ type WorkOrderRepo struct{ DB *sql.DB }
 
 const woCols = `id, project_id, title, objective, acceptance, state, autonomy,
 	builder_model, inspector_model, clarif_question, clarif_answer, revision,
-	commit_sha, source_ref, pr_url, pr_ref, created_by, created_at, updated_at`
+	commit_sha, source_ref, pr_url, pr_ref, foreman_model, architect_model, plan_review, review_rounds,
+	paused_at, pause_reason, created_by, created_at, updated_at`
 
 func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	if wo.ID == "" {
@@ -27,11 +28,11 @@ func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	wo.CreatedAt, wo.UpdatedAt = now, now
 	_, err := r.DB.ExecContext(ctx, `INSERT INTO work_orders
 		(id, project_id, title, objective, acceptance, state, autonomy, builder_model, inspector_model,
-		 clarif_question, clarif_answer, revision, source_ref, created_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 clarif_question, clarif_answer, revision, source_ref, foreman_model, architect_model, created_by, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		wo.ID, wo.ProjectID, wo.Title, wo.Objective, wo.Acceptance, string(wo.State), wo.Autonomy,
 		wo.BuilderModel, wo.InspectorModel, wo.ClarifQuestion, wo.ClarifAnswer, wo.Revision,
-		wo.SourceRef, wo.CreatedBy, now.Unix(), now.Unix())
+		wo.SourceRef, wo.ForemanModel, wo.ArchitectModel, wo.CreatedBy, now.Unix(), now.Unix())
 	return err
 }
 
@@ -60,10 +61,12 @@ func (r *WorkOrderRepo) List(ctx context.Context) ([]model.WorkOrder, error) {
 func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	var wo model.WorkOrder
 	var state string
+	var pausedAt sql.NullInt64
 	var createdAt, updatedAt int64
 	err := scan(&wo.ID, &wo.ProjectID, &wo.Title, &wo.Objective, &wo.Acceptance, &state, &wo.Autonomy,
 		&wo.BuilderModel, &wo.InspectorModel, &wo.ClarifQuestion, &wo.ClarifAnswer, &wo.Revision,
-		&wo.CommitSHA, &wo.SourceRef, &wo.PRURL, &wo.PRRef, &wo.CreatedBy, &createdAt, &updatedAt)
+		&wo.CommitSHA, &wo.SourceRef, &wo.PRURL, &wo.PRRef, &wo.ForemanModel, &wo.ArchitectModel, &wo.PlanReview,
+		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.CreatedBy, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrWorkOrderNotFound
 	}
@@ -71,6 +74,10 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 		return nil, err
 	}
 	wo.State = model.State(state)
+	if pausedAt.Valid {
+		t := time.Unix(pausedAt.Int64, 0)
+		wo.PausedAt = &t
+	}
 	wo.CreatedAt = time.Unix(createdAt, 0)
 	wo.UpdatedAt = time.Unix(updatedAt, 0)
 	return &wo, nil

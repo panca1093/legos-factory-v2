@@ -253,10 +253,14 @@ function download() {
           :aria-labelledby="'order-tab-' + tab"
         >
           <RunBanner
-            v-if="tab === 'graph' || tab === 'activity'"
-            :state="order.state"
+            v-if="tab === 'graph' || tab === 'activity' || order.paused_at"
+            :order="order"
             :tasks="tasks"
             :runs="runs"
+            :can-write="session.canWrite"
+            :busy="busy"
+            @pause="act(() => factory.pause(id))"
+            @resume="act(() => factory.resume(id))"
           />
           <Transition name="view" mode="out-in"
             ><BlueprintPanel
@@ -299,6 +303,10 @@ function download() {
               :pr-ref="order.pr_ref"
               :source-ref="order.source_ref"
               @decision="open"
+              @finding="
+                (f, action, note) =>
+                  act(() => factory.decideFinding(id, f, action, note))
+              "
           /></Transition>
         </div>
       </div>

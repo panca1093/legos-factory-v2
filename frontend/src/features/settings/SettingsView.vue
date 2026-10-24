@@ -156,12 +156,19 @@ function toggleAllowed(id: string, checked: boolean) {
           ><section class="settings-section">
             <h2>The crew that keeps the work honest.</h2>
             <p>
-              Workspace defaults apply to new work orders. Builder and Inspector
-              can be chosen when creating an order.
+              Workspace defaults apply to new work orders. Foreman and Architect
+              models are snapshotted when an order is created; Builder and
+              Inspector can be chosen per order. Models come from OpenCode
+              discovery, including subscription providers signed in there.
             </p>
             <div class="form-grid">
               <div
-                v-for="role in ['architect', 'builder', 'inspector'] as const"
+                v-for="role in [
+                  'foreman',
+                  'architect',
+                  'builder',
+                  'inspector',
+                ] as const"
                 :key="role"
                 class="form-group"
               >
@@ -189,17 +196,6 @@ function toggleAllowed(id: string, checked: boolean) {
                     {{ m.name }}
                   </option>
                 </select>
-              </div>
-              <div class="form-group">
-                <label for="foreman-model" class="row"
-                  ><BrickBot persona="foreman" class="compact" />Foreman
-                  default</label
-                ><select id="foreman-model" disabled>
-                  <option>Managed by backend · unavailable</option>
-                </select>
-                <p class="help">
-                  The API does not expose a Foreman model setting.
-                </p>
               </div>
             </div>
           </section>

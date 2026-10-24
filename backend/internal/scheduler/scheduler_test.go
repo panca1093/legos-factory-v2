@@ -30,7 +30,8 @@ func testDB(t *testing.T) *sql.DB {
 		id TEXT PRIMARY KEY, kind TEXT, wo_id TEXT, task_id TEXT, payload TEXT DEFAULT '{}',
 		state TEXT DEFAULT 'PENDING', attempts INTEGER DEFAULT 0, max_attempts INTEGER DEFAULT 3,
 		run_after INTEGER DEFAULT 0, claimed_by TEXT DEFAULT '', error TEXT DEFAULT '',
-		created_at INTEGER, updated_at INTEGER)`)
+		created_at INTEGER, updated_at INTEGER);
+		CREATE TABLE work_orders (id TEXT PRIMARY KEY, paused_at INTEGER)`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,5 +213,48 @@ func TestOrphanReconcile(t *testing.T) {
 		if err == "" {
 			t.Fatal("orphan error message should explain reconciliation requirement")
 		}
+	}
+}
+
+func TestPausedWorkOrdersAreNotClaimed(t *testing.T) {
+	db := testDB(t)
+	if _, err := db.Exec(`INSERT INTO work_orders (id, paused_at) VALUES ('paused', 1), ('running', NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	s := New(&store.JobRepo{DB: db}, slog.Default(), 2)
+	var ran atomic.Int64
+	var unpaused atomic.Bool
+	s.Register("test", func(ctx context.Context, job model.Job) error {
+		if job.WOID == "paused" && !unpaused.Load() {
+			t.Error("a paused work order's job was claimed")
+		}
+		ran.Add(1)
+		return nil
+	})
+	ctx := context.Background()
+	for _, wo := range []string{"paused", "running"} {
+		if _, err := s.Enqueue(ctx, "test", wo, "", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Start(ctx)
+	deadline := time.Now().Add(3 * time.Second)
+	for ran.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(400 * time.Millisecond) // give the poller a chance to wrongly claim
+	if ran.Load() != 1 {
+		t.Fatalf("only the running order's job may run while the other is paused, ran=%d", ran.Load())
+	}
+	unpaused.Store(true)
+	if _, err := db.Exec(`UPDATE work_orders SET paused_at = NULL WHERE id = 'paused'`); err != nil {
+		t.Fatal(err)
+	}
+	for ran.Load() < 2 && time.Now().Before(deadline.Add(2*time.Second)) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	s.Stop()
+	if ran.Load() != 2 {
+		t.Fatalf("resumed job should run once unpaused, ran=%d", ran.Load())
 	}
 }

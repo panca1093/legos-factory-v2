@@ -107,7 +107,7 @@ func (p *Projects) RemoveMember(ctx context.Context, projectID, userID string) e
 func IsNotFound(err error) bool {
 	return errors.Is(err, model.ErrProjectNotFound) || errors.Is(err, model.ErrWorkOrderNotFound) ||
 		errors.Is(err, model.ErrKnowledgeNotFound) || errors.Is(err, model.ErrUserNotFound) ||
-		errors.Is(err, model.ErrConnectionNotFound)
+		errors.Is(err, model.ErrConnectionNotFound) || errors.Is(err, model.ErrFindingNotFound)
 }
 
 func toSet(ids []string) map[string]bool {

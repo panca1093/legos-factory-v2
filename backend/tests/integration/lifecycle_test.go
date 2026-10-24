@@ -209,6 +209,22 @@ func (ta *testApp) awaitState(t *testing.T, woID string, want string, timeout ti
 	return nil
 }
 
+// awaitReviewed waits until the Foreman has approved the drafted plan, the
+// precondition for a human plan approval.
+func (ta *testApp) awaitReviewed(t *testing.T, woID string) map[string]any {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		doc := ta.awaitState(t, woID, "ARCHITECT_REVIEW", 30*time.Second)
+		if doc["work_order"].(map[string]any)["plan_review"] == "approved" {
+			return doc
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Foreman never approved the plan of %s", woID)
+	return nil
+}
+
 func tail(s string, n int) string {
 	if len(s) > n {
 		return s[len(s)-n:]
@@ -250,7 +266,7 @@ func TestFullLifecycleMockHarnessRealChecks(t *testing.T) {
 	if status != 202 {
 		t.Fatalf("plan generate: %d %s", status, body)
 	}
-	doc := ta.awaitState(t, wo.ID, "ARCHITECT_REVIEW", 30*time.Second)
+	doc := ta.awaitReviewed(t, wo.ID)
 	plan := doc["plan"].([]any)
 	if len(plan) != 4 {
 		t.Fatalf("expected 4 planned tasks, got %d", len(plan))
@@ -343,13 +359,16 @@ func TestClarificationPath(t *testing.T) {
 		t.Fatalf("expected a clarification question, got: %s", body)
 	}
 
-	// human answers → architect re-review runs → plan approved again
+	// human answers → Architect re-drafts with the answer → Foreman reviews
 	status, body = ta.do(t, "POST", fmt.Sprintf("/api/v1/work-orders/%s/clarifications", wo.ID),
 		`{"answer":"Idempotency window is 24 hours."}`)
 	if status != 202 {
 		t.Fatalf("clarify: %d %s", status, body)
 	}
-	ta.awaitState(t, wo.ID, "ARCHITECT_REVIEW", 30*time.Second)
+	doc = ta.awaitReviewed(t, wo.ID)
+	if plan, _ := doc["plan"].([]any); len(plan) == 0 {
+		t.Fatal("answering a clarification must produce a real plan, not an empty one")
+	}
 
 	// answering again must fail: not waiting anymore
 	status, body = ta.do(t, "POST", fmt.Sprintf("/api/v1/work-orders/%s/clarifications", wo.ID),

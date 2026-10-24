@@ -74,6 +74,7 @@ type Sandbox interface {
 	RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration) model.CheckResult
 	Commit(ctx context.Context, dir, message string) (string, error)
 	PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (base string, err error)
+	ChangedFiles(ctx context.Context, dir string) ([]string, error)
 }
 
 type ConnectionStore interface {
@@ -118,6 +119,8 @@ type FindingStore interface {
 	Create(ctx context.Context, f model.Finding) error
 	ResolveOpen(ctx context.Context, woID string) error
 	CountOpenBlockers(ctx context.Context, woID string) (int, error)
+	Get(ctx context.Context, woID, id string) (*model.Finding, error)
+	SetDisposition(ctx context.Context, id, status, note, by string) error
 }
 
 type QualityStore interface {

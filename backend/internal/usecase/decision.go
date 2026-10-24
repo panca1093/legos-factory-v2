@@ -11,13 +11,22 @@ import (
 
 // Human decisions: plan approval/revision, clarification, PR disposition, cancel.
 
-// ApprovePlan authorizes execution (human decision or policy, enforced by
-// the HTTP layer). Moves ARCHITECT_REVIEW → QUEUED and enqueues root tasks.
+// ApprovePlan is the human authorization to execute a Foreman-reviewed plan.
 func (f *Foreman) ApprovePlan(ctx context.Context, woID string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err
 	}
+	if wo.State == model.StateArchitectReview && wo.PlanReview != "approved" {
+		return stateConflict("the Foreman has not finished reviewing this plan")
+	}
+	return f.approvePlan(ctx, wo, "human", "Plan approved; execution authorized")
+}
+
+// approvePlan moves ARCHITECT_REVIEW → QUEUED and enqueues root tasks; actor
+// is "human" or "policy" (delegated autonomy).
+func (f *Foreman) approvePlan(ctx context.Context, wo *model.WorkOrder, actor, msg string) error {
+	woID := wo.ID
 	tasks, err := f.WO.Plan(ctx, woID)
 	if err != nil {
 		return err
@@ -25,7 +34,7 @@ func (f *Foreman) ApprovePlan(ctx context.Context, woID string) error {
 	if len(tasks) == 0 {
 		return stateConflict("plan has no tasks; approve requires a reviewed plan")
 	}
-	if err := f.step(ctx, wo, model.StateArchitectReview, model.StateQueued, "human", "Plan approved; execution authorized"); err != nil {
+	if err := f.step(ctx, wo, model.StateArchitectReview, model.StateQueued, actor, msg); err != nil {
 		return err
 	}
 	roots := model.ReadyTasks(tasks, map[string]bool{})
@@ -35,8 +44,12 @@ func (f *Foreman) ApprovePlan(ctx context.Context, woID string) error {
 		}
 	}
 	f.event(woID, "foreman", "execution_queued", fmt.Sprintf("%d task(s) queued", len(roots)), nil)
-	f.Catalog.Record(ctx, wo, model.KnowledgePlanApproved, model.TrustHumanDecision, "human",
-		fmt.Sprintf("Plan approved for %q (%d tasks)", wo.Title, len(tasks)), taskList(tasks))
+	trust := model.TrustHumanDecision
+	if actor != "human" {
+		trust = model.TrustVerified // a deterministic policy decision, not a person's
+	}
+	f.Catalog.Record(ctx, wo, model.KnowledgePlanApproved, trust, actor,
+		fmt.Sprintf("Plan approved for %q (%d tasks) by %s", wo.Title, len(tasks), actor), taskList(tasks))
 	return nil
 }
 
@@ -44,6 +57,9 @@ func (f *Foreman) ApprovePlan(ctx context.Context, woID string) error {
 func (f *Foreman) RevisePlan(ctx context.Context, woID, notes string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
+		return err
+	}
+	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"plan_review": ""}); err != nil {
 		return err
 	}
 	if err := f.step(ctx, wo, model.StateArchitectReview, model.StatePlanning, "human", "Revision requested: "+notes); err != nil {
@@ -55,23 +71,27 @@ func (f *Foreman) RevisePlan(ctx context.Context, woID, notes string) error {
 	return err
 }
 
-// AnswerClarification records the human answer and triggers re-review.
+// AnswerClarification records the human answer and has the Architect
+// re-draft the plan with it; the Foreman then reviews the new draft.
 func (f *Foreman) AnswerClarification(ctx context.Context, woID, answer string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err
 	}
-	if wo.State != model.StateWaitingForHuman {
+	if wo.State != model.StateWaitingForHuman || wo.ClarifQuestion == "" || wo.ClarifAnswer != "" {
 		return stateConflict("WO %s is not waiting for clarification (state %s)", woID, wo.State)
 	}
-	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"clarif_answer": answer}); err != nil {
+	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"clarif_answer": answer, "review_rounds": 0}); err != nil {
 		return err
 	}
+	wo.ClarifAnswer = answer
 	f.event(woID, "human", "clarification_answered", answer, nil)
 	f.Catalog.Record(ctx, wo, model.KnowledgeClarification, model.TrustHumanDecision, "human",
 		"Clarification: "+wo.ClarifQuestion, fmt.Sprintf("Question: %s\nAnswer: %s", wo.ClarifQuestion, answer))
-	_, err = f.Sched.Enqueue(ctx, JobReview, woID, "", map[string]any{})
-	return err
+	if err := f.step(ctx, wo, model.StateWaitingForHuman, model.StatePlanning, "human", "Clarification answered; re-drafting plan"); err != nil {
+		return err
+	}
+	return f.enqueuePayload(ctx, JobPlan, woID, map[string]any{"notes": "Incorporate the human clarification."})
 }
 
 // HumanPRDecision records the final human disposition from
@@ -222,4 +242,45 @@ func prBody(wo *model.WorkOrder) string {
 		fmt.Fprintf(&b, "\n\nSource: %s", wo.SourceRef)
 	}
 	return b.String()
+}
+
+// DecideFinding records a human disposition. Disputed findings stop
+// blocking readiness but keep the reason; escalating pauses the order until a
+// human resumes it.
+func (f *Foreman) DecideFinding(ctx context.Context, woID, findingID, actorID string, req model.FindingDecisionRequest) (*model.Finding, error) {
+	wo, err := f.WO.Get(ctx, woID)
+	if err != nil {
+		return nil, err
+	}
+	if wo.State == model.StateReady || wo.State == model.StateCancelled {
+		return nil, stateConflict("WO %s is %s; findings can no longer change", woID, wo.State)
+	}
+	fd, err := f.Findings.Get(ctx, woID, findingID)
+	if err != nil {
+		return nil, err
+	}
+	status := map[string]string{
+		"confirm": model.FindingConfirmed, "dispute": model.FindingDisputed,
+		"resolve": model.FindingResolved, "escalate": model.FindingEscalated,
+	}[req.Action]
+	note := strings.TrimSpace(req.Note)
+	switch {
+	case status == "":
+		return nil, fmt.Errorf("%w: action must be confirm, dispute, resolve or escalate", ErrInvalid)
+	case (status == model.FindingDisputed || status == model.FindingEscalated) && note == "":
+		return nil, fmt.Errorf("%w: a %s needs a note explaining why", ErrInvalid, req.Action)
+	}
+	if err := f.Findings.SetDisposition(ctx, fd.ID, status, note, actorID); err != nil {
+		return nil, err
+	}
+	f.event(woID, "human", "finding_"+status, fmt.Sprintf("%s: %s", fd.Title, note), map[string]any{"finding_id": fd.ID})
+	f.Catalog.Record(ctx, wo, model.KnowledgeFindingDecision, model.TrustHumanDecision, "human",
+		fmt.Sprintf("Finding %s: %s", status, fd.Title), fmt.Sprintf("Severity: %s\nSpecialty: %s\nNote: %s", fd.Severity, fd.Specialty, note),
+		"finding:"+fd.ID)
+	if status == model.FindingEscalated && wo.PausedAt == nil && !wo.State.Terminal() {
+		if err := f.pause(ctx, wo, "human", "Finding escalated: "+fd.Title); err != nil {
+			return nil, err
+		}
+	}
+	return f.Findings.Get(ctx, woID, findingID)
 }
