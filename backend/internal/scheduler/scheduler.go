@@ -226,9 +226,11 @@ func (s *Scheduler) run(ctx context.Context, job Job) {
 	var attempts int
 	_ = s.db.QueryRowContext(ctx, `SELECT attempts FROM jobs WHERE id = ?`, job.ID).Scan(&attempts)
 	if attempts+1 >= job.MaxAttempts {
+		s.log.Error("job failed permanently", "job", job.ID, "kind", job.Kind, "wo", job.WOID, "attempts", attempts+1, "err", err)
 		s.finish(ctx, job, JobFailed, err.Error())
 	} else {
 		// retryable: back off, requeue
+		s.log.Warn("job retryable failure", "job", job.ID, "kind", job.Kind, "wo", job.WOID, "err", err)
 		_, _ = s.db.ExecContext(ctx, `UPDATE jobs SET state = 'PENDING', attempts = attempts + 1,
 			run_after = ?, error = ?, updated_at = ? WHERE id = ?`,
 			time.Now().Add(2*time.Second).Unix(), err.Error(), time.Now().Unix(), job.ID)

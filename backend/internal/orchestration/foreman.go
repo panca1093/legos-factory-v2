@@ -147,11 +147,31 @@ func (f *Foreman) handlePlan(ctx context.Context, job scheduler.Job) error {
 		return fmt.Errorf("unexpected architect decision %q", plan.Decision)
 	}
 
+	// plan task ids from agents are only unique within one plan; namespace
+	// them per work order so the plan_tasks primary key stays global
+	idMap := make(map[string]string, len(plan.Tasks))
+	for i, t := range plan.Tasks {
+		ref := t.ID
+		if ref == "" {
+			ref = fmt.Sprintf("t%d", i+1)
+		}
+		idMap[ref] = fmt.Sprintf("%s_%s", wo.ID, ref)
+	}
 	tasks := make([]workorder.Task, 0, len(plan.Tasks))
 	for i, t := range plan.Tasks {
+		ref := t.ID
+		if ref == "" {
+			ref = fmt.Sprintf("t%d", i+1)
+		}
+		deps := make([]string, 0, len(t.Deps))
+		for _, d := range t.Deps {
+			if mapped, ok := idMap[d]; ok {
+				deps = append(deps, mapped)
+			}
+		}
 		tasks = append(tasks, workorder.Task{
-			ID: t.ID, WOID: wo.ID, Seq: i, Title: t.Title, Objective: t.Objective,
-			Role: t.Role, Deps: t.Deps,
+			ID: idMap[ref], WOID: wo.ID, Seq: i, Title: t.Title, Objective: t.Objective,
+			Role: t.Role, Deps: deps,
 		})
 	}
 	if err := workorder.ValidateDAG(tasks); err != nil {
