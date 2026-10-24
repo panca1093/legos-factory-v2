@@ -1,6 +1,8 @@
 # Go
 backend/factory
+backend/vendor
 backend/tests/integration/*.test
+backend/internal/http/dist
 *.test
 *.out
 
