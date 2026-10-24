@@ -63,6 +63,24 @@ FACTORY_ADDR=127.0.0.1:8090 ./factory-server
 # http://127.0.0.1:8090 (SPA served with fallback routes)
 ```
 
+## Local deployment (Docker Compose)
+
+Requires Docker with Compose. From the repository root:
+
+```sh
+docker compose up -d --build --wait
+docker compose logs -f factory
+```
+
+Open http://localhost:8080. The image builds Vue and embeds it in the Go server. Go, Node/npm, and Git remain available for work-order checks. SQLite, the credential encryption key, and workspaces persist in the `factory-data` volume. The server uses local development authentication and is exposed only on localhost.
+
+```sh
+docker compose down              # stop; preserve data
+docker compose up -d --build --wait  # rebuild after code changes
+```
+
+Runs use the mock harness unless `FACTORY_OPENCODE_URL` is set. To use OpenCode running on the host, export `FACTORY_OPENCODE_URL=http://host.docker.internal:14099` and `FACTORY_OPENCODE_PASSWORD` before starting Compose. OpenCode must listen on an address reachable from the container. Local repository paths must also be bind-mounted into the container and use their container path in project settings. Keep `FACTORY_SANDBOX_MODE=local`; the application's `docker` sandbox mode is not implemented.
+
 ## Tests
 
 ```sh
