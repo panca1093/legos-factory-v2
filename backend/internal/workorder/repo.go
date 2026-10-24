@@ -160,6 +160,7 @@ func (r *Repository) Plan(ctx context.Context, woID string) ([]Task, error) {
 		if err := rows.Scan(&t.ID, &t.WOID, &t.Seq, &t.Title, &t.Objective, &t.Role); err != nil {
 			return nil, err
 		}
+		t.Deps = []string{}
 		out = append(out, t)
 		byID[t.ID] = &out[len(out)-1]
 	}

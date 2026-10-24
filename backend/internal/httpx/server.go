@@ -171,6 +171,7 @@ func (s *Server) routes() {
 	api.POST("/work-orders/:id/pr-decision", s.requireRole(identity.RoleEngineer, s.handlePRDecision))
 	api.POST("/work-orders/:id/cancel", s.requireRole(identity.RoleEngineer, s.handleCancel))
 	api.GET("/work-orders/:id/runs", s.handleListRuns)
+	api.GET("/work-orders/:id/activity", s.handleListEvents)
 	api.GET("/work-orders/:id/quality", s.handleListQuality)
 	api.GET("/work-orders/:id/findings", s.handleListFindings)
 	api.GET("/work-orders/:id/events", s.handleWOEvents)

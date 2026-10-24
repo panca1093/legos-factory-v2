@@ -372,6 +372,17 @@ func (s *Server) handleListRuns(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"runs": runs})
 }
 
+func (s *Server) handleListEvents(c echo.Context) error {
+	events, err := s.WORepo.Events(c.Request().Context(), c.Param("id"), 0, 200)
+	if err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load events")
+	}
+	if events == nil {
+		events = []workorder.Event{}
+	}
+	return c.JSON(http.StatusOK, map[string]any{"events": events})
+}
+
 func (s *Server) handleListQuality(c echo.Context) error {
 	wo, err := s.takeWO(c)
 	if err != nil {
