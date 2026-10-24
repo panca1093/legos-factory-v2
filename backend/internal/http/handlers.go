@@ -6,15 +6,11 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"legos-factory/backend/internal/model"
-	"legos-factory/backend/internal/sandbox"
 	"legos-factory/backend/internal/usecase"
 )
-
-func shortUUID() string { return uuid.NewString()[:12] }
 
 func (s *Server) handleListProjects(c echo.Context) error {
 	projects, err := s.Projects.List(c.Request().Context(), currentUser(c))
@@ -68,32 +64,18 @@ func (s *Server) handleCreateWorkOrder(c echo.Context) error {
 	if err := req.Validate(); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
 	}
-	u := currentUser(c)
-	// unknown and inaccessible projects are indistinguishable to the caller
-	proj, err := s.Projects.Get(c.Request().Context(), u, req.ProjectID)
-	if err != nil {
+	wo, err := s.WorkOrders.Create(c.Request().Context(), currentUser(c), req)
+	switch {
+	case err == nil:
+		return c.JSON(http.StatusCreated, wo)
+	case usecase.IsNotFound(err):
+		// unknown and inaccessible projects are indistinguishable to the caller
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", "unknown project_id")
-	}
-	wo := &model.WorkOrder{
-		ID:             "wo_" + shortUUID(),
-		ProjectID:      req.ProjectID,
-		Title:          req.Title,
-		Objective:      req.Objective,
-		Acceptance:     req.Acceptance,
-		State:          model.StateCreated,
-		Autonomy:       req.Autonomy,
-		BuilderModel:   req.BuilderModel,
-		InspectorModel: req.InspectorModel,
-		CreatedBy:      u.ID,
-	}
-	if err := s.WORepo.Create(c.Request().Context(), wo); err != nil {
+	case errors.Is(err, usecase.ErrWorkspace):
+		return errorJSON(c, http.StatusInternalServerError, "WORKSPACE_FAILED", err.Error())
+	default:
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not create work order")
 	}
-	// isolated workspace: builders never touch the project source dir
-	if _, err := sandbox.Prepare(c.Request().Context(), s.Cfg.DataDir, wo.ID, proj.RepoURL); err != nil {
-		return errorJSON(c, http.StatusInternalServerError, "WORKSPACE_FAILED", fmt.Sprintf("could not prepare workspace: %v", err))
-	}
-	return c.JSON(http.StatusCreated, wo)
 }
 
 func (s *Server) handleListWorkOrders(c echo.Context) error {

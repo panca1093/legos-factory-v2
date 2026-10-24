@@ -24,6 +24,7 @@ const (
 	KnowledgeFindings           = "findings"
 	KnowledgeReadiness          = "readiness"
 	KnowledgePRDecision         = "pr_decision"
+	KnowledgePROpened           = "pr_opened"
 	KnowledgeWorkOrderCompleted = "work_order_completed"
 	KnowledgeSummary            = "summary"
 )

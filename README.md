@@ -37,6 +37,11 @@ Environment (all optional):
 | `FACTORY_OPENCODE_PASSWORD` | — | basic-auth password printed by `opencode serve` |
 | `FACTORY_MAX_CONCURRENT_RUNS` | `2` | worker pool size |
 | `FACTORY_SANDBOX_MODE` | `local` | `local` (trusted) or `docker` (**not implemented** — see limitations) |
+| `FACTORY_SECRET_KEY` | — | base64 32-byte key that encrypts provider credentials. Unset in `dev` mode: generated into `<data>/secret.key`; unset otherwise: connections are disabled |
+
+### Provider connections (GitHub, GitLab, Bitbucket, Jira)
+
+Settings → Integrations stores tokens encrypted at rest; they are never returned by the API. A connection is *unverified* until **Test** succeeds against the provider. Shared connections (admins) can be bound to a project together with its `owner/repo` slug; the project's repository URL must then be the clone URL. When a human approves a work order in a bound project, its verified commit is pushed to `legos-factory/<work-order>` and a pull request is found-or-created — nothing is merged. Jira connections are read-only and prefill new work orders. The clients are covered by contract tests against fake provider APIs; they have not been exercised against real accounts in this repository.
 
 ### Using the real OpenCode harness
 

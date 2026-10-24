@@ -12,6 +12,7 @@ import (
 // eventbus and usage, and are wired in app.
 
 type WorkOrderStore interface {
+	Create(ctx context.Context, wo *model.WorkOrder) error
 	Get(ctx context.Context, id string) (*model.WorkOrder, error)
 	List(ctx context.Context) ([]model.WorkOrder, error)
 	UpdateState(ctx context.Context, id string, s model.State) error
@@ -25,6 +26,7 @@ type ProjectStore interface {
 	Get(ctx context.Context, id string) (*model.Project, error)
 	List(ctx context.Context) ([]model.Project, error)
 	Create(ctx context.Context, p *model.Project) error
+	SetBinding(ctx context.Context, id, connectionID, remoteRepo string) error
 }
 
 type MemberStore interface {
@@ -64,11 +66,45 @@ type SettingsReader interface {
 	Get(ctx context.Context) (*model.Settings, error)
 }
 
-// Sandbox executes verification checks in a workspace and commits verified
-// changes locally, returning the SHA ("" when not under version control).
+// Sandbox owns work-order workspaces: preparing them (cloning with auth when
+// given), running checks, committing verified changes locally (returning the
+// SHA, "" when not under version control) and pushing a branch to origin.
 type Sandbox interface {
+	Prepare(ctx context.Context, woID, repoURL string, auth *model.GitAuth) (string, error)
 	RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration) model.CheckResult
 	Commit(ctx context.Context, dir, message string) (string, error)
+	PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (base string, err error)
+}
+
+type ConnectionStore interface {
+	Create(ctx context.Context, c *model.Connection, sealed []byte) error
+	Get(ctx context.Context, id string) (*model.Connection, error)
+	Secret(ctx context.Context, id string) ([]byte, error)
+	Visible(ctx context.Context, userID string) ([]model.Connection, error)
+	Rename(ctx context.Context, id, name string) error
+	SetStatus(ctx context.Context, id, status string) error
+	RotateSecret(ctx context.Context, id string, sealed []byte) error
+	RecordCheck(ctx context.Context, id, account, checkErr string) error
+	Delete(ctx context.Context, id string) error
+}
+
+// Sealer encrypts credentials at rest.
+type Sealer interface {
+	Seal(plain []byte) ([]byte, error)
+	Open(sealed []byte) ([]byte, error)
+}
+
+// GitProvider opens pull requests on a hosted git service.
+type GitProvider interface {
+	CheckAuth(ctx context.Context) (account string, err error)
+	OpenPullRequest(ctx context.Context, pr model.PRRequest) (model.PullRequest, error)
+	GitAuth() model.GitAuth
+}
+
+// IssueTracker reads issues; it never modifies them.
+type IssueTracker interface {
+	CheckAuth(ctx context.Context) (account string, err error)
+	GetIssue(ctx context.Context, key string) (model.Issue, error)
 }
 
 type RunStore interface {

@@ -90,3 +90,51 @@ it("selects a real project when a cold drawer opens before project loading finis
   );
   w.unmount();
 });
+it("imports a Jira issue into the intent and keeps its source reference", async () => {
+  const f = useFactory();
+  vi.spyOn(f, "refreshConnections").mockImplementation(async () => {
+    f.connections = [
+      {
+        id: "jira1",
+        provider: "jira",
+        name: "Team Jira",
+        scope: "personal",
+        owner_id: user.id,
+        base_url: "https://acme.atlassian.net",
+        status: "active",
+        has_credential: true,
+        created_at: "",
+      },
+    ];
+  });
+  const lookup = vi.spyOn(f, "lookupJiraIssue").mockResolvedValue({
+    source_ref: "jira:PAY-7",
+    title: "Idempotent retries",
+    objective: "Retries must not double charge.",
+    acceptance: "Repeated keys return the original result",
+    url: "https://acme.atlassian.net/browse/PAY-7",
+  });
+  const create = vi.spyOn(f, "createWorkOrder").mockResolvedValue(orders[0]);
+  vi.spyOn(f, "planGenerate").mockResolvedValue();
+  const w = render();
+  await flushPromises();
+  await w.find("#wo-jira-key").setValue(" pay-7 ");
+  await w.find('[data-test="jira-import"] button').trigger("click");
+  await flushPromises();
+  expect(lookup).toHaveBeenCalledWith("jira1", "pay-7");
+  expect((w.find("#wo-title").element as HTMLInputElement).value).toBe(
+    "Idempotent retries",
+  );
+  expect(w.find('[data-test="source-ref"]').text()).toContain("PAY-7");
+  await w.find('[data-test="drawer-next"]').trigger("click");
+  await w.find('[data-test="drawer-next"]').trigger("click");
+  await w.find('[data-test="drawer-create"]').trigger("click");
+  await flushPromises();
+  expect(create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      source_ref: "jira:PAY-7",
+      acceptance: "Repeated keys return the original result",
+    }),
+  );
+  w.unmount();
+});

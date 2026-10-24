@@ -25,7 +25,32 @@ const form = reactive({
   autonomy: "assisted",
   builder_model: "",
   inspector_model: "",
+  source_ref: "",
 });
+const jira = reactive({ connection: "", key: "", busy: false, error: "" });
+const jiraConnections = computed(() =>
+  factory.connections.filter(
+    (c) => c.provider === "jira" && c.status === "active",
+  ),
+);
+async function importIssue() {
+  if (!jira.connection || !jira.key.trim() || jira.busy) return;
+  jira.busy = true;
+  jira.error = "";
+  try {
+    const d = await factory.lookupJiraIssue(jira.connection, jira.key.trim());
+    Object.assign(form, {
+      title: d.title,
+      objective: d.objective,
+      acceptance: d.acceptance || form.acceptance,
+      source_ref: d.source_ref,
+    });
+  } catch (e) {
+    jira.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    jira.busy = false;
+  }
+}
 const project = computed(() =>
   factory.projects.find((p) => p.id === form.project_id),
 );
@@ -50,7 +75,16 @@ watch(
         autonomy: "assisted",
         builder_model: "",
         inspector_model: "",
+        source_ref: "",
       });
+      Object.assign(jira, { key: "", error: "" });
+      factory
+        .refreshConnections()
+        .then(() => {
+          if (!jira.connection)
+            jira.connection = jiraConnections.value[0]?.id ?? "";
+        })
+        .catch(() => {});
     }
   },
   { immediate: true },
@@ -124,6 +158,47 @@ async function create() {
         <span v-for="i in 3" :key="i" :class="{ on: step >= i }"></span></div
     ></template>
     <div v-if="step === 1" class="stack">
+      <div
+        v-if="jiraConnections.length"
+        class="form-grid"
+        data-test="jira-import"
+      >
+        <div class="form-group">
+          <label for="wo-jira-conn">Import from Jira</label
+          ><select id="wo-jira-conn" v-model="jira.connection">
+            <option v-for="c in jiraConnections" :key="c.id" :value="c.id">
+              {{ c.name }}
+            </option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="wo-jira-key">Issue key</label
+          ><input
+            id="wo-jira-key"
+            v-model="jira.key"
+            placeholder="PAY-42"
+            @keydown.enter.prevent="importIssue"
+          />
+        </div>
+        <div class="form-group" style="align-self: end">
+          <button
+            class="btn"
+            type="button"
+            :disabled="jira.busy || !jira.key.trim()"
+            @click="importIssue"
+          >
+            {{ jira.busy ? "Importing…" : "Import" }}
+          </button>
+        </div>
+      </div>
+      <p v-if="jira.error" class="form-error" role="alert">{{ jira.error }}</p>
+      <p v-if="form.source_ref" class="help" data-test="source-ref">
+        Linked to {{ form.source_ref.replace("jira:", "") }} · Jira is not
+        modified.
+        <button class="btn small" type="button" @click="form.source_ref = ''">
+          Unlink
+        </button>
+      </p>
       <div class="form-group">
         <label for="wo-title">What should the crew build?</label
         ><input

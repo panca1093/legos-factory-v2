@@ -4,6 +4,10 @@ package app
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +19,7 @@ import (
 
 	"legos-factory/backend/internal/agent"
 	httpapi "legos-factory/backend/internal/http"
+	"legos-factory/backend/internal/integration"
 	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/sandbox"
 	"legos-factory/backend/internal/scheduler"
@@ -55,6 +60,19 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	usageTracker := usecase.NewUsageTracker(&store.UsageRepo{DB: db})
 	projects := &usecase.Projects{Store: projRepo, Members: &store.MemberRepo{DB: db}, Users: userRepo}
 	catalog := &usecase.Cataloger{Knowledge: &store.KnowledgeRepo{DB: db}, Proj: projRepo, Settings: settingsRepo, Log: log}
+	secrets, err := secretBox(cfg, log)
+	if err != nil {
+		return nil, err
+	}
+	integrations := &usecase.Integrations{
+		Store: &store.ConnectionRepo{DB: db}, Projects: projects,
+		Git: newGitProvider, Issues: newIssueTracker,
+	}
+	if secrets != nil { // a nil *SecretBox in the interface would not be nil
+		integrations.Secrets = secrets
+	}
+	box := sandbox.Local{DataDir: cfg.DataDir}
+	workOrders := &usecase.WorkOrders{Store: woRepo, Projects: projects, Sandbox: box, Integrations: integrations}
 
 	auth := &usecase.Identity{
 		Users: userRepo,
@@ -110,7 +128,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		Proj:    projRepo,
 		Resolve: resolve, Model: modelFor,
 		Bus: bus, Usage: usageTracker,
-		Catalog: catalog, Sandbox: sandbox.Local{},
+		Catalog: catalog, Sandbox: box, Integrations: integrations,
 		DataDir:     cfg.DataDir,
 		QualTimeout: 5 * time.Minute,
 		Log:         log,
@@ -131,6 +149,8 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Jobs = jobRepo
 	srv.Settings = settingsRepo
 	srv.Projects = projects
+	srv.WorkOrders = workOrders
+	srv.Integrations = integrations
 	srv.Catalog = catalog
 	srv.Foreman = foreman
 	srv.Bus = bus
@@ -208,4 +228,57 @@ func discoverDefaults(c *agent.OpenCodeClient) map[string]string {
 	return map[string]string{
 		"foreman": ref, "architect": ref, "builder": ref, "inspector": ref,
 	}
+}
+
+func newGitProvider(c model.Connection, token string) (usecase.GitProvider, error) {
+	switch c.Provider {
+	case model.ProviderGitHub:
+		return integration.NewGitHub(c.BaseURL, token, nil), nil
+	case model.ProviderGitLab:
+		return integration.NewGitLab(c.BaseURL, token, nil), nil
+	case model.ProviderBitbucket:
+		return integration.NewBitbucket(c.BaseURL, c.Username, token, nil), nil
+	}
+	return nil, fmt.Errorf("%s is not a git provider", c.Provider)
+}
+
+func newIssueTracker(c model.Connection, token string) (usecase.IssueTracker, error) {
+	if c.Provider != model.ProviderJira {
+		return nil, fmt.Errorf("%s is not an issue tracker", c.Provider)
+	}
+	return integration.NewJira(c.BaseURL, c.Username, token, nil), nil
+}
+
+// secretBox loads FACTORY_SECRET_KEY. Dev mode without one generates a
+// local key file so connections work out of the box; other modes leave
+// credential storage disabled rather than invent a key.
+func secretBox(cfg *model.Config, log *slog.Logger) (*store.SecretBox, error) {
+	raw := cfg.SecretKey
+	if raw == "" {
+		if cfg.AuthMode != "dev" {
+			log.Warn("FACTORY_SECRET_KEY not set; provider connections are disabled")
+			return nil, nil
+		}
+		path := filepath.Join(cfg.DataDir, "secret.key")
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			key := make([]byte, 32)
+			if _, err := rand.Read(key); err != nil {
+				return nil, err
+			}
+			data = []byte(base64.StdEncoding.EncodeToString(key))
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				return nil, err
+			}
+			log.Warn("generated a development credential key; set FACTORY_SECRET_KEY outside local development", "path", path)
+		} else if err != nil {
+			return nil, err
+		}
+		raw = strings.TrimSpace(string(data))
+	}
+	key, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		return nil, fmt.Errorf("FACTORY_SECRET_KEY must be base64: %w", err)
+	}
+	return store.NewSecretBox(key)
 }

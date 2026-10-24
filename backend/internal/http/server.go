@@ -16,24 +16,26 @@ import (
 )
 
 type Server struct {
-	Echo     *echo.Echo
-	Cfg      *model.Config
-	WORepo   *store.WorkOrderRepo
-	ProjRepo *store.ProjectRepo
-	Runs     *store.RunRepo
-	Findings *store.FindingRepo
-	Quality  *store.QualityRepo
-	Jobs     *store.JobRepo
-	Settings *store.SettingsRepo
-	Foreman  *usecase.Foreman
-	Projects *usecase.Projects
-	Catalog  *usecase.Cataloger
-	Bus      *Bus
-	Auth     *usecase.Identity
-	OIDC     *OIDCClient
-	Usage    *usecase.UsageTracker
-	Models   func(ctx echo.Context) ([]model.ModelInfo, error)
-	log      *slog.Logger
+	Echo         *echo.Echo
+	Cfg          *model.Config
+	WORepo       *store.WorkOrderRepo
+	ProjRepo     *store.ProjectRepo
+	Runs         *store.RunRepo
+	Findings     *store.FindingRepo
+	Quality      *store.QualityRepo
+	Jobs         *store.JobRepo
+	Settings     *store.SettingsRepo
+	Foreman      *usecase.Foreman
+	Projects     *usecase.Projects
+	WorkOrders   *usecase.WorkOrders
+	Integrations *usecase.Integrations
+	Catalog      *usecase.Cataloger
+	Bus          *Bus
+	Auth         *usecase.Identity
+	OIDC         *OIDCClient
+	Usage        *usecase.UsageTracker
+	Models       func(ctx echo.Context) ([]model.ModelInfo, error)
+	log          *slog.Logger
 }
 
 func New(cfg *model.Config, log *slog.Logger) *Server {
@@ -197,6 +199,14 @@ func (s *Server) routes() {
 	wo.GET("/findings", s.handleListFindings)
 	wo.GET("/events", s.handleWOEvents)
 	api.GET("/events", s.handleGlobalEvents)
+
+	api.GET("/connections", s.handleListConnections)
+	api.POST("/connections", s.requireRole(model.RoleEngineer, s.handleCreateConnection))
+	api.PATCH("/connections/:id", s.requireRole(model.RoleEngineer, s.handleUpdateConnection))
+	api.DELETE("/connections/:id", s.requireRole(model.RoleEngineer, s.handleDeleteConnection))
+	api.POST("/connections/:id/test", s.requireRole(model.RoleEngineer, s.handleTestConnection))
+	api.PUT("/projects/:id/binding", s.requireRole(model.RoleEngineer, s.handleBindProject))
+	api.POST("/integrations/jira/lookup", s.requireRole(model.RoleEngineer, s.handleJiraLookup))
 
 	api.GET("/knowledge", s.handleListKnowledge)
 	api.GET("/knowledge/:id", s.handleGetKnowledge)

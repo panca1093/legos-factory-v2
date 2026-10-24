@@ -13,7 +13,7 @@ import (
 
 type ProjectRepo struct{ DB *sql.DB }
 
-const pCols = `id, workspace_id, name, description, repo_url, language, quality_profile, created_at`
+const pCols = `id, workspace_id, name, description, repo_url, language, quality_profile, git_connection_id, remote_repo, created_at`
 
 func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 	if p.ID == "" {
@@ -23,9 +23,24 @@ func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 		p.WorkspaceID = model.DefaultWorkspaceID
 	}
 	p.CreatedAt = time.Now()
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO projects (id, workspace_id, name, description, repo_url, language, quality_profile, created_at)
-		VALUES (?,?,?,?,?,?,?,?)`, p.ID, p.WorkspaceID, p.Name, p.Description, p.RepoURL, p.Language, p.QualityProfile, p.CreatedAt.Unix())
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO projects (id, workspace_id, name, description, repo_url, language, quality_profile, git_connection_id, remote_repo, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`, p.ID, p.WorkspaceID, p.Name, p.Description, p.RepoURL, p.Language, p.QualityProfile,
+		nullStr(p.GitConnection), p.RemoteRepo, p.CreatedAt.Unix())
 	return err
+}
+
+// SetBinding points the project at a git connection and provider repo slug;
+// an empty connection id unbinds it.
+func (r *ProjectRepo) SetBinding(ctx context.Context, id, connectionID, remoteRepo string) error {
+	res, err := r.DB.ExecContext(ctx, `UPDATE projects SET git_connection_id = ?, remote_repo = ? WHERE id = ?`,
+		nullStr(connectionID), remoteRepo, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return model.ErrProjectNotFound
+	}
+	return nil
 }
 
 func (r *ProjectRepo) Get(ctx context.Context, id string) (*model.Project, error) {
@@ -52,14 +67,16 @@ func (r *ProjectRepo) List(ctx context.Context) ([]model.Project, error) {
 
 func scanP(scan rowScanner) (*model.Project, error) {
 	var p model.Project
+	var conn sql.NullString
 	var createdAt int64
-	err := scan(&p.ID, &p.WorkspaceID, &p.Name, &p.Description, &p.RepoURL, &p.Language, &p.QualityProfile, &createdAt)
+	err := scan(&p.ID, &p.WorkspaceID, &p.Name, &p.Description, &p.RepoURL, &p.Language, &p.QualityProfile, &conn, &p.RemoteRepo, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrProjectNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	p.GitConnection = conn.String
 	p.CreatedAt = time.Unix(createdAt, 0)
 	return &p, nil
 }

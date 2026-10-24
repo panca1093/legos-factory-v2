@@ -16,6 +16,7 @@ backend/  (Go module legos-factory/backend)
   internal/scheduler     SQLite-backed queue: atomic claim in tx, worker pool bound, retry w/ backoff, ErrPermanent fast-fail, orphan reconcile, CancelWO
   internal/agent         harness adapters: deterministic scripted mock (mock.go) and REAL OpenCode v2 adapter (opencode.go: model discovery, sessions, async prompt, measured tokens/cost, interrupt)
   internal/sandbox       per-WO isolated workspace (git clone / plain copy), check execution (shell, timeout, broken-GOROOT tolerance), local commit of verified revisions (never pushed)
+  internal/integration   REST clients: GitHub/GitLab/Bitbucket Cloud (find-or-create pull requests) and Jira Cloud (read-only issue import), contract-tested against fake APIs
   internal/http          Echo server: request-id, recover, slog logging, body limit, CORS, session auth, RBAC + project membership, error envelope {error:{code,message,request_id}}, OIDC client, SSE + event bus, static embed w/ SPA fallback
 frontend/ (Vue 3 + TS strict)
   src/app                AppShell (rail navigation, skip link, responsive), router (URL routes/deep links)

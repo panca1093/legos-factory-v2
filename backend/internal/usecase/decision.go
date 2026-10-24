@@ -2,7 +2,9 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"legos-factory/backend/internal/model"
 )
@@ -96,6 +98,12 @@ func (f *Foreman) HumanPRDecision(ctx context.Context, woID, decision, reason st
 				f.Log.Error("cataloger: summary enqueue failed", "wo", woID, "err", err)
 			}
 		}
+		// the human approval is the explicit authorization to publish
+		if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil && proj.GitConnection != "" {
+			if _, err := f.Sched.Enqueue(ctx, JobOpenPR, woID, "", map[string]any{}); err != nil {
+				f.Log.Error("open PR enqueue failed", "wo", woID, "err", err)
+			}
+		}
 		return nil
 	case "request_changes":
 		newRev := wo.Revision + 1
@@ -151,4 +159,67 @@ func (f *Foreman) recordPRDecision(ctx context.Context, wo *model.WorkOrder, tit
 	ref := fmt.Sprintf("local:%s@%s", wo.ID, orUnversioned(wo.CommitSHA))
 	f.Catalog.Record(ctx, wo, model.KnowledgePRDecision, model.TrustHumanDecision, "human",
 		fmt.Sprintf("%s: %q", title, wo.Title), fmt.Sprintf("Reason: %s\nPR reference: %s (no remote PR)", reason, ref), "pr:"+ref)
+}
+
+// JobOpenPR publishes an approved work order: push its verified commit to
+// a work branch and find-or-create the pull request, so retries are safe.
+const JobOpenPR = "open_pr"
+
+func (f *Foreman) handleOpenPR(ctx context.Context, job model.Job) error {
+	wo, err := f.WO.Get(ctx, job.WOID)
+	if err != nil {
+		return err
+	}
+	if wo.State != model.StateReady {
+		return fmt.Errorf("%w: a pull request requires an approved work order (state %s)", model.ErrPermanent, wo.State)
+	}
+	proj, err := f.Proj.Get(ctx, wo.ProjectID)
+	if err != nil {
+		return err
+	}
+	g, bound, err := f.Integrations.GitFor(ctx, proj)
+	if !bound {
+		return nil
+	}
+	if err != nil {
+		return f.prFailed(wo, fmt.Errorf("%w: %v", model.ErrPermanent, err))
+	}
+	auth := g.GitAuth()
+	branch := "legos-factory/" + wo.ID
+	base, err := f.Sandbox.PushBranch(ctx, f.workspaceDir(wo.ID), branch, &auth)
+	if err != nil {
+		return f.prFailed(wo, err)
+	}
+	pr, err := g.OpenPullRequest(ctx, model.PRRequest{Repo: proj.RemoteRepo, Head: branch, Base: base, Title: wo.Title, Body: prBody(wo)})
+	if err != nil {
+		var pe *model.ProviderError
+		if errors.As(err, &pe) && pe.Permanent() {
+			err = fmt.Errorf("%w: %v", model.ErrPermanent, err)
+		}
+		return f.prFailed(wo, err)
+	}
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"pr_url": pr.URL, "pr_ref": pr.Ref}); err != nil {
+		return err
+	}
+	f.event(wo.ID, "foreman", "pr_opened", fmt.Sprintf("Pull request %s opened from %s into %s", pr.Ref, branch, base),
+		map[string]any{"url": pr.URL, "ref": pr.Ref, "branch": branch, "base": base})
+	f.Catalog.Record(ctx, wo, model.KnowledgePROpened, model.TrustVerified, "foreman", "Pull request opened: "+pr.Ref,
+		fmt.Sprintf("URL: %s\nBranch: %s → %s\nCommit: %s", pr.URL, branch, base, orUnversioned(wo.CommitSHA)), "pr:"+pr.Ref)
+	return nil
+}
+
+func (f *Foreman) prFailed(wo *model.WorkOrder, err error) error {
+	f.event(wo.ID, "foreman", "pr_open_failed", "Could not open pull request: "+err.Error(), nil)
+	return err
+}
+
+func prBody(wo *model.WorkOrder) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\n**Acceptance criteria**\n%s\n\n", wo.Objective, wo.Acceptance)
+	fmt.Fprintf(&b, "Verified by legos-factory at revision %d (commit %s); deterministic checks passed and a human approved this change.",
+		wo.Revision, orUnversioned(wo.CommitSHA))
+	if wo.SourceRef != "" {
+		fmt.Fprintf(&b, "\n\nSource: %s", wo.SourceRef)
+	}
+	return b.String()
 }

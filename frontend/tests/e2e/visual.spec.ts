@@ -26,6 +26,25 @@ async function fixture(page: Page, role: string = user.role) {
     else if (p.endsWith("/overview")) body = overview;
     else if (p.endsWith("/models")) body = { models };
     else if (p.endsWith("/settings")) body = settings;
+    else if (p.endsWith("/connections"))
+      body = {
+        credentials_configured: true,
+        connections: [
+          {
+            id: "conn-gh",
+            provider: "github",
+            name: "Atlas GitHub",
+            scope: "shared",
+            owner_id: "admin",
+            base_url: "https://api.github.com",
+            status: "active",
+            account: "factory-bot",
+            verified_at: "2026-10-24T00:00:00Z",
+            has_credential: true,
+            created_at: "2026-10-24T00:00:00Z",
+          },
+        ],
+      };
     else if (p.endsWith("/events")) {
       await route.fulfill({
         contentType: "text/event-stream",
@@ -285,9 +304,12 @@ test("browser permissions, unavailable settings, dialog keyboard handling and er
   await page.goto("/settings");
   await expect(page.locator("#set-architect")).toBeDisabled();
   await page.goto("/settings?tab=integrations");
+  await expect(page.getByText("Atlas GitHub")).toBeVisible();
+  await expect(page.getByText("Verified", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Test" })).toHaveCount(0);
   await expect(
-    page.getByText("Connection management is unavailable.", { exact: false }),
-  ).toBeVisible();
+    page.getByRole("button", { name: "Add connection" }),
+  ).toHaveCount(0);
   await page.keyboard.press("Control+k");
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveAttribute("aria-modal", "true");

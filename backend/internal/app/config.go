@@ -26,6 +26,7 @@ func LoadConfig() (*model.Config, error) {
 		MaxConcurrentRuns: envInt("FACTORY_MAX_CONCURRENT_RUNS", 2),
 		RunTimeoutSec:     envInt("FACTORY_RUN_TIMEOUT", 600),
 		SandboxMode:       env("FACTORY_SANDBOX_MODE", "local"),
+		SecretKey:         env("FACTORY_SECRET_KEY", ""),
 		FrontendOrigin:    env("FACTORY_FRONTEND_ORIGIN", "http://localhost:5173"),
 	}
 	if c.AuthMode != "dev" && c.AuthMode != "oidc" {

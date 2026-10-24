@@ -1499,6 +1499,24 @@ select {
   font-size: 10px;
   color: var(--muted);
   margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+.connection-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@media (max-width: 680px) {
+  .connection {
+    flex-wrap: wrap;
+  }
+  .connection-meta {
+    flex-basis: 100%;
+    justify-content: flex-start;
+    padding-left: 49px;
+  }
 }
 .autonomy-levels {
   display: grid;

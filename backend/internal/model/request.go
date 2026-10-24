@@ -2,8 +2,11 @@ package model
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+var sourceRefPattern = regexp.MustCompile(`^jira:[A-Z][A-Z0-9_]+-[0-9]+$`)
 
 type CreateProjectRequest struct {
 	Name        string `json:"name"`
@@ -31,6 +34,7 @@ type CreateWorkOrderRequest struct {
 	Autonomy       string `json:"autonomy"`
 	BuilderModel   string `json:"builder_model"`
 	InspectorModel string `json:"inspector_model"`
+	SourceRef      string `json:"source_ref"`
 }
 
 func (r *CreateWorkOrderRequest) Validate() error {
@@ -49,6 +53,10 @@ func (r *CreateWorkOrderRequest) Validate() error {
 	case "", "guided", "assisted", "delegated":
 	default:
 		return fmt.Errorf("autonomy must be guided, assisted or delegated")
+	}
+	r.SourceRef = strings.TrimSpace(r.SourceRef)
+	if r.SourceRef != "" && !sourceRefPattern.MatchString(r.SourceRef) {
+		return fmt.Errorf("source_ref must look like jira:ABC-123")
 	}
 	return nil
 }

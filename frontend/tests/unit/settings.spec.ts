@@ -60,12 +60,12 @@ it("shows read-only governance to a nonadmin", async () => {
   ).toBeDefined();
   w.unmount();
 });
-it("keeps failed edits and marks unsupported integrations unavailable without writes", async () => {
+it("keeps failed edits after a save error", async () => {
   const f = useFactory();
   const save = vi
     .spyOn(f, "saveSettings")
     .mockRejectedValue(new Error("Save unavailable"));
-  const { w, router } = await render();
+  const { w } = await render();
   await w.find("#set-architect").setValue("test/builder");
   await w.find('[data-test="save-settings"]').trigger("click");
   await flushPromises();
@@ -73,10 +73,6 @@ it("keeps failed edits and marks unsupported integrations unavailable without wr
   expect((w.find("#set-architect").element as HTMLSelectElement).value).toBe(
     "test/builder",
   );
-  await router.push("/settings?tab=integrations");
-  await flushPromises();
-  expect(w.text()).toContain("Connection management is unavailable");
-  expect(w.findAll("button:disabled").length).toBeGreaterThan(0);
   expect(save).toHaveBeenCalledOnce();
   w.unmount();
 });

@@ -17,6 +17,7 @@ import { useTheme } from "../../composables/useTheme";
 import { money } from "../../composables/presentation";
 import type { Settings } from "../../types/api";
 import BrickBot from "../../components/agents/BrickBot.vue";
+import IntegrationsPanel from "./IntegrationsPanel.vue";
 const factory = useFactory(),
   session = useSession(),
   route = useRoute(),
@@ -364,60 +365,8 @@ function toggleAllowed(id: string, checked: boolean) {
           </section></template
         >
         <template v-else-if="tab === 'integrations'"
-          ><section class="settings-section">
-            <h2>Connections, with clear ownership.</h2>
-            <p>
-              Execution harnesses are reported by model discovery. Connection
-              management is unavailable.
-            </p>
-            <div class="connection">
-              <span class="provider-logo">O</span>
-              <div class="grow">
-                <h3>OpenCode</h3>
-                <p>
-                  {{
-                    factory.models.some((m) => m.harness === "opencode")
-                      ? "Models discovered from OpenCode."
-                      : "OpenCode is not reported; scripted mock runs are labeled mock."
-                  }}
-                </p>
-              </div>
-              <span
-                class="pill"
-                :class="
-                  factory.models.some((m) => m.harness === 'opencode')
-                    ? 'green'
-                    : ''
-                "
-                >{{
-                  factory.models.some((m) => m.harness === "opencode")
-                    ? "Discovered"
-                    : "Not reported"
-                }}</span
-              >
-            </div>
-            <div
-              v-for="name in [
-                'GitHub / GitLab',
-                'Jira',
-                'Personal model providers',
-              ]"
-              :key="name"
-              class="connection"
-            >
-              <span class="provider-logo">{{ name[0] }}</span>
-              <div class="grow">
-                <h3>{{ name }}</h3>
-                <p>Credential and connection controls are unavailable.</p>
-              </div>
-              <button class="btn small" disabled>Unavailable</button>
-            </div>
-          </section>
-          <div class="notice">
-            No credentials are collected here. External repository publishing
-            and PR creation are unavailable.
-          </div></template
-        >
+          ><IntegrationsPanel
+        /></template>
         <template v-else
           ><section class="settings-section">
             <div class="row between">

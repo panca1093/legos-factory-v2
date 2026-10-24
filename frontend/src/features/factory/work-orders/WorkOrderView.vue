@@ -292,6 +292,12 @@ function download() {
               :state="order.state"
               :can-write="session.canWrite"
               :busy="busy"
+              :publish-to="
+                project?.git_connection_id ? project.remote_repo : ''
+              "
+              :pr-url="order.pr_url"
+              :pr-ref="order.pr_ref"
+              :source-ref="order.source_ref"
               @decision="open"
           /></Transition>
         </div>

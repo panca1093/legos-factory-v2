@@ -2,7 +2,9 @@ import { defineStore } from "pinia";
 import { subscribe, type LiveEvent } from "../services/events/sse";
 import {
   api,
+  type Connection,
   type Finding,
+  type IssueDraft,
   type ModelInfo,
   type Overview,
   type Project,
@@ -26,6 +28,8 @@ export const useFactory = defineStore("factory", {
     workOrders: [] as WorkOrder[],
     overview: null as Overview | null,
     models: [] as ModelInfo[],
+    connections: [] as Connection[],
+    credentialsConfigured: true,
     detail: null as WODetail | null,
     events: [] as WOEvent[],
     quality: [] as QualityCheck[],
@@ -101,6 +105,59 @@ export const useFactory = defineStore("factory", {
       const res = await api.get<{ models: ModelInfo[] }>("/api/v1/models");
       if (epoch === this.workspaceEpoch) this.models = res.models ?? [];
     },
+    async refreshConnections() {
+      const epoch = this.workspaceEpoch;
+      const res = await api.get<{
+        connections: Connection[];
+        credentials_configured: boolean;
+      }>("/api/v1/connections");
+      if (epoch !== this.workspaceEpoch) return;
+      this.connections = res.connections ?? [];
+      this.credentialsConfigured = res.credentials_configured;
+    },
+    async createConnection(input: {
+      provider: string;
+      name: string;
+      scope: string;
+      base_url: string;
+      username: string;
+      token: string;
+    }) {
+      await api.post<Connection>("/api/v1/connections", input);
+      await this.refreshConnections();
+    },
+    async updateConnection(
+      id: string,
+      patch: { name?: string; status?: string; token?: string },
+    ) {
+      await api.patch<Connection>(`/api/v1/connections/${id}`, patch);
+      await this.refreshConnections();
+    },
+    async testConnection(id: string) {
+      await api.post<Connection>(`/api/v1/connections/${id}/test`);
+      await this.refreshConnections();
+    },
+    async deleteConnection(id: string) {
+      await api.del(`/api/v1/connections/${id}`);
+      await this.refreshConnections();
+    },
+    async bindProject(
+      id: string,
+      binding: { git_connection_id: string; remote_repo: string },
+    ) {
+      const res = await api.put<Project>(
+        `/api/v1/projects/${id}/binding`,
+        binding,
+      );
+      this.projects = this.projects.map((p) => (p.id === id ? res : p));
+      return res;
+    },
+    lookupJiraIssue(connection_id: string, key: string) {
+      return api.post<IssueDraft>("/api/v1/integrations/jira/lookup", {
+        connection_id,
+        key,
+      });
+    },
     async createProject(input: {
       name: string;
       repo_url: string;
@@ -119,6 +176,7 @@ export const useFactory = defineStore("factory", {
       autonomy: string;
       builder_model: string;
       inspector_model: string;
+      source_ref?: string;
     }) {
       const res = await api.post<WorkOrder>("/api/v1/work-orders", input);
       this.workOrders = [

@@ -14,6 +14,8 @@ export interface Project {
   description: string;
   repo_url: string;
   language: string;
+  git_connection_id?: string;
+  remote_repo?: string;
   created_at: string;
 }
 
@@ -50,6 +52,9 @@ export interface WorkOrder {
   clarif_answer?: string;
   revision: number;
   commit_sha?: string;
+  source_ref?: string;
+  pr_url?: string;
+  pr_ref?: string;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -165,6 +170,32 @@ export interface WOEvent {
   created_at: string;
 }
 
+export type Provider = "github" | "gitlab" | "bitbucket" | "jira";
+
+export interface Connection {
+  id: string;
+  provider: Provider;
+  name: string;
+  scope: "shared" | "personal";
+  owner_id: string;
+  base_url: string;
+  username?: string;
+  status: "active" | "disabled";
+  account?: string;
+  verified_at?: string;
+  last_error?: string;
+  has_credential: boolean;
+  created_at: string;
+}
+
+export interface IssueDraft {
+  source_ref: string;
+  title: string;
+  objective: string;
+  acceptance: string;
+  url: string;
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,
@@ -221,4 +252,6 @@ export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, b?: unknown) => request<T>("POST", p, b ?? {}),
   put: <T>(p: string, b?: unknown) => request<T>("PUT", p, b ?? {}),
+  patch: <T>(p: string, b?: unknown) => request<T>("PATCH", p, b ?? {}),
+  del: <T>(p: string) => request<T>("DELETE", p),
 };

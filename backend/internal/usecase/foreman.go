@@ -32,21 +32,22 @@ func stateConflict(format string, args ...any) error {
 }
 
 type Foreman struct {
-	WO          WorkOrderStore
-	Runs        RunStore
-	Findings    FindingStore
-	Quality     QualityStore
-	Proj        ProjectStore
-	Resolve     func(role model.AgentRole, wo *model.WorkOrder) Harness
-	Model       func(role model.AgentRole, wo *model.WorkOrder) (provider, modelID string)
-	Sched       Queue
-	Bus         Publisher
-	Usage       Budget
-	Catalog     *Cataloger
-	Sandbox     Sandbox
-	DataDir     string
-	QualTimeout time.Duration
-	Log         *slog.Logger
+	WO           WorkOrderStore
+	Runs         RunStore
+	Findings     FindingStore
+	Quality      QualityStore
+	Proj         ProjectStore
+	Resolve      func(role model.AgentRole, wo *model.WorkOrder) Harness
+	Model        func(role model.AgentRole, wo *model.WorkOrder) (provider, modelID string)
+	Sched        Queue
+	Bus          Publisher
+	Usage        Budget
+	Catalog      *Cataloger
+	Integrations *Integrations
+	Sandbox      Sandbox
+	DataDir      string
+	QualTimeout  time.Duration
+	Log          *slog.Logger
 }
 
 // Handlers maps each job kind to the step that executes it; app registers
@@ -61,6 +62,7 @@ func (f *Foreman) Handlers() map[string]func(context.Context, model.Job) error {
 		JobEvaluate:  f.handleEvaluate,
 
 		JobCatalogSummary: f.handleCatalogSummary,
+		JobOpenPR:         f.handleOpenPR,
 	}
 }
 

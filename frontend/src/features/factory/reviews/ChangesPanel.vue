@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { GitPullRequest, Check, MessageSquare, X } from "lucide-vue-next";
+import {
+  GitPullRequest,
+  Check,
+  ExternalLink,
+  MessageSquare,
+  X,
+} from "lucide-vue-next";
 import type { Run, Finding } from "../../../types/api";
 const props = defineProps<{
   runs: Run[];
@@ -8,6 +14,10 @@ const props = defineProps<{
   state: string;
   canWrite: boolean;
   busy: boolean;
+  publishTo?: string;
+  prUrl?: string;
+  prRef?: string;
+  sourceRef?: string;
 }>();
 const emit = defineEmits<{
   decision: ["approve" | "request_changes" | "decline"];
@@ -101,7 +111,21 @@ const canDecide = computed(
           <X class="icon" />Decline
         </button>
       </div>
-      <div class="notice section-gap">
+      <p v-if="sourceRef" class="help section-gap">
+        Source issue: {{ sourceRef.replace("jira:", "") }}
+      </p>
+      <div v-if="prUrl" class="notice section-gap" data-test="pr-link">
+        Pull request opened:
+        <a :href="prUrl" target="_blank" rel="noopener noreferrer"
+          >{{ prRef || prUrl }} <ExternalLink class="icon"
+        /></a>
+        Nothing was merged; the provider's review and branch protection apply.
+      </div>
+      <div v-else-if="publishTo" class="notice section-gap">
+        Approving pushes the verified commit to a work branch and opens a pull
+        request on {{ publishTo }}. Nothing is merged.
+      </div>
+      <div v-else class="notice section-gap">
         This records a local disposition. It does not create, publish or merge a
         pull request.
       </div>
