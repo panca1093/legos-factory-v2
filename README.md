@@ -6,7 +6,7 @@ A local-first, multi-project factory that turns engineering objectives into revi
 - **Frontend**: Vue 3 (Composition API) + TypeScript strict + Pinia + Vue Router + Tailwind + Lucide icons.
 - **Agent harness**: OpenCode v2 HTTP adapter (verified live) or a deterministic scripted mock harness for offline demos and tests.
 
-> The original interactive prototype (`index.html` + `PRD.md`, `ADR.md`, `UX-SPEC.md`, `VERIFICATION.md`) remains in this repository as the visual and interaction design baseline. The Vue frontend preserves its design tokens, personas and layout.
+> The original interactive prototype (`requirements/index.html` + `PRD.md`, `ADR.md`, `UX-SPEC.md`, `VERIFICATION.md`) remains in this repository as the visual and interaction design baseline. The Vue frontend preserves its design tokens, personas and layout.
 
 ## Quick start (development)
 

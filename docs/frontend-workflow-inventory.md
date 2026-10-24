@@ -13,9 +13,9 @@ Discovered on 2026-10-24, before rebuilding product code.
 
 ## Design source
 
-`index.html` is the original self-contained interactive prototype. It contains the original five persona SVGs, light/dark tokens, responsive CSS, conveyor animation, shell, board/list, order tabs, three-step creation drawer, dialogs, settings and Cataloger preview. `preview-overview.png` and `preview-factory-dark.png` are additional visual references, not screenshots of the archived Vue app.
+`../requirements/index.html` is the original self-contained interactive prototype. It contains the original five persona SVGs, light/dark tokens, responsive CSS, conveyor animation, shell, board/list, order tabs, three-step creation drawer, dialogs, settings and Cataloger preview. `../requirements/preview-overview.png` and `../requirements/preview-factory-dark.png` are additional visual references, not screenshots of the archived Vue app.
 
-Read with it: `PRD.md`, `ADR.md`, `UX-SPEC.md`, `VERIFICATION.md`, `INSTRUCTION.md`, `README.md`, and `docs/IMPLEMENTATION-REPORT.md`. The user supplied the frontend rebuild mission as an attachment. The root product documents describe a prototype; the rebuild mission and live Go contracts override their simulated execution behavior.
+Read with it: `../requirements/PRD.md`, `../requirements/ADR.md`, `../requirements/UX-SPEC.md`, `../requirements/VERIFICATION.md`, `../requirements/INSTRUCTION.md`, `../README.md`, and `docs/IMPLEMENTATION-REPORT.md`. The user supplied the frontend rebuild mission as an attachment. The root product documents describe a prototype; the rebuild mission and live Go contracts override their simulated execution behavior.
 
 No additional filesystem `AGENTS.md` or `CLAUDE.md` was found in the repository. The instructions supplied directly in chat apply.
 

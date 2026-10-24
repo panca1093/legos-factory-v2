@@ -18,7 +18,7 @@ Do not stop after scaffolding or producing an implementation plan.
 
 Before making changes:
 
-1. Read `AGENTS.md`, `README.md`, and all relevant PRDs, ADRs, architecture, implementation plans, UX specifications, and Markdown documentation.
+1. Read `AGENTS.md`, `../README.md`, and all relevant PRDs, ADRs, architecture, implementation plans, UX specifications, and Markdown documentation.
 2. Inspect the existing frontend prototype, assets, animations, interactions, and project dependencies.
 3. Inspect Git status and preserve existing user changes.
 4. Identify what is already implemented, mocked, partially implemented, or missing.
