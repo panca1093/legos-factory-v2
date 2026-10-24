@@ -1,46 +1,99 @@
-# legos-factory — interactive frontend prototype
+# legos-factory — autonomous software engineering factory
 
-A standalone, dependency-free browser demo of a multi-project autonomous software engineering factory. Open `index.html` directly in a modern browser. All visuals, styles, sample data, and behavior are embedded in that file; no install or internet access is needed.
+A local-first, multi-project factory that turns engineering objectives into reviewed plans, bounded agent execution, verified implementations, and an explicit human PR decision.
 
-For consistent browser storage across sessions, optionally serve this directory:
+- **Backend**: Go + Echo, SQLite (WAL) with goose migrations, SSE, persistent state machine, SQLite-backed job scheduler.
+- **Frontend**: Vue 3 (Composition API) + TypeScript strict + Pinia + Vue Router + Tailwind + Lucide icons.
+- **Agent harness**: OpenCode v2 HTTP adapter (verified live) or a deterministic scripted mock harness for offline demos and tests.
+
+> The original interactive prototype (`index.html` + `PRD.md`, `ADR.md`, `UX-SPEC.md`, `VERIFICATION.md`) remains in this repository as the visual and interaction design baseline. The Vue frontend preserves its design tokens, personas and layout.
+
+## Quick start (development)
+
+Requires Go ≥1.26 and Node ≥20.
 
 ```sh
-python3 -m http.server 8765 --bind 127.0.0.1
+# terminal 1 — backend (auth mode dev signs in a local owner automatically)
+cd backend
+go run ./cmd/factory
+#   listens on 127.0.0.1:8080, SQLite at ./data/factory.db
+
+# terminal 2 — frontend (Vite dev server proxies /api and /auth to :8080)
+cd frontend
+npm install
+npm run dev
+#   open http://localhost:5173
 ```
 
-Then open `http://127.0.0.1:8765`. Stop the server with Ctrl+C.
+Environment (all optional):
 
-## A useful five-minute walkthrough
+| Variable | Default | Purpose |
+|---|---|---|
+| `FACTORY_ADDR` | `127.0.0.1:8080` | HTTP listen address |
+| `FACTORY_DATA_DIR` | `./data` | SQLite db + workspaces |
+| `FACTORY_AUTH_MODE` | `dev` | `dev` or `oidc` |
+| `FACTORY_OIDC_ISSUER/_CLIENT_ID/_CLIENT_SECRET` | — | OIDC login (mode `oidc`) |
+| `FACTORY_OPENCODE_URL` | — | base URL of `opencode serve`; enables the real harness |
+| `FACTORY_OPENCODE_PASSWORD` | — | basic-auth password printed by `opencode serve` |
+| `FACTORY_MAX_CONCURRENT_RUNS` | `2` | worker pool size |
+| `FACTORY_SANDBOX_MODE` | `local` | `local` (trusted) or `docker` (**not implemented** — see limitations) |
 
-1. **Overview:** meet the five original brick characters and inspect monitoring across three sample projects.
-2. Open **Make payment retries idempotent**. Answer Architect’s clarification. Approve the blueprint.
-3. In **Task graph**, inspect a task brick, pause/resume the run, then use **Next step** three times.
-4. Inspector surfaces a deliberately failing acceptance check. Inspect the evidence, then **Ask Builder to fix & recheck**.
-5. Continue to **Changes & PR**, inspect the illustrative diff, and approve, request changes, or decline the demo PR.
-6. Create a **New work order**. Select a project/repository, describe acceptance criteria, and choose Builder/Inspector models and autonomy. Draft the blueprint and run Architect review.
-7. Explore **Settings**: admin governance, policy-constrained personal preferences, team roles and per-user limits, shared/personal demo connections, budgets, concurrency and sandbox resources.
-8. Turn on **Cataloger’s optional preview** to inspect sample knowledge records and source links.
+### Using the real OpenCode harness
 
-**Auto-play** advances assisted/delegated demo runs every 2.5 seconds while the order is open. Guided runs require each step to be advanced explicitly. Auto-play stops when navigating away, pausing, encountering a finding, or reaching a policy limit. Hidden tabs and open dialogs do not advance.
+```sh
+opencode serve --hostname 127.0.0.1 --port 14099   # note the printed password
+FACTORY_OPENCODE_URL=http://127.0.0.1:8080-independent-server   # see below
+FACTORY_OPENCODE_URL=http://127.0.0.1:14099 \
+FACTORY_OPENCODE_PASSWORD=<printed password> \
+go run ./cmd/factory
+```
 
-## Boundaries
+With OpenCode configured, model discovery (`GET /api/v1/models`) lists the real model catalog and agent runs execute on real models with measured token/cost accounting. Without it, the scripted mock harness runs; the UI labels every run with its harness (`mock` vs `opencode`).
 
-- No backend, real agent execution, repository operations, OAuth, provider calls, emails, real tests, PR creation, or merges.
-- All costs, usage, model catalog entries, resources, evidence, checks, and results are illustrative.
-- The three model families are a demo catalog, not a current pricing/capability recommendation or a live OpenCode listing.
-- State persists in this browser with `localStorage`. Direct-file storage behavior varies by browser; if storage is unavailable, the page still runs in memory. Use **Settings → My preferences → Reset demo** to restore samples.
-- The role selector previews UI restrictions; it is not production authorization. Other sample members have editable limits but do not have executable user sessions.
-- Every project has one sample repository. The picker updates the repository when the project changes.
-- Cataloger is experimental and does not ingest or automatically promote any data.
-- The source chat’s user messages and attached screenshot were available. Earlier assistant messages were opaque content references, so these documents describe this prototype and proposed decisions, not recovered approved documents.
+## Quick start (production single binary)
 
-## Contents
+```sh
+./scripts/build.sh        # builds Vue → embeds into Go → ./factory-server
+FACTORY_ADDR=127.0.0.1:8090 ./factory-server
+# http://127.0.0.1:8090 (SPA served with fallback routes)
+```
 
-- `index.html`: complete runnable prototype.
-- `PRD.md`: proposed product scope, user journeys and acceptance criteria.
-- `ADR.md`: proposed architectural and governance decisions.
-- `UX-SPEC.md`: screen map, transition model and interaction/accessibility notes.
-- `VERIFICATION.md`: actual verification performed and limits.
-- `preview-*.png`: verified browser views.
+## Tests
 
-No external assets, trademark logos, telemetry, or remote fonts are used. Character artwork is original inline SVG. Copyright/trademark affiliation is not implied.
+```sh
+cd backend
+go test ./...                    # all packages
+go test ./internal/scheduler/ ./tests/integration/ -race
+# real OpenCode live check (optional):
+LF_LIVE_OPENCODE_URL=http://127.0.0.1:14099 LF_LIVE_OPENCODE_PASSWORD=… \
+  go test ./internal/agents/opencode/ -run TestLiveOpenCode -v
+
+cd ../frontend
+npm run typecheck                # vue-tsc strict
+npm test                         # vitest (8 tests)
+npm run e2e                      # Playwright journey (needs backend on :8080)
+```
+
+## The verified work order journey
+
+```text
+Create Project → Create Work Order → Foreman planning (Architect draft)
+→ Architect review → (clarification ⇄ human) → human plan approval
+→ baseline verification (failing evidence at revision 0) → Builder tasks (DAG)
+→ deterministic checks (go test / go vet, really executed)
+→ Inspector review (blocker finding on rev 0) → bounded fix (rev 1)
+→ re-verify → clean re-inspection → merge readiness → NEEDS_HUMAN_REVIEW
+→ human PR decision (approve → READY / request changes / decline)
+```
+
+Every state transition is validated by a persistent state machine and streamed live to the UI over SSE. Nothing is ever published, pushed or merged — the PR decision is a local disposition.
+
+## Known limitations (honest boundaries)
+
+- **Sandbox**: `local` mode executes builder changes and quality commands in an isolated copy of the repo under `data/workspaces/`, but quality commands run as host shell processes — repository scripts run with your user's permissions. The `docker` sandbox mode is **not implemented**; do not enable it expecting isolation.
+- **Auth**: `dev` mode is for local use only. OIDC is implemented (discovery + code exchange) but only tested against a fake IdP; the login state parameter is not validated yet. SameSite=Lax cookies mitigate basic CSRF; no CSRF tokens; no `Secure` cookie flag (no TLS locally).
+- **Authorization**: single workspace, role checks (OWNER/ADMIN/ENGINEER/VIEWER) at the API boundary; per-project membership matrix is future work.
+- **Budget**: reservations are in-memory (single process) and estimated; measured costs come from OpenCode where available, mock runs record clearly-labeled estimates.
+- **Execution recovery**: planning auto-resumes after restart; execution-phase interruptions are marked FAILED and require a human to re-drive (intentional, per reconciliation policy).
+
+See `docs/IMPLEMENTATION-REPORT.md` for the full report.

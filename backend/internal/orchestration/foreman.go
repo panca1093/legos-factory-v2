@@ -292,11 +292,9 @@ func (f *Foreman) maybeAdvanceAfterImplementation(ctx context.Context, wo *worko
 	}
 	ready := workorder.ReadyTasks(tasks, done)
 	for _, t := range ready {
-		if f.hasActiveJob(ctx, wo.ID, t.ID, JobImplement) {
-			continue
-		}
+		// duplicate enqueues are rejected by the unique active-job index
 		if _, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, t.ID, map[string]any{}); err != nil {
-			return err
+			continue // another worker already owns this task
 		}
 	}
 	if len(tasks) > 0 && len(done) == len(tasks) {

@@ -78,9 +78,11 @@ func scanWO(scan rowScanner) (*WorkOrder, error) {
 	return &wo, nil
 }
 
-// UpdateState persists a state change; caller must have validated the transition.
+// UpdateState persists a state change; the conditional WHERE makes the
+// validated transition atomic (a concurrent writer cannot double-apply it).
 func (r *Repository) UpdateState(ctx context.Context, id string, s State) error {
-	res, err := r.DB.ExecContext(ctx, `UPDATE work_orders SET state = ?, updated_at = ? WHERE id = ?`,
+	res, err := r.DB.ExecContext(ctx, `UPDATE work_orders SET state = ?, updated_at = ?
+		WHERE id = ? AND state NOT IN ('READY','CANCELLED','BLOCKED')`,
 		string(s), time.Now().Unix(), id)
 	if err != nil {
 		return err
