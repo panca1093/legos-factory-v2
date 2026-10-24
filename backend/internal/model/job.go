@@ -1,6 +1,13 @@
 package model
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrPermanent wraps handler errors that must not be retried (e.g. policy
+// refusals); the scheduler marks the job FAILED immediately.
+var ErrPermanent = errors.New("permanent failure")
 
 type JobState string
 

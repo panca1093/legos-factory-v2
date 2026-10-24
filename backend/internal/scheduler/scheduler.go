@@ -18,10 +18,6 @@ import (
 	"legos-factory/backend/internal/store"
 )
 
-// ErrPermanent wraps handler errors that must not be retried (e.g. policy
-// refusals); the scheduler marks the job FAILED immediately.
-var ErrPermanent = errors.New("permanent failure")
-
 // Handler executes one job. Returning nil completes the job; an error marks
 // it failed (retryable while attempts remain).
 type Handler func(ctx context.Context, job model.Job) error
@@ -159,7 +155,7 @@ func (s *Scheduler) run(ctx context.Context, job model.Job) {
 		return
 	}
 	attempts := s.jobs.Attempts(ctx, job.ID)
-	if attempts+1 >= job.MaxAttempts || errors.Is(err, ErrPermanent) {
+	if attempts+1 >= job.MaxAttempts || errors.Is(err, model.ErrPermanent) {
 		s.log.Error("job failed permanently", "job", job.ID, "kind", job.Kind, "wo", job.WOID, "attempts", attempts+1, "err", err)
 		s.finish(ctx, job, model.JobFailed, err.Error())
 	} else {

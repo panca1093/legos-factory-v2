@@ -21,10 +21,10 @@ import (
 	"legos-factory/backend/internal/httpx"
 	"legos-factory/backend/internal/identity"
 	"legos-factory/backend/internal/model"
-	"legos-factory/backend/internal/orchestration"
 	"legos-factory/backend/internal/scheduler"
 	"legos-factory/backend/internal/store"
 	"legos-factory/backend/internal/usage"
+	"legos-factory/backend/internal/usecase"
 )
 
 type App struct {
@@ -115,9 +115,9 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		return splitModelRef(def)
 	}
 
-	foreman := &orchestration.Foreman{
+	foreman := &usecase.Foreman{
 		WO: woRepo, Runs: runRepo, Findings: findingRepo, Quality: qualityRepo,
-		Proj:    projectReader{repo: projRepo},
+		Proj:    projRepo,
 		Resolve: resolve, Model: modelFor,
 		Bus: bus, Usage: usageTracker,
 		DataDir:     cfg.DataDir,
@@ -127,7 +127,9 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 
 	sched := scheduler.New(jobRepo, log, cfg.MaxConcurrentRuns)
 	foreman.Sched = sched
-	foreman.Register(sched)
+	for kind, h := range foreman.Handlers() {
+		sched.Register(kind, h)
+	}
 
 	srv := httpx.New(cfg, log)
 	srv.WORepo = woRepo
@@ -182,19 +184,6 @@ func (a *App) Start(ctx context.Context) error {
 		a.Server.Usage.SetBudgetLimit(s.BudgetLimitMicros)
 	}
 	return nil
-}
-
-// projectReader adapts store.ProjectRepo to orchestration.ProjectReader.
-type projectReader struct{ repo *store.ProjectRepo }
-
-func (r projectReader) Get(ctx context.Context, id string) (*orchestration.ProjectView, error) {
-	p, err := r.repo.Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	return &orchestration.ProjectView{
-		ID: p.ID, RepoURL: p.RepoURL, Language: p.Language, QualityProfile: p.QualityProfile,
-	}, nil
 }
 
 func splitModelRef(ref string) (string, string) {

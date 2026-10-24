@@ -11,7 +11,7 @@ import (
 
 	"legos-factory/backend/internal/execenv"
 	"legos-factory/backend/internal/model"
-	"legos-factory/backend/internal/orchestration"
+	"legos-factory/backend/internal/usecase"
 )
 
 func shortUUID() string { return uuid.NewString()[:12] }
@@ -161,7 +161,7 @@ func (s *Server) handlePlanGenerate(c echo.Context) error {
 		return errorJSON(c, http.StatusConflict, "INVALID_STATE_TRANSITION",
 			fmt.Sprintf("plan generation requires a pre-execution state, WO is %s", wo.State))
 	}
-	if _, err := s.Foreman.Sched.Enqueue(c.Request().Context(), orchestration.JobPlan, wo.ID, "", map[string]any{}); err != nil {
+	if _, err := s.Foreman.Sched.Enqueue(c.Request().Context(), usecase.JobPlan, wo.ID, "", map[string]any{}); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not enqueue planning job")
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "queued"})

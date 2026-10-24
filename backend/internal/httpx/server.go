@@ -14,7 +14,7 @@ import (
 	"legos-factory/backend/internal/eventbus"
 	"legos-factory/backend/internal/identity"
 	"legos-factory/backend/internal/model"
-	"legos-factory/backend/internal/orchestration"
+	"legos-factory/backend/internal/usecase"
 	"legos-factory/backend/internal/store"
 	"legos-factory/backend/internal/usage"
 )
@@ -29,7 +29,7 @@ type Server struct {
 	Quality  *store.QualityRepo
 	Jobs     *store.JobRepo
 	Settings *store.SettingsRepo
-	Foreman  *orchestration.Foreman
+	Foreman  *usecase.Foreman
 	Bus      *eventbus.Bus
 	Auth     *identity.Service
 	Usage    *usage.Tracker
