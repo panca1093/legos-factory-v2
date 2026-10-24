@@ -1,0 +1,149 @@
+{
+  "fixtures": "Test-only API responses; production store contains no sample data.",
+  "pairs": [
+    {
+      "state": "01-overview",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/01-overview.png",
+      "rebuilt": "tablet/app/01-overview.png"
+    },
+    {
+      "state": "02-factory-board",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/02-factory-board.png",
+      "rebuilt": "tablet/app/02-factory-board.png"
+    },
+    {
+      "state": "03-factory-list",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/03-factory-list.png",
+      "rebuilt": "tablet/app/03-factory-list.png"
+    },
+    {
+      "state": "04-blueprint",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/04-blueprint.png",
+      "rebuilt": "tablet/app/04-blueprint.png"
+    },
+    {
+      "state": "05-task-graph",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/05-task-graph.png",
+      "rebuilt": "tablet/app/05-task-graph.png"
+    },
+    {
+      "state": "06-task-details",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/06-task-details.png",
+      "rebuilt": "tablet/app/06-task-details.png"
+    },
+    {
+      "state": "07-activity",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/07-activity.png",
+      "rebuilt": "tablet/app/07-activity.png"
+    },
+    {
+      "state": "08-quality",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/08-quality.png",
+      "rebuilt": "tablet/app/08-quality.png"
+    },
+    {
+      "state": "09-evidence",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/09-evidence.png",
+      "rebuilt": "tablet/app/09-evidence.png"
+    },
+    {
+      "state": "10-changes-pr",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/10-changes-pr.png",
+      "rebuilt": "tablet/app/10-changes-pr.png"
+    },
+    {
+      "state": "11-new-order-intent",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/11-new-order-intent.png",
+      "rebuilt": "tablet/app/11-new-order-intent.png"
+    },
+    {
+      "state": "12-new-order-crew",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/12-new-order-crew.png",
+      "rebuilt": "tablet/app/12-new-order-crew.png"
+    },
+    {
+      "state": "13-new-order-review",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/13-new-order-review.png",
+      "rebuilt": "tablet/app/13-new-order-review.png"
+    },
+    {
+      "state": "14-settings",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/14-settings.png",
+      "rebuilt": "tablet/app/14-settings.png"
+    },
+    {
+      "state": "15-knowledge",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/15-knowledge.png",
+      "rebuilt": "tablet/app/15-knowledge.png"
+    },
+    {
+      "state": "16-overview-dark",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "reference": "tablet/reference/16-overview-dark.png",
+      "rebuilt": "tablet/app/16-overview-dark.png"
+    }
+  ]
+}

@@ -25,3 +25,11 @@ frontend-archive/
 # production build
 factory-server
 backend/internal/web/dist/
+
+# Active frontend generated files
+frontend/dist/
+frontend/.vite/
+frontend/test-results/
+frontend/playwright-report/
+*.tsbuildinfo
+.superpowers/
