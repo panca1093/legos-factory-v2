@@ -66,7 +66,7 @@ go test ./...                    # all packages
 go test ./internal/scheduler/ ./tests/integration/ -race
 # real OpenCode live check (optional):
 LF_LIVE_OPENCODE_URL=http://127.0.0.1:14099 LF_LIVE_OPENCODE_PASSWORD=… \
-  go test ./internal/agents/opencode/ -run TestLiveOpenCode -v
+  go test ./internal/agent/ -run TestLiveOpenCode -v
 
 cd ../frontend
 npm run typecheck                # vue-tsc strict

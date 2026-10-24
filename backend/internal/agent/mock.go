@@ -1,4 +1,4 @@
-package mock
+package agent
 
 import (
 	"context"
@@ -10,15 +10,14 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"legos-factory/backend/internal/agents"
 	"legos-factory/backend/internal/model"
 )
 
-// Harness is a deterministic, scripted agent harness used for local
+// MockHarness is a deterministic, scripted agent harness used for local
 // development, tests and the demo lifecycle. It performs REAL filesystem
 // actions for builder runs but produces canned reasoning. Every run records
 // harness="mock" so the UI can label it clearly as scripted.
-type Harness struct {
+type MockHarness struct {
 	next sessionIDGen
 	mu   sync.Mutex
 	ses  map[string]*mockSession
@@ -34,15 +33,15 @@ type mockSession struct {
 	err    error
 }
 
-func New() *Harness {
-	return &Harness{ses: map[string]*mockSession{}}
+func NewMock() *MockHarness {
+	return &MockHarness{ses: map[string]*mockSession{}}
 }
 
-func (h *Harness) Name() string { return "mock" }
+func (h *MockHarness) Name() string { return "mock" }
 
 func (s *mockSession) ID() string { return s.id }
 
-func (h *Harness) Start(ctx context.Context, req model.AgentRequest) (agents.AgentSession, error) {
+func (h *MockHarness) Start(ctx context.Context, req model.AgentRequest) (model.AgentSession, error) {
 	s := &mockSession{id: fmt.Sprintf("mock-%d", h.next.n.Add(1)), req: req, done: make(chan struct{})}
 	h.mu.Lock()
 	h.ses[s.id] = s
@@ -54,7 +53,7 @@ func (h *Harness) Start(ctx context.Context, req model.AgentRequest) (agents.Age
 	return s, nil
 }
 
-func (h *Harness) Cancel(_ context.Context, sessionID string) error {
+func (h *MockHarness) Cancel(_ context.Context, sessionID string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if s, ok := h.ses[sessionID]; ok {
@@ -66,15 +65,15 @@ func (h *Harness) Cancel(_ context.Context, sessionID string) error {
 		}
 		return nil
 	}
-	return agents.ErrSessionNotFound
+	return model.ErrAgentSessionNotFound
 }
 
-func (h *Harness) Result(_ context.Context, sessionID string) (model.AgentResult, error) {
+func (h *MockHarness) Result(_ context.Context, sessionID string) (model.AgentResult, error) {
 	h.mu.Lock()
 	s, ok := h.ses[sessionID]
 	h.mu.Unlock()
 	if !ok {
-		return model.AgentResult{}, agents.ErrSessionNotFound
+		return model.AgentResult{}, model.ErrAgentSessionNotFound
 	}
 	<-s.done
 	if s.err != nil {
@@ -84,7 +83,7 @@ func (h *Harness) Result(_ context.Context, sessionID string) (model.AgentResult
 }
 
 // execute produces the scripted behavior per role.
-func (h *Harness) execute(ctx context.Context, req model.AgentRequest) (model.AgentResult, error) {
+func (h *MockHarness) execute(ctx context.Context, req model.AgentRequest) (model.AgentResult, error) {
 	res := model.AgentResult{
 		SessionRef: "mock-session",
 		CostSource: "estimated",
@@ -118,7 +117,7 @@ func isPlanReview(req model.AgentRequest) bool {
 // architectPlan decomposes the objective into a plan. When the objective
 // contains an explicit open question marker ("?") the architect requests
 // human clarification instead of inventing product decisions.
-func (h *Harness) architectPlan(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
+func (h *MockHarness) architectPlan(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
 	obj := req.Context["objective"]
 	acc := req.Context["acceptance"]
 	if hasOpenQuestion(obj) {
@@ -151,7 +150,7 @@ func (h *Harness) architectPlan(req model.AgentRequest, res model.AgentResult) (
 }
 
 // architectReview re-reviews a recorded plan (and clarification answer).
-func (h *Harness) architectReview(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
+func (h *MockHarness) architectReview(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
 	answer := req.Context["clarification_answer"]
 	if answer == "" && req.Context["has_open_question"] == "true" {
 		res.Text = `{"decision":"CLARIFY","question_text":"The recorded clarification has not been answered yet."}`
@@ -162,7 +161,7 @@ func (h *Harness) architectReview(req model.AgentRequest, res model.AgentResult)
 
 // builder performs a real filesystem change in the workspace: it writes the
 // implementation required by the fixture project's failing test.
-func (h *Harness) builder(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
+func (h *MockHarness) builder(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
 	dir := req.WorkspaceDir
 	if dir == "" {
 		return res, fmt.Errorf("builder run requires a workspace")
@@ -194,7 +193,7 @@ func Greet(name string) string {
 // inspector produces one scripted blocker finding on the first inspection of
 // a work order (revision 0), mirroring the prototype's QA story. Later
 // revisions pass once the fix has landed.
-func (h *Harness) inspector(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
+func (h *MockHarness) inspector(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
 	if req.Context["revision"] == "0" {
 		res.Text = `{"findings":[{"severity":"blocker","title":"Sample regression: acceptance check failed on first revision","detail":"Scripted mock finding to exercise the remediation loop.","location":"greeter/greeter.go"}]}`
 		return res, nil

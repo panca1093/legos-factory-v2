@@ -1,5 +1,7 @@
 package model
 
+import "errors"
+
 // AgentRole identifies which persona a harness invocation serves.
 type AgentRole string
 
@@ -30,3 +32,11 @@ type AgentResult struct {
 	CostMicros int64
 	CostSource string // "measured" | "estimated" | "unknown"
 }
+
+// AgentSession is a handle to an in-flight invocation.
+type AgentSession interface {
+	ID() string
+}
+
+// ErrAgentSessionNotFound is returned when a session handle is unknown or expired.
+var ErrAgentSessionNotFound = errors.New("agent session not found")

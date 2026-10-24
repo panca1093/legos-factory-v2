@@ -1,4 +1,4 @@
-package opencode
+package agent
 
 import (
 	"context"
@@ -15,14 +15,14 @@ import (
 // Run with:
 //
 //	LF_LIVE_OPENCODE_URL=http://127.0.0.1:14099 \
-//	LF_LIVE_OPENCODE_PASSWORD=... go test ./internal/agents/opencode/ -run TestLiveOpenCode -v
+//	LF_LIVE_OPENCODE_PASSWORD=... go test ./internal/agent/ -run TestLiveOpenCode -v
 func TestLiveOpenCode(t *testing.T) {
 	url := os.Getenv("LF_LIVE_OPENCODE_URL")
 	if url == "" {
 		t.Skip("set LF_LIVE_OPENCODE_URL to verify against a real server")
 	}
 	pass := os.Getenv("LF_LIVE_OPENCODE_PASSWORD")
-	c := NewClient(url, "opencode", pass)
+	c := NewOpenCodeClient(url, "opencode", pass)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -35,7 +35,7 @@ func TestLiveOpenCode(t *testing.T) {
 	}
 	t.Logf("discovered %d models, using %s", len(models), models[0].ProviderID+"/"+models[0].ModelID)
 
-	h := NewHarness(c)
+	h := NewOpenCodeHarness(c)
 	ses, err := h.Start(ctx, model.AgentRequest{
 		Role:       model.AgentBuilder,
 		Prompt:     "Reply with exactly the four characters: OKAY",

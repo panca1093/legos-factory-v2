@@ -24,7 +24,7 @@ frontend-archive/
 
 # production build
 factory-server
-backend/internal/web/dist/
+backend/internal/http/dist/
 
 # Active frontend generated files
 frontend/dist/

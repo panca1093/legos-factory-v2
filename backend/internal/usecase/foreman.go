@@ -5,11 +5,13 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strings"
 	"time"
 
-	"legos-factory/backend/internal/agents"
 	"legos-factory/backend/internal/model"
 )
 
@@ -35,13 +37,13 @@ type Foreman struct {
 	Findings    FindingStore
 	Quality     QualityStore
 	Proj        ProjectStore
-	Resolve     func(role model.AgentRole, wo *model.WorkOrder) agents.Harness
+	Resolve     func(role model.AgentRole, wo *model.WorkOrder) Harness
 	Model       func(role model.AgentRole, wo *model.WorkOrder) (provider, modelID string)
 	Sched       Queue
 	Bus         Publisher
 	Usage       Budget
 	Catalog     *Cataloger
-	VCS         Versioner
+	Sandbox     Sandbox
 	DataDir     string
 	QualTimeout time.Duration
 	Log         *slog.Logger
@@ -203,7 +205,7 @@ func (f *Foreman) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Ch
 }
 
 func parseStructured(text string, v any) error {
-	return agents.StructuredJSON(agents.StripFences(text), v)
+	return StructuredJSON(StripFences(text), v)
 }
 
 func (f *Foreman) enqueue(ctx context.Context, kind, woID, reason string) error {
@@ -213,4 +215,35 @@ func (f *Foreman) enqueue(ctx context.Context, kind, woID, reason string) error 
 func (f *Foreman) enqueuePayload(ctx context.Context, kind, woID string, payload map[string]any) error {
 	_, err := f.Sched.Enqueue(ctx, kind, woID, "", payload)
 	return err
+}
+
+// StructuredJSON extracts the first JSON object/array from agent text and
+// unmarshals it into v. Agent replies are prose+JSON; this normalizes the
+// extraction. Callers must still validate semantics before acting on it.
+func StructuredJSON(text string, v any) error {
+	start := strings.Index(text, "{")
+	if start < 0 {
+		return fmt.Errorf("no JSON object found in agent response")
+	}
+	// find matching closing brace from start
+	depth := 0
+	for i := start; i < len(text); i++ {
+		switch text[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return json.Unmarshal([]byte(text[start:i+1]), v)
+			}
+		}
+	}
+	return fmt.Errorf("unterminated JSON object in agent response")
+}
+
+var jsonFence = regexp.MustCompile("(?s)```(?:json)?\\s*")
+
+// StripFences removes markdown code fences (agents often fence their JSON).
+func StripFences(s string) string {
+	return jsonFence.ReplaceAllString(s, "")
 }

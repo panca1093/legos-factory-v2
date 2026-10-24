@@ -1,4 +1,4 @@
-package execenv
+package sandbox
 
 import (
 	"context"
@@ -20,27 +20,27 @@ func TestGitCommitRecordsWorkspaceChange(t *testing.T) {
 	}
 	run("init", "-q")
 	run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base")
-	base, err := Git{}.Commit(context.Background(), dir, "noop")
+	base, err := Local{}.Commit(context.Background(), dir, "noop")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "f.go"), []byte("package f\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sha, err := Git{}.Commit(context.Background(), dir, "wo_1 rev 0")
+	sha, err := Local{}.Commit(context.Background(), dir, "wo_1 rev 0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(sha) || sha == base {
 		t.Fatalf("expected a new 40-hex commit, base=%s got=%s", base, sha)
 	}
-	if again, _ := (Git{}).Commit(context.Background(), dir, "clean"); again != sha {
+	if again, _ := (Local{}).Commit(context.Background(), dir, "clean"); again != sha {
 		t.Fatalf("clean tree should return HEAD %s, got %s", sha, again)
 	}
 }
 
 func TestGitCommitNonRepoIsUnversioned(t *testing.T) {
-	sha, err := Git{}.Commit(context.Background(), t.TempDir(), "x")
+	sha, err := Local{}.Commit(context.Background(), t.TempDir(), "x")
 	if err != nil || sha != "" {
 		t.Fatalf("non-git workspace: sha=%q err=%v", sha, err)
 	}

@@ -6,8 +6,8 @@ cd "$(dirname "$0")/.."
 
 (cd frontend && npm run build)
 
-rm -rf backend/internal/web/dist
-cp -R frontend/dist backend/internal/web/dist
+rm -rf backend/internal/http/dist
+cp -R frontend/dist backend/internal/http/dist
 
 (cd backend && go build -tags embedstatic -o ../factory-server ./cmd/factory)
 echo "built ./factory-server (frontend embedded)"

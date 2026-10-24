@@ -1,4 +1,4 @@
-package httpx
+package http
 
 import (
 	"errors"
@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
-	"legos-factory/backend/internal/execenv"
 	"legos-factory/backend/internal/model"
+	"legos-factory/backend/internal/sandbox"
 	"legos-factory/backend/internal/usecase"
 )
 
@@ -90,7 +90,7 @@ func (s *Server) handleCreateWorkOrder(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not create work order")
 	}
 	// isolated workspace: builders never touch the project source dir
-	if _, err := execenv.Prepare(c.Request().Context(), s.Cfg.DataDir, wo.ID, proj.RepoURL); err != nil {
+	if _, err := sandbox.Prepare(c.Request().Context(), s.Cfg.DataDir, wo.ID, proj.RepoURL); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "WORKSPACE_FAILED", fmt.Sprintf("could not prepare workspace: %v", err))
 	}
 	return c.JSON(http.StatusCreated, wo)

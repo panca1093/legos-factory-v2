@@ -1,7 +1,4 @@
-// Package usage records agent execution cost and enforces local budget
-// limits. Where provider pricing is unknown, cost is recorded as an
-// estimate with source="estimated" and never presented as billed value.
-package usage
+package usecase
 
 import (
 	"context"
@@ -10,11 +7,13 @@ import (
 	"time"
 
 	"legos-factory/backend/internal/model"
-	"legos-factory/backend/internal/store"
 )
 
-type Tracker struct {
-	Repo *store.UsageRepo
+// UsageTracker records agent execution cost and enforces local budget
+// limits. Where provider pricing is unknown, cost is recorded as an
+// estimate with source="estimated" and never presented as billed value.
+type UsageTracker struct {
+	Repo UsageStore
 
 	mu           sync.Mutex
 	limitMicros  int64
@@ -22,11 +21,11 @@ type Tracker struct {
 	totalRes     int64
 }
 
-func NewTracker(repo *store.UsageRepo) *Tracker {
-	return &Tracker{Repo: repo, reserved: map[int64]int64{}}
+func NewUsageTracker(repo UsageStore) *UsageTracker {
+	return &UsageTracker{Repo: repo, reserved: map[int64]int64{}}
 }
 
-func (t *Tracker) Record(ctx context.Context, r model.UsageRecord) error {
+func (t *UsageTracker) Record(ctx context.Context, r model.UsageRecord) error {
 	if r.ID == "" {
 		r.ID = fmt.Sprintf("use_%s_%d", r.Role, time.Now().UnixNano())
 	}
@@ -35,19 +34,19 @@ func (t *Tracker) Record(ctx context.Context, r model.UsageRecord) error {
 }
 
 // Summary aggregates usage. source of truth is the usage_records table.
-func (t *Tracker) Summary(ctx context.Context) (model.UsageTotals, error) {
+func (t *UsageTracker) Summary(ctx context.Context) (model.UsageTotals, error) {
 	return t.Repo.Totals(ctx)
 }
 
 // SetBudgetLimit sets the workspace spending cap in cost micros (0 = unset).
-func (t *Tracker) SetBudgetLimit(micros int64) {
+func (t *UsageTracker) SetBudgetLimit(micros int64) {
 	t.mu.Lock()
 	t.limitMicros = micros
 	t.mu.Unlock()
 }
 
 // BudgetStatus reports limit, spent (recorded), reserved, and available.
-func (t *Tracker) BudgetStatus() (limit, spent, reserved, available int64) {
+func (t *UsageTracker) BudgetStatus() (limit, spent, reserved, available int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	spent = t.spentLocked()
@@ -64,7 +63,7 @@ func (t *Tracker) BudgetStatus() (limit, spent, reserved, available int64) {
 // Reserve tries to reserve estMicros against the remaining budget. The
 // reservation is held in memory (single-process MVP); it prevents parallel
 // jobs from independently consuming the same remaining budget.
-func (t *Tracker) Reserve(estMicros int64) (release func(actual int64), ok bool) {
+func (t *UsageTracker) Reserve(estMicros int64) (release func(actual int64), ok bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	spent := t.spentLocked()
@@ -88,6 +87,6 @@ func (t *Tracker) Reserve(estMicros int64) (release func(actual int64), ok bool)
 	}, true
 }
 
-func (t *Tracker) spentLocked() int64 {
+func (t *UsageTracker) spentLocked() int64 {
 	return t.Repo.SpentMicros(context.Background())
 }

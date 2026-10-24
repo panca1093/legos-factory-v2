@@ -1,4 +1,4 @@
-package opencode
+package agent
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"legos-factory/backend/internal/agents"
 	"legos-factory/backend/internal/model"
 )
 
@@ -122,7 +121,7 @@ func (s *opencodeStub) messagesJSON(id string) string {
 
 func TestModelDiscovery(t *testing.T) {
 	srv, _ := fakeServer(t)
-	c := NewClient(srv.URL, "opencode", "pass")
+	c := NewOpenCodeClient(srv.URL, "opencode", "pass")
 	models, err := c.Models(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +133,7 @@ func TestModelDiscovery(t *testing.T) {
 
 func TestFullSessionLifecycle(t *testing.T) {
 	srv, _ := fakeServer(t)
-	h := NewHarness(NewClient(srv.URL, "opencode", "pass"))
+	h := NewOpenCodeHarness(NewOpenCodeClient(srv.URL, "opencode", "pass"))
 	ses, err := h.Start(context.Background(), model.AgentRequest{
 		Role: model.AgentArchitect, Prompt: "draft", ProviderID: "p1", ModelID: "m2",
 	})
@@ -159,7 +158,7 @@ func TestFullSessionLifecycle(t *testing.T) {
 func TestPromptFailureSurfaces(t *testing.T) {
 	srv, st := fakeServer(t)
 	st.failPrompt = true
-	h := NewHarness(NewClient(srv.URL, "opencode", "pass"))
+	h := NewOpenCodeHarness(NewOpenCodeClient(srv.URL, "opencode", "pass"))
 	_, err := h.Start(context.Background(), model.AgentRequest{ProviderID: "p1", ModelID: "m1"})
 	if err == nil {
 		t.Fatal("expected error when prompt submission fails")
@@ -168,7 +167,7 @@ func TestPromptFailureSurfaces(t *testing.T) {
 
 func TestCancelInterruptsAndResultsError(t *testing.T) {
 	srv, _ := fakeServer(t)
-	h := NewHarness(NewClient(srv.URL, "opencode", "pass"))
+	h := NewOpenCodeHarness(NewOpenCodeClient(srv.URL, "opencode", "pass"))
 	ses, err := h.Start(context.Background(), model.AgentRequest{ProviderID: "p1", ModelID: "m1"})
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +180,7 @@ func TestCancelInterruptsAndResultsError(t *testing.T) {
 		t.Fatalf("expected cancelled error, got %v", err)
 	}
 	// cancel of unknown session
-	if err := h.Cancel(context.Background(), "nope"); err != agents.ErrSessionNotFound {
+	if err := h.Cancel(context.Background(), "nope"); err != model.ErrAgentSessionNotFound {
 		t.Fatalf("expected ErrSessionNotFound, got %v", err)
 	}
 }
@@ -193,7 +192,7 @@ func TestModelsEmptyListOnNoProviders(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	c := NewClient(srv.URL, "", "")
+	c := NewOpenCodeClient(srv.URL, "", "")
 	models, err := c.Models(context.Background())
 	if err != nil {
 		t.Fatal(err)

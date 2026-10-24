@@ -9,21 +9,14 @@ Pragmatic modular monolith, exactly within the mandated stack:
 ```text
 backend/  (Go module legos-factory/backend)
   cmd/factory            entrypoint: config → app wiring → graceful shutdown
-  internal/config        env configuration, validated (auth mode, sandbox mode)
-  internal/store/sqlite  modernc pure-Go SQLite (WAL, FK, busy_timeout, 1-writer pool) + goose migrations (001 init, 002 job-unique)
-  internal/workorder     WorkOrder + Task models, persistent transition table, DAG validation (cycle/unknown/self/empty-id), repository, events
-  internal/project       project repository (repo URL, language, quality profile)
-  internal/agents        Harness interface (Start/Cancel/Result), structured-JSON extraction
-    agents/mock          deterministic scripted harness: architect plan/review, real file-writing builder, scripted inspector regression
-    agents/opencode      REAL OpenCode v2 adapter: model discovery, session create, async prompt, message polling, measured tokens/cost, interrupt
-  internal/orchestration Foreman: plan/review/implement/verify/inspect/evaluate handlers, bounded remediation loop (MaxRevisionCycles=2), budget reservation, resume-on-start, human decisions
+  internal/app           wiring + env configuration (auth mode, sandbox mode)
+  internal/model         all shared types: work-order state machine + DAG, project, user/roles, agent request/result, quality profiles, knowledge records, HTTP DTOs
+  internal/usecase       business rules behind ports.go interfaces: Foreman (foreman/architect/builder/inspector/readiness/decision), Cataloger, project access rule, identity sessions, usage + budget reservation
+  internal/store         modernc pure-Go SQLite (WAL, FK, busy_timeout, 1-writer pool), one repository per table group, goose migrations (001 init, 002 job-unique, 003 cataloger + membership)
   internal/scheduler     SQLite-backed queue: atomic claim in tx, worker pool bound, retry w/ backoff, ErrPermanent fast-fail, orphan reconcile, CancelWO
-  internal/quality       language presets (go/ts/rust/node), real check execution (shell, timeout, broken-GOROOT tolerance), PASS/FAIL/UNVERIFIED
-  internal/identity      dev login + OIDC (discovery, code exchange), sessions table, roles OWNER/ADMIN/ENGINEER/VIEWER
-  internal/usage         usage records + in-memory budget reservation (mutex-guarded)
-  internal/execenv       per-WO isolated workspace (git clone / plain copy)
-  internal/eventbus      in-process fan-out for SSE
-  internal/httpx         Echo server: request-id, recover, slog logging, body limit, CORS, session auth, RBAC, error envelope {error:{code,message,request_id}}, SSE streams, static embed w/ SPA fallback
+  internal/agent         harness adapters: deterministic scripted mock (mock.go) and REAL OpenCode v2 adapter (opencode.go: model discovery, sessions, async prompt, measured tokens/cost, interrupt)
+  internal/sandbox       per-WO isolated workspace (git clone / plain copy), check execution (shell, timeout, broken-GOROOT tolerance), local commit of verified revisions (never pushed)
+  internal/http          Echo server: request-id, recover, slog logging, body limit, CORS, session auth, RBAC + project membership, error envelope {error:{code,message,request_id}}, OIDC client, SSE + event bus, static embed w/ SPA fallback
 frontend/ (Vue 3 + TS strict)
   src/app                AppShell (rail navigation, skip link, responsive), router (URL routes/deep links)
   src/features           overview / factory (board+list, drawers) / workorders (5 tabs) / knowledge / settings

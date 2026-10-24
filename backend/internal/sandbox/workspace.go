@@ -1,4 +1,6 @@
-package execenv
+// Package sandbox prepares isolated work-order workspaces, runs
+// verification commands in them and commits verified changes locally.
+package sandbox
 
 import (
 	"context"
@@ -7,6 +9,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"legos-factory/backend/internal/model"
 )
 
 // Workspace is an isolated per-work-order copy of a project repository.
@@ -45,13 +50,18 @@ func isLocalGitRepo(path string) bool {
 	return err == nil && (info.IsDir() || info.Mode().IsRegular())
 }
 
-// Git commits work inside isolated workspaces. It never pushes.
-type Git struct{}
+// Local runs checks and commits inside isolated workspaces on this host.
+// It never pushes.
+type Local struct{}
+
+func (Local) RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration) model.CheckResult {
+	return RunCheck(ctx, dir, check, timeout)
+}
 
 // Commit records all workspace changes as a local commit and returns its
 // SHA. A non-git workspace returns "" without error; a clean tree returns
 // the current HEAD.
-func (Git) Commit(ctx context.Context, dir, message string) (string, error) {
+func (Local) Commit(ctx context.Context, dir, message string) (string, error) {
 	if !isLocalGitRepo(dir) {
 		return "", nil
 	}

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"time"
 
 	"legos-factory/backend/internal/model"
 )
@@ -38,6 +39,21 @@ type UserDirectory interface {
 	ByEmail(ctx context.Context, email string) (*model.User, error)
 }
 
+type UserStore interface {
+	UserDirectory
+	EnsureUser(ctx context.Context, u model.User) error
+	Create(ctx context.Context, u model.User) error
+	CreateSession(ctx context.Context, sid, userID string, expiresAt time.Time) error
+	UserForSession(ctx context.Context, sid string) (*model.User, error)
+	DeleteSession(ctx context.Context, sid string) error
+}
+
+type UsageStore interface {
+	Insert(ctx context.Context, u model.UsageRecord) error
+	Totals(ctx context.Context) (model.UsageTotals, error)
+	SpentMicros(ctx context.Context) int64
+}
+
 type KnowledgeStore interface {
 	Insert(ctx context.Context, k *model.KnowledgeRecord) error
 	Get(ctx context.Context, id string) (*model.KnowledgeRecord, error)
@@ -48,9 +64,10 @@ type SettingsReader interface {
 	Get(ctx context.Context) (*model.Settings, error)
 }
 
-// Versioner commits workspace changes locally and returns the commit SHA
-// ("" when the workspace is not under version control).
-type Versioner interface {
+// Sandbox executes verification checks in a workspace and commits verified
+// changes locally, returning the SHA ("" when not under version control).
+type Sandbox interface {
+	RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration) model.CheckResult
 	Commit(ctx context.Context, dir, message string) (string, error)
 }
 
@@ -78,6 +95,14 @@ type Queue interface {
 	Enqueue(ctx context.Context, kind, woID, taskID string, payload map[string]any) (string, error)
 	CancelWO(ctx context.Context, woID string) error
 	HasActive(ctx context.Context, woID, taskID, kind string) bool
+}
+
+// Harness abstracts the coding-agent runtime (OpenCode, mock, ...).
+type Harness interface {
+	Start(ctx context.Context, req model.AgentRequest) (model.AgentSession, error)
+	Cancel(ctx context.Context, sessionID string) error
+	Result(ctx context.Context, sessionID string) (model.AgentResult, error)
+	Name() string
 }
 
 type Publisher interface {

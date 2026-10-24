@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"legos-factory/backend/internal/model"
-	"legos-factory/backend/internal/quality"
 )
 
 // Builder: baseline verification, task implementation and DAG advancement.
@@ -64,7 +63,7 @@ func (f *Foreman) recordBaseline(ctx context.Context, wo *model.WorkOrder) error
 	}
 	f.event(wo.ID, "builder", "baseline_started", "Recording baseline verification (pre-change)", nil)
 	for _, c := range profile.Checks {
-		r := quality.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
+		r := f.Sandbox.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
 		if err := f.saveCheck(ctx, wo, c, r); err != nil {
 			return err
 		}

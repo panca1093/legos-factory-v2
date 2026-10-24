@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"legos-factory/backend/internal/model"
-	"legos-factory/backend/internal/quality"
 )
 
 // Inspector: deterministic verification and specialist review findings.
@@ -30,7 +29,7 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 	failed := ""
 	var results strings.Builder
 	for _, c := range profile.Checks {
-		r := quality.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
+		r := f.Sandbox.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
 		if err := f.saveCheck(ctx, wo, c, r); err != nil {
 			return err
 		}
@@ -151,10 +150,7 @@ func (f *Foreman) handleInspect(ctx context.Context, job model.Job) error {
 // commitVerified records the verified workspace as a local commit (never
 // pushed) and stamps the work order and this revision's checks with its SHA.
 func (f *Foreman) commitVerified(ctx context.Context, wo *model.WorkOrder) error {
-	if f.VCS == nil {
-		return nil
-	}
-	sha, err := f.VCS.Commit(ctx, f.workspaceDir(wo.ID), fmt.Sprintf("legos-factory: %s revision %d (%s)", wo.ID, wo.Revision, wo.Title))
+	sha, err := f.Sandbox.Commit(ctx, f.workspaceDir(wo.ID), fmt.Sprintf("legos-factory: %s revision %d (%s)", wo.ID, wo.Revision, wo.Title))
 	if err != nil {
 		return err
 	}

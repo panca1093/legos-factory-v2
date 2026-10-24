@@ -1,5 +1,4 @@
-// Package quality executes deterministic verification checks.
-package quality
+package sandbox
 
 import (
 	"context"

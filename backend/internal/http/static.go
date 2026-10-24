@@ -1,4 +1,4 @@
-package httpx
+package http
 
 import (
 	"io/fs"
@@ -6,18 +6,16 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v4"
-
-	"legos-factory/backend/internal/web"
 )
 
 // mountStatic serves the embedded Vue build with SPA fallback when the
 // binary was built with -tags embedstatic; otherwise it is a no-op so the
 // Vite dev server can proxy API traffic instead.
 func (s *Server) mountStatic() {
-	if !web.Enabled {
+	if !webEnabled {
 		return
 	}
-	dist, err := fs.Sub(web.Dist, "dist")
+	dist, err := fs.Sub(webDist, "dist")
 	if err != nil {
 		s.log.Error("embedded frontend missing", "err", err)
 		return

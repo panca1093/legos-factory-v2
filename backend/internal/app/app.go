@@ -13,25 +13,19 @@ import (
 	"github.com/labstack/echo/v4"
 	"log/slog"
 
-	"legos-factory/backend/internal/agents"
-	"legos-factory/backend/internal/agents/mock"
-	"legos-factory/backend/internal/agents/opencode"
-	"legos-factory/backend/internal/config"
-	"legos-factory/backend/internal/eventbus"
-	"legos-factory/backend/internal/execenv"
-	"legos-factory/backend/internal/httpx"
-	"legos-factory/backend/internal/identity"
+	"legos-factory/backend/internal/agent"
+	httpapi "legos-factory/backend/internal/http"
 	"legos-factory/backend/internal/model"
+	"legos-factory/backend/internal/sandbox"
 	"legos-factory/backend/internal/scheduler"
 	"legos-factory/backend/internal/store"
-	"legos-factory/backend/internal/usage"
 	"legos-factory/backend/internal/usecase"
 )
 
 type App struct {
-	Cfg      *config.Config
+	Cfg      *model.Config
 	DBCloser func() error
-	Server   *httpx.Server
+	Server   *httpapi.Server
 	Sched    *scheduler.Scheduler
 	settings *store.SettingsRepo
 	log      *slog.Logger
@@ -39,7 +33,7 @@ type App struct {
 
 // Build resolves configuration, opens the database, wires domains and
 // constructs the HTTP server. It does not start background work.
-func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
+func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -49,7 +43,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		return nil, err
 	}
 
-	bus := eventbus.New()
+	bus := httpapi.NewBus()
 	woRepo := &store.WorkOrderRepo{DB: db}
 	projRepo := &store.ProjectRepo{DB: db}
 	runRepo := &store.RunRepo{DB: db}
@@ -58,11 +52,11 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	jobRepo := &store.JobRepo{DB: db}
 	settingsRepo := &store.SettingsRepo{DB: db}
 	userRepo := &store.UserRepo{DB: db}
-	usageTracker := usage.NewTracker(&store.UsageRepo{DB: db})
+	usageTracker := usecase.NewUsageTracker(&store.UsageRepo{DB: db})
 	projects := &usecase.Projects{Store: projRepo, Members: &store.MemberRepo{DB: db}, Users: userRepo}
 	catalog := &usecase.Cataloger{Knowledge: &store.KnowledgeRepo{DB: db}, Proj: projRepo, Settings: settingsRepo, Log: log}
 
-	auth := &identity.Service{
+	auth := &usecase.Identity{
 		Users: userRepo,
 		Mode:  cfg.AuthMode,
 		DevUser: model.User{
@@ -71,23 +65,15 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		},
 		Log: log,
 	}
-	if cfg.AuthMode == "oidc" {
-		auth.OIDC = &identity.OIDCClient{
-			Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
-			RedirectURL: cfg.FrontendOrigin + "/auth/oidc/callback",
-			HTTP:        &http.Client{Timeout: 45 * time.Second},
-		}
-	}
-
-	mockH := mock.New()
-	var ocHarness *opencode.Harness
-	var ocClient *opencode.Client
+	mockH := agent.NewMock()
+	var ocHarness *agent.OpenCodeHarness
+	var ocClient *agent.OpenCodeClient
 	if cfg.OpenCodeURL != "" {
-		ocClient = opencode.NewClient(cfg.OpenCodeURL, cfg.OpenCodeUser, cfg.OpenCodePass)
-		ocHarness = opencode.NewHarness(ocClient)
+		ocClient = agent.NewOpenCodeClient(cfg.OpenCodeURL, cfg.OpenCodeUser, cfg.OpenCodePass)
+		ocHarness = agent.NewOpenCodeHarness(ocClient)
 	}
 
-	resolve := func(role model.AgentRole, wo *model.WorkOrder) agents.Harness {
+	resolve := func(role model.AgentRole, wo *model.WorkOrder) usecase.Harness {
 		if ocHarness != nil {
 			return ocHarness
 		}
@@ -124,7 +110,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		Proj:    projRepo,
 		Resolve: resolve, Model: modelFor,
 		Bus: bus, Usage: usageTracker,
-		Catalog: catalog, VCS: execenv.Git{},
+		Catalog: catalog, Sandbox: sandbox.Local{},
 		DataDir:     cfg.DataDir,
 		QualTimeout: 5 * time.Minute,
 		Log:         log,
@@ -136,7 +122,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		sched.Register(kind, h)
 	}
 
-	srv := httpx.New(cfg, log)
+	srv := httpapi.New(cfg, log)
 	srv.WORepo = woRepo
 	srv.ProjRepo = projRepo
 	srv.Runs = runRepo
@@ -149,6 +135,13 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	srv.Foreman = foreman
 	srv.Bus = bus
 	srv.Auth = auth
+	if cfg.AuthMode == "oidc" {
+		srv.OIDC = &httpapi.OIDCClient{
+			Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
+			RedirectURL: cfg.FrontendOrigin + "/auth/oidc/callback",
+			HTTP:        &http.Client{Timeout: 45 * time.Second},
+		}
+	}
 	srv.Usage = usageTracker
 	if ocClient != nil {
 		oc := ocClient
@@ -204,7 +197,7 @@ func splitModelRef(ref string) (string, string) {
 // discoverDefaults picks the first available real model as the workspace
 // default for all roles (admins refine via settings; preferences come per
 // work order).
-func discoverDefaults(c *opencode.Client) map[string]string {
+func discoverDefaults(c *agent.OpenCodeClient) map[string]string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	models, err := c.Models(ctx)

@@ -1,7 +1,4 @@
-// Package eventbus is a tiny in-process pub/sub used to fan work-order
-// events out to SSE subscribers. Persistence happens in the repository;
-// the bus is delivery-only.
-package eventbus
+package http
 
 import (
 	"sync"
@@ -9,12 +6,15 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
+// Bus is a tiny in-process pub/sub used to fan work-order
+// events out to SSE subscribers. Persistence happens in the repository;
+// the bus is delivery-only.
 type Bus struct {
 	mu   sync.Mutex
 	subs map[string][]chan model.LiveEvent
 }
 
-func New() *Bus {
+func NewBus() *Bus {
 	return &Bus{subs: map[string][]chan model.LiveEvent{}}
 }
 

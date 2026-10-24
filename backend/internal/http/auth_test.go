@@ -1,4 +1,4 @@
-package httpx
+package http
 
 import (
 	"database/sql"
@@ -11,10 +11,9 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"legos-factory/backend/internal/config"
-	"legos-factory/backend/internal/identity"
 	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/store"
+	"legos-factory/backend/internal/usecase"
 	_ "modernc.org/sqlite"
 )
 
@@ -32,9 +31,9 @@ func bootMini(t *testing.T) (*Server, *sql.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	cfg := &config.Config{FrontendOrigin: "http://localhost:5173"}
+	cfg := &model.Config{FrontendOrigin: "http://localhost:5173"}
 	srv := New(cfg, slog.New(slog.NewTextHandler(testDiscard{}, nil)))
-	srv.Auth = &identity.Service{Users: &store.UserRepo{DB: db}, Mode: "dev", DevUser: model.User{ID: "u1", Email: "a@b", Name: "A", Role: model.RoleOwner}}
+	srv.Auth = &usecase.Identity{Users: &store.UserRepo{DB: db}, Mode: "dev", DevUser: model.User{ID: "u1", Email: "a@b", Name: "A", Role: model.RoleOwner}}
 	return srv, db
 }
 
@@ -56,9 +55,9 @@ func TestUnauthenticatedGets401(t *testing.T) {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	cfg := &config.Config{}
+	cfg := &model.Config{}
 	srv := New(cfg, slog.New(slog.NewTextHandler(testDiscard{}, nil)))
-	srv.Auth = &identity.Service{Users: &store.UserRepo{DB: db}, Mode: "dev"}
+	srv.Auth = &usecase.Identity{Users: &store.UserRepo{DB: db}, Mode: "dev"}
 	// register projects route with a handler that would 500 without auth
 	token, _ := json.Marshal(map[string]string{})
 	_ = token

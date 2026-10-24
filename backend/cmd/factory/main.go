@@ -9,14 +9,13 @@ import (
 	"time"
 
 	"legos-factory/backend/internal/app"
-	"legos-factory/backend/internal/config"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	cfg, err := config.Load()
+	cfg, err := app.LoadConfig()
 	if err != nil {
 		logger.Error("config", "err", err)
 		os.Exit(1)

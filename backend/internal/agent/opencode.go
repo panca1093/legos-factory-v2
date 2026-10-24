@@ -6,7 +6,7 @@
 //	POST /api/session/{id}/prompt            {"text", "model":{providerID, modelID}}
 //	GET  /api/session/{id}/message           message list (assistant finish/tokens)
 //	POST /api/session/{id}/interrupt         cancel execution
-package opencode
+package agent
 
 import (
 	"bytes"
@@ -19,19 +19,18 @@ import (
 	"sync"
 	"time"
 
-	"legos-factory/backend/internal/agents"
 	"legos-factory/backend/internal/model"
 )
 
-type Client struct {
+type OpenCodeClient struct {
 	baseURL string
 	user    string
 	pass    string
 	http    *http.Client
 }
 
-func NewClient(baseURL, user, pass string) *Client {
-	return &Client{
+func NewOpenCodeClient(baseURL, user, pass string) *OpenCodeClient {
+	return &OpenCodeClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		user:    user,
 		pass:    pass,
@@ -48,7 +47,7 @@ type Model struct {
 
 // Models lists models available on the configured server. Returns an empty
 // slice (not an error) when the server has no authenticated providers yet.
-func (c *Client) Models(ctx context.Context) ([]Model, error) {
+func (c *OpenCodeClient) Models(ctx context.Context) ([]Model, error) {
 	var env struct {
 		Data []Model `json:"data"`
 	}
@@ -61,7 +60,7 @@ func (c *Client) Models(ctx context.Context) ([]Model, error) {
 	return env.Data, nil
 }
 
-func (c *Client) do(ctx context.Context, method, path string, body []byte, out any) error {
+func (c *OpenCodeClient) do(ctx context.Context, method, path string, body []byte, out any) error {
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
@@ -89,24 +88,24 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte, out a
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-func (c *Client) get(ctx context.Context, path string, out any) error {
+func (c *OpenCodeClient) get(ctx context.Context, path string, out any) error {
 	return c.do(ctx, http.MethodGet, path, nil, out)
 }
 
-func (c *Client) post(ctx context.Context, path string, body []byte, out any) error {
+func (c *OpenCodeClient) post(ctx context.Context, path string, body []byte, out any) error {
 	return c.do(ctx, http.MethodPost, path, body, out)
 }
 
 // ---- Harness implementation ----
 
-type Harness struct {
-	client *Client
+type OpenCodeHarness struct {
+	client *OpenCodeClient
 	mu     sync.Mutex
 	ses    map[string]*sessionState
 }
 
 type sessionState struct {
-	client   *Client
+	client   *OpenCodeClient
 	id       string
 	done     chan struct{}
 	result   model.AgentResult
@@ -119,13 +118,13 @@ type sessionHandle struct{ id string }
 
 func (s *sessionHandle) ID() string { return s.id }
 
-func NewHarness(client *Client) *Harness {
-	return &Harness{client: client, ses: map[string]*sessionState{}}
+func NewOpenCodeHarness(client *OpenCodeClient) *OpenCodeHarness {
+	return &OpenCodeHarness{client: client, ses: map[string]*sessionState{}}
 }
 
-func (h *Harness) Name() string { return "opencode" }
+func (h *OpenCodeHarness) Name() string { return "opencode" }
 
-func (h *Harness) Start(ctx context.Context, req model.AgentRequest) (agents.AgentSession, error) {
+func (h *OpenCodeHarness) Start(ctx context.Context, req model.AgentRequest) (model.AgentSession, error) {
 	var created struct {
 		Data struct {
 			ID string `json:"id"`
@@ -244,12 +243,12 @@ func (s *sessionState) fetchMessages() ([]message, error) {
 	return env.Data, nil
 }
 
-func (h *Harness) Cancel(ctx context.Context, sessionID string) error {
+func (h *OpenCodeHarness) Cancel(ctx context.Context, sessionID string) error {
 	h.mu.Lock()
 	st, ok := h.ses[sessionID]
 	h.mu.Unlock()
 	if !ok {
-		return agents.ErrSessionNotFound
+		return model.ErrAgentSessionNotFound
 	}
 	st.mu.Lock()
 	if st.finished {
@@ -262,12 +261,12 @@ func (h *Harness) Cancel(ctx context.Context, sessionID string) error {
 	return h.client.post(ctx, "/api/session/"+sessionID+"/interrupt", []byte("{}"), nil)
 }
 
-func (h *Harness) Result(_ context.Context, sessionID string) (model.AgentResult, error) {
+func (h *OpenCodeHarness) Result(_ context.Context, sessionID string) (model.AgentResult, error) {
 	h.mu.Lock()
 	st, ok := h.ses[sessionID]
 	h.mu.Unlock()
 	if !ok {
-		return model.AgentResult{}, agents.ErrSessionNotFound
+		return model.AgentResult{}, model.ErrAgentSessionNotFound
 	}
 	<-st.done
 	st.mu.Lock()

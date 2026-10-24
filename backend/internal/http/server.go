@@ -1,6 +1,6 @@
-// Package httpx wires the Echo HTTP server: middleware, routes, handlers
+// Package http wires the Echo HTTP server: middleware, routes, handlers
 // and SSE streaming. Handlers stay thin; logic lives in domain packages.
-package httpx
+package http
 
 import (
 	"log/slog"
@@ -10,18 +10,14 @@ import (
 	"github.com/labstack/echo/v4"
 	echomw "github.com/labstack/echo/v4/middleware"
 
-	"legos-factory/backend/internal/config"
-	"legos-factory/backend/internal/eventbus"
-	"legos-factory/backend/internal/identity"
 	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/store"
-	"legos-factory/backend/internal/usage"
 	"legos-factory/backend/internal/usecase"
 )
 
 type Server struct {
 	Echo     *echo.Echo
-	Cfg      *config.Config
+	Cfg      *model.Config
 	WORepo   *store.WorkOrderRepo
 	ProjRepo *store.ProjectRepo
 	Runs     *store.RunRepo
@@ -32,14 +28,15 @@ type Server struct {
 	Foreman  *usecase.Foreman
 	Projects *usecase.Projects
 	Catalog  *usecase.Cataloger
-	Bus      *eventbus.Bus
-	Auth     *identity.Service
-	Usage    *usage.Tracker
+	Bus      *Bus
+	Auth     *usecase.Identity
+	OIDC     *OIDCClient
+	Usage    *usecase.UsageTracker
 	Models   func(ctx echo.Context) ([]model.ModelInfo, error)
 	log      *slog.Logger
 }
 
-func New(cfg *config.Config, log *slog.Logger) *Server {
+func New(cfg *model.Config, log *slog.Logger) *Server {
 	e := echo.New()
 	e.HideBanner = true
 	e.HidePort = true
@@ -252,10 +249,10 @@ func (s *Server) handleLogout(c echo.Context) error {
 }
 
 func (s *Server) handleOIDCStart(c echo.Context) error {
-	if s.Cfg.AuthMode != "oidc" || s.Auth.OIDC == nil {
+	if s.Cfg.AuthMode != "oidc" || s.OIDC == nil {
 		return errorJSON(c, http.StatusNotFound, "NOT_AVAILABLE", "oidc not configured")
 	}
-	u, err := s.Auth.OIDC.AuthURL(c.Request().Context(), "state-cookie-protected")
+	u, err := s.OIDC.AuthURL(c.Request().Context(), "state-cookie-protected")
 	if err != nil {
 		return errorJSON(c, http.StatusBadGateway, "OIDC_UNAVAILABLE", err.Error())
 	}
@@ -263,14 +260,14 @@ func (s *Server) handleOIDCStart(c echo.Context) error {
 }
 
 func (s *Server) handleOIDCCallback(c echo.Context) error {
-	if s.Cfg.AuthMode != "oidc" || s.Auth.OIDC == nil {
+	if s.Cfg.AuthMode != "oidc" || s.OIDC == nil {
 		return errorJSON(c, http.StatusNotFound, "NOT_AVAILABLE", "oidc not configured")
 	}
 	code := c.QueryParam("code")
 	if code == "" {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "missing code")
 	}
-	email, name, err := s.Auth.OIDC.Exchange(c.Request().Context(), code)
+	email, name, err := s.OIDC.Exchange(c.Request().Context(), code)
 	if err != nil {
 		return errorJSON(c, http.StatusBadGateway, "OIDC_EXCHANGE_FAILED", err.Error())
 	}

@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"legos-factory/backend/internal/app"
-	"legos-factory/backend/internal/config"
+	"legos-factory/backend/internal/model"
 )
 
 const fixtureGoMod = "module factory-fixture\n\ngo 1.25\n"
@@ -93,7 +93,7 @@ func bootAt(t *testing.T, dataDir string) *testApp {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 
-	cfg := &config.Config{
+	cfg := &model.Config{
 		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
 		DataDir:           dataDir,
 		AuthMode:          "dev",
