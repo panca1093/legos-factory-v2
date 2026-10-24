@@ -46,7 +46,7 @@ The live-backend tests use the backend's explicitly labeled scripted mock harnes
 
 ## Visual verification
 
-[Interactive comparison viewer](screenshots/frontend-rebuild/comparison.html).
+Screenshots and the interactive comparison viewer are generated locally by `npm run e2e` (`frontend/tests/e2e/visual.spec.ts`) into `docs/screenshots/frontend-rebuild/`; they are not committed.
 
 49 reference/rebuild pairs (98 PNGs): 16 desktop states at 1440×1110, 16 tablet states at 1024×900, and 17 mobile states at 390×844. Each viewport includes Overview/light/dark, Factory board/list, Blueprint, graph/task details, Activity, Quality/evidence, Changes & PR, all three drawer steps, Settings and Knowledge; mobile also includes the navigation scrim.
 
