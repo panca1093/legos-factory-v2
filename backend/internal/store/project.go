@@ -1,4 +1,4 @@
-package project
+package store
 
 import (
 	"context"
@@ -7,25 +7,15 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"legos-factory/backend/internal/model"
 )
 
-var ErrNotFound = errors.New("project not found")
-
-type Project struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Description    string    `json:"description"`
-	RepoURL        string    `json:"repo_url"`
-	Language       string    `json:"language"`
-	QualityProfile string    `json:"quality_profile"` // JSON: [{"name","command"}]
-	CreatedAt      time.Time `json:"created_at"`
-}
-
-type Repository struct{ DB *sql.DB }
+type ProjectRepo struct{ DB *sql.DB }
 
 const pCols = `id, name, description, repo_url, language, quality_profile, created_at`
 
-func (r *Repository) Create(ctx context.Context, p *Project) error {
+func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 	if p.ID == "" {
 		p.ID = "prj_" + uuid.NewString()[:12]
 	}
@@ -35,18 +25,18 @@ func (r *Repository) Create(ctx context.Context, p *Project) error {
 	return err
 }
 
-func (r *Repository) Get(ctx context.Context, id string) (*Project, error) {
+func (r *ProjectRepo) Get(ctx context.Context, id string) (*model.Project, error) {
 	row := r.DB.QueryRowContext(ctx, `SELECT `+pCols+` FROM projects WHERE id = ?`, id)
 	return scanP(row.Scan)
 }
 
-func (r *Repository) List(ctx context.Context) ([]Project, error) {
+func (r *ProjectRepo) List(ctx context.Context) ([]model.Project, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT `+pCols+` FROM projects ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []Project
+	var out []model.Project
 	for rows.Next() {
 		p, err := scanP(rows.Scan)
 		if err != nil {
@@ -57,12 +47,12 @@ func (r *Repository) List(ctx context.Context) ([]Project, error) {
 	return out, rows.Err()
 }
 
-func scanP(scan func(dest ...any) error) (*Project, error) {
-	var p Project
+func scanP(scan rowScanner) (*model.Project, error) {
+	var p model.Project
 	var createdAt int64
 	err := scan(&p.ID, &p.Name, &p.Description, &p.RepoURL, &p.Language, &p.QualityProfile, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
+		return nil, model.ErrProjectNotFound
 	}
 	if err != nil {
 		return nil, err

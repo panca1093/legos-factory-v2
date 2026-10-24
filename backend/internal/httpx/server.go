@@ -13,30 +13,28 @@ import (
 	"legos-factory/backend/internal/config"
 	"legos-factory/backend/internal/eventbus"
 	"legos-factory/backend/internal/identity"
+	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/orchestration"
-	"legos-factory/backend/internal/project"
+	"legos-factory/backend/internal/store"
 	"legos-factory/backend/internal/usage"
-	"legos-factory/backend/internal/workorder"
 )
 
 type Server struct {
-	Echo    *echo.Echo
-	Cfg     *config.Config
-	WORepo  *workorder.Repository
-	ProjRepo *project.Repository
-	Foreman *orchestration.Foreman
-	Bus     *eventbus.Bus
-	Auth    *identity.Service
-	Usage   *usage.Tracker
-	Models  func(ctx echo.Context) ([]ModelInfo, error)
-	log     *slog.Logger
-}
-
-type ModelInfo struct {
-	ProviderID string `json:"provider_id"`
-	ModelID    string `json:"model_id"`
-	Name       string `json:"name"`
-	Harness    string `json:"harness"`
+	Echo     *echo.Echo
+	Cfg      *config.Config
+	WORepo   *store.WorkOrderRepo
+	ProjRepo *store.ProjectRepo
+	Runs     *store.RunRepo
+	Findings *store.FindingRepo
+	Quality  *store.QualityRepo
+	Jobs     *store.JobRepo
+	Settings *store.SettingsRepo
+	Foreman  *orchestration.Foreman
+	Bus      *eventbus.Bus
+	Auth     *identity.Service
+	Usage    *usage.Tracker
+	Models   func(ctx echo.Context) ([]model.ModelInfo, error)
+	log      *slog.Logger
 }
 
 func New(cfg *config.Config, log *slog.Logger) *Server {
@@ -92,8 +90,8 @@ func (s *Server) setUser(c echo.Context) error {
 	return nil
 }
 
-func currentUser(c echo.Context) *identity.User {
-	u, _ := c.Get("user").(*identity.User)
+func currentUser(c echo.Context) *model.User {
+	u, _ := c.Get("user").(*model.User)
 	return u
 }
 
@@ -108,14 +106,14 @@ func (s *Server) requireAuth(next echo.HandlerFunc) echo.HandlerFunc {
 }
 
 // requireRole enforces the given role floor on the current user.
-func (s *Server) requireRole(min identity.Role, next echo.HandlerFunc) echo.HandlerFunc {
+func (s *Server) requireRole(min model.Role, next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
 		u := currentUser(c)
 		if u == nil {
 			return errorJSON(c, http.StatusUnauthorized, "UNAUTHENTICATED", "Sign in required")
 		}
 		switch min {
-		case identity.RoleAdmin:
+		case model.RoleAdmin:
 			if !u.Role.IsAdmin() {
 				return errorJSON(c, http.StatusForbidden, "FORBIDDEN", "Admin role required")
 			}
@@ -130,15 +128,9 @@ func (s *Server) requireRole(min identity.Role, next echo.HandlerFunc) echo.Hand
 
 // ---- error envelope ----
 
-type apiError struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	RequestID string `json:"request_id,omitempty"`
-}
-
 func errorJSON(c echo.Context, status int, code, message string) error {
 	return c.JSON(status, map[string]any{
-		"error":      apiError{Code: code, Message: message, RequestID: c.Response().Header().Get(echo.HeaderXRequestID)},
+		"error":      model.APIError{Code: code, Message: message, RequestID: c.Response().Header().Get(echo.HeaderXRequestID)},
 		"request_id": c.Response().Header().Get(echo.HeaderXRequestID),
 	})
 }
@@ -159,18 +151,18 @@ func (s *Server) routes() {
 	api.Use(s.requireAuth)
 
 	api.GET("/projects", s.handleListProjects)
-	api.POST("/projects", s.requireRole(identity.RoleEngineer, s.handleCreateProject))
+	api.POST("/projects", s.requireRole(model.RoleEngineer, s.handleCreateProject))
 	api.GET("/projects/:id", s.handleGetProject)
 
 	api.GET("/work-orders", s.handleListWorkOrders)
-	api.POST("/work-orders", s.requireRole(identity.RoleEngineer, s.handleCreateWorkOrder))
+	api.POST("/work-orders", s.requireRole(model.RoleEngineer, s.handleCreateWorkOrder))
 	api.GET("/work-orders/:id", s.handleGetWorkOrder)
-	api.POST("/work-orders/:id/plan/generate", s.requireRole(identity.RoleEngineer, s.handlePlanGenerate))
+	api.POST("/work-orders/:id/plan/generate", s.requireRole(model.RoleEngineer, s.handlePlanGenerate))
 	api.GET("/work-orders/:id/plan", s.handleGetPlan)
-	api.POST("/work-orders/:id/plan/decisions", s.requireRole(identity.RoleEngineer, s.handlePlanDecision))
-	api.POST("/work-orders/:id/clarifications", s.requireRole(identity.RoleEngineer, s.handleClarification))
-	api.POST("/work-orders/:id/pr-decision", s.requireRole(identity.RoleEngineer, s.handlePRDecision))
-	api.POST("/work-orders/:id/cancel", s.requireRole(identity.RoleEngineer, s.handleCancel))
+	api.POST("/work-orders/:id/plan/decisions", s.requireRole(model.RoleEngineer, s.handlePlanDecision))
+	api.POST("/work-orders/:id/clarifications", s.requireRole(model.RoleEngineer, s.handleClarification))
+	api.POST("/work-orders/:id/pr-decision", s.requireRole(model.RoleEngineer, s.handlePRDecision))
+	api.POST("/work-orders/:id/cancel", s.requireRole(model.RoleEngineer, s.handleCancel))
 	api.GET("/work-orders/:id/runs", s.handleListRuns)
 	api.GET("/work-orders/:id/activity", s.handleListEvents)
 	api.GET("/work-orders/:id/quality", s.handleListQuality)
@@ -184,7 +176,7 @@ func (s *Server) routes() {
 
 	settings := api.Group("/settings")
 	settings.GET("", s.handleGetSettings)
-	settings.PUT("", s.requireRole(identity.RoleAdmin, s.handlePutSettings))
+	settings.PUT("", s.requireRole(model.RoleAdmin, s.handlePutSettings))
 }
 
 // ---- auth handlers ----
@@ -219,7 +211,7 @@ func (s *Server) handleDevLogin(c echo.Context) error {
 
 func (s *Server) handleLogout(c echo.Context) error {
 	if cookie, err := c.Cookie(sessionCookie); err == nil && cookie.Value != "" {
-		_, _ = s.Auth.DB.ExecContext(c.Request().Context(), `DELETE FROM sessions WHERE id = ?`, cookie.Value)
+		_ = s.Auth.Logout(c.Request().Context(), cookie.Value)
 	}
 	c.SetCookie(&http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})

@@ -13,6 +13,8 @@ import (
 
 	"legos-factory/backend/internal/config"
 	"legos-factory/backend/internal/identity"
+	"legos-factory/backend/internal/model"
+	"legos-factory/backend/internal/store"
 	_ "modernc.org/sqlite"
 )
 
@@ -32,11 +34,11 @@ func bootMini(t *testing.T) (*Server, *sql.DB) {
 	t.Cleanup(func() { db.Close() })
 	cfg := &config.Config{FrontendOrigin: "http://localhost:5173"}
 	srv := New(cfg, slog.New(slog.NewTextHandler(testDiscard{}, nil)))
-	srv.Auth = &identity.Service{DB: db, Mode: "dev", DevUser: identity.User{ID: "u1", Email: "a@b", Name: "A", Role: identity.RoleOwner}}
+	srv.Auth = &identity.Service{Users: &store.UserRepo{DB: db}, Mode: "dev", DevUser: model.User{ID: "u1", Email: "a@b", Name: "A", Role: model.RoleOwner}}
 	return srv, db
 }
 
-func (s *Server) mkUserAndSession(t *testing.T, db *sql.DB, id string, role identity.Role) string {
+func (s *Server) mkUserAndSession(t *testing.T, db *sql.DB, id string, role model.Role) string {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO users (id, email, name, role, created_at) VALUES (?,?,?,?,?)`, id, id+"@t", id, string(role), time.Now().Unix()); err != nil {
 		t.Fatal(err)
@@ -56,7 +58,7 @@ func TestUnauthenticatedGets401(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	cfg := &config.Config{}
 	srv := New(cfg, slog.New(slog.NewTextHandler(testDiscard{}, nil)))
-	srv.Auth = &identity.Service{DB: db, Mode: "dev"}
+	srv.Auth = &identity.Service{Users: &store.UserRepo{DB: db}, Mode: "dev"}
 	// register projects route with a handler that would 500 without auth
 	token, _ := json.Marshal(map[string]string{})
 	_ = token
@@ -72,8 +74,8 @@ func TestUnauthenticatedGets401(t *testing.T) {
 
 func TestViewerCannotWrite(t *testing.T) {
 	srv, db := bootMini(t)
-	tok := srv.mkUserAndSession(t, db, "viewer1", identity.RoleViewer)
-	srv.Echo.POST("/api/v1/projects", srv.requireAuth(srv.requireRole(identity.RoleEngineer, func(c echo.Context) error { return c.JSON(http.StatusOK, map[string]string{}) })))
+	tok := srv.mkUserAndSession(t, db, "viewer1", model.RoleViewer)
+	srv.Echo.POST("/api/v1/projects", srv.requireAuth(srv.requireRole(model.RoleEngineer, func(c echo.Context) error { return c.JSON(http.StatusOK, map[string]string{}) })))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/projects", nil)
 	req.AddCookie(&http.Cookie{Name: "factory_session", Value: tok})
 	rec := httptest.NewRecorder()
@@ -82,7 +84,7 @@ func TestViewerCannotWrite(t *testing.T) {
 		t.Fatalf("expected 403 for viewer write, got %d", rec.Code)
 	}
 	// admin may write
-	tokA := srv.mkUserAndSession(t, db, "admin1", identity.RoleAdmin)
+	tokA := srv.mkUserAndSession(t, db, "admin1", model.RoleAdmin)
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/projects", nil)
 	req.AddCookie(&http.Cookie{Name: "factory_session", Value: tokA})
 	rec = httptest.NewRecorder()
@@ -118,7 +120,7 @@ func TestSessionExpiryRejected(t *testing.T) {
 
 func TestNSErrorEnvelopeHasRequestID(t *testing.T) {
 	srv, db := bootMini(t)
-	tok := srv.mkUserAndSession(t, db, "eng1", identity.RoleEngineer)
+	tok := srv.mkUserAndSession(t, db, "eng1", model.RoleEngineer)
 	srv.Echo.GET("/api/v1/work-orders/:id", func(c echo.Context) error {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
 	})

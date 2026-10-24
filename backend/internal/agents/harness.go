@@ -7,37 +7,9 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"legos-factory/backend/internal/model"
 )
-
-// Role identifies which persona a harness invocation serves.
-type Role string
-
-const (
-	RoleForeman   Role = "foreman"
-	RoleArchitect Role = "architect"
-	RoleBuilder   Role = "builder"
-	RoleInspector Role = "inspector"
-)
-
-// AgentRequest is one logical agent invocation.
-type AgentRequest struct {
-	Role        Role
-	Prompt      string
-	ProviderID  string // selected model, provider-qualified
-	ModelID     string
-	WorkspaceDir string // directory the agent may operate on (builder/inspector)
-	Context     map[string]string
-}
-
-// AgentResult is the outcome of one invocation.
-type AgentResult struct {
-	Text        string
-	SessionRef  string
-	TokensIn    int64
-	TokensOut   int64
-	CostMicros  int64
-	CostSource  string // "measured" | "estimated" | "unknown"
-}
 
 // AgentSession is a handle to an in-flight invocation.
 type AgentSession interface {
@@ -46,9 +18,9 @@ type AgentSession interface {
 
 // Harness abstracts the coding-agent runtime (OpenCode, mock, ...).
 type Harness interface {
-	Start(ctx context.Context, req AgentRequest) (AgentSession, error)
+	Start(ctx context.Context, req model.AgentRequest) (AgentSession, error)
 	Cancel(ctx context.Context, sessionID string) error
-	Result(ctx context.Context, sessionID string) (AgentResult, error)
+	Result(ctx context.Context, sessionID string) (model.AgentResult, error)
 	Name() string
 }
 

@@ -4,7 +4,6 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -21,12 +20,11 @@ import (
 	"legos-factory/backend/internal/eventbus"
 	"legos-factory/backend/internal/httpx"
 	"legos-factory/backend/internal/identity"
+	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/orchestration"
-	"legos-factory/backend/internal/project"
 	"legos-factory/backend/internal/scheduler"
-	"legos-factory/backend/internal/store/sqlite"
+	"legos-factory/backend/internal/store"
 	"legos-factory/backend/internal/usage"
-	"legos-factory/backend/internal/workorder"
 )
 
 type App struct {
@@ -34,6 +32,7 @@ type App struct {
 	DBCloser func() error
 	Server   *httpx.Server
 	Sched    *scheduler.Scheduler
+	settings *store.SettingsRepo
 	log      *slog.Logger
 }
 
@@ -44,22 +43,27 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		return nil, err
 	}
 	dbPath := filepath.Join(cfg.DataDir, "factory.db")
-	db, err := sqlite.Open(dbPath)
+	db, err := store.Open(dbPath)
 	if err != nil {
 		return nil, err
 	}
 
 	bus := eventbus.New()
-	woRepo := &workorder.Repository{DB: db}
-	projRepo := &project.Repository{DB: db}
-	usageTracker := usage.NewTracker(db)
+	woRepo := &store.WorkOrderRepo{DB: db}
+	projRepo := &store.ProjectRepo{DB: db}
+	runRepo := &store.RunRepo{DB: db}
+	findingRepo := &store.FindingRepo{DB: db}
+	qualityRepo := &store.QualityRepo{DB: db}
+	jobRepo := &store.JobRepo{DB: db}
+	settingsRepo := &store.SettingsRepo{DB: db}
+	usageTracker := usage.NewTracker(&store.UsageRepo{DB: db})
 
 	auth := &identity.Service{
-		DB:   db,
-		Mode: cfg.AuthMode,
-		DevUser: identity.User{
+		Users: &store.UserRepo{DB: db},
+		Mode:  cfg.AuthMode,
+		DevUser: model.User{
 			ID:    cfg.DevUserID,
-			Email: "dev@localhost", Name: cfg.DevUserName, Role: identity.RoleOwner,
+			Email: "dev@localhost", Name: cfg.DevUserName, Role: model.RoleOwner,
 		},
 		Log: log,
 	}
@@ -79,7 +83,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		ocHarness = opencode.NewHarness(ocClient)
 	}
 
-	resolve := func(role agents.Role, wo *workorder.WorkOrder) agents.Harness {
+	resolve := func(role model.AgentRole, wo *model.WorkOrder) agents.Harness {
 		if ocHarness != nil {
 			return ocHarness
 		}
@@ -90,16 +94,16 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		modelDefaults = discoverDefaults(ocClient)
 	}
 
-	modelFor := func(role agents.Role, wo *workorder.WorkOrder) (string, string) {
+	modelFor := func(role model.AgentRole, wo *model.WorkOrder) (string, string) {
 		if ocHarness == nil {
 			return "mock", "mock-local"
 		}
 		switch role {
-		case agents.RoleBuilder:
+		case model.AgentBuilder:
 			if wo.BuilderModel != "" && wo.BuilderModel != "mock-local" {
 				return splitModelRef(wo.BuilderModel)
 			}
-		case agents.RoleInspector:
+		case model.AgentInspector:
 			if wo.InspectorModel != "" && wo.InspectorModel != "mock-local" {
 				return splitModelRef(wo.InspectorModel)
 			}
@@ -112,7 +116,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	}
 
 	foreman := &orchestration.Foreman{
-		WO: woRepo, DB: db,
+		WO: woRepo, Runs: runRepo, Findings: findingRepo, Quality: qualityRepo,
 		Proj:    projectReader{repo: projRepo},
 		Resolve: resolve, Model: modelFor,
 		Bus: bus, Usage: usageTracker,
@@ -121,27 +125,32 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		Log:         log,
 	}
 
-	sched := scheduler.New(db, log, cfg.MaxConcurrentRuns)
+	sched := scheduler.New(jobRepo, log, cfg.MaxConcurrentRuns)
 	foreman.Sched = sched
 	foreman.Register(sched)
 
 	srv := httpx.New(cfg, log)
 	srv.WORepo = woRepo
 	srv.ProjRepo = projRepo
+	srv.Runs = runRepo
+	srv.Findings = findingRepo
+	srv.Quality = qualityRepo
+	srv.Jobs = jobRepo
+	srv.Settings = settingsRepo
 	srv.Foreman = foreman
 	srv.Bus = bus
 	srv.Auth = auth
 	srv.Usage = usageTracker
 	if ocClient != nil {
 		oc := ocClient
-		srv.Models = func(c echo.Context) ([]httpx.ModelInfo, error) {
+		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) {
 			models, err := oc.Models(c.Request().Context())
 			if err != nil {
 				return nil, err
 			}
-			out := make([]httpx.ModelInfo, 0, len(models))
+			out := make([]model.ModelInfo, 0, len(models))
 			for _, m := range models {
-				out = append(out, httpx.ModelInfo{
+				out = append(out, model.ModelInfo{
 					ProviderID: m.ProviderID, ModelID: m.ModelID, Name: m.Name, Harness: "opencode",
 				})
 			}
@@ -149,14 +158,14 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		}
 	} else {
 		// mock harness exposes a single scriptable pseudo-model
-		srv.Models = func(c echo.Context) ([]httpx.ModelInfo, error) {
-			return []httpx.ModelInfo{{
+		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) {
+			return []model.ModelInfo{{
 				ProviderID: "mock", ModelID: "mock-local", Name: "Scripted Mock (no real model)", Harness: "mock",
 			}}, nil
 		}
 	}
 
-	return &App{Cfg: cfg, DBCloser: db.Close, Server: srv, Sched: sched, log: log}, nil
+	return &App{Cfg: cfg, DBCloser: db.Close, Server: srv, Sched: sched, settings: settingsRepo, log: log}, nil
 }
 
 // Start launches the scheduler and prepares shutdown hooks.
@@ -169,23 +178,14 @@ func (a *App) Start(ctx context.Context) error {
 		return err
 	}
 	// apply persisted budget limit to the tracker
-	rows, err := a.Server.Foreman.DB.QueryContext(ctx, `SELECT key, value FROM settings_kv WHERE key = 'budget_limit_micros'`)
-	if err == nil {
-		for rows.Next() {
-			var k, v string
-			if err := rows.Scan(&k, &v); err == nil {
-				var micros int64
-				fmt.Sscanf(v, "%d", &micros)
-				a.Server.Usage.SetBudgetLimit(micros)
-			}
-		}
-		rows.Close()
+	if s, err := a.settings.Get(ctx); err == nil {
+		a.Server.Usage.SetBudgetLimit(s.BudgetLimitMicros)
 	}
 	return nil
 }
 
-// projectReader adapts project.Repository to orchestration.ProjectReader.
-type projectReader struct{ repo *project.Repository }
+// projectReader adapts store.ProjectRepo to orchestration.ProjectReader.
+type projectReader struct{ repo *store.ProjectRepo }
 
 func (r projectReader) Get(ctx context.Context, id string) (*orchestration.ProjectView, error) {
 	p, err := r.repo.Get(ctx, id)

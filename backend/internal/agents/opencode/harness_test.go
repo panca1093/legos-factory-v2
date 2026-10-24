@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"legos-factory/backend/internal/agents"
+	"legos-factory/backend/internal/model"
 )
 
 // fakeServer mimics the verified OpenCode v2 API surface used by the adapter.
@@ -134,8 +135,8 @@ func TestModelDiscovery(t *testing.T) {
 func TestFullSessionLifecycle(t *testing.T) {
 	srv, _ := fakeServer(t)
 	h := NewHarness(NewClient(srv.URL, "opencode", "pass"))
-	ses, err := h.Start(context.Background(), agents.AgentRequest{
-		Role: agents.RoleArchitect, Prompt: "draft", ProviderID: "p1", ModelID: "m2",
+	ses, err := h.Start(context.Background(), model.AgentRequest{
+		Role: model.AgentArchitect, Prompt: "draft", ProviderID: "p1", ModelID: "m2",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +160,7 @@ func TestPromptFailureSurfaces(t *testing.T) {
 	srv, st := fakeServer(t)
 	st.failPrompt = true
 	h := NewHarness(NewClient(srv.URL, "opencode", "pass"))
-	_, err := h.Start(context.Background(), agents.AgentRequest{ProviderID: "p1", ModelID: "m1"})
+	_, err := h.Start(context.Background(), model.AgentRequest{ProviderID: "p1", ModelID: "m1"})
 	if err == nil {
 		t.Fatal("expected error when prompt submission fails")
 	}
@@ -168,7 +169,7 @@ func TestPromptFailureSurfaces(t *testing.T) {
 func TestCancelInterruptsAndResultsError(t *testing.T) {
 	srv, _ := fakeServer(t)
 	h := NewHarness(NewClient(srv.URL, "opencode", "pass"))
-	ses, err := h.Start(context.Background(), agents.AgentRequest{ProviderID: "p1", ModelID: "m1"})
+	ses, err := h.Start(context.Background(), model.AgentRequest{ProviderID: "p1", ModelID: "m1"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"legos-factory/backend/internal/agents"
+	"legos-factory/backend/internal/model"
 )
 
 type Client struct {
@@ -108,7 +109,7 @@ type sessionState struct {
 	client   *Client
 	id       string
 	done     chan struct{}
-	result   agents.AgentResult
+	result   model.AgentResult
 	err      error
 	finished bool
 	mu       sync.Mutex
@@ -124,7 +125,7 @@ func NewHarness(client *Client) *Harness {
 
 func (h *Harness) Name() string { return "opencode" }
 
-func (h *Harness) Start(ctx context.Context, req agents.AgentRequest) (agents.AgentSession, error) {
+func (h *Harness) Start(ctx context.Context, req model.AgentRequest) (agents.AgentSession, error) {
 	var created struct {
 		Data struct {
 			ID string `json:"id"`
@@ -203,7 +204,7 @@ func (s *sessionState) absorb(msgs []message) bool {
 		s.mu.Lock()
 		if !s.finished {
 			s.finished = true
-			s.result = agents.AgentResult{
+			s.result = model.AgentResult{
 				Text:       text.String(),
 				SessionRef: s.id,
 				TokensIn:   int64(m.Tokens.Input),
@@ -261,18 +262,18 @@ func (h *Harness) Cancel(ctx context.Context, sessionID string) error {
 	return h.client.post(ctx, "/api/session/"+sessionID+"/interrupt", []byte("{}"), nil)
 }
 
-func (h *Harness) Result(_ context.Context, sessionID string) (agents.AgentResult, error) {
+func (h *Harness) Result(_ context.Context, sessionID string) (model.AgentResult, error) {
 	h.mu.Lock()
 	st, ok := h.ses[sessionID]
 	h.mu.Unlock()
 	if !ok {
-		return agents.AgentResult{}, agents.ErrSessionNotFound
+		return model.AgentResult{}, agents.ErrSessionNotFound
 	}
 	<-st.done
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.err != nil {
-		return agents.AgentResult{}, st.err
+		return model.AgentResult{}, st.err
 	}
 	return st.result, nil
 }

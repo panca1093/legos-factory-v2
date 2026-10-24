@@ -5,45 +5,23 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 
 	"legos-factory/backend/internal/execenv"
+	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/orchestration"
-	"legos-factory/backend/internal/project"
-	"legos-factory/backend/internal/workorder"
 )
 
 func shortUUID() string { return uuid.NewString()[:12] }
-
-// ---- DTOs ----
-
-type createProjectReq struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	RepoURL     string `json:"repo_url"`
-	Language    string `json:"language"`
-}
-
-func (r *createProjectReq) validate() error {
-	r.Name = strings.TrimSpace(r.Name)
-	if r.Name == "" {
-		return fmt.Errorf("name is required")
-	}
-	if len(r.Name) > 200 {
-		return fmt.Errorf("name too long")
-	}
-	return nil
-}
 
 func (s *Server) handleListProjects(c echo.Context) error {
 	projects, err := s.ProjRepo.List(c.Request().Context())
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not list projects")
 	}
-	out := make([]project.Project, 0, len(projects))
+	out := make([]model.Project, 0, len(projects))
 	for _, p := range projects {
 		p.QualityProfile = "" // not exposed in list view
 		out = append(out, p)
@@ -52,14 +30,14 @@ func (s *Server) handleListProjects(c echo.Context) error {
 }
 
 func (s *Server) handleCreateProject(c echo.Context) error {
-	var req createProjectReq
+	var req model.CreateProjectRequest
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
-	if err := req.validate(); err != nil {
+	if err := req.Validate(); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
 	}
-	p := &project.Project{
+	p := &model.Project{
 		Name: req.Name, Description: req.Description, RepoURL: req.RepoURL,
 		Language: req.Language,
 	}
@@ -82,42 +60,12 @@ func (s *Server) handleGetProject(c echo.Context) error {
 
 // ---- work orders ----
 
-type createWorkOrderReq struct {
-	ProjectID      string `json:"project_id"`
-	Title          string `json:"title"`
-	Objective      string `json:"objective"`
-	Acceptance     string `json:"acceptance"`
-	Autonomy       string `json:"autonomy"`
-	BuilderModel   string `json:"builder_model"`
-	InspectorModel string `json:"inspector_model"`
-}
-
-func (r *createWorkOrderReq) validate() error {
-	r.Title = strings.TrimSpace(r.Title)
-	r.Objective = strings.TrimSpace(r.Objective)
-	r.Acceptance = strings.TrimSpace(r.Acceptance)
-	switch {
-	case r.Title == "":
-		return fmt.Errorf("title is required")
-	case r.Objective == "":
-		return fmt.Errorf("objective is required")
-	case r.ProjectID == "":
-		return fmt.Errorf("project_id is required")
-	}
-	switch r.Autonomy {
-	case "", "guided", "assisted", "delegated":
-	default:
-		return fmt.Errorf("autonomy must be guided, assisted or delegated")
-	}
-	return nil
-}
-
 func (s *Server) handleCreateWorkOrder(c echo.Context) error {
-	var req createWorkOrderReq
+	var req model.CreateWorkOrderRequest
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
-	if err := req.validate(); err != nil {
+	if err := req.Validate(); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
 	}
 	u := currentUser(c)
@@ -126,13 +74,13 @@ func (s *Server) handleCreateWorkOrder(c echo.Context) error {
 	if err != nil {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", "unknown project_id")
 	}
-	wo := &workorder.WorkOrder{
+	wo := &model.WorkOrder{
 		ID:             "wo_" + shortUUID(),
 		ProjectID:      req.ProjectID,
 		Title:          req.Title,
 		Objective:      req.Objective,
 		Acceptance:     req.Acceptance,
-		State:          workorder.StateCreated,
+		State:          model.StateCreated,
 		Autonomy:       req.Autonomy,
 		BuilderModel:   req.BuilderModel,
 		InspectorModel: req.InspectorModel,
@@ -155,7 +103,7 @@ func (s *Server) handleListWorkOrders(c echo.Context) error {
 	}
 	// server-side filtering
 	if state := c.QueryParam("state"); state != "" {
-		filtered := make([]workorder.WorkOrder, 0, len(wos))
+		filtered := make([]model.WorkOrder, 0, len(wos))
 		for _, wo := range wos {
 			if string(wo.State) == strings.ToUpper(state) {
 				filtered = append(filtered, wo)
@@ -164,7 +112,7 @@ func (s *Server) handleListWorkOrders(c echo.Context) error {
 		wos = filtered
 	}
 	if proj := c.QueryParam("project_id"); proj != "" {
-		filtered := make([]workorder.WorkOrder, 0, len(wos))
+		filtered := make([]model.WorkOrder, 0, len(wos))
 		for _, wo := range wos {
 			if wo.ProjectID == proj {
 				filtered = append(filtered, wo)
@@ -172,10 +120,10 @@ func (s *Server) handleListWorkOrders(c echo.Context) error {
 		}
 		wos = filtered
 	}
-	out := make([]workorder.WorkOrder, 0, len(wos))
+	out := make([]model.WorkOrder, 0, len(wos))
 	out = append(out, wos...)
 	if out == nil {
-		out = []workorder.WorkOrder{}
+		out = []model.WorkOrder{}
 	}
 	return c.JSON(http.StatusOK, map[string]any{"work_orders": out})
 }
@@ -186,22 +134,17 @@ func (s *Server) handleGetWorkOrder(c echo.Context) error {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
 	}
 	tasks, _ := s.WORepo.Plan(c.Request().Context(), wo.ID)
-	runs, _ := s.runsFor(c, wo.ID)
+	runs, _ := s.Runs.List(c.Request().Context(), wo.ID)
 	return c.JSON(http.StatusOK, map[string]any{
 		"work_order": wo, "plan": tasksOrEmpty(tasks), "runs": runs,
 	})
 }
 
-func tasksOrEmpty(t []workorder.Task) []workorder.Task {
+func tasksOrEmpty(t []model.Task) []model.Task {
 	if t == nil {
-		return []workorder.Task{}
+		return []model.Task{}
 	}
 	return t
-}
-
-type decisionReq struct {
-	Decision string `json:"decision"`
-	Notes    string `json:"notes"`
 }
 
 func (s *Server) handlePlanGenerate(c echo.Context) error {
@@ -209,10 +152,10 @@ func (s *Server) handlePlanGenerate(c echo.Context) error {
 	if err != nil {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
 	}
-	resumable := map[workorder.State]bool{
-		workorder.StateCreated: true, workorder.StateRequirement: true,
-		workorder.StateDecomposition: true, workorder.StatePlanGeneration: true,
-		workorder.StatePlanning: true,
+	resumable := map[model.State]bool{
+		model.StateCreated: true, model.StateRequirement: true,
+		model.StateDecomposition: true, model.StatePlanGeneration: true,
+		model.StatePlanning: true,
 	}
 	if !resumable[wo.State] {
 		return errorJSON(c, http.StatusConflict, "INVALID_STATE_TRANSITION",
@@ -233,7 +176,7 @@ func (s *Server) handleGetPlan(c echo.Context) error {
 }
 
 func (s *Server) handlePlanDecision(c echo.Context) error {
-	var req decisionReq
+	var req model.PlanDecisionRequest
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
@@ -253,12 +196,8 @@ func (s *Server) handlePlanDecision(c echo.Context) error {
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
-type clarifyReq struct {
-	Answer string `json:"answer"`
-}
-
 func (s *Server) handleClarification(c echo.Context) error {
-	var req clarifyReq
+	var req model.ClarificationRequest
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
@@ -281,13 +220,8 @@ func (s *Server) handleClarification(c echo.Context) error {
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
-type prDecisionReq struct {
-	Decision string `json:"decision"`
-	Reason   string `json:"reason"`
-}
-
 func (s *Server) handlePRDecision(c echo.Context) error {
-	var req prDecisionReq
+	var req model.PRDecisionRequest
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
@@ -309,7 +243,7 @@ func (s *Server) handleCancel(c echo.Context) error {
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "cancelled"})
 }
 
-func (s *Server) takeWO(c echo.Context) (*workorder.WorkOrder, error) {
+func (s *Server) takeWO(c echo.Context) (*model.WorkOrder, error) {
 	wo, err := s.WORepo.Get(c.Request().Context(), c.Param("id"))
 	if err != nil {
 		return nil, err
@@ -318,10 +252,10 @@ func (s *Server) takeWO(c echo.Context) (*workorder.WorkOrder, error) {
 }
 
 func mapDomainError(c echo.Context, err error) error {
-	if errors.Is(err, workorder.ErrNotFound) {
+	if errors.Is(err, model.ErrWorkOrderNotFound) {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
 	}
-	if errors.Is(err, orchestration.ErrStateConflict) {
+	if errors.Is(err, model.ErrStateConflict) {
 		return errorJSON(c, http.StatusConflict, "INVALID_STATE_TRANSITION", err.Error())
 	}
 	msg := err.Error()
@@ -333,44 +267,11 @@ func mapDomainError(c echo.Context, err error) error {
 
 // ---- runs / quality / findings ----
 
-func (s *Server) runsFor(c echo.Context, woID string) ([]map[string]any, error) {
-	rows, err := s.Foreman.DB.QueryContext(c.Request().Context(), `SELECT id, task_id, kind, state, harness,
-		output, error, tokens_in, tokens_out, cost_micros, created_at, started_at, finished_at
-		FROM runs WHERE work_order_id = ? ORDER BY created_at`, woID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []map[string]any{}
-	for rows.Next() {
-		var id, kind, state, harness string
-		var taskID, output, runErr *string
-		var tokensIn, tokensOut, cost int64
-		var createdAt, startedAt, finishedAt *int64
-		if err := rows.Scan(&id, &taskID, &kind, &state, &harness, &output, &runErr, &tokensIn, &tokensOut, &cost, &createdAt, &startedAt, &finishedAt); err != nil {
-			return nil, err
-		}
-		entry := map[string]any{
-			"id": id, "task_id": taskID, "kind": kind, "state": state, "harness": harness,
-			"tokens_in": tokensIn, "tokens_out": tokensOut, "cost_micros": cost,
-			"created_at": unixTime(createdAt),
-		}
-		if output != nil {
-			entry["output"] = *output
-		}
-		if runErr != nil {
-			entry["error"] = *runErr
-		}
-		out = append(out, entry)
-	}
-	return out, rows.Err()
-}
-
 func (s *Server) handleListRuns(c echo.Context) error {
 	if _, err := s.takeWO(c); err != nil {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
 	}
-	runs, err := s.runsFor(c, c.Param("id"))
+	runs, err := s.Runs.List(c.Request().Context(), c.Param("id"))
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load runs")
 	}
@@ -383,7 +284,7 @@ func (s *Server) handleListEvents(c echo.Context) error {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load events")
 	}
 	if events == nil {
-		events = []workorder.Event{}
+		events = []model.Event{}
 	}
 	return c.JSON(http.StatusOK, map[string]any{"events": events})
 }
@@ -393,26 +294,9 @@ func (s *Server) handleListQuality(c echo.Context) error {
 	if err != nil {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
 	}
-	rows, err := s.Foreman.DB.QueryContext(c.Request().Context(), `SELECT id, name, command, outcome, exit_code, output, revision, created_at
-		FROM quality_checks WHERE wo_id = ? ORDER BY created_at`, wo.ID)
+	checks, err := s.Quality.List(c.Request().Context(), wo.ID)
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load quality checks")
-	}
-	defer rows.Close()
-	checks := []map[string]any{}
-	for rows.Next() {
-		var id, name, command, outcome, output string
-		var exit int
-		var revision int64
-		var createdAt int64
-		if err := rows.Scan(&id, &name, &command, &outcome, &exit, &output, &revision, &createdAt); err != nil {
-			return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "quality scan failed")
-		}
-		checks = append(checks, map[string]any{
-			"id": id, "name": name, "command": command, "outcome": outcome,
-			"exit_code": exit, "output": output, "revision": revision,
-			"created_at": time.Unix(createdAt, 0),
-		})
 	}
 	return c.JSON(http.StatusOK, map[string]any{"checks": checks, "revision": wo.Revision})
 }
@@ -421,24 +305,9 @@ func (s *Server) handleListFindings(c echo.Context) error {
 	if _, err := s.takeWO(c); err != nil {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
 	}
-	rows, err := s.Foreman.DB.QueryContext(c.Request().Context(), `SELECT id, run_id, severity, title, detail, location, status, created_at
-		FROM findings WHERE wo_id = ? ORDER BY created_at`, c.Param("id"))
+	findings, err := s.Findings.List(c.Request().Context(), c.Param("id"))
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load findings")
-	}
-	defer rows.Close()
-	findings := []map[string]any{}
-	for rows.Next() {
-		var id, runID, severity, title, detail, location, status string
-		var createdAt int64
-		if err := rows.Scan(&id, &runID, &severity, &title, &detail, &location, &status, &createdAt); err != nil {
-			return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "findings scan failed")
-		}
-		findings = append(findings, map[string]any{
-			"id": id, "run_id": runID, "severity": severity, "title": title,
-			"detail": detail, "location": location, "status": status,
-			"created_at": time.Unix(createdAt, 0),
-		})
 	}
 	return c.JSON(http.StatusOK, map[string]any{"findings": findings})
 }
@@ -483,16 +352,14 @@ func (s *Server) handleOverview(c echo.Context) error {
 	var active, waiting int
 	for _, wo := range wos {
 		switch {
-		case wo.State == workorder.StateWaitingForHuman:
+		case wo.State == model.StateWaitingForHuman:
 			waiting++
 		case !wo.State.Terminal():
 			active++
 		}
 	}
-	var pendingJobs int
-	_ = s.Foreman.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE state IN ('PENDING','RUNNING')`).Scan(&pendingJobs)
-	var failedJobs int
-	_ = s.Foreman.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE state = 'FAILED'`).Scan(&failedJobs)
+	pendingJobs := s.Jobs.CountPendingOrRunning(ctx)
+	failedJobs := s.Jobs.CountFailed(ctx)
 	summary, _ := s.Usage.Summary(ctx)
 	limit, spent, reserved, available := s.Usage.BudgetStatus()
 	u := currentUser(c)
@@ -515,90 +382,29 @@ func (s *Server) handleOverview(c echo.Context) error {
 }
 
 func (s *Server) handleGetSettings(c echo.Context) error {
-	settings, err := s.loadSettings(c)
+	settings, err := s.Settings.Get(c.Request().Context())
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load settings")
 	}
 	return c.JSON(http.StatusOK, settings)
 }
 
-type settingsDTO struct {
-	BudgetLimitMicros int64             `json:"budget_limit_micros"`
-	ArchitectModel    string            `json:"architect_model"`
-	BuilderModel      string            `json:"builder_model"`
-	InspectorModel    string            `json:"inspector_model"`
-	AllowedModels     []string          `json:"allowed_models"`
-	Extra             map[string]string `json:"extra,omitempty"`
-}
-
-func (s *Server) loadSettings(ctx echo.Context) (*settingsDTO, error) {
-	rows, err := s.Foreman.DB.QueryContext(ctx.Request().Context(), `SELECT key, value FROM settings_kv`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	dto := &settingsDTO{}
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, err
-		}
-		switch k {
-		case "budget_limit_micros":
-			fmt.Sscanf(v, "%d", &dto.BudgetLimitMicros)
-		case "architect_model":
-			dto.ArchitectModel = v
-		case "builder_model":
-			dto.BuilderModel = v
-		case "inspector_model":
-			dto.InspectorModel = v
-		case "allowed_models":
-			dto.AllowedModels = strings.Split(strings.Trim(v, ","), ",")
-		default:
-			if dto.Extra == nil {
-				dto.Extra = map[string]string{}
-			}
-			dto.Extra[k] = v
-		}
-	}
-	return dto, rows.Err()
-}
-
 func (s *Server) handlePutSettings(c echo.Context) error {
-	var dto settingsDTO
+	var dto model.Settings
 	if err := c.Bind(&dto); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
 	ctx := c.Request().Context()
-	writes := map[string]string{
-		"budget_limit_micros": fmt.Sprintf("%d", dto.BudgetLimitMicros),
-		"architect_model":     dto.ArchitectModel,
-		"builder_model":       dto.BuilderModel,
-		"inspector_model":     dto.InspectorModel,
-	}
-	if dto.AllowedModels != nil {
-		writes["allowed_models"] = strings.Trim(strings.Join(dto.AllowedModels, ","), ",")
-	}
-	for k, v := range writes {
-		if _, err := s.Foreman.DB.ExecContext(ctx, `INSERT INTO settings_kv (key, value) VALUES (?,?)
-			ON CONFLICT(key) DO UPDATE SET value = excluded.value`, k, v); err != nil {
-			return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not save settings")
-		}
+	if err := s.Settings.Put(ctx, dto); err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not save settings")
 	}
 	s.Usage.SetBudgetLimit(dto.BudgetLimitMicros)
 	if u := currentUser(c); u != nil && !u.Role.IsAdmin() {
 		return errorJSON(c, http.StatusForbidden, "FORBIDDEN", "admin role required") // unreachable: route guards
 	}
-	out, err := s.loadSettings(c)
+	out, err := s.Settings.Get(ctx)
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not reload settings")
 	}
 	return c.JSON(http.StatusOK, out)
-}
-
-func unixTime(p *int64) any {
-	if p == nil {
-		return nil
-	}
-	return time.Unix(*p, 0)
 }

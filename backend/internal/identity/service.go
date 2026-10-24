@@ -4,7 +4,6 @@ package identity
 
 import (
 	"context"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -17,41 +16,23 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"legos-factory/backend/internal/model"
+	"legos-factory/backend/internal/store"
 )
-
-type Role string
-
-const (
-	RoleOwner    Role = "OWNER"
-	RoleAdmin    Role = "ADMIN"
-	RoleEngineer Role = "ENGINEER"
-	RoleViewer   Role = "VIEWER"
-)
-
-// CanWrite reports whether the role may mutate work.
-func (r Role) CanWrite() bool { return r != RoleViewer }
-
-// IsAdmin reports whether the role may change governance/settings.
-func (r Role) IsAdmin() bool { return r == RoleOwner || r == RoleAdmin }
-
-type User struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
-	Role  Role   `json:"role"`
-}
 
 type Service struct {
-	DB      *sql.DB
+	Users   *store.UserRepo
 	Mode    string // dev|oidc
-	DevUser User
+	DevUser model.User
 	OIDC    *OIDCClient
 	Log     *slog.Logger
 }
 
-func (s *Service) EnsureDevUser(ctx context.Context) (*User, error) {
-	if _, err := s.DB.ExecContext(ctx, `INSERT INTO users (id, email, name, role, created_at) VALUES (?,?,?,?,?)
-		ON CONFLICT(id) DO NOTHING`, s.DevUser.ID, s.DevUser.Email, s.DevUser.Name, string(RoleOwner), time.Now().Unix()); err != nil {
+func (s *Service) EnsureDevUser(ctx context.Context) (*model.User, error) {
+	dev := s.DevUser
+	dev.Role = model.RoleOwner
+	if err := s.Users.EnsureUser(ctx, dev); err != nil {
 		return nil, err
 	}
 	return &s.DevUser, nil
@@ -59,55 +40,39 @@ func (s *Service) EnsureDevUser(ctx context.Context) (*User, error) {
 
 // Login issues a session. In dev mode this signs in DevUser directly; OIDC
 // code exchange produces a UserInfo that upserts a user first.
-func (s *Service) Login(ctx context.Context, u *User) (sessionID string, expires bool, err error) {
+func (s *Service) Login(ctx context.Context, u *model.User) (sessionID string, expires bool, err error) {
 	sid := "sess_" + uuid.NewString()
 	ttl := 7 * 24 * time.Hour
-	if _, err := s.DB.ExecContext(ctx, `INSERT INTO sessions (id, user_id, expires_at, created_at) VALUES (?,?,?,?)`,
-		sid, u.ID, time.Now().Add(ttl).Unix(), time.Now().Unix()); err != nil {
+	if err := s.Users.CreateSession(ctx, sid, u.ID, time.Now().Add(ttl)); err != nil {
 		return "", false, err
 	}
 	return sid, true, nil
 }
 
 // UserForSession resolves the session cookie value to a user.
-func (s *Service) UserForSession(ctx context.Context, sid string) (*User, error) {
-	row := s.DB.QueryRowContext(ctx, `SELECT u.id, u.email, u.name, u.role FROM sessions s
-		JOIN users u ON u.id = s.user_id WHERE s.id = ? AND s.expires_at > ?`, sid, time.Now().Unix())
-	var u User
-	var role string
-	if err := row.Scan(&u.ID, &u.Email, &u.Name, &role); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrNotFound
-		}
-		return nil, err
-	}
-	u.Role = Role(role)
-	return &u, nil
+func (s *Service) UserForSession(ctx context.Context, sid string) (*model.User, error) {
+	return s.Users.UserForSession(ctx, sid)
+}
+
+func (s *Service) Logout(ctx context.Context, sid string) error {
+	return s.Users.DeleteSession(ctx, sid)
 }
 
 // UpsertOIDCUser creates or updates a local user from verified OIDC claims.
-func (s *Service) UpsertUser(ctx context.Context, email, name string) (*User, error) {
-	id := "usr_" + uuid.NewString()[:12]
-	var existing string
-	err := s.DB.QueryRowContext(ctx, `SELECT id FROM users WHERE email = ?`, email).Scan(&existing)
-	if errors.Is(err, sql.ErrNoRows) {
-		if _, err := s.DB.ExecContext(ctx, `INSERT INTO users (id, email, name, role, created_at) VALUES (?,?,?,?,?)`,
-			id, email, name, string(RoleEngineer), time.Now().Unix()); err != nil {
+func (s *Service) UpsertUser(ctx context.Context, email, name string) (*model.User, error) {
+	existing, err := s.Users.ByEmail(ctx, email)
+	if errors.Is(err, model.ErrUserNotFound) {
+		u := model.User{ID: "usr_" + uuid.NewString()[:12], Email: email, Name: name, Role: model.RoleEngineer}
+		if err := s.Users.Create(ctx, u); err != nil {
 			return nil, err
 		}
-		return &User{ID: id, Email: email, Name: name, Role: RoleEngineer}, nil
+		return &u, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	var name0, role string
-	if err := s.DB.QueryRowContext(ctx, `SELECT name, role FROM users WHERE id = ?`, existing).Scan(&name0, &role); err != nil {
-		return nil, err
-	}
-	return &User{ID: existing, Email: email, Name: name0, Role: Role(role)}, nil
+	return &model.User{ID: existing.ID, Email: email, Name: existing.Name, Role: existing.Role}, nil
 }
-
-var ErrNotFound = errors.New("session not found")
 
 // ---- OIDC client (authorization code flow, discovery-based) ----
 

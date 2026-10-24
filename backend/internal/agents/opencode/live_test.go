@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"legos-factory/backend/internal/agents"
+	"legos-factory/backend/internal/model"
 )
 
 // TestLiveOpenCode exercises the real OpenCode server end to end and is
@@ -36,8 +36,8 @@ func TestLiveOpenCode(t *testing.T) {
 	t.Logf("discovered %d models, using %s", len(models), models[0].ProviderID+"/"+models[0].ModelID)
 
 	h := NewHarness(c)
-	ses, err := h.Start(ctx, agents.AgentRequest{
-		Role:       agents.RoleBuilder,
+	ses, err := h.Start(ctx, model.AgentRequest{
+		Role:       model.AgentBuilder,
 		Prompt:     "Reply with exactly the four characters: OKAY",
 		ProviderID: models[0].ProviderID,
 		ModelID:    models[0].ModelID,
@@ -57,8 +57,8 @@ func TestLiveOpenCode(t *testing.T) {
 
 	// cancellation against the live server
 	t0 := time.Now()
-	ses2, err := h.Start(ctx, agents.AgentRequest{
-		Role:       agents.RoleBuilder,
+	ses2, err := h.Start(ctx, model.AgentRequest{
+		Role:       model.AgentBuilder,
 		Prompt:     "Write a 300-line poem about bricks before answering anything else.",
 		ProviderID: models[0].ProviderID,
 		ModelID:    models[0].ModelID,

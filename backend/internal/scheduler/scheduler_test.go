@@ -10,6 +10,9 @@ import (
 
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
+
+	"legos-factory/backend/internal/model"
+	"legos-factory/backend/internal/store"
 )
 
 func testDB(t *testing.T) *sql.DB {
@@ -37,8 +40,8 @@ func testDB(t *testing.T) *sql.DB {
 func TestConcurrentClaimingNoDoubleExecution(t *testing.T) {
 	db := testDB(t)
 	log := slog.Default()
-	s := New(db, log, 4)
-	s.Register("test", func(ctx context.Context, job Job) error {
+	s := New(&store.JobRepo{DB: db}, log, 4)
+	s.Register("test", func(ctx context.Context, job model.Job) error {
 		time.Sleep(20 * time.Millisecond)
 		return nil
 	})
@@ -85,10 +88,10 @@ func TestConcurrentClaimingNoDoubleExecution(t *testing.T) {
 func TestWorkerPoolBound(t *testing.T) {
 	db := testDB(t)
 	log := slog.Default()
-	s := New(db, log, 2)
+	s := New(&store.JobRepo{DB: db}, log, 2)
 	var concurrent atomic.Int64
 	var peak atomic.Int64
-	s.Register("test", func(ctx context.Context, job Job) error {
+	s.Register("test", func(ctx context.Context, job model.Job) error {
 		n := concurrent.Add(1)
 		for {
 			p := peak.Load()
@@ -127,15 +130,15 @@ func TestWorkerPoolBound(t *testing.T) {
 func TestRetryAndPermanentFailure(t *testing.T) {
 	db := testDB(t)
 	log := slog.Default()
-	s := New(db, log, 2)
+	s := New(&store.JobRepo{DB: db}, log, 2)
 	var calls atomic.Int64
-	s.Register("flaky", func(ctx context.Context, job Job) error {
+	s.Register("flaky", func(ctx context.Context, job model.Job) error {
 		if calls.Add(1) < 3 {
 			return context.DeadlineExceeded // retried
 		}
 		return nil
 	})
-	s.Register("broken", func(ctx context.Context, job Job) error {
+	s.Register("broken", func(ctx context.Context, job model.Job) error {
 		return context.Canceled // always fails: job never completes
 	})
 	ctx := context.Background()
@@ -189,7 +192,7 @@ func TestOrphanReconcile(t *testing.T) {
 		}
 	}
 	var _ atomic.Value
-	s := New(db, slog.Default(), 1)
+	s := New(&store.JobRepo{DB: db}, slog.Default(), 1)
 	s.Start(context.Background())
 	defer s.Stop()
 	deadline := time.Now().Add(2 * time.Second)

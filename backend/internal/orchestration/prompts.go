@@ -3,14 +3,13 @@ package orchestration
 import (
 	"fmt"
 
-	"legos-factory/backend/internal/scheduler"
-	"legos-factory/backend/internal/workorder"
+	"legos-factory/backend/internal/model"
 )
 
 // Prompts request schema-validated JSON. Structured outputs are parsed and
 // validated before any state transition; free text never drives control flow.
 
-func planPrompt(wo *workorder.WorkOrder) string {
+func planPrompt(wo *model.WorkOrder) string {
 	return fmt.Sprintf(`You are the Architect of a software engineering team.
 
 Work order: %s
@@ -35,7 +34,7 @@ Rules:
 - role is "builder" for implementation tasks.`, wo.Title, wo.Objective, wo.Acceptance)
 }
 
-func reviewPrompt(wo *workorder.WorkOrder) string {
+func reviewPrompt(wo *model.WorkOrder) string {
 	return fmt.Sprintf(`You are the Architect. A human clarified the requirements of work order %q:
 
 Answer: %s
@@ -49,7 +48,7 @@ or
 {"decision":"CLARIFY","question_text":"..."}`, wo.Title, wo.ClarifAnswer, wo.Objective)
 }
 
-func implementPrompt(wo *workorder.WorkOrder, job scheduler.Job) string {
+func implementPrompt(wo *model.WorkOrder, job model.Job) string {
 	reason, _ := job.Payload["reason"].(string)
 	if reason != "" {
 		return fmt.Sprintf(`You are the Builder. Work order %q requires remediation.
@@ -74,7 +73,7 @@ Acceptance criteria:
 Work only within the assigned workspace. When done, reply with one line describing what changed.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance)
 }
 
-func inspectPrompt(wo *workorder.WorkOrder) string {
+func inspectPrompt(wo *model.WorkOrder) string {
 	return fmt.Sprintf(`You are the Inspector. Independently review the implementation of work order %q in the workspace.
 
 Objective:

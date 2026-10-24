@@ -9,8 +9,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"legos-factory/backend/internal/eventbus"
-	"legos-factory/backend/internal/workorder"
+	"legos-factory/backend/internal/model"
 )
 
 // SSE streams. Events are both replayed from the persistent log (after
@@ -93,12 +92,12 @@ func (s *Server) stream(c echo.Context, woID string) error {
 }
 
 // eventJSON serializes a persisted event; liveJSON a bus-delivered one.
-func (s *Server) eventJSON(ev workorder.Event) string {
+func (s *Server) eventJSON(ev model.Event) string {
 	b, _ := json.Marshal(ev)
 	return string(b)
 }
 
-func (s *Server) liveJSON(woID string, ev eventbus.Event) string {
+func (s *Server) liveJSON(woID string, ev model.LiveEvent) string {
 	seq, _ := ev.Payload["id"].(float64)
 	b, _ := json.Marshal(map[string]any{
 		"id":            int64(seq),

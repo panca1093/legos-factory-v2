@@ -1,4 +1,4 @@
-package workorder
+package model
 
 import "testing"
 

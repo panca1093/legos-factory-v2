@@ -1,4 +1,4 @@
-package sqlite
+package store
 
 import (
 	"database/sql"
@@ -38,4 +38,13 @@ func Open(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return db, nil
+}
+
+type rowScanner func(dest ...any) error
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

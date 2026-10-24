@@ -1,94 +1,21 @@
-// Package quality implements the contract-driven quality system: language
-// profiles, deterministic check execution and merge-readiness evaluation.
+// Package quality executes deterministic verification checks.
 package quality
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"legos-factory/backend/internal/model"
 )
-
-// Outcome values. An unexecuted check is never treated as success.
-type Outcome string
-
-const (
-	Pass       Outcome = "PASS"
-	Fail       Outcome = "FAIL"
-	Unverified Outcome = "UNVERIFIED"
-)
-
-// Check is one configured verification command.
-type Check struct {
-	Name    string `json:"name"`
-	Command string `json:"command"`
-}
-
-// Profile defines the deterministic verification commands for a project.
-type Profile struct {
-	Language string  `json:"language"`
-	Checks   []Check `json:"checks"`
-}
-
-// Preset returns the built-in profile for a language. Repositories refine
-// these during onboarding; the preset is a safe default, not a framework.
-func Preset(language string) Profile {
-	switch language {
-	case "go":
-		return Profile{Language: language, Checks: []Check{
-			{Name: "go-test", Command: "go test ./..."},
-			{Name: "go-vet", Command: "go vet ./..."},
-		}}
-	case "typescript":
-		return Profile{Language: language, Checks: []Check{
-			{Name: "typecheck", Command: "npm run -s typecheck"},
-			{Name: "test", Command: "npm test -- --run"},
-		}}
-	case "rust":
-		return Profile{Language: language, Checks: []Check{
-			{Name: "cargo-check", Command: "cargo check"},
-			{Name: "cargo-test", Command: "cargo test"},
-		}}
-	case "node":
-		return Profile{Language: language, Checks: []Check{
-			{Name: "test", Command: "npm test -- --run"},
-		}}
-	default:
-		return Profile{Language: language, Checks: nil}
-	}
-}
-
-func ParseProfile(profileJSON, language string) (Profile, error) {
-	if profileJSON == "" || profileJSON == "{}" || profileJSON == "[]" {
-		return Preset(language), nil
-	}
-	var p Profile
-	if err := json.Unmarshal([]byte(profileJSON), &p); err != nil {
-		return Profile{}, fmt.Errorf("invalid quality profile: %w", err)
-	}
-	if p.Language == "" {
-		p.Language = language
-	}
-	return p, nil
-}
-
-// Result is the recorded result of one executed check.
-type Result struct {
-	Name     string  `json:"name"`
-	Command  string  `json:"command"`
-	Outcome  Outcome `json:"outcome"`
-	ExitCode *int    `json:"exit_code"`
-	Output   string  `json:"output"`
-	Duration time.Duration
-}
 
 // RunCheck executes a single check command inside dir with a timeout.
 // The command is run via the shell, matching how developers run it locally.
-func RunCheck(ctx context.Context, dir string, check Check, timeout time.Duration) Result {
+func RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration) model.CheckResult {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
@@ -112,9 +39,9 @@ func RunCheck(ctx context.Context, dir string, check Check, timeout time.Duratio
 	cmd.Dir = dir
 	cmd.Env = env
 	outBytes, err := cmd.CombinedOutput()
-	r := Result{Name: check.Name, Command: check.Command, Output: string(outBytes)}
+	r := model.CheckResult{Name: check.Name, Command: check.Command, Output: string(outBytes)}
 	if ctx.Err() != nil {
-		r.Outcome = Unverified
+		r.Outcome = model.Unverified
 		r.Output = fmt.Sprintf("check timed out after %s\n%s", timeout, r.Output)
 		return r
 	}
@@ -122,16 +49,16 @@ func RunCheck(ctx context.Context, dir string, check Check, timeout time.Duratio
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			code := exitErr.ExitCode()
 			r.ExitCode = &code
-			r.Outcome = Fail
+			r.Outcome = model.Fail
 		} else {
-			r.Outcome = Unverified
+			r.Outcome = model.Unverified
 			r.Output = fmt.Sprintf("could not execute: %v\n%s", err, r.Output)
 		}
 		return r
 	}
 	code := 0
 	r.ExitCode = &code
-	r.Outcome = Pass
+	r.Outcome = model.Pass
 	return r
 }
 
