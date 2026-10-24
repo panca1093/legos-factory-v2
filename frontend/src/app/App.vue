@@ -22,7 +22,7 @@ onMounted(async () => {
 
 <template>
   <div v-if="session.loading" class="grid min-h-screen place-items-center" style="background: var(--bg)">
-    <div class="panel px-8 py-6 font-bold">Starting factory…</div>
+    <main class="panel px-8 py-6 font-bold" aria-busy="true">Starting factory…</main>
   </div>
   <RouterView v-else />
 </template>

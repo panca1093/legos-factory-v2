@@ -197,7 +197,6 @@ const canCancel = computed(() => wo.value && !['READY', 'CANCELLED', 'BLOCKED'].
       </button>
     </div>
 
-    <Transition name="fade" mode="out-in">
       <!-- BLUEPRINT -->
       <div v-if="tab === 'blueprint'" key="bp" class="mt-4 grid gap-4 lg:grid-cols-3">
         <div class="panel p-5 lg:col-span-2">
@@ -346,6 +345,5 @@ const canCancel = computed(() => wo.value && !['READY', 'CANCELLED', 'BLOCKED'].
           </div>
         </div>
       </div>
-    </Transition>
   </div>
 </template>
