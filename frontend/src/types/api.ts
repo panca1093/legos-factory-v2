@@ -9,6 +9,7 @@ export interface User {
 
 export interface Project {
   id: string;
+  workspace_id?: string;
   name: string;
   description: string;
   repo_url: string;
@@ -48,6 +49,7 @@ export interface WorkOrder {
   clarif_question?: string;
   clarif_answer?: string;
   revision: number;
+  commit_sha?: string;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -96,6 +98,7 @@ export interface QualityCheck {
   exit_code: number;
   output: string;
   revision: number;
+  commit_sha?: string;
   created_at: string;
 }
 
@@ -131,6 +134,25 @@ export interface Settings {
   builder_model: string;
   inspector_model: string;
   allowed_models: string[] | null;
+  cataloger_summaries?: boolean;
+}
+
+export type Trust = "verified" | "human_decision" | "ai_interpretation";
+
+export interface KnowledgeRecord {
+  id: string;
+  workspace_id: string;
+  project_id: string;
+  work_order_id?: string;
+  repo_url?: string;
+  commit_sha?: string;
+  kind: string;
+  trust: Trust;
+  title: string;
+  body: string;
+  actor: string;
+  source_refs: string[];
+  created_at: string;
 }
 
 export interface WOEvent {

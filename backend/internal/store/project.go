@@ -13,15 +13,18 @@ import (
 
 type ProjectRepo struct{ DB *sql.DB }
 
-const pCols = `id, name, description, repo_url, language, quality_profile, created_at`
+const pCols = `id, workspace_id, name, description, repo_url, language, quality_profile, created_at`
 
 func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 	if p.ID == "" {
 		p.ID = "prj_" + uuid.NewString()[:12]
 	}
+	if p.WorkspaceID == "" {
+		p.WorkspaceID = model.DefaultWorkspaceID
+	}
 	p.CreatedAt = time.Now()
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO projects (id, name, description, repo_url, language, quality_profile, created_at)
-		VALUES (?,?,?,?,?,?,?)`, p.ID, p.Name, p.Description, p.RepoURL, p.Language, p.QualityProfile, p.CreatedAt.Unix())
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO projects (id, workspace_id, name, description, repo_url, language, quality_profile, created_at)
+		VALUES (?,?,?,?,?,?,?,?)`, p.ID, p.WorkspaceID, p.Name, p.Description, p.RepoURL, p.Language, p.QualityProfile, p.CreatedAt.Unix())
 	return err
 }
 
@@ -50,7 +53,7 @@ func (r *ProjectRepo) List(ctx context.Context) ([]model.Project, error) {
 func scanP(scan rowScanner) (*model.Project, error) {
 	var p model.Project
 	var createdAt int64
-	err := scan(&p.ID, &p.Name, &p.Description, &p.RepoURL, &p.Language, &p.QualityProfile, &createdAt)
+	err := scan(&p.ID, &p.WorkspaceID, &p.Name, &p.Description, &p.RepoURL, &p.Language, &p.QualityProfile, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrProjectNotFound
 	}

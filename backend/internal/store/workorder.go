@@ -17,7 +17,7 @@ type WorkOrderRepo struct{ DB *sql.DB }
 
 const woCols = `id, project_id, title, objective, acceptance, state, autonomy,
 	builder_model, inspector_model, clarif_question, clarif_answer, revision,
-	created_by, created_at, updated_at`
+	commit_sha, created_by, created_at, updated_at`
 
 func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	if wo.ID == "" {
@@ -63,7 +63,7 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	var createdAt, updatedAt int64
 	err := scan(&wo.ID, &wo.ProjectID, &wo.Title, &wo.Objective, &wo.Acceptance, &state, &wo.Autonomy,
 		&wo.BuilderModel, &wo.InspectorModel, &wo.ClarifQuestion, &wo.ClarifAnswer, &wo.Revision,
-		&wo.CreatedBy, &createdAt, &updatedAt)
+		&wo.CommitSHA, &wo.CreatedBy, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrWorkOrderNotFound
 	}

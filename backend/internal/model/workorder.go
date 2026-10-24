@@ -93,6 +93,7 @@ type WorkOrder struct {
 	ClarifQuestion string    `json:"clarif_question,omitempty"`
 	ClarifAnswer   string    `json:"clarif_answer,omitempty"`
 	Revision       int       `json:"revision"`
+	CommitSHA      string    `json:"commit_sha,omitempty"`
 	CreatedBy      string    `json:"created_by"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`

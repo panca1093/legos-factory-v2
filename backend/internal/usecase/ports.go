@@ -22,6 +22,36 @@ type WorkOrderStore interface {
 
 type ProjectStore interface {
 	Get(ctx context.Context, id string) (*model.Project, error)
+	List(ctx context.Context) ([]model.Project, error)
+	Create(ctx context.Context, p *model.Project) error
+}
+
+type MemberStore interface {
+	Add(ctx context.Context, projectID, userID string) error
+	Remove(ctx context.Context, projectID, userID string) error
+	IsMember(ctx context.Context, projectID, userID string) (bool, error)
+	ProjectIDsFor(ctx context.Context, userID string) ([]string, error)
+	List(ctx context.Context, projectID string) ([]model.ProjectMember, error)
+}
+
+type UserDirectory interface {
+	ByEmail(ctx context.Context, email string) (*model.User, error)
+}
+
+type KnowledgeStore interface {
+	Insert(ctx context.Context, k *model.KnowledgeRecord) error
+	Get(ctx context.Context, id string) (*model.KnowledgeRecord, error)
+	Search(ctx context.Context, q model.KnowledgeQuery) ([]model.KnowledgeRecord, error)
+}
+
+type SettingsReader interface {
+	Get(ctx context.Context) (*model.Settings, error)
+}
+
+// Versioner commits workspace changes locally and returns the commit SHA
+// ("" when the workspace is not under version control).
+type Versioner interface {
+	Commit(ctx context.Context, dir, message string) (string, error)
 }
 
 type RunStore interface {
@@ -41,6 +71,7 @@ type QualityStore interface {
 	Save(ctx context.Context, c model.QualityCheck) error
 	Count(ctx context.Context, woID string) (int, error)
 	CountForRevision(ctx context.Context, woID string, revision int) (int, error)
+	AttachCommit(ctx context.Context, woID string, revision int, sha string) error
 }
 
 type Queue interface {

@@ -40,6 +40,8 @@ type Foreman struct {
 	Sched       Queue
 	Bus         Publisher
 	Usage       Budget
+	Catalog     *Cataloger
+	VCS         Versioner
 	DataDir     string
 	QualTimeout time.Duration
 	Log         *slog.Logger
@@ -55,6 +57,8 @@ func (f *Foreman) Handlers() map[string]func(context.Context, model.Job) error {
 		JobVerify:    f.handleVerify,
 		JobInspect:   f.handleInspect,
 		JobEvaluate:  f.handleEvaluate,
+
+		JobCatalogSummary: f.handleCatalogSummary,
 	}
 }
 

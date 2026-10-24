@@ -27,10 +27,16 @@ func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
 		return err
 	}
 	provider, modelID := f.Model(model.AgentBuilder, wo)
-	if _, _, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job), nil, job.TaskID); err != nil {
+	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job), nil, job.TaskID)
+	if err != nil {
 		return err
 	}
 	f.event(wo.ID, "builder", "task_completed", fmt.Sprintf("Task %s implemented", job.TaskID), nil)
+	title := fmt.Sprintf("Task %s implemented", job.TaskID)
+	if job.TaskID == "" {
+		title = fmt.Sprintf("Remediation implemented (revision %d)", wo.Revision)
+	}
+	f.Catalog.Record(ctx, wo, model.KnowledgeImplementation, model.TrustAIInterpretation, "builder", title, res.Text, "run:"+runID)
 	return f.maybeAdvanceAfterImplementation(ctx, wo)
 }
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 // Workspace is an isolated per-work-order copy of a project repository.
@@ -42,4 +43,41 @@ func Destroy(_ context.Context, woID, dataDir string) error {
 func isLocalGitRepo(path string) bool {
 	info, err := os.Stat(filepath.Join(path, ".git"))
 	return err == nil && (info.IsDir() || info.Mode().IsRegular())
+}
+
+// Git commits work inside isolated workspaces. It never pushes.
+type Git struct{}
+
+// Commit records all workspace changes as a local commit and returns its
+// SHA. A non-git workspace returns "" without error; a clean tree returns
+// the current HEAD.
+func (Git) Commit(ctx context.Context, dir, message string) (string, error) {
+	if !isLocalGitRepo(dir) {
+		return "", nil
+	}
+	if out, err := git(ctx, dir, "add", "-A"); err != nil {
+		return "", fmt.Errorf("git add: %v: %s", err, out)
+	}
+	status, err := git(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return "", fmt.Errorf("git status: %v: %s", err, status)
+	}
+	if strings.TrimSpace(status) != "" {
+		if out, err := git(ctx, dir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost",
+			"commit", "--quiet", "--no-verify", "-m", message); err != nil {
+			return "", fmt.Errorf("git commit: %v: %s", err, out)
+		}
+	}
+	sha, err := git(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse: %v: %s", err, sha)
+	}
+	return strings.TrimSpace(sha), nil
+}
+
+func git(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }

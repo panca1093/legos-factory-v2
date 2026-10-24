@@ -8,6 +8,7 @@ const (
 	AgentArchitect AgentRole = "architect"
 	AgentBuilder   AgentRole = "builder"
 	AgentInspector AgentRole = "inspector"
+	AgentCataloger AgentRole = "cataloger"
 )
 
 // AgentRequest is one logical agent invocation.

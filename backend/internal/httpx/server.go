@@ -14,9 +14,9 @@ import (
 	"legos-factory/backend/internal/eventbus"
 	"legos-factory/backend/internal/identity"
 	"legos-factory/backend/internal/model"
-	"legos-factory/backend/internal/usecase"
 	"legos-factory/backend/internal/store"
 	"legos-factory/backend/internal/usage"
+	"legos-factory/backend/internal/usecase"
 )
 
 type Server struct {
@@ -30,6 +30,8 @@ type Server struct {
 	Jobs     *store.JobRepo
 	Settings *store.SettingsRepo
 	Foreman  *usecase.Foreman
+	Projects *usecase.Projects
+	Catalog  *usecase.Cataloger
 	Bus      *eventbus.Bus
 	Auth     *identity.Service
 	Usage    *usage.Tracker
@@ -126,6 +128,31 @@ func (s *Server) requireRole(min model.Role, next echo.HandlerFunc) echo.Handler
 	}
 }
 
+// requireWOAccess loads the :id work order and rejects callers outside its
+// project with the same 404 as a missing order.
+func (s *Server) requireWOAccess(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		ctx := c.Request().Context()
+		wo, err := s.WORepo.Get(ctx, c.Param("id"))
+		if err != nil {
+			return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
+		}
+		if err := s.Projects.Authorize(ctx, currentUser(c), wo.ProjectID); err != nil {
+			if usecase.IsNotFound(err) {
+				return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
+			}
+			return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not check access")
+		}
+		c.Set("wo", wo)
+		return next(c)
+	}
+}
+
+func woFrom(c echo.Context) *model.WorkOrder {
+	wo, _ := c.Get("wo").(*model.WorkOrder)
+	return wo
+}
+
 // ---- error envelope ----
 
 func errorJSON(c echo.Context, status int, code, message string) error {
@@ -153,22 +180,29 @@ func (s *Server) routes() {
 	api.GET("/projects", s.handleListProjects)
 	api.POST("/projects", s.requireRole(model.RoleEngineer, s.handleCreateProject))
 	api.GET("/projects/:id", s.handleGetProject)
+	api.GET("/projects/:id/members", s.handleListMembers)
+	api.POST("/projects/:id/members", s.requireRole(model.RoleAdmin, s.handleAddMember))
+	api.DELETE("/projects/:id/members/:user_id", s.requireRole(model.RoleAdmin, s.handleRemoveMember))
 
 	api.GET("/work-orders", s.handleListWorkOrders)
 	api.POST("/work-orders", s.requireRole(model.RoleEngineer, s.handleCreateWorkOrder))
-	api.GET("/work-orders/:id", s.handleGetWorkOrder)
-	api.POST("/work-orders/:id/plan/generate", s.requireRole(model.RoleEngineer, s.handlePlanGenerate))
-	api.GET("/work-orders/:id/plan", s.handleGetPlan)
-	api.POST("/work-orders/:id/plan/decisions", s.requireRole(model.RoleEngineer, s.handlePlanDecision))
-	api.POST("/work-orders/:id/clarifications", s.requireRole(model.RoleEngineer, s.handleClarification))
-	api.POST("/work-orders/:id/pr-decision", s.requireRole(model.RoleEngineer, s.handlePRDecision))
-	api.POST("/work-orders/:id/cancel", s.requireRole(model.RoleEngineer, s.handleCancel))
-	api.GET("/work-orders/:id/runs", s.handleListRuns)
-	api.GET("/work-orders/:id/activity", s.handleListEvents)
-	api.GET("/work-orders/:id/quality", s.handleListQuality)
-	api.GET("/work-orders/:id/findings", s.handleListFindings)
-	api.GET("/work-orders/:id/events", s.handleWOEvents)
+	wo := api.Group("/work-orders/:id", s.requireWOAccess)
+	wo.GET("", s.handleGetWorkOrder)
+	wo.POST("/plan/generate", s.requireRole(model.RoleEngineer, s.handlePlanGenerate))
+	wo.GET("/plan", s.handleGetPlan)
+	wo.POST("/plan/decisions", s.requireRole(model.RoleEngineer, s.handlePlanDecision))
+	wo.POST("/clarifications", s.requireRole(model.RoleEngineer, s.handleClarification))
+	wo.POST("/pr-decision", s.requireRole(model.RoleEngineer, s.handlePRDecision))
+	wo.POST("/cancel", s.requireRole(model.RoleEngineer, s.handleCancel))
+	wo.GET("/runs", s.handleListRuns)
+	wo.GET("/activity", s.handleListEvents)
+	wo.GET("/quality", s.handleListQuality)
+	wo.GET("/findings", s.handleListFindings)
+	wo.GET("/events", s.handleWOEvents)
 	api.GET("/events", s.handleGlobalEvents)
+
+	api.GET("/knowledge", s.handleListKnowledge)
+	api.GET("/knowledge/:id", s.handleGetKnowledge)
 
 	api.GET("/models", s.handleModels)
 	api.GET("/usage", s.handleUsage)

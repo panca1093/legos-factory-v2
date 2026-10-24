@@ -62,6 +62,10 @@ type ClarificationRequest struct {
 	Answer string `json:"answer"`
 }
 
+type AddMemberRequest struct {
+	Email string `json:"email"`
+}
+
 type PRDecisionRequest struct {
 	Decision string `json:"decision"`
 	Reason   string `json:"reason"`

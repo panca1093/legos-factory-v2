@@ -7,6 +7,7 @@ var (
 	ErrProjectNotFound   = errors.New("project not found")
 	ErrSessionNotFound   = errors.New("session not found")
 	ErrUserNotFound      = errors.New("user not found")
+	ErrKnowledgeNotFound = errors.New("knowledge record not found")
 )
 
 // ErrStateConflict marks domain rejections that indicate an invalid

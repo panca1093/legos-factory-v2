@@ -27,6 +27,7 @@ const config = ref<Settings>({
   builder_model: "",
   inspector_model: "",
   allowed_models: null,
+  cataloger_summaries: false,
 });
 const tabs = [
   { id: "governance", name: "Governance", icon: ShieldCheck },
@@ -238,6 +239,30 @@ function toggleAllowed(id: string, checked: boolean) {
             <p v-if="!factory.models.length" class="notice">
               No models discovered. Existing defaults are preserved.
             </p>
+          </section>
+          <section class="settings-section">
+            <h2>Cataloger summaries</h2>
+            <p>
+              Knowledge is always recorded deterministically. Optionally, the
+              Cataloger model writes one summary when a work order is approved;
+              it is stored as an AI interpretation that cites its sources.
+            </p>
+            <label class="switch-row"
+              ><span class="row"
+                ><BrickBot persona="cataloger" class="compact" /><strong
+                  class="small"
+                  >Summarize completed work orders</strong
+                ></span
+              ><span class="switch"
+                ><input
+                  v-model="config.cataloger_summaries"
+                  type="checkbox"
+                  data-test="cataloger-summaries"
+                  aria-label="Summarize completed work orders"
+                  :disabled="
+                    !session.isAdmin || busy || !initialized
+                  " /><span></span></span
+            ></label>
           </section>
           <section class="settings-section">
             <h2>Progressive autonomy</h2>

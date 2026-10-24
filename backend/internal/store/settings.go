@@ -34,6 +34,8 @@ func (r *SettingsRepo) Get(ctx context.Context) (*model.Settings, error) {
 			s.InspectorModel = v
 		case "allowed_models":
 			s.AllowedModels = strings.Split(strings.Trim(v, ","), ",")
+		case "cataloger_summaries":
+			s.CatalogerSummaries = v == "true"
 		default:
 			if s.Extra == nil {
 				s.Extra = map[string]string{}
@@ -52,6 +54,7 @@ func (r *SettingsRepo) Put(ctx context.Context, s model.Settings) error {
 		"architect_model":     s.ArchitectModel,
 		"builder_model":       s.BuilderModel,
 		"inspector_model":     s.InspectorModel,
+		"cataloger_summaries": fmt.Sprintf("%t", s.CatalogerSummaries),
 	}
 	if s.AllowedModels != nil {
 		writes["allowed_models"] = strings.Trim(strings.Join(s.AllowedModels, ","), ",")

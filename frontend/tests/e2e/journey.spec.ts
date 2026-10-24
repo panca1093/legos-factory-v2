@@ -180,12 +180,19 @@ test("settings save, navigation and missing-order recovery against the real back
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect(page.getByRole("status")).toHaveText("Settings saved");
   await page.getByRole("link", { name: "Knowledge", exact: true }).click();
-  await page
-    .getByRole("checkbox", { name: "Explore sample knowledge records" })
-    .check();
-  await expect(
-    page.getByText(/UI-only preview. Nothing is ingested/),
-  ).toBeVisible();
+  const decision = page
+    .locator('.memory-card[data-trust="human_decision"]')
+    .first();
+  await expect(decision).toBeVisible();
+  await page.selectOption("#kn-trust", "verified");
+  await expect(page.locator(".memory-card").first()).toHaveAttribute(
+    "data-trust",
+    "verified",
+  );
+  await page.locator(".memory-card").first().click();
+  await expect(page.getByRole("dialog")).toContainText("Verified fact");
+  await expect(page.getByRole("dialog")).toContainText("Commit");
+  await page.keyboard.press("Escape");
   await page.goto("/factory/missing");
   await expect(page.getByRole("alert")).toContainText("work order not found");
   await page

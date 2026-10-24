@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,11 +74,18 @@ type testApp struct {
 	base    string
 	client  *http.Client
 	session string
+	stop    func()
 }
 
 func boot(t *testing.T) *testApp {
 	t.Helper()
-	dataDir := t.TempDir()
+	return bootAt(t, t.TempDir())
+}
+
+// bootAt starts the app on dataDir; stop is idempotent so a test can
+// restart on the same directory.
+func bootAt(t *testing.T, dataDir string) *testApp {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -102,14 +110,18 @@ func boot(t *testing.T) *testApp {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(func() {
-		cancel()
-		a.Sched.Stop()
-		shctx, c2 := context.WithTimeout(context.Background(), 2*time.Second)
-		defer c2()
-		_ = a.Server.Echo.Shutdown(shctx)
-		_ = a.DBCloser()
-	})
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			cancel()
+			a.Sched.Stop()
+			shctx, c2 := context.WithTimeout(context.Background(), 2*time.Second)
+			defer c2()
+			_ = a.Server.Echo.Shutdown(shctx)
+			_ = a.DBCloser()
+		})
+	}
+	t.Cleanup(stop)
 	if err := a.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +143,7 @@ func boot(t *testing.T) *testApp {
 		base:    "http://" + cfg.Addr,
 		client:  &http.Client{Timeout: 10 * time.Second},
 		session: sid,
+		stop:    stop,
 	}
 }
 
@@ -151,12 +164,17 @@ func waitReady(addr string) error {
 
 func (ta *testApp) do(t *testing.T, method, path string, body string) (int, string) {
 	t.Helper()
+	return ta.doAs(t, ta.session, method, path, body)
+}
+
+func (ta *testApp) doAs(t *testing.T, session, method, path string, body string) (int, string) {
+	t.Helper()
 	req, err := http.NewRequest(method, ta.base+path, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: "factory_session", Value: ta.session})
+	req.AddCookie(&http.Cookie{Name: "factory_session", Value: session})
 	resp, err := ta.client.Do(req)
 	if err != nil {
 		t.Fatal(err)

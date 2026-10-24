@@ -102,6 +102,9 @@ func (h *Harness) execute(ctx context.Context, req model.AgentRequest) (model.Ag
 		return h.builder(req, res)
 	case model.AgentInspector:
 		return h.inspector(req, res)
+	case model.AgentCataloger:
+		res.Text = fmt.Sprintf("Scripted mock summary of %s knowledge record(s); not a real model output.", req.Context["record_count"])
+		return res, nil
 	default:
 		return res, nil
 	}

@@ -115,3 +115,15 @@ it("retains authoritative settings when ancillary model discovery fails", async 
   );
   w.unmount();
 });
+it("round-trips the Cataloger summaries toggle", async () => {
+  const f = useFactory();
+  const save = vi.spyOn(f, "saveSettings").mockResolvedValue();
+  const { w } = await render();
+  await w.find('[data-test="cataloger-summaries"]').setValue(true);
+  await w.find('[data-test="save-settings"]').trigger("click");
+  await flushPromises();
+  expect(save).toHaveBeenLastCalledWith(
+    expect.objectContaining({ cataloger_summaries: true }),
+  );
+  w.unmount();
+});

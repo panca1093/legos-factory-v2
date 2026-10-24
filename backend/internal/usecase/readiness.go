@@ -43,6 +43,7 @@ func (f *Foreman) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 		reason = "No verification evidence recorded for the current revision."
 	}
 	f.event(wo.ID, "foreman", "readiness_"+strings.ToLower(decision), reason, map[string]any{"decision": decision})
+	f.Catalog.Record(ctx, wo, model.KnowledgeReadiness, model.TrustVerified, "foreman", "Merge readiness: "+decision, reason)
 	// Final PR disposition stays human: evidence-complete orders land in
 	// NEEDS_HUMAN_REVIEW; the human approve/decline endpoint decides READY.
 	next := model.StateNeedsHumanReview
@@ -51,6 +52,9 @@ func (f *Foreman) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 	}
 	if err := f.step(ctx, wo, model.StateMergeReadiness, next, "foreman", "Merge readiness: "+decision); err != nil {
 		return err
+	}
+	if next == model.StateBlocked {
+		f.Catalog.Completed(ctx, wo, "BLOCKED")
 	}
 	return nil
 }

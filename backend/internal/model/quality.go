@@ -89,5 +89,6 @@ type QualityCheck struct {
 	ExitCode  int       `json:"exit_code"`
 	Output    string    `json:"output"`
 	Revision  int64     `json:"revision"`
+	CommitSHA string    `json:"commit_sha,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }

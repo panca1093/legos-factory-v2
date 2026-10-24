@@ -33,6 +33,8 @@ func (f *Foreman) ApprovePlan(ctx context.Context, woID string) error {
 		}
 	}
 	f.event(woID, "foreman", "execution_queued", fmt.Sprintf("%d task(s) queued", len(roots)), nil)
+	f.Catalog.Record(ctx, wo, model.KnowledgePlanApproved, model.TrustHumanDecision, "human",
+		fmt.Sprintf("Plan approved for %q (%d tasks)", wo.Title, len(tasks)), taskList(tasks))
 	return nil
 }
 
@@ -45,6 +47,8 @@ func (f *Foreman) RevisePlan(ctx context.Context, woID, notes string) error {
 	if err := f.step(ctx, wo, model.StateArchitectReview, model.StatePlanning, "human", "Revision requested: "+notes); err != nil {
 		return err
 	}
+	f.Catalog.Record(ctx, wo, model.KnowledgePlanRevision, model.TrustHumanDecision, "human",
+		fmt.Sprintf("Plan revision requested for %q", wo.Title), notes)
 	_, err = f.Sched.Enqueue(ctx, JobPlan, woID, "", map[string]any{"notes": notes})
 	return err
 }
@@ -62,6 +66,8 @@ func (f *Foreman) AnswerClarification(ctx context.Context, woID, answer string) 
 		return err
 	}
 	f.event(woID, "human", "clarification_answered", answer, nil)
+	f.Catalog.Record(ctx, wo, model.KnowledgeClarification, model.TrustHumanDecision, "human",
+		"Clarification: "+wo.ClarifQuestion, fmt.Sprintf("Question: %s\nAnswer: %s", wo.ClarifQuestion, answer))
 	_, err = f.Sched.Enqueue(ctx, JobReview, woID, "", map[string]any{})
 	return err
 }
@@ -80,21 +86,37 @@ func (f *Foreman) HumanPRDecision(ctx context.Context, woID, decision, reason st
 	switch decision {
 	case "approve":
 		f.event(woID, "human", "pr_approved", reason, nil)
-		return f.step(ctx, wo, model.StateNeedsHumanReview, model.StateReady, "human", "PR approved by human (no publish/merge performed)")
+		if err := f.step(ctx, wo, model.StateNeedsHumanReview, model.StateReady, "human", "PR approved by human (no publish/merge performed)"); err != nil {
+			return err
+		}
+		f.recordPRDecision(ctx, wo, "PR approved", reason)
+		f.Catalog.Completed(ctx, wo, "READY")
+		if f.Catalog.summariesEnabled(ctx) {
+			if _, err := f.Sched.Enqueue(ctx, JobCatalogSummary, woID, "", map[string]any{}); err != nil {
+				f.Log.Error("cataloger: summary enqueue failed", "wo", woID, "err", err)
+			}
+		}
+		return nil
 	case "request_changes":
 		newRev := wo.Revision + 1
-		if err := f.WO.UpdateFields(ctx, woID, map[string]any{"revision": newRev}); err != nil {
+		if err := f.WO.UpdateFields(ctx, woID, map[string]any{"revision": newRev, "commit_sha": ""}); err != nil {
 			return err
 		}
 		f.event(woID, "human", "revision_requested", reason, map[string]any{"revision": newRev})
 		if err := f.step(ctx, wo, model.StateNeedsHumanReview, model.StateImplementing, "human", "Changes requested; invalidating prior quality approval"); err != nil {
 			return err
 		}
+		f.recordPRDecision(ctx, wo, "Changes requested", reason)
 		_, err := f.Sched.Enqueue(ctx, JobImplement, woID, "", map[string]any{"reason": "human_revision"})
 		return err
 	case "decline":
 		f.event(woID, "human", "pr_declined", reason, nil)
-		return f.step(ctx, wo, model.StateNeedsHumanReview, model.StateCancelled, "human", "Work order declined")
+		if err := f.step(ctx, wo, model.StateNeedsHumanReview, model.StateCancelled, "human", "Work order declined"); err != nil {
+			return err
+		}
+		f.recordPRDecision(ctx, wo, "PR declined", reason)
+		f.Catalog.Completed(ctx, wo, "DECLINED")
+		return nil
 	default:
 		return fmt.Errorf("unknown PR decision %q", decision)
 	}
@@ -119,5 +141,14 @@ func (f *Foreman) Cancel(ctx context.Context, woID string) error {
 		return err
 	}
 	f.event(woID, "human", "cancelled", "Work order cancelled", map[string]any{"from": string(wo.State)})
+	f.Catalog.Completed(ctx, wo, "CANCELLED")
 	return nil
+}
+
+// recordPRDecision stores the human disposition. The PR reference is local:
+// nothing is pushed and no remote pull request is created.
+func (f *Foreman) recordPRDecision(ctx context.Context, wo *model.WorkOrder, title, reason string) {
+	ref := fmt.Sprintf("local:%s@%s", wo.ID, orUnversioned(wo.CommitSHA))
+	f.Catalog.Record(ctx, wo, model.KnowledgePRDecision, model.TrustHumanDecision, "human",
+		fmt.Sprintf("%s: %q", title, wo.Title), fmt.Sprintf("Reason: %s\nPR reference: %s (no remote PR)", reason, ref), "pr:"+ref)
 }

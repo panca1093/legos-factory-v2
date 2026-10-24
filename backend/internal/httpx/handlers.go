@@ -17,7 +17,7 @@ import (
 func shortUUID() string { return uuid.NewString()[:12] }
 
 func (s *Server) handleListProjects(c echo.Context) error {
-	projects, err := s.ProjRepo.List(c.Request().Context())
+	projects, err := s.Projects.List(c.Request().Context(), currentUser(c))
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not list projects")
 	}
@@ -44,14 +44,14 @@ func (s *Server) handleCreateProject(c echo.Context) error {
 	if p.Language == "" {
 		p.Language = "go"
 	}
-	if err := s.ProjRepo.Create(c.Request().Context(), p); err != nil {
+	if err := s.Projects.Create(c.Request().Context(), currentUser(c), p); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not create project")
 	}
 	return c.JSON(http.StatusCreated, p)
 }
 
 func (s *Server) handleGetProject(c echo.Context) error {
-	p, err := s.ProjRepo.Get(c.Request().Context(), c.Param("id"))
+	p, err := s.Projects.Get(c.Request().Context(), currentUser(c), c.Param("id"))
 	if err != nil {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "project not found")
 	}
@@ -69,8 +69,8 @@ func (s *Server) handleCreateWorkOrder(c echo.Context) error {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
 	}
 	u := currentUser(c)
-	// verify project exists (authorization enforced at workspace boundary)
-	proj, err := s.ProjRepo.Get(c.Request().Context(), req.ProjectID)
+	// unknown and inaccessible projects are indistinguishable to the caller
+	proj, err := s.Projects.Get(c.Request().Context(), u, req.ProjectID)
 	if err != nil {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", "unknown project_id")
 	}
@@ -97,7 +97,7 @@ func (s *Server) handleCreateWorkOrder(c echo.Context) error {
 }
 
 func (s *Server) handleListWorkOrders(c echo.Context) error {
-	wos, err := s.WORepo.List(c.Request().Context())
+	wos, err := s.visibleWorkOrders(c)
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not list work orders")
 	}
@@ -129,10 +129,7 @@ func (s *Server) handleListWorkOrders(c echo.Context) error {
 }
 
 func (s *Server) handleGetWorkOrder(c echo.Context) error {
-	wo, err := s.WORepo.Get(c.Request().Context(), c.Param("id"))
-	if err != nil {
-		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
-	}
+	wo := woFrom(c)
 	tasks, _ := s.WORepo.Plan(c.Request().Context(), wo.ID)
 	runs, _ := s.Runs.List(c.Request().Context(), wo.ID)
 	return c.JSON(http.StatusOK, map[string]any{
@@ -148,10 +145,7 @@ func tasksOrEmpty(t []model.Task) []model.Task {
 }
 
 func (s *Server) handlePlanGenerate(c echo.Context) error {
-	wo, err := s.WORepo.Get(c.Request().Context(), c.Param("id"))
-	if err != nil {
-		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
-	}
+	wo := woFrom(c)
 	resumable := map[model.State]bool{
 		model.StateCreated: true, model.StateRequirement: true,
 		model.StateDecomposition: true, model.StatePlanGeneration: true,
@@ -206,10 +200,7 @@ func (s *Server) handleClarification(c echo.Context) error {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", "answer is required")
 	}
 	// only the owner may answer a clarification for their work order
-	wo, err := s.WORepo.Get(c.Request().Context(), c.Param("id"))
-	if err != nil {
-		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
-	}
+	wo := woFrom(c)
 	u := currentUser(c)
 	if wo.CreatedBy != u.ID && !u.Role.IsAdmin() {
 		return errorJSON(c, http.StatusForbidden, "FORBIDDEN", "only the work order owner or an admin may clarify")
@@ -243,12 +234,28 @@ func (s *Server) handleCancel(c echo.Context) error {
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "cancelled"})
 }
 
-func (s *Server) takeWO(c echo.Context) (*model.WorkOrder, error) {
-	wo, err := s.WORepo.Get(c.Request().Context(), c.Param("id"))
+// visibleWorkOrders lists work orders in projects the caller may access.
+func (s *Server) visibleWorkOrders(c echo.Context) ([]model.WorkOrder, error) {
+	ctx := c.Request().Context()
+	wos, err := s.WORepo.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return wo, nil
+	scope, err := s.Projects.Scope(ctx, currentUser(c))
+	if err != nil || scope == nil {
+		return wos, err
+	}
+	allowed := make(map[string]bool, len(scope))
+	for _, id := range scope {
+		allowed[id] = true
+	}
+	out := make([]model.WorkOrder, 0, len(wos))
+	for _, wo := range wos {
+		if allowed[wo.ProjectID] {
+			out = append(out, wo)
+		}
+	}
+	return out, nil
 }
 
 func mapDomainError(c echo.Context, err error) error {
@@ -268,9 +275,6 @@ func mapDomainError(c echo.Context, err error) error {
 // ---- runs / quality / findings ----
 
 func (s *Server) handleListRuns(c echo.Context) error {
-	if _, err := s.takeWO(c); err != nil {
-		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
-	}
 	runs, err := s.Runs.List(c.Request().Context(), c.Param("id"))
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load runs")
@@ -290,10 +294,7 @@ func (s *Server) handleListEvents(c echo.Context) error {
 }
 
 func (s *Server) handleListQuality(c echo.Context) error {
-	wo, err := s.takeWO(c)
-	if err != nil {
-		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
-	}
+	wo := woFrom(c)
 	checks, err := s.Quality.List(c.Request().Context(), wo.ID)
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load quality checks")
@@ -302,9 +303,6 @@ func (s *Server) handleListQuality(c echo.Context) error {
 }
 
 func (s *Server) handleListFindings(c echo.Context) error {
-	if _, err := s.takeWO(c); err != nil {
-		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
-	}
 	findings, err := s.Findings.List(c.Request().Context(), c.Param("id"))
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load findings")
@@ -341,11 +339,11 @@ func (s *Server) handleUsage(c echo.Context) error {
 
 func (s *Server) handleOverview(c echo.Context) error {
 	ctx := c.Request().Context()
-	wos, err := s.WORepo.List(ctx)
+	wos, err := s.visibleWorkOrders(c)
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load work orders")
 	}
-	projects, err := s.ProjRepo.List(ctx)
+	projects, err := s.Projects.List(ctx, currentUser(c))
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load projects")
 	}

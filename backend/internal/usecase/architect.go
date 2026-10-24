@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"legos-factory/backend/internal/model"
 )
@@ -34,8 +35,18 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 	}
 	f.event(wo.ID, "architect", "planning_started", "Architect drafting plan", nil)
 
+	prior := f.Catalog.Relevant(ctx, wo)
+	priorRefs := make([]string, 0, len(prior))
+	for _, k := range prior {
+		priorRefs = append(priorRefs, "knowledge:"+k.ID)
+	}
+	if len(prior) > 0 {
+		f.event(wo.ID, "cataloger", "knowledge_retrieved",
+			fmt.Sprintf("%d prior project record(s) provided to the Architect", len(prior)), map[string]any{"refs": priorRefs})
+	}
+
 	provider, modelID := f.Model(model.AgentArchitect, wo)
-	res, _, err := f.runAgent(ctx, wo, model.AgentArchitect, provider, modelID, planPrompt(wo), nil, "")
+	res, runID, err := f.runAgent(ctx, wo, model.AgentArchitect, provider, modelID, planPrompt(wo)+knowledgePrompt(prior), nil, "")
 	if err != nil {
 		return err
 	}
@@ -109,6 +120,8 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 	}
 	f.event(wo.ID, "architect", "plan_ready", fmt.Sprintf("Plan with %d tasks", len(tasks)),
 		map[string]any{"summary": plan.Summary})
+	f.Catalog.Record(ctx, wo, model.KnowledgeArchitectReview, model.TrustAIInterpretation, "architect",
+		"Architect plan: "+plan.Summary, taskList(tasks), append([]string{"run:" + runID}, priorRefs...)...)
 	if err := f.toReview(ctx, wo); err != nil {
 		return err
 	}
@@ -140,9 +153,12 @@ func (f *Foreman) handleReview(ctx context.Context, job model.Job) error {
 		"clarification_answer": wo.ClarifAnswer,
 		"plan_json":            "present",
 	}
-	if _, _, err := f.runAgent(ctx, wo, model.AgentArchitect, provider, modelID, reviewPrompt(wo), ctxData, ""); err != nil {
+	res, runID, err := f.runAgent(ctx, wo, model.AgentArchitect, provider, modelID, reviewPrompt(wo), ctxData, "")
+	if err != nil {
 		return err
 	}
+	f.Catalog.Record(ctx, wo, model.KnowledgeArchitectReview, model.TrustAIInterpretation, "architect",
+		"Architect re-review after clarification", res.Text, "run:"+runID)
 	f.event(wo.ID, "architect", "architect_approved", "Architect re-review passed after clarification", nil)
 	if err := f.step(ctx, wo, model.StateWaitingForHuman, model.StatePlanning, "foreman", "Plan updated with clarification"); err != nil {
 		return err
@@ -151,4 +167,12 @@ func (f *Foreman) handleReview(ctx context.Context, job model.Job) error {
 		return err
 	}
 	return f.step(ctx, wo, model.StatePlanGeneration, model.StateArchitectReview, "foreman", "Architect review complete")
+}
+
+func taskList(tasks []model.Task) string {
+	var b strings.Builder
+	for i, t := range tasks {
+		fmt.Fprintf(&b, "%d. %s — %s\n", i+1, t.Title, t.Objective)
+	}
+	return b.String()
 }

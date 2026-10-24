@@ -4,6 +4,7 @@ import "time"
 
 type Project struct {
 	ID             string    `json:"id"`
+	WorkspaceID    string    `json:"workspace_id"`
 	Name           string    `json:"name"`
 	Description    string    `json:"description"`
 	RepoURL        string    `json:"repo_url"`

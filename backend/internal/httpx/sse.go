@@ -16,11 +16,7 @@ import (
 // Last-Event-ID) and pushed live from the event bus.
 
 func (s *Server) handleWOEvents(c echo.Context) error {
-	woID := c.Param("id")
-	if _, err := s.takeWO(c); err != nil {
-		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "work order not found")
-	}
-	return s.stream(c, woID)
+	return s.stream(c, woFrom(c).ID)
 }
 
 func (s *Server) handleGlobalEvents(c echo.Context) error {
@@ -70,6 +66,7 @@ func (s *Server) stream(c echo.Context, woID string) error {
 		}
 	}
 
+	visible := s.liveFilter(c, woID)
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {
@@ -85,9 +82,34 @@ func (s *Server) stream(c echo.Context, woID string) error {
 			if !open {
 				return nil
 			}
+			if !visible(ev.WOID) {
+				continue
+			}
 			fmt.Fprintf(res.Writer, "event: %s\ndata: %s\n\n", ev.Kind, s.liveJSON(woID, ev))
 			flusher.Flush()
 		}
+	}
+}
+
+// liveFilter limits the global stream to work orders in projects the caller
+// can access; a per-order stream was already authorized by middleware.
+func (s *Server) liveFilter(c echo.Context, woID string) func(string) bool {
+	if woID != "" {
+		return func(string) bool { return true }
+	}
+	ctx := c.Request().Context()
+	u := currentUser(c)
+	cache := map[string]bool{}
+	return func(id string) bool {
+		if ok, seen := cache[id]; seen {
+			return ok
+		}
+		ok := false
+		if wo, err := s.WORepo.Get(ctx, id); err == nil {
+			ok, _ = s.Projects.CanAccess(ctx, u, wo.ProjectID)
+		}
+		cache[id] = ok
+		return ok
 	}
 }
 

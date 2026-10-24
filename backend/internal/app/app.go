@@ -18,6 +18,7 @@ import (
 	"legos-factory/backend/internal/agents/opencode"
 	"legos-factory/backend/internal/config"
 	"legos-factory/backend/internal/eventbus"
+	"legos-factory/backend/internal/execenv"
 	"legos-factory/backend/internal/httpx"
 	"legos-factory/backend/internal/identity"
 	"legos-factory/backend/internal/model"
@@ -56,10 +57,13 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	qualityRepo := &store.QualityRepo{DB: db}
 	jobRepo := &store.JobRepo{DB: db}
 	settingsRepo := &store.SettingsRepo{DB: db}
+	userRepo := &store.UserRepo{DB: db}
 	usageTracker := usage.NewTracker(&store.UsageRepo{DB: db})
+	projects := &usecase.Projects{Store: projRepo, Members: &store.MemberRepo{DB: db}, Users: userRepo}
+	catalog := &usecase.Cataloger{Knowledge: &store.KnowledgeRepo{DB: db}, Proj: projRepo, Settings: settingsRepo, Log: log}
 
 	auth := &identity.Service{
-		Users: &store.UserRepo{DB: db},
+		Users: userRepo,
 		Mode:  cfg.AuthMode,
 		DevUser: model.User{
 			ID:    cfg.DevUserID,
@@ -120,6 +124,7 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 		Proj:    projRepo,
 		Resolve: resolve, Model: modelFor,
 		Bus: bus, Usage: usageTracker,
+		Catalog: catalog, VCS: execenv.Git{},
 		DataDir:     cfg.DataDir,
 		QualTimeout: 5 * time.Minute,
 		Log:         log,
@@ -139,6 +144,8 @@ func Build(cfg *config.Config, log *slog.Logger) (*App, error) {
 	srv.Quality = qualityRepo
 	srv.Jobs = jobRepo
 	srv.Settings = settingsRepo
+	srv.Projects = projects
+	srv.Catalog = catalog
 	srv.Foreman = foreman
 	srv.Bus = bus
 	srv.Auth = auth
