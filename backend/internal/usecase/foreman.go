@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -45,8 +47,11 @@ type Foreman struct {
 	Sandbox      Sandbox
 	DataDir      string
 	QualTimeout  time.Duration
+	StallAfter   time.Duration // no new agent step for this long reports a stall; 0 = defaultStallAfter
 	Log          *slog.Logger
 }
+
+const defaultStallAfter = 3 * time.Minute
 
 // Handlers maps each job kind to the step that executes it; app registers
 // them with the scheduler.
@@ -121,17 +126,28 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	if err := f.Runs.Start(ctx, runID, wo.ID, taskID, string(role), h.Name()); err != nil {
 		return model.AgentResult{}, "", err
 	}
+	runRef := map[string]any{"run_id": runID}
 	f.event(wo.ID, string(role), "agent_started",
-		fmt.Sprintf("%s agent started (%s harness, model %s)", role, h.Name(), modelID), nil)
+		fmt.Sprintf("%s agent started (%s harness, model %s)", role, h.Name(), modelID), runRef)
 
+	var lastStep atomic.Int64
+	lastStep.Store(time.Now().UnixNano())
+	req.OnStep = func(st model.AgentStep) {
+		lastStep.Store(time.Now().UnixNano())
+		f.event(wo.ID, string(role), "agent_step", stepMessage(role, st),
+			map[string]any{"run_id": runID, "step": st.N, "tools": st.Tools, "tokens_out": st.TokensOut})
+	}
+	stopWatch := f.watchStall(wo.ID, role, runID, &lastStep)
 	ses, err := h.Start(ctx, req)
 	if err != nil {
-		f.failRun(ctx, runID, err)
+		stopWatch()
+		f.failRun(ctx, wo.ID, role, runID, err)
 		return model.AgentResult{}, runID, err
 	}
 	res, err := h.Result(ctx, ses.ID())
+	stopWatch()
 	if err != nil {
-		f.failRun(ctx, runID, err)
+		f.failRun(ctx, wo.ID, role, runID, err)
 		return model.AgentResult{}, runID, err
 	}
 	if err := f.Runs.Complete(ctx, runID, res); err != nil {
@@ -145,7 +161,7 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 			CostMicros: res.CostMicros, Source: res.CostSource,
 		})
 	}
-	f.event(wo.ID, string(role), "agent_completed", fmt.Sprintf("%s agent finished", role), nil)
+	f.event(wo.ID, string(role), "agent_completed", fmt.Sprintf("%s agent finished", role), runRef)
 	return res, runID, nil
 }
 
@@ -153,8 +169,62 @@ func (f *Foreman) release(release func(actual int64)) {
 	release(0)
 }
 
-func (f *Foreman) failRun(ctx context.Context, runID string, err error) {
+func (f *Foreman) failRun(ctx context.Context, woID string, role model.AgentRole, runID string, err error) {
 	_ = f.Runs.Fail(ctx, runID, err.Error())
+	f.event(woID, string(role), "agent_failed", fmt.Sprintf("%s agent failed: %v", role, err), map[string]any{"run_id": runID})
+}
+
+// watchStall reports once when a run goes StallAfter without a new step, and
+// re-arms after progress. stop waits for the watcher so no stall lands after the run ends.
+func (f *Foreman) watchStall(woID string, role model.AgentRole, runID string, lastStep *atomic.Int64) (stop func()) {
+	after := f.StallAfter
+	if after <= 0 {
+		after = defaultStallAfter
+	}
+	done, exited := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(exited)
+		tick := time.NewTicker(after / 6)
+		defer tick.Stop()
+		stalled := false
+		for {
+			select {
+			case <-done:
+				return
+			case <-tick.C:
+				idle := time.Since(time.Unix(0, lastStep.Load()))
+				if idle < after {
+					stalled = false
+				} else if !stalled {
+					stalled = true
+					f.event(woID, string(role), "agent_stalled",
+						fmt.Sprintf("%s agent has made no progress for %s", role, idle.Round(time.Second)),
+						map[string]any{"run_id": runID, "idle_seconds": int(idle.Seconds())})
+				}
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-exited
+	}
+}
+
+// stepMessage summarizes a step for the activity trail, e.g. "Architect step 2: read D06.md, grep tenant".
+func stepMessage(role model.AgentRole, st model.AgentStep) string {
+	var calls []string
+	for _, t := range st.Tools[:min(2, len(st.Tools))] {
+		calls = append(calls, strings.TrimSpace(t.Name+" "+t.Target))
+	}
+	more := ""
+	if len(st.Tools) > 2 {
+		more = fmt.Sprintf(" +%d more", len(st.Tools)-2)
+	}
+	name := string(role)
+	if name != "" {
+		name = strings.ToUpper(name[:1]) + name[1:]
+	}
+	return fmt.Sprintf("%s step %d: %s%s", name, st.N, strings.Join(calls, ", "), more)
 }
 
 // ---- transitions & events ----

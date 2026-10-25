@@ -3124,3 +3124,89 @@ a {
   background: #242540;
   color: #d9d8ed;
 }
+.agent-live {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+}
+.agent-live.stalled {
+  border-color: var(--amber);
+}
+.agent-live-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.agent-scan {
+  display: inline-flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.agent-scan i {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--violet);
+  transition: opacity 0.08s linear;
+}
+.agent-live.stalled .agent-scan i {
+  background: var(--amber);
+}
+.agent-verb {
+  font-size: 14px;
+  min-width: 0;
+}
+.agent-verb span {
+  white-space: pre;
+  animation: agent-wave 1.6s ease-in-out infinite;
+}
+@keyframes agent-wave {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.agent-live-meta {
+  margin-top: 4px;
+}
+.agent-stall {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--amber) 55%, var(--ink));
+}
+.agent-transcript {
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.agent-failed {
+  color: var(--red);
+}
+.agent-run summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+.agent-run summary::-webkit-details-marker {
+  display: none;
+}
+.agent-run-chevron {
+  transition: transform 0.15s;
+}
+.agent-run[open] .agent-run-chevron {
+  transform: rotate(90deg);
+}

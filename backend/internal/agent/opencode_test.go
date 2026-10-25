@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -199,5 +201,76 @@ func TestModelsEmptyListOnNoProviders(t *testing.T) {
 	}
 	if len(models) != 0 {
 		t.Fatalf("expected empty list, got %+v", models)
+	}
+}
+
+// OpenCode v2 lists messages newest-first; a tool-using reply spans several
+// assistant steps and only the final one (finish=stop) carries the answer.
+func TestAbsorbMultiStepNewestFirst(t *testing.T) {
+	step := func(created int, finish, text string) string {
+		content := `[{"type":"tool","name":"read"}]`
+		if text != "" {
+			content = fmt.Sprintf(`[{"type":"reasoning","text":"thinking"},{"type":"text","text":%q}]`, text)
+		}
+		return fmt.Sprintf(`{"type":"assistant","time":{"created":%d},"finish":%q,"content":%s,"tokens":{"input":1,"output":2},"cost":0}`, created, finish, content)
+	}
+	user := `{"type":"user","time":{"created":100}}`
+	cases := []struct {
+		name     string
+		data     string
+		wantDone bool
+		wantText string
+	}{
+		{"final answer after tool steps",
+			`[{"type":"idle","time":{"created":500}},` + step(400, "stop", `{"decision":"REVISE"}`) + `,` + step(300, "tool-calls", "") + `,` + step(200, "tool-calls", "") + `,` + user + `]`,
+			true, `{"decision":"REVISE"}`},
+		{"only tool steps so far",
+			`[` + step(300, "tool-calls", "") + `,` + step(200, "tool-calls", "") + `,` + user + `]`,
+			false, ""},
+		{"newest step still streaming",
+			`[` + step(400, "", "") + `,` + step(300, "tool-calls", "") + `,` + user + `]`,
+			false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var msgs []message
+			if err := json.Unmarshal([]byte(tc.data), &msgs); err != nil {
+				t.Fatal(err)
+			}
+			s := &sessionState{id: "ses"}
+			if done := s.absorb(msgs); done != tc.wantDone {
+				t.Fatalf("done = %v, want %v", done, tc.wantDone)
+			}
+			if s.result.Text != tc.wantText {
+				t.Fatalf("text = %q, want %q", s.result.Text, tc.wantText)
+			}
+		})
+	}
+}
+
+func TestAbsorbReportsEachToolStepOnce(t *testing.T) {
+	data := `[` +
+		`{"id":"m3","type":"assistant","time":{"created":300},"finish":"","content":[]},` +
+		`{"id":"m2","type":"assistant","time":{"created":200},"finish":"tool-calls","tokens":{"output":7},"content":[` +
+		`{"type":"tool","name":"read","state":{"status":"error","input":{"filePath":"/Users/me/repo/web/app/layout.tsx"}}}]},` +
+		`{"id":"m1","type":"assistant","time":{"created":100},"finish":"tool-calls","tokens":{"output":5},"content":[` +
+		`{"type":"reasoning","text":"look around"},` +
+		`{"type":"tool","name":"grep","state":{"status":"completed","input":{"path":"/Users/me/repo","pattern":"tenant"}}},` +
+		`{"type":"tool","name":"bash","state":{"status":"completed","input":{"command":"go test ./...\nexit 0"}}}]},` +
+		`{"id":"u1","type":"user","time":{"created":50}}]`
+	var msgs []message
+	if err := json.Unmarshal([]byte(data), &msgs); err != nil {
+		t.Fatal(err)
+	}
+	var got []model.AgentStep
+	s := &sessionState{id: "ses", onStep: func(st model.AgentStep) { got = append(got, st) }}
+	s.absorb(msgs)
+	s.absorb(msgs)
+	want := []model.AgentStep{
+		{N: 1, TokensOut: 5, Tools: []model.AgentTool{{Name: "grep", Target: "tenant"}, {Name: "bash", Target: "go test ./..."}}},
+		{N: 2, TokensOut: 7, Tools: []model.AgentTool{{Name: "read", Target: "web/app/layout.tsx", Failed: true}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("steps = %+v\nwant   %+v", got, want)
 	}
 }

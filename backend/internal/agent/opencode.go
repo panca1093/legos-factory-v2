@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -112,6 +113,8 @@ type sessionState struct {
 	err      error
 	finished bool
 	mu       sync.Mutex
+	onStep   func(model.AgentStep)
+	reported map[string]bool // step message ids already passed to onStep
 }
 
 type sessionHandle struct{ id string }
@@ -136,7 +139,7 @@ func (h *OpenCodeHarness) Start(ctx context.Context, req model.AgentRequest) (mo
 	if created.Data.ID == "" {
 		return nil, fmt.Errorf("opencode returned an empty session id")
 	}
-	st := &sessionState{client: h.client, id: created.Data.ID, done: make(chan struct{})}
+	st := &sessionState{client: h.client, id: created.Data.ID, done: make(chan struct{}), onStep: req.OnStep}
 	h.mu.Lock()
 	h.ses[st.id] = st
 	h.mu.Unlock()
@@ -186,13 +189,19 @@ func (s *sessionState) await() {
 
 // absorb updates state from the latest message list and reports completion.
 func (s *sessionState) absorb(msgs []message) bool {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		m := msgs[i]
-		if m.Type != "assistant" {
-			continue
+	// v2 lists newest-first, so order steps by creation time, not position.
+	var steps []message
+	for _, m := range msgs {
+		if m.Type == "assistant" {
+			steps = append(steps, m)
 		}
-		if m.Finish == "" {
-			return false // assistant turn still running
+	}
+	sort.SliceStable(steps, func(a, b int) bool { return steps[a].Time.Created < steps[b].Time.Created })
+	s.reportSteps(steps)
+	if len(steps) > 0 {
+		m := steps[len(steps)-1]
+		if m.Finish == "" || m.Finish == "tool-calls" {
+			return false // turn still running, or the model will continue after its tool calls
 		}
 		var text strings.Builder
 		for _, part := range m.Content {
@@ -219,17 +228,75 @@ func (s *sessionState) absorb(msgs []message) bool {
 }
 
 type message struct {
-	Type    string `json:"type"`
+	ID   string `json:"id"`
+	Type string `json:"type"`
+	Time struct {
+		Created int64 `json:"created"`
+	} `json:"time"`
 	Finish  string `json:"finish"`
 	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+		Type  string `json:"type"`
+		Text  string `json:"text"`
+		Name  string `json:"name"`
+		State struct {
+			Status string         `json:"status"`
+			Input  map[string]any `json:"input"`
+		} `json:"state"`
 	} `json:"content"`
 	Tokens struct {
 		Input  int `json:"input"`
 		Output int `json:"output"`
 	} `json:"tokens"`
 	Cost float64 `json:"cost"`
+}
+
+// reportSteps passes each newly finished tool-calling step to onStep, in order.
+func (s *sessionState) reportSteps(steps []message) {
+	if s.onStep == nil {
+		return
+	}
+	if s.reported == nil {
+		s.reported = map[string]bool{}
+	}
+	n := 0
+	for _, m := range steps {
+		if m.Finish != "tool-calls" {
+			continue
+		}
+		n++
+		if s.reported[m.ID] {
+			continue
+		}
+		s.reported[m.ID] = true
+		st := model.AgentStep{N: n, TokensOut: int64(m.Tokens.Output)}
+		for _, p := range m.Content {
+			if p.Type == "tool" {
+				st.Tools = append(st.Tools, model.AgentTool{Name: p.Name, Target: toolTarget(p.State.Input), Failed: p.State.Status == "error"})
+			}
+		}
+		s.onStep(st)
+	}
+}
+
+// toolTarget picks the input that best says what a tool call touched.
+func toolTarget(in map[string]any) string {
+	for _, k := range []string{"pattern", "filePath", "path", "command", "url", "query", "description"} {
+		v, ok := in[k].(string)
+		if !ok || strings.TrimSpace(v) == "" {
+			continue
+		}
+		v = strings.TrimSpace(strings.SplitN(strings.TrimSpace(v), "\n", 2)[0])
+		if strings.HasPrefix(v, "/") {
+			if parts := strings.Split(v, "/"); len(parts) > 4 {
+				v = strings.Join(parts[len(parts)-3:], "/")
+			}
+		}
+		if r := []rune(v); len(r) > 80 {
+			v = string(r[:79]) + "…"
+		}
+		return v
+	}
+	return ""
 }
 
 func (s *sessionState) fetchMessages() ([]message, error) {

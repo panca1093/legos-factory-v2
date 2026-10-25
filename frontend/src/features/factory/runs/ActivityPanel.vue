@@ -1,8 +1,17 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import { persona, money } from "../../../composables/presentation";
 import BrickBot from "../../../components/agents/BrickBot.vue";
 import type { WOEvent, Run } from "../../../types/api";
-defineProps<{ events: WOEvent[]; runs: Run[] }>();
+import AgentLiveCard from "./AgentLiveCard.vue";
+import AgentRunCard from "./AgentRunCard.vue";
+import { groupActivity, liveRun } from "./agentActivity";
+const props = defineProps<{ events: WOEvent[]; runs: Run[] }>();
+const items = computed(() => groupActivity(props.events));
+const live = computed(() => liveRun(items.value));
+const history = computed(() =>
+  items.value.filter((it) => it !== live.value).reverse(),
+);
 </script>
 <template>
   <div>
@@ -10,22 +19,31 @@ defineProps<{ events: WOEvent[]; runs: Run[] }>();
       <h2>What’s happening</h2>
       <span class="pill">Recorded event stream</span>
     </div>
+    <AgentLiveCard v-if="live" :key="live.id" :run="live" />
     <TransitionGroup name="view" tag="div" class="timeline"
-      ><article v-for="e in [...events].reverse()" :key="e.id" class="event">
-        <BrickBot :persona="persona(e.actor)" class="compact" />
-        <div class="event-body">
-          <div class="row between">
-            <strong class="small">{{
-              e.actor.charAt(0).toUpperCase() + e.actor.slice(1)
-            }}</strong
-            ><time :datetime="e.created_at">{{
-              new Date(e.created_at).toLocaleString()
-            }}</time>
+      ><template v-for="it in history"
+        ><article v-if="it.type === 'run'" :key="it.id" class="event">
+          <BrickBot :persona="persona(it.actor)" class="compact" />
+          <div class="event-body"><AgentRunCard :run="it" /></div>
+        </article>
+        <article v-else :key="it.event.id" class="event">
+          <BrickBot :persona="persona(it.event.actor)" class="compact" />
+          <div class="event-body">
+            <div class="row between">
+              <strong class="small">{{
+                it.event.actor.charAt(0).toUpperCase() + it.event.actor.slice(1)
+              }}</strong
+              ><time :datetime="it.event.created_at">{{
+                new Date(it.event.created_at).toLocaleString()
+              }}</time>
+            </div>
+            <p>{{ it.event.message }}</p>
+            <span class="tiny muted">{{
+              it.event.kind.replaceAll("_", " ")
+            }}</span>
           </div>
-          <p>{{ e.message }}</p>
-          <span class="tiny muted">{{ e.kind.replaceAll("_", " ") }}</span>
-        </div>
-      </article></TransitionGroup
+        </article></template
+      ></TransitionGroup
     >
     <div v-if="!events.length" class="empty">
       The activity trail starts when you draft a blueprint.

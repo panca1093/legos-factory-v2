@@ -21,6 +21,21 @@ type AgentRequest struct {
 	ModelID      string
 	WorkspaceDir string // directory the agent may operate on (builder/inspector)
 	Context      map[string]string
+	OnStep       func(AgentStep) // optional; called once per finished tool-calling step
+}
+
+// AgentStep is one finished tool-calling step of a running agent.
+type AgentStep struct {
+	N         int         `json:"step"`
+	Tools     []AgentTool `json:"tools"`
+	TokensOut int64       `json:"tokens_out"`
+}
+
+// AgentTool is a tool call within a step, with its main input shortened for display.
+type AgentTool struct {
+	Name   string `json:"name"`
+	Target string `json:"target,omitempty"`
+	Failed bool   `json:"failed,omitempty"`
 }
 
 // AgentResult is the outcome of one invocation.
