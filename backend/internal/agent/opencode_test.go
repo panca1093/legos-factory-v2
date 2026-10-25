@@ -3,10 +3,12 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -243,6 +245,43 @@ func TestAbsorbMultiStepNewestFirst(t *testing.T) {
 			}
 			if s.result.Text != tc.wantText {
 				t.Fatalf("text = %q, want %q", s.result.Text, tc.wantText)
+			}
+		})
+	}
+}
+
+func TestAbsorbProviderErrorFailsSession(t *testing.T) {
+	user := `{"type":"user","time":{"created":100}}`
+	idle := `{"type":"idle","time":{"created":300},"outcome":"failed","error":{"type":"provider.quota","message":"Go usage limit exceeded","status":429,"retryAfterMs":13972000}}`
+	cases := []struct {
+		name, assistant, want string
+		permanent             bool
+	}{
+		{"quota",
+			`{"type":"assistant","time":{"created":200},"finish":"error","error":{"type":"provider.quota","message":"Go usage limit exceeded","status":429},"content":[]}`,
+			"opencode provider error (provider.quota, 429): Go usage limit exceeded", true},
+		{"invalid request",
+			`{"type":"assistant","time":{"created":200},"finish":"error","error":{"type":"provider.invalid-request","message":"Upstream request failed: privacy settings","status":400},"content":[]}`,
+			"opencode provider error (provider.invalid-request, 400): Upstream request failed: privacy settings", true},
+		{"transient",
+			`{"type":"assistant","time":{"created":200},"finish":"error","error":{"type":"provider.unavailable","message":"overloaded","status":503},"content":[]}`,
+			"opencode provider error (provider.unavailable, 503): overloaded", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var msgs []message
+			if err := json.Unmarshal([]byte(`[`+idle+`,`+tc.assistant+`,`+user+`]`), &msgs); err != nil {
+				t.Fatal(err)
+			}
+			s := &sessionState{id: "ses"}
+			if !s.absorb(msgs) {
+				t.Fatal("a failed turn must finish the session")
+			}
+			if s.err == nil || !strings.Contains(s.err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to contain %q", s.err, tc.want)
+			}
+			if errors.Is(s.err, model.ErrPermanent) != tc.permanent {
+				t.Fatalf("permanent = %v, want %v", !tc.permanent, tc.permanent)
 			}
 		})
 	}

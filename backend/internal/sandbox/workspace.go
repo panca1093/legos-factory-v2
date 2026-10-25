@@ -24,11 +24,15 @@ type Workspace struct {
 
 // Prepare creates a workspace for a work order: a git clone for local
 // repositories (shared objects, cheap), an authenticated clone for remote
-// repositories when auth is given, or an empty directory otherwise.
+// repositories when auth is given, or an empty directory when there is no
+// repository. A remote repository without auth is an error.
 func Prepare(ctx context.Context, dataDir, woID, repoURL string, auth *model.GitAuth) (*Workspace, error) {
 	root := filepath.Join(dataDir, "workspaces", woID)
 	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
 		return nil, err
+	}
+	if repoURL != "" && auth == nil && isRemote(repoURL) {
+		return nil, fmt.Errorf("repository %s needs a git connection: link the project to a connection in project settings", repoURL)
 	}
 	if repoURL != "" && (isLocalGitRepo(repoURL) || (auth != nil && isRemote(repoURL))) {
 		if out, err := gitAuthed(ctx, "", auth, "clone", "--quiet", repoURL, root); err != nil {

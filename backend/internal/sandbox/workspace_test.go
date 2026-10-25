@@ -94,13 +94,24 @@ func TestPushBranchPublishesHeadAndReportsBase(t *testing.T) {
 	}
 }
 
-func TestRemoteWithoutAuthIsNotCloned(t *testing.T) {
-	dir, err := Local{DataDir: t.TempDir()}.Prepare(context.Background(), "wo_2", "https://example.invalid/acme/greeter.git", nil)
+func TestRemoteWithoutAuthIsRejected(t *testing.T) {
+	data := t.TempDir()
+	_, err := Local{DataDir: data}.Prepare(context.Background(), "wo_2", "https://example.invalid/acme/greeter.git", nil)
+	if err == nil || !strings.Contains(err.Error(), "needs a git connection") || !strings.Contains(err.Error(), "https://example.invalid/acme/greeter.git") {
+		t.Fatalf("expected an actionable git-connection error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(data, "workspaces", "wo_2")); statErr == nil {
+		t.Fatal("no empty workspace must be left behind")
+	}
+}
+
+func TestEmptyRepoURLGivesEmptyWorkspace(t *testing.T) {
+	dir, err := Local{DataDir: t.TempDir()}.Prepare(context.Background(), "wo_3", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if isLocalGitRepo(dir) {
-		t.Fatal("remote repos must only be cloned with a bound connection")
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() || isLocalGitRepo(dir) {
+		t.Fatalf("expected an empty non-git directory, got %v %v", info, err)
 	}
 }
 

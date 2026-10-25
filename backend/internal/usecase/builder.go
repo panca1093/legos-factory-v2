@@ -26,7 +26,7 @@ func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
 		return err
 	}
 	provider, modelID := f.Model(model.AgentBuilder, wo)
-	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job), nil, job.TaskID)
+	res, runID, err := f.runBuilder(ctx, wo, job, provider, modelID)
 	if err != nil {
 		return err
 	}
@@ -46,6 +46,30 @@ func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
 		}
 	}
 	return nil
+}
+
+// runBuilder runs the builder agent and fails permanently when the workspace
+// has no changes afterwards. It checks the whole diff, not this run's delta:
+// a later task may legitimately add nothing when an earlier one did the work.
+func (f *Foreman) runBuilder(ctx context.Context, wo *model.WorkOrder, job model.Job, provider, modelID string) (model.AgentResult, string, error) {
+	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job), nil, job.TaskID)
+	if err != nil {
+		return res, runID, err
+	}
+	changed, err := f.Sandbox.ChangedFiles(ctx, f.workspaceDir(wo.ID))
+	if err != nil {
+		return res, runID, err
+	}
+	if len(changed) == 0 {
+		what := "task " + job.TaskID
+		if job.TaskID == "" {
+			what = "remediation"
+		}
+		msg := fmt.Sprintf("Builder finished %s without changing any files", what)
+		f.event(wo.ID, "builder", "task_no_changes", msg, map[string]any{"run_id": runID})
+		return res, runID, fmt.Errorf("%w: %s", model.ErrPermanent, msg)
+	}
+	return res, runID, nil
 }
 
 // recordBaseline runs the deterministic checks once, before implementation,

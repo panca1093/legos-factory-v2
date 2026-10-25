@@ -203,6 +203,10 @@ func (s *sessionState) absorb(msgs []message) bool {
 		if m.Finish == "" || m.Finish == "tool-calls" {
 			return false // turn still running, or the model will continue after its tool calls
 		}
+		if m.Finish == "error" || m.Error != nil {
+			s.fail(providerError(m.Error))
+			return true
+		}
 		var text strings.Builder
 		for _, part := range m.Content {
 			if part.Type == "text" {
@@ -227,13 +231,43 @@ func (s *sessionState) absorb(msgs []message) bool {
 	return false
 }
 
+// fail finishes the session with err unless it already finished.
+func (s *sessionState) fail(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.finished {
+		s.finished = true
+		s.err = err
+	}
+}
+
+// providerError turns an OpenCode provider failure into an error. Quota and
+// invalid-request failures cannot succeed on a quick retry, so they are permanent.
+func providerError(e *providerFailure) error {
+	if e == nil {
+		return fmt.Errorf("opencode provider error: step finished with an error and no detail")
+	}
+	err := fmt.Errorf("opencode provider error (%s, %d): %s", e.Type, e.Status, e.Message)
+	if e.Status == 429 || e.Status == 400 || e.Type == "provider.quota" || e.Type == "provider.invalid-request" {
+		return fmt.Errorf("%w: %v", model.ErrPermanent, err)
+	}
+	return err
+}
+
+type providerFailure struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+	Status  int    `json:"status"`
+}
+
 type message struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 	Time struct {
 		Created int64 `json:"created"`
 	} `json:"time"`
-	Finish  string `json:"finish"`
+	Finish  string           `json:"finish"`
+	Error   *providerFailure `json:"error"`
 	Content []struct {
 		Type  string `json:"type"`
 		Text  string `json:"text"`
