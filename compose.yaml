@@ -8,12 +8,12 @@ services:
       FACTORY_AUTH_MODE: dev
       FACTORY_FRONTEND_ORIGIN: http://localhost:8080
       FACTORY_SANDBOX_MODE: local
-      FACTORY_OPENCODE_URL: ${FACTORY_OPENCODE_URL:-}
-      FACTORY_OPENCODE_PASSWORD: ${FACTORY_OPENCODE_PASSWORD:-}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      FACTORY_HARNESS: acp
     volumes:
       - factory-data:/data
+      # OpenCode sessions and provider logins (`opencode auth login` inside the container)
+      - opencode-data:/root/.local/share/opencode
+      - opencode-config:/root/.config/opencode
     healthcheck:
       test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/health"]
       interval: 10s
@@ -24,3 +24,5 @@ services:
 
 volumes:
   factory-data:
+  opencode-data:
+  opencode-config:

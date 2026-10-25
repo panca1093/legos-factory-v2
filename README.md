@@ -33,6 +33,8 @@ Environment (all optional):
 | `FACTORY_DATA_DIR` | `./data` | SQLite db + workspaces |
 | `FACTORY_AUTH_MODE` | `dev` | `dev` or `oidc` |
 | `FACTORY_OIDC_ISSUER/_CLIENT_ID/_CLIENT_SECRET` | — | OIDC login (mode `oidc`) |
+| `FACTORY_HARNESS` | — | `acp`: run each agent as an ACP subprocess (`FACTORY_ACP_COMMAND`); empty: OpenCode HTTP if `FACTORY_OPENCODE_URL` is set, else the mock |
+| `FACTORY_ACP_COMMAND` | `opencode acp` | agent command for `FACTORY_HARNESS=acp` |
 | `FACTORY_OPENCODE_URL` | — | base URL of `opencode serve`; enables the real harness |
 | `FACTORY_OPENCODE_PASSWORD` | — | basic-auth password printed by `opencode serve` |
 | `FACTORY_MAX_CONCURRENT_RUNS` | `2` | worker pool size |
@@ -79,7 +81,14 @@ docker compose down              # stop; preserve data
 docker compose up -d --build --wait  # rebuild after code changes
 ```
 
-Runs use the mock harness unless `FACTORY_OPENCODE_URL` is set. To use OpenCode running on the host, export `FACTORY_OPENCODE_URL=http://host.docker.internal:14099` and `FACTORY_OPENCODE_PASSWORD` before starting Compose. OpenCode must listen on an address reachable from the container. Local repository paths must also be bind-mounted into the container and use their container path in project settings. Keep `FACTORY_SANDBOX_MODE=local`; the application's `docker` sandbox mode is not implemented.
+Agents run inside the container: the image pins OpenCode (`@opencode/cli`, build arg `OPENCODE_VERSION`) and Compose sets `FACTORY_HARNESS=acp`, so every agent run is an `opencode acp` subprocess working in its work order's workspace. Roles other than the builder are read-only, and all roles are denied access outside their workspace. Log in to your model providers once, inside the container; logins and OpenCode sessions persist in the `opencode-data` and `opencode-config` volumes:
+
+```sh
+docker compose exec -it factory opencode auth login
+docker compose exec factory opencode auth list
+```
+
+This deployment is meant for a single owner using their own subscriptions — see `docs/opencode-in-container-design.md` §10 for the terms caveats. Local repository paths must be bind-mounted into the container and use their container path in project settings. Keep `FACTORY_SANDBOX_MODE=local`; the application's `docker` sandbox mode is not implemented.
 
 ## Tests
 

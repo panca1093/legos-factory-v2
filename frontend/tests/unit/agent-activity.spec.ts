@@ -97,6 +97,9 @@ describe("presentation", () => {
       "Searched for tenant",
     );
     expect(toolLine({ name: "todowrite" })).toBe("todowrite");
+    expect(toolLine({ name: "shell", target: "go test ./..." })).toBe(
+      "Ran go test ./...",
+    );
     const [run] = groupActivity([
       ev("agent_started", { run_id: "r4" }, "foreman"),
     ]);

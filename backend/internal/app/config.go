@@ -23,6 +23,8 @@ func LoadConfig() (*model.Config, error) {
 		OpenCodeURL:       env("FACTORY_OPENCODE_URL", ""),
 		OpenCodeUser:      env("FACTORY_OPENCODE_USER", "opencode"),
 		OpenCodePass:      env("FACTORY_OPENCODE_PASSWORD", ""),
+		Harness:           strings.ToLower(env("FACTORY_HARNESS", "")),
+		ACPCommand:        strings.Fields(env("FACTORY_ACP_COMMAND", "opencode acp")),
 		MaxConcurrentRuns: envInt("FACTORY_MAX_CONCURRENT_RUNS", 2),
 		RunTimeoutSec:     envInt("FACTORY_RUN_TIMEOUT", 600),
 		SandboxMode:       env("FACTORY_SANDBOX_MODE", "local"),
@@ -34,6 +36,9 @@ func LoadConfig() (*model.Config, error) {
 	}
 	if c.AuthMode == "oidc" && (c.OIDCIssuer == "" || c.OIDCClientID == "") {
 		return nil, fmt.Errorf("oidc auth requires FACTORY_OIDC_ISSUER and FACTORY_OIDC_CLIENT_ID")
+	}
+	if c.Harness != "" && c.Harness != "acp" {
+		return nil, fmt.Errorf("FACTORY_HARNESS must be acp or empty, got %q", c.Harness)
 	}
 	if c.SandboxMode != "local" && c.SandboxMode != "docker" {
 		return nil, fmt.Errorf("FACTORY_SANDBOX_MODE must be local or docker, got %q", c.SandboxMode)

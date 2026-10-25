@@ -19,6 +19,9 @@ type Config struct {
 	OpenCodeUser string
 	OpenCodePass string
 
+	Harness    string   // "acp" runs ACPCommand per agent run; otherwise OpenCode HTTP or mock
+	ACPCommand []string // agent command for Harness=acp, e.g. opencode acp
+
 	MaxConcurrentRuns int    // global worker pool size
 	RunTimeoutSec     int    // per job execution timeout
 	SandboxMode       string // "local" (trusted) or "docker" (requires daemon)

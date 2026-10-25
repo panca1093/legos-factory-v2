@@ -84,26 +84,30 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		Log: log,
 	}
 	mockH := agent.NewMock()
-	var ocHarness *agent.OpenCodeHarness
-	var ocClient *agent.OpenCodeClient
-	if cfg.OpenCodeURL != "" {
-		ocClient = agent.NewOpenCodeClient(cfg.OpenCodeURL, cfg.OpenCodeUser, cfg.OpenCodePass)
-		ocHarness = agent.NewOpenCodeHarness(ocClient)
+	var realH usecase.Harness
+	var lister modelLister
+	switch {
+	case cfg.Harness == "acp":
+		acp := agent.NewACPHarness(cfg.ACPCommand, filepath.Join(cfg.DataDir, "agent-probe"))
+		realH, lister = acp, acp
+	case cfg.OpenCodeURL != "":
+		client := agent.NewOpenCodeClient(cfg.OpenCodeURL, cfg.OpenCodeUser, cfg.OpenCodePass)
+		realH, lister = agent.NewOpenCodeHarness(client), client
 	}
 
 	resolve := func(role model.AgentRole, wo *model.WorkOrder) usecase.Harness {
-		if ocHarness != nil {
-			return ocHarness
+		if realH != nil {
+			return realH
 		}
 		return mockH
 	}
 	var modelDefaults map[string]string
-	if ocHarness != nil {
-		modelDefaults = discoverDefaults(ocClient)
+	if lister != nil {
+		modelDefaults = discoverDefaults(lister)
 	}
 
 	modelFor := func(role model.AgentRole, wo *model.WorkOrder) (string, string) {
-		if ocHarness == nil {
+		if realH == nil {
 			return "mock", "mock-local"
 		}
 		s, _ := settingsRepo.Get(context.Background())
@@ -150,17 +154,17 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		}
 	}
 	srv.Usage = usageTracker
-	if ocClient != nil {
-		oc := ocClient
+	if lister != nil {
+		harnessName := realH.Name()
 		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) {
-			models, err := oc.Models(c.Request().Context())
+			models, err := lister.Models(c.Request().Context())
 			if err != nil {
 				return nil, err
 			}
 			out := make([]model.ModelInfo, 0, len(models))
 			for _, m := range models {
 				out = append(out, model.ModelInfo{
-					ProviderID: m.ProviderID, ModelID: m.ModelID, Name: m.Name, Harness: "opencode",
+					ProviderID: m.ProviderID, ModelID: m.ModelID, Name: m.Name, Harness: harnessName,
 				})
 			}
 			return out, nil
@@ -193,10 +197,14 @@ func (a *App) Start(ctx context.Context) error {
 	return nil
 }
 
+type modelLister interface {
+	Models(ctx context.Context) ([]agent.Model, error)
+}
+
 // discoverDefaults picks the first available real model as the workspace
 // default for all roles (admins refine via settings; preferences come per
 // work order).
-func discoverDefaults(c *agent.OpenCodeClient) map[string]string {
+func discoverDefaults(c modelLister) map[string]string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	models, err := c.Models(ctx)

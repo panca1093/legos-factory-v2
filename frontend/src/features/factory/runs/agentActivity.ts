@@ -95,6 +95,7 @@ const verbs: Record<string, string> = {
   glob: "Listed files matching",
   list: "Listed",
   bash: "Ran",
+  shell: "Ran",
   edit: "Edited",
   write: "Wrote",
   webfetch: "Fetched",
