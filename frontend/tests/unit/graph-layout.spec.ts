@@ -4,6 +4,7 @@ import type { ElkNode } from "elkjs/lib/elk-api";
 import {
   analyzeTasks,
   edgePath,
+  findHops,
   fromElkGraph,
   layoutTasks,
   lineage,
@@ -116,9 +117,73 @@ describe("ELK graph shaping", () => {
         from: "baseline",
         to: "tests",
         path: "M 264 94 L 292 94 Q 300 94 300 102 L 300 112 Q 300 120 308 120 L 336 120",
+        cycle: false,
       },
     ]);
+    expect(g.nodes.map((n) => n.dependents)).toEqual([1, 0]);
+    expect(g.ranks).toEqual([
+      { label: "Stage 1", x: 32, y: 38 },
+      { label: "Stage 2", x: 336, y: 38 },
+    ]);
     expect(g.diagnostics).toEqual(["note"]);
+  });
+  it("flags edges that run against the flow as the cycle", () => {
+    const result: ElkNode = {
+      id: "root",
+      children: [
+        { id: "baseline", x: 32, y: 40, width: 232, height: 108 },
+        { id: "tests", x: 336, y: 40, width: 232, height: 108 },
+      ],
+      edges: [
+        {
+          id: "tests->baseline",
+          sources: ["tests"],
+          targets: ["baseline"],
+          sections: [
+            {
+              id: "s0",
+              startPoint: { x: 336, y: 60 },
+              endPoint: { x: 264, y: 60 },
+            },
+          ],
+        },
+      ],
+    };
+    const g = fromElkGraph(result, [tasks[0], tasks[2]], [], "RIGHT");
+    expect(g.edges[0].cycle).toBe(true);
+  });
+  it("hops horizontal segments over vertical segments they cross", () => {
+    const horizontal = [
+        { x: 0, y: 50 },
+        { x: 100, y: 50 },
+      ],
+      vertical = [
+        { x: 40, y: 0 },
+        { x: 40, y: 100 },
+      ],
+      touching = [
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+      ];
+    const hops = findHops([horizontal, vertical, touching]);
+    expect(hops[0]).toEqual([[40]]);
+    expect(hops[1]).toEqual([[]]);
+    // ELK can emit sub-pixel noise on a straight segment.
+    expect(
+      findHops([
+        [
+          { x: 0, y: 50 },
+          { x: 100, y: 50.0000001 },
+        ],
+        vertical,
+      ])[0],
+    ).toEqual([[40]]);
+    expect(edgePath(horizontal, 8, hops[0])).toBe(
+      "M 0 50 L 35 50 A 5 5 0 0 1 45 50 L 100 50",
+    );
+    expect(edgePath([...horizontal].reverse(), 8, [[40]])).toBe(
+      "M 100 50 L 45 50 A 5 5 0 0 0 35 50 L 0 50",
+    );
   });
   it("rounds corners no further than half of the shorter segment", () => {
     expect(
@@ -204,6 +269,18 @@ describe("layoutTasks", () => {
     );
     expect(cyclic.nodes).toHaveLength(4);
     expect(cyclic.diagnostics.join(" ")).toContain("cycle");
+    // inspection -> baseline closes the loop; only tasks on it are named.
+    expect(cyclic.diagnostics.join(" ")).toContain(tasks[0].title);
+    const extra = await layoutTasks(
+      [
+        { ...tasks[0], deps: ["implementation"] },
+        { ...tasks[1], deps: ["baseline"] },
+        { ...tasks[2], deps: ["implementation"] },
+      ],
+      "RIGHT",
+      realElk,
+    );
+    expect(extra.diagnostics.join(" ")).not.toContain(tasks[2].title);
     const chain = Array.from({ length: 100 }, (_, i) => ({
       ...tasks[0],
       id: `t${i}`,

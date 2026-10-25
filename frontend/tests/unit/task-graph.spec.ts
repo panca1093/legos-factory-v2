@@ -52,6 +52,14 @@ it("renders role, sequence, status and progress like the reference design", asyn
     /4 tasks · 4 dependencies · \d+% zoom/,
   );
   expect(w.text()).toContain("Drag to pan · Scroll to zoom · Click to inspect");
+  expect(baseline.find(".tg-badge").text()).toBe("Needed by 2");
+  expect(w.find('[data-node="inspection"] .tg-badge').exists()).toBe(false);
+  expect(w.findAll(".tg-rank").map((r) => r.text())).toEqual([
+    "Stage 1",
+    "Stage 2",
+    "Stage 3",
+  ]);
+  expect(w.findAll(".tg-edge.cycle")).toHaveLength(0);
   w.unmount();
 });
 
@@ -105,4 +113,19 @@ it("shows the empty state without loading the layout engine", async () => {
   await flushPromises();
   expect(w.text()).toContain("The task graph will appear");
   expect(engine).not.toHaveBeenCalled();
+});
+
+it("draws the edge that closes a dependency cycle as a dashed cycle edge", async () => {
+  const w = mount(TaskGraph, {
+    props: {
+      tasks: [{ ...tasks[0], deps: ["inspection"] }, ...tasks.slice(1)],
+      runs,
+      engine: () => Promise.resolve(new ELK()),
+    },
+  });
+  await vi.waitFor(() => expect(w.findAll(".tg-edge")).toHaveLength(5));
+  expect(w.findAll(".tg-edge.cycle")).toHaveLength(1);
+  expect(w.find(".tg-edge.cycle").attributes("marker-end")).toContain("-cycle");
+  expect(w.find(".tg-legend").text()).toContain("Cycle");
+  expect(w.find('[role="alert"]').text()).toContain("cycle");
 });

@@ -12,6 +12,7 @@ import {
   layoutTasks,
   lineage,
   type Direction,
+  type GraphEdge,
   type GraphLayout,
   type LayoutEngine,
 } from "./layout";
@@ -28,6 +29,11 @@ const props = withDefaults(
   { engine: loadElk },
 );
 const emit = defineEmits<{ select: [string] }>();
+const markers = {
+  "": "var(--muted)",
+  "-active": "var(--violet)",
+  "-cycle": "var(--red)",
+};
 const MIN_ZOOM = 0.2,
   MAX_ZOOM = 2,
   READABLE_ZOOM = 0.5;
@@ -136,15 +142,19 @@ const roleName = (role: string) =>
   role ? role.charAt(0).toUpperCase() + role.slice(1) : "Task";
 const sequence = (t: Task, i: number) =>
   `#${String(t.seq || i + 1).padStart(2, "0")}`;
-function edgeClass(e: { from: string; to: string }) {
+function edgeClass(e: GraphEdge) {
   if (focused.value) {
     const on = focused.value.has(e.from) && focused.value.has(e.to);
-    return { active: on, dim: !on };
+    return { active: on, dim: !on, cycle: e.cycle };
   }
   return {
     active: !!selectedID.value && [e.from, e.to].includes(selectedID.value),
+    cycle: e.cycle,
   };
 }
+const arrow = (e: GraphEdge) =>
+  `url(#${marker}${edgeClass(e).active ? "-active" : e.cycle ? "-cycle" : ""})`;
+const hasCycle = computed(() => !!graph.value?.edges.some((e) => e.cycle));
 
 function select(id: string) {
   if (dragged) return void (dragged = false);
@@ -336,29 +346,36 @@ function endPan() {
           <svg :width="graph.width" :height="graph.height" aria-hidden="true">
             <defs>
               <marker
-                v-for="kind in ['', '-active']"
+                v-for="(fill, kind) in markers"
                 :id="marker + kind"
                 :key="kind"
                 markerWidth="8"
-                markerHeight="8"
-                refX="7.5"
-                refY="4"
+                markerHeight="6"
+                refX="7"
+                refY="3"
                 orient="auto"
                 markerUnits="userSpaceOnUse"
               >
-                <path
-                  d="M0,0.5 L8,4 L0,7.5 Z"
-                  :fill="kind ? 'var(--violet)' : 'var(--muted)'"
-                />
+                <path d="M0,0 L8,3 L0,6 Z" :fill="fill" />
               </marker>
             </defs>
+            <text
+              v-for="rank in graph.ranks"
+              :key="rank.label"
+              class="tg-rank"
+              :x="rank.x"
+              :y="rank.y"
+              :dominant-baseline="direction === 'DOWN' ? 'middle' : undefined"
+            >
+              {{ rank.label }}
+            </text>
             <path
               v-for="e in graph.edges"
               :key="e.id"
               class="tg-edge"
               :class="edgeClass(e)"
               :d="e.path"
-              :marker-end="`url(#${marker}${edgeClass(e).active ? '-active' : ''})`"
+              :marker-end="arrow(e)"
             /></svg
           ><button
             v-for="(n, i) in graph.nodes"
@@ -382,10 +399,15 @@ function endPan() {
             @click="select(n.id)"
           >
             <span class="tg-node-head"
-              ><BrickBot :persona="persona(n.role)" :size="16" /><span>{{
-                roleName(n.role)
-              }}</span
+              ><BrickBot :persona="persona(n.role)" :size="16" /><span
+                class="tg-role"
+                >{{ roleName(n.role) }}</span
               ><span class="grow"></span
+              ><span
+                v-if="n.dependents"
+                class="tg-badge"
+                :title="`${n.dependents} ${n.dependents === 1 ? 'task depends' : 'tasks depend'} on this one`"
+                >Needed by {{ n.dependents }}</span
               ><span class="tg-seq">{{ sequence(n, i) }}</span></span
             ><strong class="tg-node-title">{{ n.title }}</strong
             ><span class="tg-node-foot"
@@ -418,9 +440,13 @@ function endPan() {
           {{ Math.round(zoom * 100) }}% zoom</span
         >
         <span class="tg-legend"
+          ><span class="tg-eyebrow">Legend</span
           ><span><i class="tg-dot completed"></i>Done</span
           ><span><i class="tg-dot running"></i>Running</span
-          ><span><i class="tg-dot waiting"></i>Waiting</span></span
+          ><span><i class="tg-dot waiting"></i>Waiting</span
+          ><span
+            ><b class="tg-badge">Needed by N</b>Tasks that depend on it</span
+          ><span v-if="hasCycle"><i class="tg-line-cycle"></i>Cycle</span></span
         >
       </div>
     </template>

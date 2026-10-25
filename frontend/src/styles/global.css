@@ -3199,10 +3199,10 @@ a {
   border-radius: 14px;
   background-color: var(--bg);
   background-image: radial-gradient(
-    color-mix(in srgb, var(--muted) 35%, transparent) 1px,
+    color-mix(in srgb, var(--ink) 14%, transparent) 1px,
     transparent 1px
   );
-  background-size: 18px 18px;
+  background-size: 22px 22px;
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -3238,8 +3238,19 @@ a {
   stroke: var(--violet);
   stroke-width: 2;
 }
+.tg-edge.cycle {
+  stroke: var(--red);
+  stroke-dasharray: 5 4;
+}
 .tg-edge.dim {
   opacity: 0.12;
+}
+.tg-rank {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
 }
 .tg-node {
   position: absolute;
@@ -3248,7 +3259,7 @@ a {
   gap: 6px;
   padding: 10px 12px 11px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--panel);
   box-shadow: 0 2px 6px #2425400d;
   text-align: left;
@@ -3288,10 +3299,30 @@ a {
   flex: none;
   filter: none;
 }
+.tg-role,
+.tg-eyebrow {
+  font-family: var(--mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
 .tg-seq {
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 500;
+}
+.tg-badge {
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 8px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
 }
 .tg-node-title {
   font-size: 13px;
@@ -3322,8 +3353,11 @@ a {
   color: var(--muted);
 }
 .tg-engine {
-  top: 12px;
-  left: 14px;
+  top: 10px;
+  left: 10px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: var(--bg);
   font-family: var(--mono);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3373,6 +3407,8 @@ a {
   justify-content: space-between;
   gap: 8px 16px;
   margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
 }
 .tg-footer .row {
   gap: 6px;
@@ -3380,7 +3416,18 @@ a {
 .tg-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
+  align-items: center;
+  gap: 8px 14px;
+}
+.tg-legend .tg-badge {
+  margin-right: 5px;
+}
+.tg-line-cycle {
+  display: inline-block;
+  width: 16px;
+  margin-right: 5px;
+  vertical-align: middle;
+  border-top: 1.5px dashed var(--red);
 }
 @media (max-width: 680px) {
   .tg-canvas {
