@@ -72,7 +72,8 @@ func fakeAgent(scenario string) {
 				update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "read", "kind": "read", "status": "pending", "rawInput": map[string]any{}})
 				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "in_progress", "rawInput": map[string]any{"path": "/data/workspaces/wo/a/b/c.go"}})
 				update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "t2", "title": "shell", "kind": "execute", "status": "pending"})
-				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed",
+					"content": []any{map[string]any{"type": "content", "content": map[string]any{"type": "text", "text": "Read file"}}}})
 				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "in_progress", "rawInput": map[string]any{"command": "go test ./..."}})
 				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "failed"})
 				update(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "thinking"}})
@@ -100,6 +101,8 @@ func fakeAgent(scenario string) {
 				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "quota":
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Go usage limit exceeded"}})
+			case "funds":
+				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Internal error: Upstream request failed: Insufficient account funds"}})
 			case "refusal":
 				reply(m.ID, map[string]any{"stopReason": "refusal"})
 			case "crash":
@@ -216,6 +219,10 @@ func TestACPFailures(t *testing.T) {
 	_, err := runFake(t, fakeHarness(t, "quota"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
 	if err == nil || !strings.Contains(err.Error(), "Go usage limit exceeded") || !errors.Is(err, model.ErrPermanent) {
 		t.Fatalf("quota err = %v", err)
+	}
+	_, err = runFake(t, fakeHarness(t, "funds"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
+	if err == nil || !strings.Contains(err.Error(), "Insufficient account funds") || !errors.Is(err, model.ErrPermanent) {
+		t.Fatalf("funds err = %v", err)
 	}
 	_, err = runFake(t, fakeHarness(t, "refusal"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
 	if err == nil || !strings.Contains(err.Error(), "refusal") {

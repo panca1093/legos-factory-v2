@@ -370,7 +370,7 @@ func (c *acpConn) begin(method string, params any) (func(context.Context) (json.
 func rpcError(method, msg string) error {
 	err := fmt.Errorf("acp %s: %s", method, msg)
 	low := strings.ToLower(msg)
-	for _, s := range []string{"usage limit", "quota", "429", "invalid-request", "trains on request data"} {
+	for _, s := range []string{"usage limit", "quota", "429", "invalid-request", "trains on request data", "insufficient", "funds"} {
 		if strings.Contains(low, s) {
 			return fmt.Errorf("%w: %v", model.ErrPermanent, err)
 		}
@@ -442,16 +442,13 @@ func (c *acpConn) readLoop(r io.Reader) {
 func (c *acpConn) onUpdate(params json.RawMessage) {
 	var p struct {
 		Update struct {
-			Kind       string         `json:"sessionUpdate"`
-			ToolCallID string         `json:"toolCallId"`
-			Title      string         `json:"title"`
-			Status     string         `json:"status"`
-			RawInput   map[string]any `json:"rawInput"`
-			Content    struct {
-				Type string `json:"type"`
-				Text string `json:"text"`
-			} `json:"content"`
-			Cost *struct {
+			Kind       string          `json:"sessionUpdate"`
+			ToolCallID string          `json:"toolCallId"`
+			Title      string          `json:"title"`
+			Status     string          `json:"status"`
+			RawInput   map[string]any  `json:"rawInput"`
+			Content    json.RawMessage `json:"content"` // an object on message chunks, an array on tool updates
+			Cost       *struct {
 				Amount float64 `json:"amount"`
 			} `json:"cost"`
 		} `json:"update"`
@@ -464,8 +461,12 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 	var step *model.AgentStep
 	switch u.Kind {
 	case "agent_message_chunk":
-		if u.Content.Type == "text" {
-			c.text.WriteString(u.Content.Text)
+		var chunk struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(u.Content, &chunk) == nil && chunk.Type == "text" {
+			c.text.WriteString(chunk.Text)
 		}
 	case "usage_update":
 		if u.Cost != nil {
