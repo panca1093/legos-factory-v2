@@ -247,3 +247,73 @@ on it; nothing below is legal advice, and terms change.
 |---|---|---|
 | Single user, own subscriptions | Multiple users | Per-workspace API-key credentials, encrypted at rest, injected per run; remove `FACTORY_SINGLE_USER` |
 | OpenCode only | + Claude Agent SDK / Hermes harness | Same `Harness` interface; Claude via API key; Hermes server mode to be verified |
+
+## 11. Spike findings (2026-10-25, throwaway container from the factory image, arm64)
+
+| # | Question | Result |
+|---|---|---|
+| 1 | Install 2.1.3 on Linux | ✅ `npm i -g @opencode/cli@2.1.3` (v2 lives under `@opencode/*`; `opencode-ai` and GitHub releases are the 1.x line). Platform builds for linux arm64/x64 (glibc + musl). **+448 MB** to the image. |
+| 2 | Serve + password | ✅ `opencode serve --hostname 0.0.0.0 --port 4096` with `OPENCODE_SERVER_PASSWORD`; `/api/*` → 401 without, 200 with basic auth `opencode:<pw>`. |
+| 2b | Health route | `/global/health` is the web UI shell (always 200) — **not** a health check. Use authenticated `GET /api/info` → `{"version":"2.1.3",…}` for the compose healthcheck and the factory's startup version log. |
+| 3 | Login headless | ⚠️ Partially verified. `opencode auth login [target] --server <url> --method <id> --answer key=value` is scriptable; completing a **subscription** login needs the owner and was not done. Fresh container has *no* integrations but already lists 9 free `opencode/*` models. Credentials + sessions live in `/root/.local/share/opencode/opencode.db` and `/root/.config/opencode/` — both must be on the `opencode-state` volume (there is no `auth.json`). |
+| 4a | `location.directory` | ✅ Honoured: `pwd` = workspace, relative paths resolve there. |
+| 4b | Default permissions | ❌ **Nothing is sandboxed by default**: with no rules the agent read another work order's workspace without asking. Rules are mandatory. |
+| 4c | `external_directory` deny | ✅ Blocks file tools outside the workspace (`Permission denied: external_directory`). ⚠️ Does **not** stop `shell` (`cat /data/workspaces/other/...` succeeded). |
+| 5 | Read-only roles | ❌ Denying only `edit`/`write`/`patch`/`apply_patch` is useless — the model wrote files via `shell`. ✅ Also denying `shell` and `execute` makes the role truly read-only. No rule fell back to `ask`; denied tools fail or are hidden, so no session hung. |
+| — | Model selection | ❌ **Existing bug**: the harness sends `model` in the *prompt* body; 2.1.3 accepts it (200) but ignores it — the session keeps the server default. The model must be set in the **session create** body (`model: {providerID, id}`), which was verified to work. Whether past factory runs used the intended model is unverified (desktop server was not running during the spike). |
+
+Permission action names observed: `read`, `shell`, `write`, `edit`, `patch`,
+`apply_patch`, `list`, `glob`, `grep`, `websearch`, `webfetch`, `task`, `todowrite`,
+`execute`, `external_directory`, `doom_loop`. A ruleset of `allow *` followed by
+specific `deny` rules behaved as expected (later, more specific rules won).
+
+### Design changes from the spike
+
+- Session create sends `model`, `location` and `permissions`; the prompt sends only `text`.
+- Role rulesets:
+  - **builder**: allow `*`, deny `external_directory`. Shell can still reach other
+    workspaces — acceptable for single-user scope (all workspaces belong to the owner);
+    the container remains the hard boundary to the host.
+  - **architect, foreman, inspector**: allow `*`, deny `external_directory`, `edit`,
+    `write`, `patch`, `apply_patch`, `shell`, `execute`. Checks are run by the factory's
+    sandbox, not by these agents, so they do not need a shell.
+- Healthcheck = authenticated `GET /api/info`.
+- `opencode-state` volume mounts both `/root/.local/share/opencode` and
+  `/root/.config/opencode`.
+- Still to verify with the owner present: subscription login inside the container,
+  login survival across `docker compose down/up`, token refresh.
+
+## 12. ACP spike (2026-10-25): Go client ↔ `opencode acp`
+
+A ~250-line throwaway Go client (stdio, newline-delimited JSON-RPC 2.0, no SDK) drove
+`opencode acp` (2.1.3) inside the factory image, using a free `opencode/*` model.
+
+| Check | Result |
+|---|---|
+| Handshake | ✅ `initialize` → protocolVersion 1, `agentInfo` OpenCode 2.1.3, `loadSession`, session `resume`/`close`/`list`/`fork`, `authMethods: [opencode-login]` ("Run `opencode auth login` in the terminal"). |
+| Session dir | ✅ `session/new {cwd}` — tools run in the work order workspace. |
+| Model | ✅ `configOptions` has `id=model, category=model` (list of provider/model values) and `id=mode` (`build`, `plan` = read-only agent). `session/set_config_option` switches the model; agent confirms with `config_option_update`. |
+| Live steps | ✅ Pushed, no polling: `tool_call` / `tool_call_update` with `kind` (read/edit/execute), `rawInput` (path/command/content), status pending→in_progress→completed/failed; `usage_update`; `agent_message_chunk` for the reply. |
+| End of turn | ✅ `session/prompt` result: `stopReason` (`end_turn`, `cancelled`) **plus token usage** (input/output/thought/cached). |
+| Default permissions | ❌ Same as HTTP: nothing asked, other workspaces readable. |
+| `"ask"` via config | ✅ Every edit/shell/outside-workspace read arrives as `session/request_permission` with kind, `locations` and a diff; factory auto-answers. ⚠️ A `reject_once` **cancels the whole turn** (`stopReason: cancelled`) — usable only as a safety net. |
+| `"deny"` via config | ✅ Best: denied tools are hidden, outside reads fail with `external_directory`, turn completes with `end_turn` and a full answer. Config is per process (`OPENCODE_CONFIG_CONTENT`), and ACP runs one process per agent run, so each role gets its own rules. |
+| Cleanup | ✅ Closing stdin + kill leaves no `opencode acp` process behind. |
+
+### What this means for the design
+
+- **ACP replaces the OpenCode HTTP sidecar.** Agents run as subprocesses of the factory
+  inside the factory container (`opencode acp` per run); no extra service, no server
+  password, no port, no HTTP polling, no newest-first message ordering.
+- **One Go `ACPHarness`** (stdio JSON-RPC client) implements the existing `Harness`
+  interface; OnStep comes from `tool_call_update`, usage from the prompt result.
+  Claude (`claude-agent-acp`) or Codex (`codex-acp`) later = install + config, same
+  harness — each still needs its own permission/config check.
+- **Per-role rules** go in `OPENCODE_CONFIG_CONTENT` at spawn (deny for read-only roles,
+  `external_directory: deny` for all); ACP permission requests are answered by a
+  path-aware policy as a second line of defence.
+- **Model** is set with `session/set_config_option` (category `model`), not in the prompt.
+- **Auth**: agent-managed (`opencode auth login` inside the container); credentials
+  still live in the OpenCode state dirs, so the `opencode-state` volume stays.
+- Still unverified: subscription login in the container; long multi-step builder runs;
+  concurrency (several `opencode acp` processes sharing one state DB); `session/cancel`.
