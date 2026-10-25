@@ -2,6 +2,10 @@
 
 Status: draft for review (2026-10-25). Nothing implemented yet.
 
+Scope: **single-user self-hosting.** One person runs the factory for themselves and
+the agents use that person's own subscription logins. Multi-user deployments and
+shared/BYO credentials are out of scope (see §10).
+
 ## Problem
 
 Agents run in the OpenCode **desktop app** on the host (`:5001`). The harness never
@@ -18,7 +22,11 @@ container) can also disagree.
 - Factory sessions are isolated from the user's personal OpenCode history.
 - OpenCode version is pinned and never self-updates.
 
-Non-goals: fixing provider quota/privacy limits (account-level), multi-host scaling.
+- Agents authenticate with the owner's own subscription logins, logged in once and kept
+  in the deployment's private state.
+
+Non-goals: fixing provider quota/privacy limits (account-level), multi-host scaling,
+multiple users, per-workspace credentials, reselling or sharing subscription access.
 
 ## Facts verified against OpenCode v2.1.3 (host binary + `/openapi.json`)
 
@@ -69,14 +77,35 @@ Two separate secrets, both in gitignored files:
 1. **Server password** (factory → OpenCode): existing `FACTORY_OPENCODE_PASSWORD` in
    `.env`, passed to the sidecar as `OPENCODE_SERVER_PASSWORD`. The OpenCode port is
    **not published** to the host; only the compose network can reach it.
-2. **Provider credentials** (OpenCode → model providers): recommended path is
-   `opencode auth export > secrets/opencode-auth.json` on the host once, mounted
-   read-only into the sidecar and imported at startup (`opencode auth import`). Works
-   for any provider the user has logged into. `secrets/` is added to `.gitignore`.
-   Alternative for OpenCode-only providers: `OPENCODE_API_KEY` in `.env` (simpler, but
-   covers fewer providers — to confirm in spike).
+2. **Provider credentials** (OpenCode → model providers) are the owner's own
+   subscription logins (e.g. OpenCode Go). They are OAuth-style tokens that expire and
+   refresh, so they must live somewhere **writable** and persistent:
+   - Credentials live in the `opencode-state` volume, never in the image, `.env`, git
+     or logs.
+   - **Preferred: log in inside the container**, once:
+     `docker compose exec opencode opencode auth login`. Tokens never leave the
+     deployment. Depends on the login flow working headless (device code or pasted
+     code) — to confirm in the spike.
+   - **Fallback: copy from the owner's machine**, once:
+     `opencode auth export > secrets/opencode-auth.json` on the host, then the
+     entrypoint imports it **only when the state volume has no credentials yet** — so a
+     restart never overwrites refreshed tokens with stale ones. `secrets/` is
+     gitignored and the file is deleted after the first import.
+   - `docker compose exec opencode opencode auth list` shows what is logged in;
+     re-login uses the same command as the first login.
+   - The factory checks at startup that OpenCode lists at least one model for each role's
+     configured provider, and reports "OpenCode has no login for provider X" instead of
+     failing on the first agent run.
 
-OpenCode state (session DB, logs) persists in a named volume `opencode-state`.
+OpenCode state (session DB, credentials, logs) persists in the named volume
+`opencode-state`. Backing up that volume backs up the logins — treat it as a secret.
+
+**Single-user guard.** Because every agent run spends the owner's subscription, the
+deployment must not be usable by anyone else:
+- Bind the factory to `127.0.0.1` (as today) or put it behind the owner's own reverse
+  proxy auth; never expose it publicly in `dev` auth mode.
+- Add `FACTORY_SINGLE_USER=1` (default in this compose file): the factory refuses to
+  create or invite a second user and says why.
 
 ## 4. Session directory and sandboxing
 
@@ -127,8 +156,8 @@ services:
       OPENCODE_DISABLE_AUTOUPDATE: "1"
     volumes:
       - factory-data:/data                    # same path as factory
-      - opencode-state:/root/.local/share/opencode
-      - ./secrets/opencode-auth.json:/run/secrets/opencode-auth.json:ro
+      - opencode-state:/root/.local/share/opencode   # sessions + credentials (writable)
+      - ./secrets:/run/secrets:ro                    # optional one-time auth import
     healthcheck: { test: [...health route...], interval: 10s, retries: 5 }
     restart: unless-stopped
     # no ports: reachable only from the compose network
@@ -149,12 +178,16 @@ the default.
 - `Dockerfile`: install pinned OpenCode; add `opencode-entrypoint` script.
 - `compose.yaml`, `.env` example, `.gitignore` (`secrets/`), README deployment section.
 - Startup: factory logs OpenCode version; fails fast with a clear message if OpenCode is
-  unreachable or has no provider credentials.
+  unreachable or has no login for a configured provider.
+- `FACTORY_SINGLE_USER` guard on user creation/invites, with a test.
+- `opencode-entrypoint`: import `/run/secrets/opencode-auth.json` only when the state
+  volume has no credentials, then delete-safe (never overwrites refreshed tokens).
 
 ## 7. Risks
 
-- **Credentials in a container**: auth file mounted read-only, never baked into the
-  image, never logged.
+- **Credentials in a container**: kept only in the `opencode-state` volume; never baked
+  into the image, committed, or logged.
+- **Subscription terms**: see §10 — the main non-technical risk of this scope.
 - **Image size**: OpenCode binary is ~200 MB.
 - **Version drift**: pinned; live harness test gates upgrades.
 - **Quota**: unchanged — the same account limits apply wherever OpenCode runs.
@@ -163,7 +196,9 @@ the default.
 
 1. Install OpenCode 2.1.3 in the runtime image for linux/arm64 and linux/amd64.
 2. `opencode serve` with `OPENCODE_SERVER_PASSWORD`; confirm basic auth and a health route.
-3. `auth import` from an exported file; `GET /api/model` lists the expected models.
+3. `opencode auth login` inside the container (does the subscription login work
+   headless?); fallback `auth import` from an exported file; `GET /api/model` lists the
+   expected models; restart the container and confirm the login survives and refreshes.
 4. Create a session with `location.directory=/data/workspaces/x`; confirm `read`/`bash`
    run there and a path outside is denied.
 5. List permission action names; confirm none fall back to `ask` with our ruleset.
@@ -174,3 +209,41 @@ the default.
 - Compose smoke: `docker compose up`, create a work order on a real repo with a linked
   connection, confirm the builder's edits appear in `/data/workspaces/<wo>` and nowhere
   on the host, checks run, and a PR branch is pushed.
+
+## 10. Scope and subscription terms caveats
+
+This design deliberately targets **one owner using their own subscriptions for their
+own work**. That is the narrowest use that fits how consumer subscriptions are sold, but
+it is not a guarantee of compliance. Check each provider's current terms before relying
+on it; nothing below is legal advice, and terms change.
+
+- **Subscriptions are personal and interactive by design.** Consumer plans are priced
+  for one person using the vendor's own apps. An always-on server running autonomous
+  agents on that login may be treated differently from interactive use (rate limits,
+  "automated access" or "no sharing" clauses). Confirm the plan allows it.
+- **OpenCode Go.** Terms for server/automated use are unknown to us. Two account-level
+  conditions already surfaced in practice: a 5-hour usage cap (`429 Go usage limit
+  exceeded`) and a data-use condition (`400 This Go model trains on request data…`,
+  fixed only in the owner's OpenCode privacy settings). Both apply wherever OpenCode
+  runs; the factory can only report them, not avoid them.
+- **Claude Pro/Max.** Anthropic's Agent SDK documentation says that, unless previously
+  approved, third-party developers may not offer claude.ai login or subscription rate
+  limits in their products, and should use API keys. A future Claude harness must
+  therefore **not** be offered as "log in with your Claude subscription" to anyone else.
+  Even for the owner alone, using a Claude subscription through a third-party runtime
+  (OpenCode or this factory) may not be permitted — verify before building it; the
+  conservative path for Claude is an API key.
+- **No sharing, no reselling.** The single-user guard (§3) exists so the owner's
+  subscription is never spent by another person. Adding users, teams or a hosted offer
+  means switching to API-key credentials per workspace — a different auth design, not
+  a configuration change.
+- **Data handling.** Code from the owner's repositories is sent to whichever provider
+  each role uses, under that subscription's data policy (including training opt-ins).
+  Private or client code should only go to providers whose policy the owner accepts.
+
+### What changes if the scope ever widens
+
+| From | To | Needs |
+|---|---|---|
+| Single user, own subscriptions | Multiple users | Per-workspace API-key credentials, encrypted at rest, injected per run; remove `FACTORY_SINGLE_USER` |
+| OpenCode only | + Claude Agent SDK / Hermes harness | Same `Harness` interface; Claude via API key; Hermes server mode to be verified |
