@@ -102,21 +102,20 @@ type Session interface {
 }
 
 type SessionSpec struct {
-    Role       Role
-    Profile    Profile          // harness, credential, model
-    Dir        string           // worktree
-    Env        map[string]string
-    ToolPolicy ToolPolicy
-    Limits     Limits           // steps, tokens, wall time
+    Role         Role
+    Profile      Profile           // agent, credential, model
+    AgentCommand []string          // e.g. ["claude-agent-acp"]
+    Dir          string            // worktree
+    Env          map[string]string
+    ToolPolicy   ToolPolicy
+    Limits       Limits            // steps, tokens, wall time
 }
 ```
 
-Adapters:
-- `claude`: runs `claude -p --output-format stream-json`. Credentials come from
-  `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_BASE_URL` +
-  `ANTHROPIC_AUTH_TOKEN` for Anthropic-compatible providers. Pin the small/aux model
-  (`ANTHROPIC_DEFAULT_HAIKU_MODEL`) to the run's model.
-- `acp`: the existing `backend/internal/agent/acp.go` approach.
+There is one adapter: ACP (port of `backend/internal/agent/acp.go`). Agents:
+- `claude-agent-acp`: credentials from `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` for Anthropic-compatible providers (GLM, Kimi, MiniMax). Pin the small/aux model (`ANTHROPIC_DEFAULT_HAIKU_MODEL`) to the run's model. Tool denies go in Claude Code settings, not ACP permission replies.
+- `opencode acp`: per-role config through `OPENCODE_CONFIG_CONTENT`; model via `session/set_config_option`.
+- `codex-acp`: for ChatGPT subscription or OpenAI API key.
 
 Cost is computed by the factory from token usage × the profile's price table. It is
 never taken from a harness's own estimate, which uses Anthropic prices for every
@@ -128,10 +127,10 @@ model.
   - API key: the provider's model list;
   - subscription: the plan's models only.
 - Compatibility matrix credential kind → harnesses, for example:
-  - Claude subscription → `claude` only;
-  - ChatGPT subscription → Codex or OpenCode;
-  - OpenCode Go → OpenCode;
-  - Z.ai or Moonshot API → `claude` (compatible endpoint) or OpenCode.
+  - Claude subscription → `claude-agent-acp` only;
+  - ChatGPT subscription → `codex-acp` or `opencode acp`;
+  - OpenCode Go → `opencode acp`;
+  - Z.ai or Moonshot API → `claude-agent-acp` (compatible endpoint) or `opencode acp`.
 - Smoke test per profile: create file, run a test command, commit. It records
   `verified_at`. Unverified profiles cannot bind to Builder.
 - Concurrency semaphore per credential.
@@ -156,7 +155,7 @@ The Inspector's `logic_changed=true` caps the level at 2.
 
 ## 10. Sandbox and workspace
 
-- Image: harness CLIs, git, language toolchains. Repository-specific tools come
+- Image: harness CLIs, Node (for `claude-agent-acp`), git, language toolchains. Repository-specific tools come
   from the project's setup command.
 - Volume layout: `/ws/repo` (main clone), `/ws/wt/<task>` (worktrees),
   `/ws/home` (harness session state such as `~/.claude`).
@@ -194,7 +193,7 @@ The factory injects these; it never provisions the env's infrastructure.
    rights?
 3. Claude subscription tokens in a self-hosted factory: confirm the terms of use
    before enabling.
-4. Which providers pass the Builder smoke test through the `claude` harness
+4. Which providers pass the Builder smoke test through `claude-agent-acp`
    (GLM, Kimi K3.1, MiniMax)?
 5. Where the rebuild lives: new module in this repo vs a new repository; what to keep
    from `backend/` (store, scheduler, SCM integrations, ACP adapter).

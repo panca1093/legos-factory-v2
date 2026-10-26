@@ -12,6 +12,7 @@ previous one's check passes.
 | Measure peak memory and CPU of `make vet-lsm test-lsm`, `make test-bre`, `make test-integration` (clean loan-platform copy) | Numbers written into SPEC §10 |
 | Measure one Claude Code and one OpenCode session's RSS under a real build task | Numbers written into SPEC §10 |
 | Check Bitbucket branch protection for auto-merge | SPEC §13 Q2 answered |
+| Spike `claude-agent-acp`: model selection at session creation, settings-based tool deny, credential env passthrough, `session/load` from a volume in a new container | Findings written into SPEC §7 |
 
 ## M1 — Walking skeleton (F13)
 
@@ -21,7 +22,7 @@ One work order, one builder, no Foreman loop, no Cataloger, no parallelism.
 |---|---|
 | Fact store + derived status for a work order | Unit tests: status derived from fact sequences, including restart |
 | Workspace volume + sandbox container lifecycle (start, mount, stop) | Integration test: container stops after the run, volume persists |
-| `claude` harness adapter (stream-json) emitting the normalized events | Parser tests against captured real streams (lesson #5) |
+| Port the ACP client and run Claude Code through `claude-agent-acp` | Parser tests against captured real streams (lesson #5) |
 | Builder run in one worktree with an API-key profile | Fake-repo test: commit produced; no-change run fails as `task_no_changes` |
 | Verify step running the project's `verify` commands | Failing command marks the work order `verify_failed` |
 | Push branch + open PR (reuse existing SCM clients), observe CI | PR facts and check facts stored |
@@ -90,9 +91,9 @@ builder and a Sonnet profile elsewhere.
 | Auto-merge at L3 + CI green; human approval otherwise | End-to-end on the test repo |
 | Rebase when main moves; follow-up work order on a PR branch | Tests |
 
-## M8 — Second harness
+## M8 — More agents on ACP
 
 | Task | Verify |
 |---|---|
-| ACP adapter on the normalized event model (port `backend/internal/agent/acp.go`) | Same parser test suite passes for ACP streams |
-| Subscription credential via OpenCode (e.g. OpenCode Go) passes smoke test | Profile verified |
+| Add `opencode acp` and `codex-acp` agent commands | Same parser test suite passes for their captured streams |
+| Subscription credential via OpenCode (e.g. OpenCode Go) and via Codex (ChatGPT) passes smoke test | Profiles verified |

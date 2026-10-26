@@ -42,20 +42,21 @@ Intended defaults:
 **Why:** a capable harness makes most models adequate, but cost and quality per role
 differ. Inspector on a different model than Builder avoids shared blind spots.
 
-## ADR-F03: Harness adapters per protocol, with a capability matrix
+## ADR-F03: One harness protocol (ACP); an agent is a command
 
-**Decision:** adapters are per protocol, not per product:
-1. Claude Agent SDK / `claude -p --output-format stream-json`, driven from Go (default);
-2. ACP over stdio JSON-RPC (OpenCode, Gemini CLI, Goose, Kimi CLI, Codex via adapter);
-3. optional later: Codex app-server.
+**Decision:** every agent runs as an ACP subprocess (stdio JSON-RPC), driven by the existing Go client (`backend/internal/agent/acp.go`). An agent is configured as a command:
 
-All adapters emit one normalized event model (step, tool call, usage, stop reason).
-A `(harness, credential, model)` combination may serve the Builder role only after
-passing a smoke test (edit a file, run a test, commit).
+| Agent | Command |
+|---|---|
+| Claude Code | `claude-agent-acp` (Claude Agent SDK; supports session load/resume) |
+| OpenCode | `opencode acp` |
+| Codex | `codex-acp` |
 
-**Why:** provider tool-use quality differs even behind "Anthropic-compatible"
-endpoints (thinking blocks, `cache_control`, `count_tokens`, server tools). Users
-choose freely; the factory refuses unverified combinations for Builder.
+No translation proxy or router: models without an Anthropic-compatible endpoint (GPT, OpenCode Go/Zen) run through OpenCode or Codex, not through Claude Code. A `(agent, credential, model)` combination may serve the Builder role only after passing a smoke test (edit a file, run a test, commit).
+
+**Why:** one adapter, one event parser and one test suite against captured real streams (lesson #5). The ACP client already works. Provider tool-use quality still differs, so the smoke test decides; a router adds a failure point and lossy translation.
+
+**To verify (PLAN M0):** permission deny via Claude Code settings (an ACP rejection cancels the turn, lesson #3); how the model is set at session creation; credential env (`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`) reaches the SDK; `session/load` from the workspace volume in a new container.
 
 ## ADR-F04: Credentials are API keys or subscription tokens; models derive from them
 
@@ -64,7 +65,7 @@ choose freely; the factory refuses unverified combinations for Builder.
   harness's own login (`claude setup-token`, `codex login`,
   `opencode auth login --method device`). Stored encrypted, injected per run.
 - The selectable model list is derived from the credential: a subscription shows
-  only its plan's models (as OpenCode does for OpenCode Go). The harness list is
+  only its plan's models (as OpenCode does for OpenCode Go). The agent list is
   then filtered to those compatible with the credential.
 - Concurrency is limited per credential, not only per sandbox.
 - Subscription credentials are allowed only in single-owner mode (ADR-F12).
