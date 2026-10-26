@@ -88,6 +88,7 @@ export interface Run {
   tokens_out: number;
   cost_micros: number;
   created_at: string;
+  finished_at?: string;
 }
 
 export interface Finding {
