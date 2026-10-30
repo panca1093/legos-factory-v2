@@ -24,6 +24,7 @@ const (
 	KindRunStarted       = "run.started"
 	KindRunStep          = "run.step"
 	KindRunFinished      = "run.finished"
+	KindCatalogReady     = "catalog.ready"
 	KindTaskCommitted    = "task.committed"
 	KindTaskFailed       = "task.failed"
 	KindVerifyPassed     = "verify.passed"
@@ -109,6 +110,16 @@ type RunFinished struct {
 	StopReason string          `json:"stop_reason"`
 	Usage      json.RawMessage `json:"usage,omitempty"`
 	CostUSD    float64         `json:"cost_usd,omitempty"`
+	// ReadsBeforeEdit counts a builder's read-only tool calls before its first edit (lesson #7); Edited tells whether one happened.
+	ReadsBeforeEdit int  `json:"reads_before_edit"`
+	Edited          bool `json:"edited"`
+}
+
+type CatalogReady struct {
+	Repo     string `json:"repo"`
+	Commit   string `json:"commit"`
+	CacheHit bool   `json:"cache_hit"`
+	Files    int    `json:"files"`
 }
 
 type TaskCommitted struct {

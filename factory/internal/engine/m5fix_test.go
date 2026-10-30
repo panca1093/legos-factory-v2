@@ -110,7 +110,7 @@ func TestInspectorTestsUseConfiguredCommand(t *testing.T) {
 	ev.p.Env.TestPkg = "echo MARK-{pkg}"
 	runWO(t, ev)
 	ip := h.promptsFor(harness.RoleInspector)
-	if len(ip) != 1 || !strings.Contains(ip[0], "echo MARK-pkg") || !strings.Contains(ip[0], "<<<TESTS-") {
+	if len(ip) != 1 || !strings.Contains(ip[0], "echo MARK-'pkg'") || !strings.Contains(ip[0], "<<<TESTS-") {
 		t.Errorf("inspector prompt = %q", ip)
 	}
 }
