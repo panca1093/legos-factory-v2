@@ -44,24 +44,53 @@ func (e *ProviderError) Error() string {
 }
 
 var (
-	statusRe        = regexp.MustCompile(`\b([45]\d\d)\b`)
-	permanentErrors = []string{"usage limit", "quota", "429", "invalid request", "trains on request data", "insufficient", "funds", "authentication", "budget", "context",
-		"unauthorized", "bad request", "policy", "model not found", "invalid params"}
-	kindNormalizer = strings.NewReplacer("_", " ", "-", " ")
-	camelBoundary  = regexp.MustCompile(`([a-z])([A-Z])`)
+	statusRe       = regexp.MustCompile(`\b([45]\d\d)\b`)
+	nonAlnum       = regexp.MustCompile(`[^a-z0-9]`)
+	permanentTexts = []string{"usage limit", "quota", "invalid request", "trains on request data", "insufficient", "funds", "authentication", "budget",
+		"context window", "context length", "maximum context", "unauthorized", "bad request", "policy", "model not found", "invalid params"}
 )
 
+// Structured error tags per agent, normalized by lowering case and dropping separators; true means permanent.
+// TODO: uncertain — the tables list the kinds seen in captures and the codex protocol enum, not each agent's full set; unlisted kinds fall back to text
+var (
+	claudeKinds   = map[string]bool{"usagelimit": true, "budget": true, "context": true, "ratelimit": false, "overloaded": false}
+	opencodeNames = map[string]bool{"providerfreelimit": false, "providerauth": true, "providerautherror": true, "contextoverflowerror": true}
+	codexInfos    = map[string]bool{"usagelimitexceeded": true, "contextwindowexceeded": true, "unauthorized": true, "badrequest": true, "sandboxerror": true,
+		"serveroverloaded": false, "httpconnectionfailed": false, "responsestreamconnectionfailed": false, "internalservererror": false,
+		"responsestreamdisconnected": false, "responsetoomanyfailedattempts": false}
+)
+
+// errorTags are the structured error fields an agent may attach to a JSON-RPC error.
+type errorTags struct{ Claude, Opencode, Codex string }
+
+func (t errorTags) permanent() (perm, known bool) {
+	for _, c := range []struct {
+		v     string
+		table map[string]bool
+	}{{t.Claude, claudeKinds}, {t.Opencode, opencodeNames}, {t.Codex, codexInfos}} {
+		if p, ok := c.table[nonAlnum.ReplaceAllString(strings.ToLower(c.v), "")]; ok {
+			return p, true
+		}
+	}
+	return false, false
+}
+
 // classifyError keeps quota, funds, auth and invalid-request failures permanent so they are not retried (lesson #2).
-// errorKind is the agent's structured error tag: claude-agent-acp errorKind (usage-limit, budget, context, ...),
-// codex-acp codexErrorInfo (usageLimitExceeded, ...) or opencode errorName (provider.free-limit).
-// TODO: uncertain — kinds are matched by substring, not verified against each agent's full enum
-func classifyError(msg, errorKind string) *ProviderError {
+// A structured kind decides first; message text is only the fallback, and 429 or overloaded text stays transient.
+func classifyError(msg string, tags errorTags) *ProviderError {
 	pe := &ProviderError{IsTransient: true, Message: msg}
 	if m := statusRe.FindStringSubmatch(msg); m != nil {
 		fmt.Sscan(m[1], &pe.Status)
 	}
-	low := kindNormalizer.Replace(strings.ToLower(msg + " " + camelBoundary.ReplaceAllString(errorKind, "$1 $2")))
-	for _, s := range permanentErrors {
+	if perm, ok := tags.permanent(); ok {
+		pe.IsTransient = !perm
+		return pe
+	}
+	low := strings.ToLower(msg)
+	if strings.Contains(low, "429") || strings.Contains(low, "overloaded") {
+		return pe
+	}
+	for _, s := range permanentTexts {
 		if strings.Contains(low, s) {
 			pe.IsTransient = false
 		}
@@ -71,7 +100,7 @@ func classifyError(msg, errorKind string) *ProviderError {
 
 func NewACP() *ACP { return &ACP{} }
 
-var readOnlyDeny = []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute", "task"}
+var readOnlyDeny = []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute", "task", "subagent", "webfetch", "websearch"}
 
 // opencodeConfig denies by default: a rejected permission request cancels the whole turn (lesson #3).
 // question is denied everywhere: no human answers it in a headless run.
@@ -614,11 +643,11 @@ func (s *acpSession) begin(method string, params any) (func(context.Context) (js
 					CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
 				}
 				_ = json.Unmarshal(m.Error.Data, &data)
-				msg, kind := m.Error.Message, data.ErrorKind+" "+data.ErrorName+" "+strings.Trim(string(data.CodexErrorInfo), `"`)
+				msg := m.Error.Message
 				if data.Message != "" {
 					msg += ": " + data.Message // codex-acp puts the cause here under a generic "Internal error"
 				}
-				return nil, fmt.Errorf("acp %s: %w", method, classifyError(msg, kind))
+				return nil, fmt.Errorf("acp %s: %w", method, classifyError(msg, errorTags{Claude: data.ErrorKind, Opencode: data.ErrorName, Codex: codexInfoName(data.CodexErrorInfo)}))
 			}
 			return m.Result, nil
 		case <-s.exited:
@@ -627,6 +656,21 @@ func (s *acpSession) begin(method string, params any) (func(context.Context) (js
 			return nil, ctx.Err()
 		}
 	}, nil
+}
+
+// codexInfoName reads codexErrorInfo, a bare string or a one-key object such as {"httpConnectionFailed":{...}}.
+func codexInfoName(raw json.RawMessage) string {
+	var name string
+	if json.Unmarshal(raw, &name) == nil {
+		return name
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) == nil {
+		for k := range obj {
+			return k
+		}
+	}
+	return ""
 }
 
 func (s *acpSession) exitErr(method string, cause error) error {

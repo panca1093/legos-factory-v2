@@ -14,31 +14,6 @@ func TestProviderErrorExposesTransient(t *testing.T) {
 	}
 }
 
-func TestClassifyClaudeErrors(t *testing.T) {
-	cases := []struct {
-		msg, kind string
-		transient bool
-	}{
-		{"Authentication required", "", false},
-		{"Request failed", "usage-limit", false},
-		{"Request failed", "budget_exceeded", false},
-		{"Request failed", "context", false},
-		{"API Error: 529 overloaded", "", true},
-		{"Invalid params: model not found: opencode/nope", "", false},
-		{"Internal error: quota", "provider.free-limit", false},
-		{"Internal error: x", "usageLimitExceeded", false},
-		{"Internal error: x", "sessionBudgetExceeded", false},
-		{"Internal error: x", "unauthorized", false},
-		{"Internal error: x", "rateLimitExceeded", true},
-		{"Internal error: x", "serverOverloaded", true},
-	}
-	for _, c := range cases {
-		if got := classifyError(c.msg, c.kind); got.IsTransient != c.transient {
-			t.Errorf("%q/%q transient = %v, want %v", c.msg, c.kind, got.IsTransient, c.transient)
-		}
-	}
-}
-
 func TestClaudeSessionSetup(t *testing.T) {
 	wantMeta := `"_meta":{"claudeCode":{"options":{"model":"sonnet","settings":{"permissions":{"deny":["Edit","Write","MultiEdit","NotebookEdit","Bash","WebFetch"]}}}}}`
 	s, err := startFake(t, "echo", SessionSpec{

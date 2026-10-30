@@ -72,7 +72,8 @@ type fixtureCase struct {
 	calls     []string
 	notCalls  []string
 	stop      string
-	promptErr string // the prompt fails permanently with this text
+	promptErr string // the prompt fails with this text, permanently unless transient
+	transient bool
 	tools     []string
 	final     map[string]string
 	steps     int
@@ -110,8 +111,8 @@ var fixtureCases = []fixtureCase{
 	{name: "opencode session/load from a fresh process", file: "opencode-load.jsonl", profile: opencode, role: RoleBuilder, loadID: "ses_e7366b306ffeYzYopQuNV1rPgi",
 		stop: "end_turn", steps: 1, tokens: Usage{InputTokens: 122, OutputTokens: 3, CacheReadTokens: 5694},
 	},
-	{name: "opencode free model limit is permanent", file: "opencode-error-free-limit.jsonl", profile: opencode, role: RoleForeman, policy: ToolPolicy{AllowNone: true},
-		promptErr: "Free usage limit reached"},
+	{name: "opencode free model limit is transient", file: "opencode-error-free-limit.jsonl", profile: opencode, role: RoleForeman, policy: ToolPolicy{AllowNone: true},
+		promptErr: "Free usage limit reached", transient: true},
 	{name: "opencode provider 401 is permanent", file: "opencode-error-auth.jsonl", profile: Profile{Agent: "opencode", Provider: "acme", Model: "m1"}, role: RoleBuilder,
 		promptErr: "Authentication required"},
 	{name: "opencode unknown model is rejected before the prompt", file: "opencode-error-bad-model.jsonl",
@@ -155,7 +156,11 @@ func TestAgentFixtures(t *testing.T) {
 			}
 			r := replay(t, tc)
 			if tc.promptErr != "" {
-				assertPermanent(t, r.err, tc.promptErr)
+				if tc.transient {
+					assertTransient(t, r.err, tc.promptErr)
+				} else {
+					assertPermanent(t, r.err, tc.promptErr)
+				}
 				return
 			}
 			if r.err != nil {
@@ -306,4 +311,12 @@ func assertPermanent(t *testing.T, err error, text string) {
 func replayClaude(t *testing.T, fixture string, role Role) fixtureRun {
 	t.Helper()
 	return replay(t, fixtureCase{file: fixture, profile: claude, role: role})
+}
+
+func assertTransient(t *testing.T, err error, text string) {
+	t.Helper()
+	var pe *ProviderError
+	if !errors.As(err, &pe) || !pe.IsTransient || !strings.Contains(err.Error(), text) {
+		t.Fatalf("err = %v, want a transient ProviderError containing %q", err, text)
+	}
 }
