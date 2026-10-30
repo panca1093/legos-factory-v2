@@ -43,6 +43,8 @@ type Fact struct {
 type WOCreated struct {
 	Project   string `json:"project,omitempty"`
 	Objective string `json:"objective,omitempty"`
+	// LevelCap is the autonomy cap chosen at creation (SPEC §9); 0 makes the plan gate require a human.
+	LevelCap int `json:"level_cap"`
 }
 
 type WOFailed struct {
@@ -156,7 +158,17 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
-func (s *Store) Append(ctx context.Context, subject, kind string, payload any) (Fact, error) {
+// NewFact is a fact to append; AppendBatch writes several atomically.
+type NewFact struct {
+	Kind    string
+	Payload any
+}
+
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func insert(ctx context.Context, x execer, subject, kind string, payload any) (Fact, error) {
 	if payload == nil {
 		payload = struct{}{}
 	}
@@ -165,7 +177,7 @@ func (s *Store) Append(ctx context.Context, subject, kind string, payload any) (
 		return Fact{}, fmt.Errorf("marshal %s payload: %w", kind, err)
 	}
 	at := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx,
+	res, err := x.ExecContext(ctx,
 		`INSERT INTO facts(subject, kind, payload, at) VALUES(?,?,?,?)`,
 		subject, kind, string(raw), at.UnixNano())
 	if err != nil {
@@ -176,6 +188,31 @@ func (s *Store) Append(ctx context.Context, subject, kind string, payload any) (
 		return Fact{}, err
 	}
 	return Fact{ID: id, Subject: subject, Kind: kind, Payload: raw, At: at}, nil
+}
+
+func (s *Store) Append(ctx context.Context, subject, kind string, payload any) (Fact, error) {
+	return insert(ctx, s.db, subject, kind, payload)
+}
+
+// AppendBatch writes all facts in one transaction: either every fact is recorded, in order, or none.
+func (s *Store) AppendBatch(ctx context.Context, subject string, in []NewFact) ([]Fact, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	out := make([]Fact, 0, len(in))
+	for _, n := range in {
+		f, err := insert(ctx, tx, subject, n.Kind, n.Payload)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) List(ctx context.Context, subject string) ([]Fact, error) {

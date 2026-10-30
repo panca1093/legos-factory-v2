@@ -6,6 +6,9 @@ type Status string
 
 const (
 	StatusQueued    Status = "queued"
+
+	// StatusAwaitingHuman is never returned by Derive; the engine reads it from the workflow state.
+	StatusAwaitingHuman Status = "awaiting_human"
 	StatusBuilding  Status = "building"
 	StatusVerifying Status = "verifying"
 	StatusPROpen    Status = "pr_open"

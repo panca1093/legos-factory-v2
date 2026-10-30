@@ -189,3 +189,23 @@ func TestStalled(t *testing.T) {
 		})
 	}
 }
+
+func TestAppendBatchIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "f.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, err := s.AppendBatch(ctx, "wo-1", []NewFact{{"a", map[string]int{"n": 1}}, {"b", nil}})
+	if err != nil || len(got) != 2 || got[0].ID >= got[1].ID {
+		t.Fatalf("batch = %+v, %v", got, err)
+	}
+	if _, err := s.AppendBatch(ctx, "wo-1", []NewFact{{"c", nil}, {"bad", make(chan int)}}); err == nil {
+		t.Fatal("unmarshalable payload accepted")
+	}
+	all, _ := s.List(ctx, "wo-1")
+	if len(all) != 2 {
+		t.Fatalf("failed batch left %d facts, want 2", len(all))
+	}
+}
