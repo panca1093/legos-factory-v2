@@ -259,6 +259,9 @@ func (s State) checkDispatch(ids []string, lim Limits) error {
 	return nil
 }
 
+// CanDispatch reports whether dispatching the task alone would be accepted now.
+func (s State) CanDispatch(id string, lim Limits) bool { return s.checkDispatch([]string{id}, lim) == nil }
+
 func (s State) checkPlan() error {
 	if len(s.Tasks) == 0 {
 		return fmt.Errorf("plan has no tasks")

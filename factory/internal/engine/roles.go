@@ -645,7 +645,7 @@ func (o *orch) building(ctx context.Context) error {
 				drain()
 				return err
 			}
-		case needsDecision(st):
+		case needsDecision(st, o.lim):
 			if err := o.foreman(cctx, st, facts); err != nil {
 				drain()
 				return err
@@ -693,7 +693,7 @@ func splitPending(st workflow.State) *workflow.Task {
 	return nil
 }
 
-func needsDecision(st workflow.State) bool {
+func needsDecision(st workflow.State, lim workflow.Limits) bool {
 	for _, t := range st.Tasks {
 		switch t.Status {
 		case workflow.TaskFailed:
@@ -703,7 +703,7 @@ func needsDecision(st workflow.State) bool {
 				return true
 			}
 		case workflow.TaskPending:
-			if !t.SplitPending && depsDone(st, t) {
+			if !t.SplitPending && depsDone(st, t) && st.CanDispatch(t.ID, lim) {
 				return true
 			}
 		}
