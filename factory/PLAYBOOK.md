@@ -9,65 +9,23 @@ Takes about 20 minutes, most of it waiting on the agent and CI.
 - `gh` logged in as `panca1093`.
 - Go with the GOROOT fix: `export GOROOT=/opt/homebrew/Cellar/go/1.26.3/libexec`.
 
-## 1. Create the testbed repo
+## 1. Testbed repo
 
-A tiny private repo with one unimplemented function, a test for it, and a CI job named `test`.
+`legos-pos-testbed`: a tiny TypeScript point-of-sale core (catalog, cart, payment, checkout) with
+vitest tests and a CI job named `test`. It lives at `~/Documents/MyBook/Project/legos-pos-testbed`.
+Its README lists work order ideas, smallest first. `src/payment/**` is a protected path, so a work
+order touching it always waits for you.
 
-```bash
-mkdir -p ~/tmp/legos-factory-testbed/calc ~/tmp/legos-factory-testbed/.github/workflows && cd ~/tmp/legos-factory-testbed
-```
-
-```bash
-cat > go.mod <<'EOF'
-module testbed
-
-go 1.26
-EOF
-cat > calc/calc.go <<'EOF'
-package calc
-
-// Sum returns the sum of xs.
-func Sum(xs []int) int {
-	panic("not implemented")
-}
-EOF
-cat > calc/calc_test.go <<'EOF'
-package calc
-
-import "testing"
-
-func TestSum(t *testing.T) {
-	if got := Sum([]int{1, 2, 3}); got != 6 {
-		t.Fatalf("Sum = %d, want 6", got)
-	}
-	if got := Sum(nil); got != 0 {
-		t.Fatalf("Sum(nil) = %d, want 0", got)
-	}
-}
-EOF
-cat > .github/workflows/ci.yml <<'EOF'
-name: ci
-on: [pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-      - run: go test ./...
-EOF
-```
+If it is not on GitHub yet:
 
 ```bash
-git init -b main && git add . && git commit -m "init testbed" && gh repo create panca1093/legos-factory-testbed --private --source . --push
+cd ~/Documents/MyBook/Project/legos-pos-testbed && gh repo create panca1093/legos-pos-testbed --private --source . --push
 ```
 
 ## 2. Credentials
 
 1. GitHub → Settings → Developer settings → Fine-grained tokens → new token.
-   Repository access: only `legos-factory-testbed`.
+   Repository access: only `legos-pos-testbed`.
    Permissions: Contents read/write, Pull requests read/write, Commit statuses read, Checks read.
 2. Claude subscription token: run `claude setup-token` and copy the output.
 3. Put both in a private env file:
@@ -106,7 +64,7 @@ source ~/.config/legos-factory/live.env
 ```
 
 ```bash
-WO=$(~/bin/factory create -db live.db -project examples/live-m1.json -objective "Implement calc.Sum so go test ./... passes") && echo $WO
+WO=$(~/bin/factory create -db live.db -project examples/live-m1.json -objective "Add an optional percentage discount to the cart: Cart.setDiscount(percent) and Cart.total() = subtotal minus discount, rounded down to the rupiah, with tests") && echo $WO
 ```
 
 ```bash
@@ -129,7 +87,7 @@ Check status any time from another shell:
 |---|---|---|
 | `ci_green` + PR on GitHub | **M1 passed** | Merge the PR yourself (`max_level: 2`) |
 | `ci_failed` then back to building | Resume path working | Let `watch` continue |
-| `failed` / `awaiting_human` | Escalation (verify kept failing, agent or credential error, ...) | Send me the `watch` output and `live.db` path |
+| `failed` / `awaiting_human` | Escalation (verify kept failing, agent or credential error, protected path touched, ...) | Send me the `watch` output and `live.db` path |
 | `env ... is empty` at start | `live.env` not sourced in this shell | `source` it again |
 
 ## 6. Extra M0 checks (optional, while it runs)
@@ -147,5 +105,5 @@ rm live.db*
 ```
 
 ```bash
-gh repo delete panca1093/legos-factory-testbed
+gh repo delete panca1093/legos-pos-testbed
 ```
