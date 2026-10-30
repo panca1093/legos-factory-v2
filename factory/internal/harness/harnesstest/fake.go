@@ -48,6 +48,10 @@ func fakeAgent(scenario string) {
 		case "initialize":
 			reply(m.ID, map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": os.Getenv("ACP_FAKE_NOLOAD") == ""}})
 		case "session/new":
+			if f := os.Getenv("ACP_FAKE_NEWFIXTURE"); f != "" {
+				send(fixtureReply(f, "session/new", m.ID))
+				continue
+			}
 			res := map[string]any{"sessionId": "ses_1"}
 			if os.Getenv("ACP_FAKE_MODELS") != "" {
 				res["models"] = map[string]any{"availableModels": []any{map[string]any{"modelId": "sonnet"}, map[string]any{"modelId": "haiku"}}}
@@ -71,10 +75,14 @@ func fakeAgent(scenario string) {
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32602, "message": "session not found"}})
 				continue
 			}
+			if f := os.Getenv("ACP_FAKE_NEWFIXTURE"); f != "" {
+				send(fixtureReply(f, "session/load", m.ID))
+				continue
+			}
 			reply(m.ID, map[string]any{"configOptions": []any{
 				map[string]any{"id": "model", "category": "model", "options": []any{map[string]any{"value": "opencode-go/kimi"}}},
 			}})
-		case "session/set_config_option", "session/set_model":
+		case "session/set_config_option", "session/set_model", "authenticate":
 			reply(m.ID, map[string]any{})
 		case "session/cancel":
 			if promptID != nil {
@@ -139,10 +147,7 @@ func fakeAgent(scenario string) {
 			case "permission":
 				send(map[string]any{"id": "perm-1", "method": "session/request_permission", "params": map[string]any{
 					"toolCall": map[string]any{"toolCallId": "t9", "title": "x", "kind": os.Getenv("ACP_FAKE_KIND"), "locations": []any{map[string]any{"path": os.Getenv("ACP_FAKE_PATH")}}},
-					"options": []any{
-						map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"},
-						map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
-					},
+					"options": permissionOptions(os.Getenv("ACP_FAKE_OPTS")),
 				}})
 				in.Scan()
 				var r struct {
@@ -153,6 +158,12 @@ func fakeAgent(scenario string) {
 				_ = json.Unmarshal(in.Bytes(), &r)
 				chunk(r.Result.Outcome.OptionID)
 				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "toolkind":
+				send(map[string]any{"method": "session/update", "params": map[string]any{"update": map[string]any{
+					"sessionUpdate": "tool_call", "toolCallId": "k1", "title": "Create notes.txt: read", "kind": "read", "status": "pending"}}})
+				send(map[string]any{"method": "session/update", "params": map[string]any{"update": map[string]any{
+					"sessionUpdate": "tool_call_update", "toolCallId": "k1", "status": "completed"}}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "quota":
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Go usage limit exceeded"}})
 			case "funds":
@@ -162,10 +173,54 @@ func fakeAgent(scenario string) {
 			case "refusal":
 				reply(m.ID, map[string]any{"stopReason": "refusal"})
 			case "crash":
-				fmt.Fprintln(os.Stderr, "fatal: provider exploded")
+				fmt.Fprintln(os.Stderr, "fatal: provider exploded", os.Getenv("ACP_FAKE_LEAK"))
 				os.Exit(3)
 			case "hang":
 			}
 		}
 	}
+}
+
+// fixtureReply returns the agent's response to the first client request for method in a capture, addressed to id.
+func fixtureReply(path, method string, id any) map[string]any {
+	f, err := os.Open(path)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	var reqID string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		var line struct {
+			Dir string          `json:"dir"`
+			Msg json.RawMessage `json:"msg"`
+		}
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if json.Unmarshal(sc.Bytes(), &line) != nil || json.Unmarshal(line.Msg, &msg) != nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line.Dir, "client") && msg.Method == method && reqID == "":
+			reqID = string(msg.ID)
+		case strings.HasPrefix(line.Dir, "agent") && msg.Method == "" && reqID != "" && string(msg.ID) == reqID:
+			var out map[string]any
+			_ = json.Unmarshal(line.Msg, &out)
+			out["id"] = id
+			return out
+		}
+	}
+	panic("no " + method + " exchange in " + path)
+}
+
+// permissionOptions is the option list of a permission request; "allow_only" offers no reject option.
+func permissionOptions(mode string) []any {
+	allow := map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"}
+	if mode == "allow_only" {
+		return []any{allow}
+	}
+	return []any{map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"}, allow}
 }

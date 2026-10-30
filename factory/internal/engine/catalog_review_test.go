@@ -354,8 +354,11 @@ func TestLockfileNoiseWarnsInLineModeEvenWhenOwned(t *testing.T) {
 }
 
 func TestToolKindOnCapturedFixtures(t *testing.T) {
-	want := map[string]string{"Preparing file…": "edit", "ToolSearch": "", "read": "read", "shell": ""}
+	want := map[string]string{"Preparing file…": "edit", "ToolSearch": "", "read": "read", "shell": "",
+		"edit": "edit", "subagent": "", "Create notes.txt: read": "read", "Edit files": "edit",
+		"Run `touch notes.txt`": "", "Run `cat main.go`": ""}
 	seen := map[string]bool{}
+	byKind := map[string]string{"read": "read", "search": "read", "edit": "edit", "delete": "edit", "move": "edit", "execute": "", "think": "", "fetch": ""}
 	files, _ := filepath.Glob("../harness/testdata/*.jsonl")
 	if len(files) == 0 {
 		t.Fatal("no fixtures")
@@ -363,6 +366,7 @@ func TestToolKindOnCapturedFixtures(t *testing.T) {
 	type update struct {
 		SessionUpdate string `json:"sessionUpdate"`
 		Title         string `json:"title"`
+		Kind          string `json:"kind"`
 	}
 	type rpc struct {
 		Params struct {
@@ -398,6 +402,11 @@ func TestToolKindOnCapturedFixtures(t *testing.T) {
 			seen[u.Title] = true
 			if got := toolKind(harness.Event{Tool: u.Title}); got != w {
 				t.Errorf("%s: toolKind(%q) = %q, want %q", filepath.Base(f), u.Title, got, w)
+			}
+			if k, ok := byKind[u.Kind]; ok {
+				if got := toolKind(harness.Event{Tool: u.Title, ToolKind: u.Kind}); got != k {
+					t.Errorf("%s: toolKind(%q, kind %q) = %q, want %q", filepath.Base(f), u.Title, u.Kind, got, k)
+				}
 			}
 		}
 		fh.Close()

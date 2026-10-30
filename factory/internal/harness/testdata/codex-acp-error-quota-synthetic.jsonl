@@ -1,0 +1,2 @@
+{"dir":"client->agent","msg":{"jsonrpc":"2.0","id":4,"method":"session/prompt","params":{"sessionId":"01a18c9b-5fa0-70c0-b435-e9a8226ec1ed","prompt":[{"type":"text","text":"Anything."}]}}}
+{"dir":"agent->client","msg":{"jsonrpc":"2.0","id":4,"error":{"code":-32603,"message":"Internal error","data":{"message":"You've hit your usage limit. Try again later.","codexErrorInfo":"usageLimitExceeded"}}}}

@@ -86,6 +86,7 @@ type Event struct {
 	Text       string
 	ToolCallID string
 	Tool       string
+	ToolKind   string // ACP tool kind: read, edit, delete, move, search, execute, think, fetch, other; empty if the agent sent none
 	Status     string
 	Usage      Usage
 	StopReason string

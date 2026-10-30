@@ -248,7 +248,9 @@ func TestRunEnv(t *testing.T) {
 		{"openai codex", Credential{Kind: "api_key", Provider: "openai"}, "codex-acp", map[string]string{"OPENAI_API_KEY": "S"}, nil},
 		{"chatgpt codex bad secret", Credential{Kind: "subscription", Provider: "chatgpt"}, "codex-acp", nil, errors.New("JSON object")},
 		{"opencode anthropic", Credential{Kind: "api_key", Provider: "anthropic"}, "opencode", map[string]string{"ANTHROPIC_API_KEY": "S"}, nil},
-		{"opencode go bad secret", Credential{Kind: "subscription", Provider: "opencode-go"}, "opencode", nil, errors.New("JSON object")},
+		{"opencode go api key", Credential{Kind: "subscription", Provider: "opencode-go"}, "opencode", map[string]string{"OPENCODE_API_KEY": "S"}, nil},
+		{"opencode claude sub bad secret", Credential{Kind: "subscription", Provider: "claude"}, "opencode", nil, errors.New("JSON object")},
+		{"opencode chatgpt bad secret", Credential{Kind: "subscription", Provider: "chatgpt"}, "opencode", nil, errors.New("JSON object")},
 		{"opencode custom needs base", Credential{Kind: "api_key", Provider: "acme"}, "opencode", nil, errors.New("base_url")},
 	}
 	for _, tc := range cases {
@@ -310,9 +312,8 @@ func TestRunEnvAuthFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var auth map[string]map[string]string
-	if err := json.Unmarshal(rs.Files[opencodeAuthFile], &auth); err != nil || auth["acme"]["key"] != "KEY" || auth["acme"]["type"] != "api" {
-		t.Fatalf("auth = %s %v", rs.Files[opencodeAuthFile], err)
+	if len(rs.Files) != 0 {
+		t.Fatalf("custom provider key must not go through an auth file: %v", rs.Files)
 	}
 	var cfg struct {
 		Provider map[string]struct {
@@ -321,11 +322,51 @@ func TestRunEnvAuthFiles(t *testing.T) {
 		} `json:"provider"`
 	}
 	if err := json.Unmarshal([]byte(rs.Env["OPENCODE_CONFIG_CONTENT"]), &cfg); err != nil ||
-		cfg.Provider["acme"].Options["baseURL"] != "http://acme/v1" || cfg.Provider["acme"].Models["m1"] == nil {
+		cfg.Provider["acme"].Options["baseURL"] != "http://acme/v1" || cfg.Provider["acme"].Options["apiKey"] != "KEY" || cfg.Provider["acme"].Models["m1"] == nil {
 		t.Fatalf("config = %s %v", rs.Env["OPENCODE_CONFIG_CONTENT"], err)
 	}
-	if strings.Contains(rs.Env["OPENCODE_CONFIG_CONTENT"], "KEY") {
-		t.Fatal("key leaked into config env")
+}
+
+func TestRunEnvOpencodeProviderID(t *testing.T) {
+	s := newStore(t, true)
+	c := mustCred(t, s, Credential{Name: "kimi", Kind: "api_key", Provider: "moonshot"}, "S")
+	rs, err := s.RunEnv(bg, Profile{Agent: "opencode", CredentialID: c.ID, Model: "kimi-k3"})
+	if err != nil || rs.Profile.Provider != "moonshotai" || rs.Env["MOONSHOT_API_KEY"] != "S" {
+		t.Fatalf("profile=%+v env=%v err=%v", rs.Profile, rs.Env, err)
+	}
+	rs, err = s.RunEnv(bg, Profile{Agent: "claude-agent-acp", CredentialID: c.ID, Model: "kimi-k3"})
+	if err != nil || rs.Profile.Provider != "moonshot" {
+		t.Fatalf("claude profile=%+v err=%v", rs.Profile, err)
+	}
+}
+
+func TestRunEnvOpencodeBaseURLUsesOpencodeProviderID(t *testing.T) {
+	s := newStore(t, true)
+	c := mustCred(t, s, Credential{Name: "kimi-gw", Kind: "api_key", Provider: "moonshot", BaseURL: "http://gw/v1"}, "S")
+	rs, err := s.RunEnv(bg, Profile{Agent: "opencode", CredentialID: c.ID, Model: "kimi-k3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Provider map[string]struct {
+			Options map[string]string `json:"options"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(rs.Env["OPENCODE_CONFIG_CONTENT"]), &cfg); err != nil ||
+		len(cfg.Provider) != 1 || cfg.Provider["moonshotai"].Options["baseURL"] != "http://gw/v1" || rs.Profile.Provider != "moonshotai" {
+		t.Fatalf("config = %s profile=%+v err=%v", rs.Env["OPENCODE_CONFIG_CONTENT"], rs.Profile, err)
+	}
+}
+
+func TestRunEnvSubscriptionTokenOnlyForOpencodeGo(t *testing.T) {
+	s := newStore(t, true)
+	c := mustCred(t, s, Credential{Name: "claude-sub", Kind: "subscription", Provider: "claude"}, "plain-token")
+	rs, err := s.RunEnv(bg, Profile{Agent: "claude-agent-acp", CredentialID: c.ID, Model: "M"})
+	if err != nil || rs.Env["CLAUDE_CODE_OAUTH_TOKEN"] != "plain-token" {
+		t.Fatalf("claude env=%v err=%v", rs.Env, err)
+	}
+	if _, err := s.RunEnv(bg, Profile{Agent: "opencode", CredentialID: c.ID, Model: "M"}); err == nil || !strings.Contains(err.Error(), "JSON object") {
+		t.Fatalf("opencode with a plain claude token: err = %v", err)
 	}
 }
 
