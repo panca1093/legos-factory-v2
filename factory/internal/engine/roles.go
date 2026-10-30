@@ -105,7 +105,7 @@ func (o *orch) run(ctx context.Context) (ready bool, err error) {
 			return ready, err
 		}
 	}
-	return false, o.escalate(ctx, "orchestration step limit reached")
+	return false, o.escalate(ctx, fact.ClassForeman, "orchestration step limit reached")
 }
 
 func (o *orch) fail(ctx context.Context, f fact.WOFailed) error {
@@ -123,8 +123,8 @@ func (o *orch) fail(ctx context.Context, f fact.WOFailed) error {
 	return errWOFailed
 }
 
-func (o *orch) escalate(ctx context.Context, reason string) error {
-	_, err := o.e.Facts.Append(ctx, o.woID, workflow.KindEscalated, workflow.Escalated{Reason: reason})
+func (o *orch) escalate(ctx context.Context, class, reason string) error {
+	_, err := o.e.Facts.Append(ctx, o.woID, workflow.KindEscalated, workflow.Escalated{Reason: reason, Class: class})
 	return err
 }
 
@@ -668,7 +668,7 @@ func (o *orch) building(ctx context.Context) error {
 				return err
 			}
 		case len(active) == 0:
-			return o.escalate(ctx, "no task can make progress")
+			return o.escalate(ctx, fact.ClassForeman, "no task can make progress")
 		default:
 			select {
 			case r := <-results:
@@ -682,7 +682,7 @@ func (o *orch) building(ctx context.Context) error {
 		}
 	}
 	drain()
-	return o.escalate(ctx, "orchestration step limit reached")
+	return o.escalate(ctx, fact.ClassForeman, "orchestration step limit reached")
 }
 
 func hasInspecting(st workflow.State) bool {
@@ -979,7 +979,7 @@ func (o *orch) integrate(ctx context.Context, st workflow.State, facts []fact.Fa
 	}
 	order, oerr := topoOrder(st.Tasks)
 	if oerr != nil {
-		return false, o.escalate(ctx, oerr.Error())
+		return false, o.escalate(ctx, fact.ClassIntegration, oerr.Error())
 	}
 	_, _ = o.git(ctx, o.dir, "merge", "--abort")
 	// start from the base every time so a rebuilt task is merged once, never on top of its stale earlier merge
@@ -1026,7 +1026,7 @@ func (o *orch) integrate(ctx context.Context, st workflow.State, facts []fact.Fa
 			}
 		}
 		if rounds >= maxConflictRounds {
-			return false, o.escalate(ctx, fmt.Sprintf("tasks %s and %s still conflict after %d serialize rounds (files %v)", other, t.ID, rounds, conflicted))
+			return false, o.escalate(ctx, fact.ClassIntegration, fmt.Sprintf("tasks %s and %s still conflict after %d serialize rounds (files %v)", other, t.ID, rounds, conflicted))
 		}
 		_, err := o.e.Facts.Append(ctx, o.woID, workflow.KindIntegrationConflict, workflow.IntegrationConflict{A: other, B: t.ID, Files: conflicted})
 		return false, err

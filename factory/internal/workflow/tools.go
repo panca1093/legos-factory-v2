@@ -454,7 +454,7 @@ func (s State) Apply(call Call, lim Limits) ([]NewFact, error) {
 	case ToolSerialize:
 		out = append(out, NewFact{Kind: KindTasksSerialized, Payload: TasksSerialized{A: call.A, B: call.B}})
 	case ToolEscalateToHuman:
-		out = append(out, NewFact{Kind: KindEscalated, Payload: Escalated{Reason: call.Reason}})
+		out = append(out, NewFact{Kind: KindEscalated, Payload: Escalated{Reason: call.Reason, Class: fact.ClassForeman}})
 	}
 	return out, nil
 }
