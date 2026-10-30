@@ -24,7 +24,9 @@ func finding(sev, msg string) string {
 func inspectorLine(t *testing.T, inspector []string, foreman ...string) (*scripted, *env) {
 	t.Helper()
 	h := newScripted()
-	h.build = func(_ string, n int, dir string) error { return writeIn("pkg/out.txt", fmt.Sprintf("v%d\n", n))("", n, dir) }
+	h.build = func(_ string, n int, dir string) error {
+		return writeIn("pkg/out.txt", fmt.Sprintf("v%d\n", n))("", n, dir)
+	}
 	h.say(harness.RoleArchitect, "The spec.", planJSON(`{"id":"t1","description":"add out","owned_paths":["pkg/"]}`))
 	h.say(harness.RoleForeman, append([]string{call("approve_spec", `{}`), call("approve_plan", `{}`)}, foreman...)...)
 	h.say(harness.RoleInspector, inspector...)
