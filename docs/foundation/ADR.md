@@ -188,3 +188,15 @@ secret encryption) are copied into `factory/` and adapted, never imported across
 **Why:** one place for docs and history; the old backend keeps running unchanged
 until the new factory reaches its M1 check; copying avoids coupling to the old
 model types.
+
+## ADR-F15: Foreman calls transitions as one JSON object per reply
+
+**Decision:** the Foreman runs as a read-only ACP session with every agent tool denied.
+Each reply ends with exactly one JSON object `{"tool": "<transition>", "args": {...}}`.
+The engine parses it, checks the guard (`internal/workflow`) and either appends the
+decision facts or sends the guard error back as the next prompt ("tool error"). A reply
+without a parseable call counts as a rejected call.
+
+**Why:** ACP agents expose their own tools; injecting factory tools would need an MCP
+server reachable from inside the sandbox. A text protocol keeps one adapter and works
+for every agent. Revisit with an MCP server if parse failures are frequent.
