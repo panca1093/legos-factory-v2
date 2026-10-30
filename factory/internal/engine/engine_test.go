@@ -55,12 +55,13 @@ func newRemote(t *testing.T) string {
 }
 
 type fakeHarness struct {
-	mu      sync.Mutex
-	edit    func(call int, dir string) error
-	noLoad  bool // resuming a session fails with harness.ErrNoLoad
-	usage   harness.Usage
-	specs   []harness.SessionSpec
-	prompts []string
+	mu       sync.Mutex
+	edit     func(call int, dir string) error
+	noLoad   bool // resuming a session fails with harness.ErrNoLoad
+	usage    harness.Usage
+	toolText string // tool call text; default "edit file"
+	specs    []harness.SessionSpec
+	prompts  []string
 }
 
 func (h *fakeHarness) Start(_ context.Context, s harness.SessionSpec) (harness.Session, error) {
@@ -95,7 +96,11 @@ func (s *fakeSession) Prompt(_ context.Context, text string) (string, error) {
 	s.h.prompts = append(s.h.prompts, text)
 	s.h.mu.Unlock()
 	s.events <- harness.Event{Kind: harness.EventStep, Text: "thinking"}
-	s.events <- harness.Event{Kind: harness.EventToolCall, Tool: "edit", Text: "edit file"}
+	tool := "edit file"
+	if s.h.toolText != "" {
+		tool = s.h.toolText
+	}
+	s.events <- harness.Event{Kind: harness.EventToolCall, Tool: "edit", Text: tool}
 	if !reflect.DeepEqual(s.h.usage, harness.Usage{}) {
 		s.events <- harness.Event{Kind: harness.EventUsage, Usage: s.h.usage}
 	}
@@ -162,8 +167,7 @@ func newEnv(t *testing.T, verify ...string) *env {
 	t.Helper()
 	dir := t.TempDir()
 	ev := &env{h: &fakeHarness{edit: writeFile("out.txt", "built\n")}, scm: &fakeSCM{}, db: filepath.Join(dir, "f.db"), root: filepath.Join(dir, "work")}
-	ev.p = Project{ID: "p1", RepoURL: newRemote(t), Repo: "o/r", DefaultBranch: "main", Verify: verify,
-		Setup: `echo x >> "$HOME/setup.log"`}
+	ev.p = Project{ID: "p1", RepoURL: newRemote(t), Repo: "o/r", DefaultBranch: "main", Env: Env{Verify: verify, Setup: `echo x >> "$HOME/setup.log"`}}
 	ev.e = ev.engine(t)
 	return ev
 }
@@ -251,7 +255,7 @@ func TestHappyPath(t *testing.T) {
 	if sh(t, ev.p.RepoURL, "git", "rev-parse", "--verify", "lf/"+id) == "" {
 		t.Error("branch not pushed")
 	}
-	if ev.h.specs[0].Role != harness.RoleBuilder || ev.h.prompts[0] != "add out.txt" {
+	if ev.h.specs[0].Role != harness.RoleBuilder || !strings.HasPrefix(ev.h.prompts[0], "add out.txt\n\nBefore finishing") {
 		t.Errorf("spec/prompt = %+v %q", ev.h.specs[0], ev.h.prompts[0])
 	}
 }
@@ -356,7 +360,7 @@ func TestCIFailureRequeueResumesSession(t *testing.T) {
 
 func TestSetupRunsInWorktree(t *testing.T) {
 	ev := newEnv(t)
-	ev.p.Setup = `pwd > "$HOME/setup.pwd"`
+	ev.p.Env.Setup = `pwd > "$HOME/setup.pwd"`
 	id := ev.create(t)
 	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
 		t.Fatal(err)
@@ -700,7 +704,7 @@ func TestRunThroughRealACPHarness(t *testing.T) {
 			fin, _ = fact.Decode[fact.RunFinished](f)
 		}
 	}
-	if len(steps) != 1 || steps[0] != "write built.txt" {
+	if len(steps) != 2 || steps[0] != "write built.txt" || steps[1] != "no_targeted_tests" {
 		t.Errorf("steps = %v", steps)
 	}
 	var u harness.Usage

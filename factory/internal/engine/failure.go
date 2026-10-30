@@ -164,21 +164,21 @@ func mentions(tok string, owned []string) bool {
 
 // verifyFailed records the failure and routes it: mapped tasks go back to their builders as failed with the output,
 // anything unmapped is escalated.
-func (o *orch) verifyFailed(ctx context.Context, cmd, output string) error {
+func (o *orch) verifyFailed(ctx context.Context, tier, cmd, output string) error {
 	facts, err := o.e.Facts.List(ctx, o.woID)
 	if err != nil {
 		return err
 	}
 	st := workflow.Fold(facts)
 	ids := verifyTasks(output, st.Tasks)
-	nf := []fact.NewFact{{Kind: fact.KindVerifyFailed, Payload: fact.VerifyFailed{Commands: []string{cmd}, Output: output}}}
+	nf := []fact.NewFact{{Kind: fact.KindVerifyFailed, Payload: fact.VerifyFailed{Tier: tier, Commands: []string{cmd}, Output: output}}}
 	if len(ids) == 0 {
 		nf = append(nf, fact.NewFact{Kind: workflow.KindEscalated, Payload: workflow.Escalated{Class: fact.ClassVerify,
 			Reason: "verify failed and no failing file maps to a task's owned paths: " + firstLine(output, 300)}})
 	}
 	for _, id := range ids {
 		nf = append(nf, fact.NewFact{Kind: fact.KindTaskFailed, Payload: fact.TaskFailed{Task: id, Class: fact.ClassVerify,
-			Reason: "verify_failed", Message: fmt.Sprintf("`%s` failed:\n%s", cmd, output)}})
+			Reason: "verify_failed", Message: fmt.Sprintf("`%s` (%s) failed:\n%s", cmd, tier, output)}})
 	}
 	_, err = o.e.Facts.AppendBatch(ctx, o.woID, 0, nf)
 	return err

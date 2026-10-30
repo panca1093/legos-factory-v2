@@ -771,11 +771,12 @@ func lastFailure(facts []fact.Fact, id string) (fact.TaskFailed, bool) {
 	return out, found
 }
 
-func taskPrompt(objective, spec string, t workflow.Task, facts []fact.Fact) string {
+func taskPrompt(objective, spec string, t workflow.Task, facts []fact.Fact, testCmd string) string {
 	s := objective + "\n\nSpecification:\n" + spec + "\n\nYour task (" + t.ID + "): " + t.Description
 	if len(t.Paths) > 0 {
 		s += "\nYou own these paths; change files only there: " + strings.Join(t.Paths, ", ")
 	}
+	s += testPrompt(testCmd)
 	if tf, ok := lastFailure(facts, t.ID); ok {
 		s += "\nA previous attempt failed (" + tf.Class + "): " + tail(tf.Message, 3000) + "\nFix the cause and try again."
 	}
@@ -836,7 +837,7 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 	}
 	defer cfg.release()
 	sid, open := roleSession(facts, harness.RoleBuilder, t.ID)
-	prompt := taskPrompt(o.objective, latestSpec(facts), t, facts)
+	prompt := taskPrompt(o.objective, latestSpec(facts), t, facts, e.testCommand(ctx, o.p, o.sb, dir))
 	note := ""
 	if open != "" {
 		note = "Your previous run was interrupted and the worktree may hold partial work. "

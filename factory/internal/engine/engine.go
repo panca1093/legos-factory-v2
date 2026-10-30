@@ -39,30 +39,61 @@ type Project struct {
 	SCMBaseURL    string
 	SCMUsername   string
 	SCMToken      string // loaded from env at startup; never serialized or put in facts
-	Setup         string
-	Verify        []string
+	Env           Env
 	Builder       BuilderConfig
 	// Roles is the JSON fallback for roles without a profile binding: foreman, architect, inspector, cataloger.
 	Roles          map[string]BuilderConfig
 	RequiredChecks []string
+	// ProtectedPaths always need a human (ADR-F09); enforced from M7.
+	ProtectedPaths []string
 	MaxRequeues    int // 0 means defaultMaxRequeues
 	// Fallbacks lists profile ids per role, in the order retry_task other_model moves through them.
 	Fallbacks map[string][]string
 }
 
+// Env is the project's environment binding (SPEC §11): the factory injects it and never provisions infrastructure.
+type Env struct {
+	Setup       string
+	Verify      []string
+	Integration *Integration
+	// Docker mounts the host docker socket into the sandbox: the agent gets root-equivalent control of the host daemon.
+	Docker bool
+	// TestPkg is the targeted-test command template, e.g. "go test ./{pkg}/..."; default derived from go.mod.
+	TestPkg string
+}
+
+// Integration runs once after verify passes against an environment the project already has.
+type Integration struct {
+	Command   string
+	Endpoints map[string]string // exposed as LF_ENDPOINT_<NAME>
+	SecretEnv []string          // names of host env vars passed to this step only, by name
+}
+
 func (b BuilderConfig) set() bool { return b.Profile.Agent != "" || len(b.AgentCommand) > 0 }
 
 type projectFile struct {
-	ID             string                 `json:"id"`
-	RepoURL        string                 `json:"repo_url"`
-	Repo           string                 `json:"repo"`
-	DefaultBranch  string                 `json:"default_branch"`
-	SCMKind        string                 `json:"scm_kind"`
-	SCMBaseURL     string                 `json:"scm_base_url"`
-	SCMUsername    string                 `json:"scm_username"`
-	SCMTokenEnv    string                 `json:"scm_token_env"`
-	Setup          string                 `json:"setup"`
-	Verify         []string               `json:"verify"`
+	ID            string   `json:"id"`
+	RepoURL       string   `json:"repo_url"`
+	Repo          string   `json:"repo"`
+	DefaultBranch string   `json:"default_branch"`
+	SCMKind       string   `json:"scm_kind"`
+	SCMBaseURL    string   `json:"scm_base_url"`
+	SCMUsername   string   `json:"scm_username"`
+	SCMTokenEnv   string   `json:"scm_token_env"`
+	Setup         string   `json:"setup"`
+	Verify        []string `json:"verify"`
+	Env           struct {
+		Setup       string   `json:"setup"`
+		Verify      []string `json:"verify"`
+		Integration *struct {
+			Command   string            `json:"command"`
+			Endpoints map[string]string `json:"endpoints"`
+			SecretEnv []string          `json:"secret_env"`
+		} `json:"integration"`
+		Docker  bool   `json:"docker"`
+		TestPkg string `json:"test_pkg"`
+	} `json:"env"`
+	ProtectedPaths []string               `json:"protected_paths"`
 	RequiredChecks []string               `json:"required_checks"`
 	MaxRequeues    int                    `json:"max_requeues"`
 	Fallbacks      map[string][]string    `json:"fallbacks"`
@@ -106,8 +137,9 @@ func LoadProject(path string) (Project, error) {
 		return Project{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	p := Project{ID: f.ID, RepoURL: f.RepoURL, Repo: f.Repo, DefaultBranch: f.DefaultBranch, SCMKind: f.SCMKind,
-		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername, Setup: f.Setup, Verify: f.Verify,
-		RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues, Fallbacks: f.Fallbacks}
+		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername,
+		Env:            Env{Setup: f.Env.Setup, Verify: f.Env.Verify, Docker: f.Env.Docker, TestPkg: f.Env.TestPkg},
+		ProtectedPaths: f.ProtectedPaths, RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues, Fallbacks: f.Fallbacks}
 	if p.DefaultBranch == "" {
 		p.DefaultBranch = "main"
 	}
@@ -115,6 +147,15 @@ func LoadProject(path string) (Project, error) {
 		if p.SCMToken = os.Getenv(f.SCMTokenEnv); p.SCMToken == "" {
 			return Project{}, fmt.Errorf("env %s (scm_token_env) is empty", f.SCMTokenEnv)
 		}
+	}
+	if p.Env.Setup == "" {
+		p.Env.Setup = f.Setup
+	}
+	if len(p.Env.Verify) == 0 {
+		p.Env.Verify = f.Verify
+	}
+	if i := f.Env.Integration; i != nil && i.Command != "" {
+		p.Env.Integration = &Integration{Command: i.Command, Endpoints: i.Endpoints, SecretEnv: i.SecretEnv}
 	}
 	p.Builder = f.Builder.config()
 	if len(f.Roles) > 0 {
@@ -349,8 +390,8 @@ func requeuePrompt(r fact.WORequeued) string {
 }
 
 // builderPrompt: a fresh session has no memory of the objective, so it is restated ahead of any re-queue reason.
-func builderPrompt(v *view, fresh bool) string {
-	prompt := v.objective
+func builderPrompt(v *view, fresh bool, testCmd string) string {
+	prompt := v.objective + testPrompt(testCmd)
 	if v.requeue != nil {
 		if fresh {
 			prompt += "\n\n"
@@ -363,6 +404,25 @@ func builderPrompt(v *view, fresh bool) string {
 		prompt = "Your previous run was interrupted and the worktree may hold partial work. " + prompt
 	}
 	return prompt
+}
+
+// testCommand is the tier-1 targeted test command shown to the builder; "" when neither configured nor derivable.
+func (e *Engine) testCommand(ctx context.Context, p Project, sb sandbox.Sandbox, dir string) string {
+	if p.Env.TestPkg != "" {
+		return p.Env.TestPkg
+	}
+	if _, _, code, err := sb.Exec(ctx, dir, nil, "test", "-f", "go.mod"); err == nil && code == 0 {
+		return "go test ./{pkg}/..."
+	}
+	return ""
+}
+
+func testPrompt(cmd string) string {
+	s := "\n\nBefore finishing, run targeted tests for the packages you touched, without -race"
+	if cmd != "" {
+		s += ", with `" + strings.ReplaceAll(cmd, "{pkg}", "<pkg>") + "`"
+	}
+	return s + ". State the exact command and its result in your final message."
 }
 
 func tail(s string, n int) string {
@@ -425,6 +485,7 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 	if err != nil {
 		return err
 	}
+	ws.Docker = p.Env.Docker
 	sb, err := e.Runtime.Start(ctx, ws, nil)
 	if err != nil {
 		return err
@@ -521,6 +582,11 @@ const (
 	stepStop
 )
 
+const (
+	tierVerify      = "verify"
+	tierIntegration = "integration"
+)
+
 // verifyStep drives the line (when there is one) to a verifiable branch and runs the verify commands once. A verify
 // failure in the line goes back to the owning builders (stepAgain); on the single-builder path it fails the work order.
 func (e *Engine) verifyStep(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, o *orch, v *view) (step, error) {
@@ -532,8 +598,32 @@ func (e *Engine) verifyStep(ctx context.Context, p Project, woID string, sb sand
 	if v.cycleHas(fact.KindVerifyPassed) {
 		return stepPublish, nil
 	}
-	for _, cmd := range p.Verify {
-		stdout, stderr, code, err := sb.Exec(ctx, dir, nil, "sh", "-c", cmd)
+	type check struct {
+		tier, cmd string
+		env       map[string]string
+	}
+	var checks []check
+	for _, cmd := range p.Env.Verify {
+		checks = append(checks, check{tier: tierVerify, cmd: cmd})
+	}
+	var secrets []string
+	if in := p.Env.Integration; in != nil && in.Command != "" {
+		env := map[string]string{}
+		for name, url := range in.Endpoints {
+			env["LF_ENDPOINT_"+strings.ToUpper(name)] = url
+		}
+		for _, name := range in.SecretEnv {
+			val := os.Getenv(name)
+			if val == "" {
+				return stepStop, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "integration_secret_missing", Message: "host env " + name + " (env.integration.secret_env) is empty"})
+			}
+			env[name] = val
+			secrets = append(secrets, val)
+		}
+		checks = append(checks, check{tier: tierIntegration, cmd: in.Command, env: env})
+	}
+	for _, c := range checks {
+		stdout, stderr, code, err := sb.Exec(ctx, dir, c.env, "sh", "-c", c.cmd)
 		if err != nil {
 			return stepStop, err
 		}
@@ -541,13 +631,18 @@ func (e *Engine) verifyStep(ctx context.Context, p Project, woID string, sb sand
 			continue
 		}
 		out := tail(stdout+stderr, 4000)
-		if o != nil {
-			return stepAgain, o.verifyFailed(ctx, cmd, out)
+		if c.tier == tierIntegration {
+			for _, sec := range secrets {
+				out = strings.ReplaceAll(out, sec, "***")
+			}
 		}
-		if _, err := e.Facts.Append(ctx, woID, fact.KindVerifyFailed, fact.VerifyFailed{Commands: []string{cmd}, Output: out}); err != nil {
+		if o != nil {
+			return stepAgain, o.verifyFailed(ctx, c.tier, c.cmd, out)
+		}
+		if _, err := e.Facts.Append(ctx, woID, fact.KindVerifyFailed, fact.VerifyFailed{Tier: c.tier, Commands: []string{c.cmd}, Output: out}); err != nil {
 			return stepStop, err
 		}
-		return stepStop, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassVerify, Reason: "verify_failed", Message: fmt.Sprintf("%s: exit %d", cmd, code)})
+		return stepStop, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassVerify, Reason: "verify_failed", Message: fmt.Sprintf("%s (%s): exit %d", c.cmd, c.tier, code)})
 	}
 	_, err := e.Facts.Append(ctx, woID, fact.KindVerifyPassed, struct{}{})
 	return stepPublish, err
@@ -578,7 +673,7 @@ func (e *Engine) restartSandbox(ctx context.Context, woID string, old sandbox.Sa
 }
 
 func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir, task string) (failed bool, err error) {
-	if p.Setup == "" {
+	if p.Env.Setup == "" {
 		return false, nil
 	}
 	ws := sb.Workspace()
@@ -588,7 +683,7 @@ func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.S
 	} else if code == 0 {
 		return false, nil
 	}
-	stdout, stderr, code, err := sb.Exec(ctx, dir, nil, "sh", "-c", p.Setup)
+	stdout, stderr, code, err := sb.Exec(ctx, dir, nil, "sh", "-c", p.Env.Setup)
 	if err != nil {
 		return false, err
 	}
@@ -742,6 +837,7 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 
 	var usage harness.Usage
 	var last string
+	var testSeen bool
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
@@ -754,6 +850,9 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 				}
 				if ev.Kind == harness.EventStep {
 					last = ev.Text
+				}
+				if ev.Kind == harness.EventToolCall && strings.Contains(strings.ToLower(ev.Tool+" "+ev.Text), "test") {
+					testSeen = true
 				}
 				if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: step, Summary: firstLine(ev.Text, 200)}); err != nil {
 					e.log().Warn("record run step", "wo", woID, "err", err)
@@ -789,6 +888,11 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 		}
 		return "", perr, nil
 	}
+	if c.role == harness.RoleBuilder && !testSeen {
+		if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: "no_targeted_tests", Summary: "builder finished without running any test command"}); err != nil {
+			return "", nil, err
+		}
+	}
 	raw, _ := json.Marshal(usage)
 	fin := fact.RunFinished{Run: run, StopReason: stop, Usage: raw}
 	if b.price != nil {
@@ -810,7 +914,7 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 	defer cfg.release()
 	_, agentErr, err := e.converse(ctx, woID, sb, convo{
 		role: harness.RoleBuilder, task: task, dir: dir, cfg: cfg, sessionID: v.sessionID, openRun: v.openRun,
-		prompt: func(fresh bool) string { return builderPrompt(v, fresh) },
+		prompt: func(fresh bool) string { return builderPrompt(v, fresh, e.testCommand(ctx, p, sb, dir)) },
 	})
 	if err != nil {
 		return false, err
