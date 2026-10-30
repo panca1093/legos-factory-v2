@@ -23,6 +23,7 @@ import (
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
 	"legos-factory/factory/internal/profile"
+	"legos-factory/factory/internal/workflow"
 )
 
 const (
@@ -79,6 +80,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /work-orders", s.listWorkOrders)
 	mux.HandleFunc("GET /work-orders/{id}", s.getWorkOrder)
 	mux.HandleFunc("POST /work-orders/{id}/run", s.runWorkOrder)
+	mux.HandleFunc("POST /work-orders/{id}/approve", s.approveWorkOrder)
 	return s.auth(mux)
 }
 
@@ -389,6 +391,9 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		Builder struct {
 			Env map[string]string `json:"env"`
 		} `json:"builder"`
+		Roles map[string]struct {
+			Env map[string]string `json:"env"`
+		} `json:"roles"`
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &f) != nil || json.Unmarshal(raw, &fields) != nil {
@@ -399,10 +404,16 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "raw tokens are not accepted; use scm_token_env to name an environment variable")
 		return
 	}
-	for k, v := range f.Builder.Env {
-		if !envRef.MatchString(v) {
-			writeErr(w, http.StatusBadRequest, "builder.env."+k+" must reference an environment variable like ${NAME}")
-			return
+	envs := map[string]map[string]string{"builder": f.Builder.Env}
+	for role, rc := range f.Roles {
+		envs["roles."+role] = rc.Env
+	}
+	for where, env := range envs {
+		for k, v := range env {
+			if !envRef.MatchString(v) {
+				writeErr(w, http.StatusBadRequest, where+".env."+k+" must reference an environment variable like ${NAME}")
+				return
+			}
 		}
 	}
 	if !idRe.MatchString(f.ID) || f.RepoURL == "" || f.Repo == "" {
@@ -492,6 +503,7 @@ func (s *Server) createWorkOrder(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Project   string `json:"project"`
 		Objective string `json:"objective"`
+		Level     *int   `json:"level"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -500,12 +512,19 @@ func (s *Server) createWorkOrder(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "project and objective are required")
 		return
 	}
+	level := workflow.DefaultLevelCap
+	if in.Level != nil {
+		if level = *in.Level; level < 0 || level > workflow.DefaultLevelCap {
+			writeErr(w, http.StatusBadRequest, "level must be between 0 and 3")
+			return
+		}
+	}
 	p, code, err := s.loadProject(in.Project)
 	if err != nil {
 		writeErr(w, code, err.Error())
 		return
 	}
-	id, err := s.Engine.Create(r.Context(), p, in.Objective)
+	id, err := s.Engine.CreateAt(r.Context(), p, in.Objective, level)
 	if err != nil {
 		s.fail(w, r, err, "")
 		return
@@ -571,6 +590,39 @@ func (s *Server) getWorkOrder(w http.ResponseWriter, r *http.Request) {
 	created, _ := fact.Decode[fact.WOCreated](facts[0])
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "project": created.Project, "objective": created.Objective,
 		"status": status, "stalled": stalled, "facts": page, "more": more, "running": s.isRunning(id)})
+}
+
+// approveWorkOrder records the human approval a level gate (gate "plan", the default) or an escalation (gate "escalation") waits for; the caller then starts a run to continue.
+func (s *Server) approveWorkOrder(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var in struct {
+		Gate string `json:"gate"`
+		Note string `json:"note"`
+	}
+	if r.ContentLength != 0 && !decode(w, r, &in) {
+		return
+	}
+	if in.Gate == "" {
+		in.Gate = workflow.GatePlan
+	}
+	facts, err := s.Engine.Facts.List(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err, "")
+		return
+	}
+	if len(facts) == 0 {
+		writeErr(w, http.StatusNotFound, "work order not found")
+		return
+	}
+	if st := workflow.Fold(facts); st.Phase != workflow.PhaseAwaitingHuman || st.Gate != in.Gate {
+		writeErr(w, http.StatusConflict, "work order is not waiting for approval of the "+in.Gate+" gate")
+		return
+	}
+	if _, err := s.Engine.Facts.Append(r.Context(), id, workflow.KindHumanApproved, workflow.HumanApproved{Gate: in.Gate, Note: in.Note}); err != nil {
+		s.fail(w, r, err, "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "gate": in.Gate, "state": "approved"})
 }
 
 func (s *Server) isRunning(id string) bool {

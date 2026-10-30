@@ -20,6 +20,7 @@ import (
 	"legos-factory/factory/internal/profile"
 	"legos-factory/factory/internal/sandbox"
 	"legos-factory/factory/internal/scm"
+	"legos-factory/factory/internal/workflow"
 )
 
 type BuilderConfig struct {
@@ -29,44 +30,65 @@ type BuilderConfig struct {
 }
 
 type Project struct {
-	ID             string
-	RepoURL        string
-	Repo           string
-	DefaultBranch  string
-	SCMKind        string
-	SCMBaseURL     string
-	SCMUsername    string
-	SCMToken       string // loaded from env at startup; never serialized or put in facts
-	Setup          string
-	Verify         []string
-	Builder        BuilderConfig
+	ID            string
+	RepoURL       string
+	Repo          string
+	DefaultBranch string
+	SCMKind       string
+	SCMBaseURL    string
+	SCMUsername   string
+	SCMToken      string // loaded from env at startup; never serialized or put in facts
+	Setup         string
+	Verify        []string
+	Builder       BuilderConfig
+	// Roles is the JSON fallback for roles without a profile binding: foreman, architect, inspector, cataloger.
+	Roles          map[string]BuilderConfig
 	RequiredChecks []string
 	MaxRequeues    int // 0 means defaultMaxRequeues
 }
 
+func (b BuilderConfig) set() bool { return b.Profile.Agent != "" || len(b.AgentCommand) > 0 }
+
 type projectFile struct {
-	ID             string   `json:"id"`
-	RepoURL        string   `json:"repo_url"`
-	Repo           string   `json:"repo"`
-	DefaultBranch  string   `json:"default_branch"`
-	SCMKind        string   `json:"scm_kind"`
-	SCMBaseURL     string   `json:"scm_base_url"`
-	SCMUsername    string   `json:"scm_username"`
-	SCMTokenEnv    string   `json:"scm_token_env"`
-	Setup          string   `json:"setup"`
-	Verify         []string `json:"verify"`
-	RequiredChecks []string `json:"required_checks"`
-	MaxRequeues    int      `json:"max_requeues"`
-	Builder        struct {
-		Profile struct {
-			Agent       string `json:"agent"`
-			Provider    string `json:"provider"`
-			Model       string `json:"model"`
-			BillingKind string `json:"billing_kind"`
-		} `json:"profile"`
-		AgentCommand []string          `json:"agent_command"`
-		Env          map[string]string `json:"env"` // values may reference ${VAR}
-	} `json:"builder"`
+	ID             string                 `json:"id"`
+	RepoURL        string                 `json:"repo_url"`
+	Repo           string                 `json:"repo"`
+	DefaultBranch  string                 `json:"default_branch"`
+	SCMKind        string                 `json:"scm_kind"`
+	SCMBaseURL     string                 `json:"scm_base_url"`
+	SCMUsername    string                 `json:"scm_username"`
+	SCMTokenEnv    string                 `json:"scm_token_env"`
+	Setup          string                 `json:"setup"`
+	Verify         []string               `json:"verify"`
+	RequiredChecks []string               `json:"required_checks"`
+	MaxRequeues    int                    `json:"max_requeues"`
+	Builder        builderFile            `json:"builder"`
+	Roles          map[string]builderFile `json:"roles"`
+}
+
+type builderFile struct {
+	Profile struct {
+		Agent       string `json:"agent"`
+		Provider    string `json:"provider"`
+		Model       string `json:"model"`
+		BillingKind string `json:"billing_kind"`
+	} `json:"profile"`
+	AgentCommand []string          `json:"agent_command"`
+	Env          map[string]string `json:"env"` // values may reference ${VAR}
+}
+
+func (b builderFile) config() BuilderConfig {
+	c := BuilderConfig{
+		Profile:      harness.Profile{Agent: b.Profile.Agent, Provider: b.Profile.Provider, Model: b.Profile.Model, BillingKind: b.Profile.BillingKind},
+		AgentCommand: b.AgentCommand,
+	}
+	if len(b.Env) > 0 {
+		c.Env = map[string]string{}
+		for k, v := range b.Env {
+			c.Env[k] = os.ExpandEnv(v)
+		}
+	}
+	return c
 }
 
 // LoadProject reads a project JSON file and resolves secrets from the environment.
@@ -90,15 +112,11 @@ func LoadProject(path string) (Project, error) {
 			return Project{}, fmt.Errorf("env %s (scm_token_env) is empty", f.SCMTokenEnv)
 		}
 	}
-	b := f.Builder
-	p.Builder = BuilderConfig{
-		Profile:      harness.Profile{Agent: b.Profile.Agent, Provider: b.Profile.Provider, Model: b.Profile.Model, BillingKind: b.Profile.BillingKind},
-		AgentCommand: b.AgentCommand,
-	}
-	if len(b.Env) > 0 {
-		p.Builder.Env = map[string]string{}
-		for k, v := range b.Env {
-			p.Builder.Env[k] = os.ExpandEnv(v)
+	p.Builder = f.Builder.config()
+	if len(f.Roles) > 0 {
+		p.Roles = map[string]BuilderConfig{}
+		for role, b := range f.Roles {
+			p.Roles[role] = b.config()
 		}
 	}
 	if p.ID == "" || p.RepoURL == "" || p.Repo == "" {
@@ -164,8 +182,13 @@ func isProviderErr(err error) bool {
 }
 
 func (e *Engine) Create(ctx context.Context, p Project, objective string) (string, error) {
+	return e.CreateAt(ctx, p, objective, workflow.DefaultLevelCap)
+}
+
+// CreateAt creates a work order with an autonomy cap; 0 makes the plan gate wait for a human.
+func (e *Engine) CreateAt(ctx context.Context, p Project, objective string, level int) (string, error) {
 	id := newID("wo-")
-	_, err := e.Facts.Append(ctx, id, fact.KindWOCreated, fact.WOCreated{Project: p.ID, Objective: objective})
+	_, err := e.Facts.Append(ctx, id, fact.KindWOCreated, fact.WOCreated{Project: p.ID, Objective: objective, LevelCap: level, Line: e.lineConfigured(ctx, p)})
 	return id, err
 }
 
@@ -175,13 +198,18 @@ func (e *Engine) Status(ctx context.Context, woID string) (fact.Status, bool, er
 	if err != nil {
 		return "", false, err
 	}
-	return fact.Derive(facts), fact.Stalled(facts, e.now()), nil
+	st := fact.Derive(facts)
+	if !st.Terminal() && workflow.Fold(facts).Phase == workflow.PhaseAwaitingHuman {
+		st = fact.StatusAwaitingHuman
+	}
+	return st, fact.Stalled(facts, e.now()), nil
 }
 
 type view struct {
 	facts     []fact.Fact
 	cycle     []fact.Fact // facts since the latest wo.requeued, inclusive
 	objective string
+	line      bool
 	requeue   *fact.WORequeued
 	sessionID string
 	prOpened  bool
@@ -209,7 +237,7 @@ func load(facts []fact.Fact) (*view, error) {
 			if err != nil {
 				return nil, err
 			}
-			v.objective = c.Objective
+			v.objective, v.line = c.Objective, c.Line
 		case fact.KindWORequeued:
 			start = i
 			r, err := fact.Decode[fact.WORequeued](f)
@@ -222,7 +250,7 @@ func load(facts []fact.Fact) (*view, error) {
 			if err != nil {
 				return nil, err
 			}
-			if r.SessionID != "" {
+			if r.SessionID != "" && (r.Role == "" || r.Role == string(harness.RoleBuilder)) && (r.Task == "" || r.Task == task) {
 				v.sessionID = r.SessionID
 			}
 		case fact.KindPROpened:
@@ -364,11 +392,17 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 	if err != nil {
 		return err
 	}
-	if failed, err := e.setup(ctx, p, woID, sb, dir); err != nil || failed {
+	if failed, err := e.setup(ctx, p, woID, sb, dir, task); err != nil || failed {
 		return err
 	}
 
-	if !v.cycleHas(fact.KindTaskCommitted) {
+	line := v.requeue == nil && v.line
+	if line {
+		o := &orch{e: e, p: p, woID: woID, sb: sb, dir: dir, objective: v.objective, lim: workflow.DefaultLimits()}
+		if ready, err := o.run(ctx); err != nil || !ready {
+			return err
+		}
+	} else if !v.cycleHas(fact.KindTaskCommitted) {
 		if !v.finished {
 			if done, err := e.build(ctx, p, woID, sb, dir, v); err != nil || done {
 				return err
@@ -412,7 +446,7 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 	return e.publish(ctx, p, woID, sb, dir, branch, gitAuth, prov, v)
 }
 
-func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string) (failed bool, err error) {
+func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir, task string) (failed bool, err error) {
 	if p.Setup == "" {
 		return false, nil
 	}
@@ -434,65 +468,100 @@ func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.S
 	return false, err
 }
 
-// build runs one builder turn; done is true when the work order was failed.
-func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, v *view) (done bool, err error) {
-	prompt := builderPrompt(v, false)
-	if v.openRun != "" {
-		if _, err := e.Facts.Append(ctx, woID, fact.KindRunFinished, fact.RunFinished{Run: v.openRun, StopReason: "interrupted"}); err != nil {
-			return false, err
+// agentCfg is a resolved role configuration; release must always be called.
+type agentCfg struct {
+	BuilderConfig
+	files   map[string][]byte
+	price   *profile.Price
+	release func()
+}
+
+// agentConfig picks the explicit JSON config when it names an agent, else the profile bound to role.
+// The builder keeps its M1 fallback to an empty config; other roles have none.
+func (e *Engine) agentConfig(ctx context.Context, p Project, role harness.Role) (agentCfg, error) {
+	explicit := p.Builder
+	if role != harness.RoleBuilder {
+		explicit = p.Roles[string(role)]
+	}
+	usable := explicit.Profile.Agent != ""
+	if role != harness.RoleBuilder {
+		usable = explicit.set()
+	}
+	if usable || e.Profiles == nil {
+		if !usable && role != harness.RoleBuilder {
+			return agentCfg{}, fmt.Errorf("no profile configured for role %s", role)
+		}
+		return agentCfg{BuilderConfig: explicit, release: func() {}}, nil
+	}
+	prof, err := e.Profiles.Resolve(ctx, p.ID, role)
+	if err != nil {
+		return agentCfg{}, fmt.Errorf("resolve %s profile: %w", role, err)
+	}
+	rs, err := e.Profiles.RunEnv(ctx, prof)
+	if err != nil {
+		return agentCfg{}, fmt.Errorf("%s profile env: %w", role, err)
+	}
+	release, err := e.Profiles.Acquire(ctx, prof.CredentialID)
+	if err != nil {
+		return agentCfg{}, err
+	}
+	return agentCfg{BuilderConfig: BuilderConfig{Profile: rs.Profile, AgentCommand: profile.AgentCommand(prof.Agent), Env: rs.Env},
+		files: rs.Files, price: &prof.Price, release: release}, nil
+}
+
+// convo is one agent turn: a session for (role, task) resumed from sessionID when possible.
+type convo struct {
+	role      harness.Role
+	task      string
+	dir       string
+	cfg       agentCfg
+	policy    harness.ToolPolicy
+	sessionID string
+	openRun   string // an interrupted run to close before starting
+	prompt    func(fresh bool) string
+}
+
+// converse runs the turn and records run.started/step/finished. agentErr is the agent's failure for the caller to
+// classify; err is infrastructure (fact store, context, transient provider errors) and is returned as is.
+func (e *Engine) converse(ctx context.Context, woID string, sb sandbox.Sandbox, c convo) (reply string, agentErr, err error) {
+	if c.openRun != "" {
+		if _, err := e.Facts.Append(ctx, woID, fact.KindRunFinished, fact.RunFinished{Run: c.openRun, StopReason: "interrupted"}); err != nil {
+			return "", nil, err
 		}
 	}
-	b := p.Builder
-	var price *profile.Price
-	var files map[string][]byte
-	if b.Profile.Agent == "" && e.Profiles != nil {
-		prof, err := e.Profiles.Resolve(ctx, p.ID, harness.RoleBuilder)
-		if err != nil {
-			return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: "resolve builder profile: " + err.Error()})
-		}
-		rs, err := e.Profiles.RunEnv(ctx, prof)
-		if err != nil {
-			return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: "builder profile env: " + err.Error()})
-		}
-		b = BuilderConfig{Profile: rs.Profile, AgentCommand: profile.AgentCommand(prof.Agent), Env: rs.Env}
-		files = rs.Files
-		price = &prof.Price
-		release, err := e.Profiles.Acquire(ctx, prof.CredentialID)
-		if err != nil {
-			return false, err
-		}
-		defer release()
-	}
-	env := map[string]string{"CLAUDE_CONFIG_DIR": path.Join(sb.Workspace().HomeDir(), "builder-"+task)}
+	b := c.cfg
+	env := map[string]string{"CLAUDE_CONFIG_DIR": path.Join(sb.Workspace().HomeDir(), string(c.role)+"-"+c.task)}
 	for k, val := range b.Env {
 		env[k] = val
 	}
 	spec := harness.SessionSpec{
-		Role: harness.RoleBuilder, Profile: b.Profile, AgentCommand: b.AgentCommand,
-		Dir: dir, Env: env, Files: files, SessionID: v.sessionID, Sandbox: sb,
+		Role: c.role, Profile: b.Profile, AgentCommand: b.AgentCommand, ToolPolicy: c.policy,
+		Dir: c.dir, Env: env, Files: b.files, SessionID: c.sessionID, Sandbox: sb,
 	}
-	sess, err := e.Harness.Start(ctx, spec)
-	if errors.Is(err, harness.ErrNoLoad) {
-		if _, ferr := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Step: "resume_failed", Summary: firstLine(err.Error(), 200)}); ferr != nil {
-			return false, ferr
+	prompt := c.prompt(false)
+	sess, serr := e.Harness.Start(ctx, spec)
+	if errors.Is(serr, harness.ErrNoLoad) {
+		if _, ferr := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Step: "resume_failed", Summary: firstLine(serr.Error(), 200)}); ferr != nil {
+			return "", nil, ferr
 		}
-		prompt = builderPrompt(v, true)
+		prompt = c.prompt(true)
 		spec.SessionID = ""
-		sess, err = e.Harness.Start(ctx, spec)
+		sess, serr = e.Harness.Start(ctx, spec)
 	}
-	if err != nil {
-		return e.agentFailure(ctx, woID, err, b.Profile)
+	if serr != nil {
+		return "", serr, nil
 	}
 	run := newID("run-")
 	if _, err := e.Facts.Append(ctx, woID, fact.KindRunStarted, fact.RunStarted{
-		Run: run, Role: string(harness.RoleBuilder), Task: task, Agent: b.Profile.Agent, Provider: b.Profile.Provider,
+		Run: run, Role: string(c.role), Task: c.task, Agent: b.Profile.Agent, Provider: b.Profile.Provider,
 		Model: b.Profile.Model, BillingKind: b.Profile.BillingKind, SessionID: sess.ID(),
 	}); err != nil {
 		_ = sess.Close()
-		return false, err
+		return "", nil, err
 	}
 
 	var usage harness.Usage
+	var last string
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
@@ -502,6 +571,9 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 				step := string(ev.Kind)
 				if ev.Tool != "" {
 					step = ev.Tool
+				}
+				if ev.Kind == harness.EventStep {
+					last = ev.Text
 				}
 				if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: step, Summary: firstLine(ev.Text, 200)}); err != nil {
 					e.log().Warn("record run step", "wo", woID, "err", err)
@@ -522,21 +594,44 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 
 	if perr != nil {
 		if ctx.Err() != nil {
-			return false, ctx.Err()
+			return "", nil, ctx.Err()
 		}
 		if IsTransient(perr) {
-			return false, perr
+			return "", nil, perr
 		}
 		_, _ = e.Facts.Append(ctx, woID, fact.KindRunFinished, fact.RunFinished{Run: run, StopReason: "error"})
-		return e.agentFailure(ctx, woID, perr, b.Profile)
+		return "", perr, nil
 	}
 	raw, _ := json.Marshal(usage)
 	fin := fact.RunFinished{Run: run, StopReason: stop, Usage: raw}
-	if price != nil {
-		fin.CostUSD = profile.Cost(*price, usage)
+	if b.price != nil {
+		fin.CostUSD = profile.Cost(*b.price, usage)
 	}
 	_, err = e.Facts.Append(ctx, woID, fact.KindRunFinished, fin)
-	return false, err
+	return last, nil, err
+}
+
+// build runs one builder turn; done is true when the work order was failed.
+func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, v *view) (done bool, err error) {
+	cfg, err := e.agentConfig(ctx, p, harness.RoleBuilder)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
+		return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: err.Error()})
+	}
+	defer cfg.release()
+	_, agentErr, err := e.converse(ctx, woID, sb, convo{
+		role: harness.RoleBuilder, task: task, dir: dir, cfg: cfg, sessionID: v.sessionID, openRun: v.openRun,
+		prompt: func(fresh bool) string { return builderPrompt(v, fresh) },
+	})
+	if err != nil {
+		return false, err
+	}
+	if agentErr != nil {
+		return e.agentFailure(ctx, woID, agentErr, cfg.Profile)
+	}
+	return false, nil
 }
 
 func mergeModels(dst, src []harness.ModelUsage) []harness.ModelUsage {

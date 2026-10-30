@@ -42,6 +42,7 @@ func run(args []string) error {
 	image := fs.String("image", "legos-factory-sandbox", "sandbox image (docker runtime)")
 	projectPath := fs.String("project", "", "project JSON file")
 	objective := fs.String("objective", "", "work order objective (create)")
+	level := fs.Int("level", 3, "autonomy cap 0-3; 0 makes a human approve the plan (create)")
 	wo := fs.String("wo", "", "work order id")
 	addr := fs.String("addr", ":8090", "listen address (serve)")
 	tokenEnv := fs.String("token-env", "FACTORY_OWNER_TOKEN", "env var holding the owner bearer token (serve)")
@@ -104,7 +105,10 @@ func run(args []string) error {
 		if *objective == "" {
 			return errors.New("-objective is required")
 		}
-		id, err := e.Create(ctx, p, *objective)
+		if *level < 0 || *level > 3 {
+			return errors.New("-level must be between 0 and 3")
+		}
+		id, err := e.CreateAt(ctx, p, *objective, *level)
 		if err == nil {
 			fmt.Println(id)
 		}

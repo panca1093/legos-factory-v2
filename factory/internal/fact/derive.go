@@ -5,16 +5,19 @@ import "time"
 type Status string
 
 const (
-	StatusQueued    Status = "queued"
-	StatusBuilding  Status = "building"
-	StatusVerifying Status = "verifying"
-	StatusPROpen    Status = "pr_open"
-	StatusCIFailed  Status = "ci_failed"
-	StatusCIGreen   Status = "ci_green"
-	StatusMerged    Status = "merged"
-	StatusClosed    Status = "closed"
-	StatusFailed    Status = "failed"
-	StatusCancelled Status = "cancelled"
+	StatusQueued Status = "queued"
+
+	// StatusAwaitingHuman is never returned by Derive; the engine reads it from the workflow state.
+	StatusAwaitingHuman Status = "awaiting_human"
+	StatusBuilding      Status = "building"
+	StatusVerifying     Status = "verifying"
+	StatusPROpen        Status = "pr_open"
+	StatusCIFailed      Status = "ci_failed"
+	StatusCIGreen       Status = "ci_green"
+	StatusMerged        Status = "merged"
+	StatusClosed        Status = "closed"
+	StatusFailed        Status = "failed"
+	StatusCancelled     Status = "cancelled"
 )
 
 func (s Status) Terminal() bool {

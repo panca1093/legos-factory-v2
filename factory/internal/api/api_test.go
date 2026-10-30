@@ -15,6 +15,7 @@ import (
 	"legos-factory/factory/internal/engine"
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/profile"
+	"legos-factory/factory/internal/workflow"
 )
 
 const (
@@ -239,6 +240,80 @@ func TestWorkOrderCreateAndGet(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+func TestApproveResumesLevelGate(t *testing.T) {
+	ctx := context.Background()
+	c, s := newClient(t)
+	c.mustCall("POST", "/projects", map[string]any{"id": "p1", "repo_url": "file:///x", "repo": "o/r"}, http.StatusCreated)
+	c.mustCall("POST", "/work-orders", map[string]any{"project": "p1", "objective": "x", "level": 4}, http.StatusBadRequest)
+	var wo struct{ ID string }
+	json.Unmarshal(c.mustCall("POST", "/work-orders", map[string]any{"project": "p1", "objective": "x", "level": 0}, http.StatusCreated), &wo)
+	c.mustCall("POST", "/work-orders/"+wo.ID+"/approve", nil, http.StatusConflict)
+	c.mustCall("POST", "/work-orders/wo-missing/approve", nil, http.StatusNotFound)
+
+	for _, f := range []struct {
+		kind string
+		v    any
+	}{
+		{fact.KindRunStarted, fact.RunStarted{Run: "r1", Role: workflow.RoleArchitect}},
+		{workflow.KindSpecReady, workflow.SpecReady{Spec: "s"}},
+		{workflow.KindForemanDecision, workflow.ForemanDecision{Tool: workflow.ToolApproveSpec, Args: workflow.ApproveSpec("").Args(), Accepted: true}},
+		{workflow.KindPlanReady, workflow.PlanReady{Tasks: []workflow.PlanTask{{ID: "a", Paths: []string{"a/"}}}}},
+		{workflow.KindForemanDecision, workflow.ForemanDecision{Tool: workflow.ToolApprovePlan, Args: workflow.ApprovePlan("").Args(), Accepted: true}},
+	} {
+		if _, err := s.Engine.Facts.Append(ctx, wo.ID, f.kind, f.v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got struct{ Status string }
+	json.Unmarshal(c.mustCall("GET", "/work-orders/"+wo.ID, nil, http.StatusOK), &got)
+	if got.Status != "awaiting_human" {
+		t.Fatalf("status = %s", got.Status)
+	}
+	c.mustCall("POST", "/work-orders/"+wo.ID+"/approve", map[string]string{"gate": "spec"}, http.StatusConflict)
+	c.mustCall("POST", "/work-orders/"+wo.ID+"/approve", nil, http.StatusOK)
+	json.Unmarshal(c.mustCall("GET", "/work-orders/"+wo.ID, nil, http.StatusOK), &got)
+	if got.Status == "awaiting_human" {
+		t.Fatalf("still waiting after approval: %s", got.Status)
+	}
+	c.mustCall("POST", "/work-orders/"+wo.ID+"/approve", nil, http.StatusConflict)
+}
+
+func TestApproveEscalationReturnsToEscalatedPhase(t *testing.T) {
+	ctx := context.Background()
+	c, s := newClient(t)
+	c.mustCall("POST", "/projects", map[string]any{"id": "p1", "repo_url": "file:///x", "repo": "o/r"}, http.StatusCreated)
+	var wo struct{ ID string }
+	json.Unmarshal(c.mustCall("POST", "/work-orders", map[string]any{"project": "p1", "objective": "x"}, http.StatusCreated), &wo)
+	for _, f := range []struct {
+		kind string
+		v    any
+	}{
+		{fact.KindRunStarted, fact.RunStarted{Run: "r1", Role: workflow.RoleArchitect}},
+		{workflow.KindSpecReady, workflow.SpecReady{Spec: "s"}},
+		{workflow.KindEscalated, workflow.Escalated{Reason: "3 consecutive rejected Foreman calls"}},
+	} {
+		if _, err := s.Engine.Facts.Append(ctx, wo.ID, f.kind, f.v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got struct{ Status string }
+	json.Unmarshal(c.mustCall("GET", "/work-orders/"+wo.ID, nil, http.StatusOK), &got)
+	if got.Status != "awaiting_human" {
+		t.Fatalf("status = %s", got.Status)
+	}
+	c.mustCall("POST", "/work-orders/"+wo.ID+"/approve", nil, http.StatusConflict)
+	c.mustCall("POST", "/work-orders/"+wo.ID+"/approve", map[string]string{"gate": "escalation", "note": "carry on"}, http.StatusOK)
+	json.Unmarshal(c.mustCall("GET", "/work-orders/"+wo.ID, nil, http.StatusOK), &got)
+	facts, _ := s.Engine.Facts.List(ctx, wo.ID)
+	if st := workflow.Fold(facts); got.Status == "awaiting_human" || st.Phase != workflow.PhaseSpecReady || st.ConsecutiveRejections != 0 {
+		t.Fatalf("status %s, state %+v", got.Status, st)
+	}
+	if last := facts[len(facts)-1]; last.Kind != workflow.KindHumanApproved || !strings.Contains(string(last.Payload), "carry on") {
+		t.Errorf("last fact = %s %s", last.Kind, last.Payload)
+	}
+	c.mustCall("POST", "/work-orders/"+wo.ID+"/approve", map[string]string{"gate": "escalation"}, http.StatusConflict)
+}
 
 func TestRedactReplacesSecret(t *testing.T) {
 	c, s := newClient(t)

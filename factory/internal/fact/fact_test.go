@@ -3,6 +3,7 @@ package fact
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -187,5 +188,47 @@ func TestStalled(t *testing.T) {
 				t.Fatalf("got %v want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAppendBatchIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "f.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, err := s.AppendBatch(ctx, "wo-1", 0, []NewFact{{"a", map[string]int{"n": 1}}, {"b", nil}})
+	if err != nil || len(got) != 2 || got[0].ID >= got[1].ID {
+		t.Fatalf("batch = %+v, %v", got, err)
+	}
+	if _, err := s.AppendBatch(ctx, "wo-1", 0, []NewFact{{"c", nil}, {"bad", make(chan int)}}); err == nil {
+		t.Fatal("unmarshalable payload accepted")
+	}
+	all, _ := s.List(ctx, "wo-1")
+	if len(all) != 2 {
+		t.Fatalf("failed batch left %d facts, want 2", len(all))
+	}
+}
+
+func TestAppendBatchConflictsWhenNewerFactExists(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "f.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	first, _ := s.Append(ctx, "wo-1", "a", nil)
+	if _, err := s.Append(ctx, "wo-2", "other", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AppendBatch(ctx, "wo-1", first.ID, []NewFact{{"b", nil}}); err != nil {
+		t.Fatalf("other subjects must not conflict: %v", err)
+	}
+	if _, err := s.AppendBatch(ctx, "wo-1", first.ID, []NewFact{{"c", nil}}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v", err)
+	}
+	if got, _ := s.List(ctx, "wo-1"); len(got) != 2 {
+		t.Fatalf("conflicting batch was written: %d facts", len(got))
 	}
 }
