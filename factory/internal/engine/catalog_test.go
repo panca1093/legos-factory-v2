@@ -245,6 +245,18 @@ func TestLockfileNoiseWarningOnSingleBuilder(t *testing.T) {
 	}
 }
 
+func TestToolKindPrefersACPKind(t *testing.T) {
+	for _, c := range []struct{ tool, kind, want string }{
+		{"Fetching things", "read", "read"}, {"Reading x", "search", "read"}, {"Patching", "edit", "edit"}, {"Removing x", "delete", "edit"},
+		{"Renaming", "move", "edit"}, {"edit", "execute", ""}, {"read x", "think", ""}, {"write x", "fetch", ""},
+		{"Edit x", "other", "edit"}, {"Read x", "", "read"}, {"Edit x", "read", "read"},
+	} {
+		if got := toolKind(harness.Event{Tool: c.tool, ToolKind: c.kind}); got != c.want {
+			t.Errorf("toolKind(%q, kind %q) = %q, want %q", c.tool, c.kind, got, c.want)
+		}
+	}
+}
+
 func TestToolKind(t *testing.T) {
 	for tool, want := range map[string]string{
 		"Read /a/b.go": "read", "grep foo": "read", "List dir": "read", "glob **/*.go": "read", "ls": "read",

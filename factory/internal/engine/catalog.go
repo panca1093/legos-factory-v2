@@ -253,8 +253,16 @@ var (
 	editTools = []string{"edit", "multiedit", "write", "patch", "apply_patch", "notebookedit", "create", "preparing"}
 )
 
-// toolKind classifies (claude-agent-acp titles a pending Write "Preparing file…"; opencode uses the bare tool name) a tool call by the first word of its title; shell calls are neither.
+// toolKind classifies by the ACP tool kind when the agent sent one, else (claude-agent-acp titles a pending Write "Preparing file…"; opencode uses the bare tool name) a tool call by the first word of its title; shell calls are neither.
 func toolKind(ev harness.Event) string {
+	switch ev.ToolKind {
+	case "read", "search":
+		return "read"
+	case "edit", "delete", "move":
+		return "edit"
+	case "execute", "think", "fetch":
+		return ""
+	}
 	title := ev.Tool
 	// OpenCode titles some calls "<description>: <tool>"; the tool name is the suffix.
 	if i := strings.LastIndex(title, ": "); i >= 0 && !strings.Contains(title[i+2:], " ") {
