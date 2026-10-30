@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,7 +121,7 @@ func (r *Runner) scan(ctx context.Context) ([]candidate, error) {
 		if st.Terminal() || phase.Terminal() || phase == workflow.PhaseAwaitingHuman {
 			continue
 		}
-		c := candidate{id: id, project: created.Project, created: facts[0].At, lastID: facts[len(facts)-1].ID}
+		c := candidate{id: id, project: created.Project, created: facts[0].At, lastID: progressID(facts)}
 		switch st {
 		case fact.StatusPROpen, fact.StatusCIFailed, fact.StatusCIGreen:
 			c.observe = true
@@ -129,6 +130,16 @@ func (r *Runner) scan(ctx context.Context) ([]candidate, error) {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].created.Before(out[j].created) })
 	return out, nil
+}
+
+// progressID is the id of the latest fact that is not run or sandbox bookkeeping, which every Run appends.
+func progressID(facts []fact.Fact) int64 {
+	for i := len(facts) - 1; i >= 0; i-- {
+		if k := facts[i].Kind; !strings.HasPrefix(k, "run.") && !strings.HasPrefix(k, "sandbox.") {
+			return facts[i].ID
+		}
+	}
+	return 0
 }
 
 func (r *Runner) tick(ctx context.Context) {
@@ -191,7 +202,7 @@ func (r *Runner) work(ctx context.Context, c candidate) {
 		return
 	}
 	// A Run that returns without appending a fact would otherwise be re-run every poll.
-	if facts, err := r.Engine.Facts.List(ctx, c.id); err == nil && len(facts) > 0 && facts[len(facts)-1].ID == c.lastID {
+	if facts, err := r.Engine.Facts.List(ctx, c.id); err == nil && len(facts) > 0 && progressID(facts) == c.lastID {
 		r.next[c.id] = time.Now().Add(10 * or(r.Poll, 2*time.Second))
 	}
 }

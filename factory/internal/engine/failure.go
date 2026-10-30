@@ -58,8 +58,12 @@ func Classify(err error, sandboxDown bool) Failure {
 	return Failure{Class: fact.ClassTask, Reason: "error"}
 }
 
+var probeTimeout = 10 * time.Second // a hung sandbox must not hang the probe
+
 // sandboxDown probes the sandbox with a trivial command.
 func sandboxDown(ctx context.Context, sb sandbox.Sandbox) bool {
+	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
 	_, _, code, err := sb.Exec(ctx, "", nil, "true")
 	return err != nil || code != 0
 }
