@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -171,16 +172,51 @@ func TestLocalHidesHostEnv(t *testing.T) {
 	}
 }
 
-func TestGitAuthRedaction(t *testing.T) {
+func TestGitAuthEnvAndRedaction(t *testing.T) {
 	a := &GitAuth{Username: "u", Token: "s3cr3t/tok"}
-	if got := a.apply("https://example.com/r.git"); !strings.Contains(got, "u:s3cr3t%2Ftok@example.com") {
-		t.Fatalf("apply = %s", got)
+	enc := base64.StdEncoding.EncodeToString([]byte("u:s3cr3t/tok"))
+	env := a.env()
+	if env["GIT_CONFIG_COUNT"] != "1" || env["GIT_CONFIG_KEY_0"] != "http.extraHeader" ||
+		env["GIT_CONFIG_VALUE_0"] != "Authorization: Basic "+enc || env["GIT_TERMINAL_PROMPT"] != "0" {
+		t.Fatalf("env = %v", env)
 	}
-	if got := a.apply("/local/path"); got != "/local/path" {
-		t.Fatalf("local url changed: %s", got)
+	if _, ok := (*GitAuth)(nil).env()["GIT_CONFIG_COUNT"]; ok {
+		t.Fatal("nil auth must not set config env")
 	}
-	if got := a.redact("fatal: https://u:s3cr3t%2Ftok@example.com s3cr3t/tok"); strings.Contains(got, "s3cr3t") {
+	if got := a.redact("fatal s3cr3t/tok s3cr3t%2Ftok " + enc); strings.Contains(got, "s3cr3t") || strings.Contains(got, enc) {
 		t.Fatalf("not redacted: %s", got)
+	}
+}
+
+func TestCloneAuthNeverOnDisk(t *testing.T) {
+	ctx := context.Background()
+	origin := newOrigin(t)
+	rt := Local{Root: t.TempDir()}
+	ws, _ := rt.CreateWorkspace(ctx, "wo5")
+	sb, _ := rt.Start(ctx, ws, nil)
+
+	if err := os.MkdirAll(filepath.Join(ws.RepoDir(), "junk"), 0o755); err != nil { // interrupted earlier clone
+		t.Fatal(err)
+	}
+	auth := &GitAuth{Username: "u", Token: "tok-123"}
+	if err := Clone(ctx, sb, origin, auth, "main"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := os.ReadFile(filepath.Join(ws.RepoDir(), ".git", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(cfg), "tok-123") || !strings.Contains(string(cfg), origin) {
+		t.Fatalf("git config = %s", cfg)
+	}
+	if _, err := os.Stat(filepath.Join(ws.RepoDir(), "junk")); !os.IsNotExist(err) {
+		t.Fatalf("partial dir not removed: %v", err)
+	}
+	if err := Push(ctx, sb, ws.RepoDir(), "feature", auth); err != nil {
+		t.Fatal(err)
+	}
+	if sh(t, origin, "git", "rev-parse", "refs/heads/feature") == "" {
+		t.Fatal("not pushed")
 	}
 }
 

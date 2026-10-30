@@ -2,43 +2,52 @@ package sandbox
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"path/filepath"
 	"strings"
 )
 
-// GitAuth is placed in a URL on the command line only, never in git config.
+// GitAuth reaches git only through the process environment, so it is never written to .git/config or argv.
 type GitAuth struct{ Username, Token string }
 
 var gitEnv = map[string]string{"GIT_TERMINAL_PROMPT": "0"}
 
-func (a *GitAuth) apply(repoURL string) string {
-	if a == nil || a.Token == "" {
-		return repoURL
-	}
-	u, err := url.Parse(repoURL)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
-		return repoURL
-	}
+func (a *GitAuth) header() string {
 	user := a.Username
 	if user == "" {
 		user = "x-access-token"
 	}
-	u.User = url.UserPassword(user, a.Token)
-	return u.String()
+	return "Authorization: Basic " + base64.StdEncoding.EncodeToString([]byte(user+":"+a.Token))
+}
+
+func (a *GitAuth) env() map[string]string {
+	env := map[string]string{}
+	for k, v := range gitEnv {
+		env[k] = v
+	}
+	if a != nil && a.Token != "" {
+		env["GIT_CONFIG_COUNT"] = "1"
+		env["GIT_CONFIG_KEY_0"] = "http.extraHeader"
+		env["GIT_CONFIG_VALUE_0"] = a.header()
+	}
+	return env
 }
 
 func (a *GitAuth) redact(s string) string {
 	if a == nil || a.Token == "" {
 		return s
 	}
-	s = strings.ReplaceAll(s, a.Token, "[REDACTED]")
-	return strings.ReplaceAll(s, url.QueryEscape(a.Token), "[REDACTED]")
+	enc := strings.TrimPrefix(a.header(), "Authorization: Basic ")
+	for _, secret := range []string{a.Token, url.QueryEscape(a.Token), enc} {
+		s = strings.ReplaceAll(s, secret, "[REDACTED]")
+	}
+	return s
 }
 
 func git(ctx context.Context, sb Sandbox, dir string, auth *GitAuth, args ...string) (string, error) {
-	stdout, stderr, code, err := sb.Exec(ctx, dir, gitEnv, append([]string{"git"}, args...)...)
+	stdout, stderr, code, err := sb.Exec(ctx, dir, auth.env(), append([]string{"git"}, args...)...)
 	if err != nil {
 		return "", fmt.Errorf("git %s: %s", args[0], auth.redact(err.Error()))
 	}
@@ -48,21 +57,25 @@ func git(ctx context.Context, sb Sandbox, dir string, auth *GitAuth, args ...str
 	return strings.TrimSpace(stdout), nil
 }
 
-// Clone clones into ws.RepoDir(); a no-op when the repo is already there.
+// Clone clones into ws.RepoDir(); a no-op when the repo is already there, and a leftover partial clone is replaced.
 func Clone(ctx context.Context, sb Sandbox, repoURL string, auth *GitAuth, branch string) error {
 	ws := sb.Workspace()
-	if _, err := git(ctx, sb, ws.RepoDir(), nil, "rev-parse", "--git-dir"); err == nil {
-		return nil
+	if _, _, code, err := sb.Exec(ctx, "", nil, "test", "-e", ws.RepoDir()+"/.git"); err != nil {
+		return err
+	} else if code == 0 {
+		if _, err := git(ctx, sb, ws.RepoDir(), nil, "rev-parse", "--git-dir"); err == nil {
+			return nil
+		}
+	}
+	if _, stderr, code, err := sb.Exec(ctx, "", nil, "rm", "-rf", ws.RepoDir()); err != nil || code != 0 {
+		return fmt.Errorf("remove partial clone: %v %s", err, stderr)
 	}
 	args := []string{"clone", "--quiet"}
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
-	args = append(args, auth.apply(repoURL), ws.RepoDir())
-	if _, err := git(ctx, sb, ws.Root(), auth, args...); err != nil {
-		return err
-	}
-	_, err := git(ctx, sb, ws.RepoDir(), nil, "remote", "set-url", "origin", repoURL)
+	args = append(args, repoURL, ws.RepoDir())
+	_, err := git(ctx, sb, ws.Root(), auth, args...)
 	return err
 }
 
@@ -132,16 +145,8 @@ func ChangedFiles(ctx context.Context, sb Sandbox, dir, base string) ([]string, 
 	return files, nil
 }
 
-// Push pushes HEAD to branch on origin, using the credentialed URL for this call only.
+// Push pushes HEAD to branch on origin; credentials travel in the environment of this call only.
 func Push(ctx context.Context, sb Sandbox, dir, branch string, auth *GitAuth) error {
-	remote := "origin"
-	if auth != nil && auth.Token != "" {
-		out, err := git(ctx, sb, dir, auth, "remote", "get-url", "origin")
-		if err != nil {
-			return err
-		}
-		remote = auth.apply(out)
-	}
-	_, err := git(ctx, sb, dir, auth, "push", "--quiet", remote, "HEAD:refs/heads/"+branch)
+	_, err := git(ctx, sb, dir, auth, "push", "--quiet", "origin", "HEAD:refs/heads/"+branch)
 	return err
 }
