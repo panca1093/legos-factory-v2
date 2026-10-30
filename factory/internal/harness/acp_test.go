@@ -116,7 +116,7 @@ func TestNewSessionSetsModelAndEnv(t *testing.T) {
 			t.Errorf("log missing %q:\n%s", want, joined)
 		}
 	}
-	for _, tool := range []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute", "external_directory"} {
+	for _, tool := range []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute", "task", "question", "external_directory"} {
 		if !strings.Contains(e.Env, `"`+tool+`":"deny"`) {
 			t.Errorf("read-only config must deny %s: %s", tool, e.Env)
 		}
@@ -156,7 +156,7 @@ func TestSetModelViaAdvertisedModels(t *testing.T) {
 }
 
 func TestSetModelSkippedWithoutAdvertisedModels(t *testing.T) {
-	s, err := startFake(t, "echo", SessionSpec{Role: RoleBuilder, Profile: Profile{Agent: "codex-acp", Model: "haiku"}})
+	s, err := startFake(t, "echo", SessionSpec{Role: RoleBuilder, Profile: Profile{Agent: "generic-acp", Model: "haiku"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestSessionFilesInSessionDirAndRemovedOnClose(t *testing.T) {
 	ws, _ := rt.CreateWorkspace(context.Background(), "wo1")
 	sb, _ := rt.Start(context.Background(), ws, nil)
 	s, err := ACP{}.Start(context.Background(), SessionSpec{
-		Role: RoleBuilder, Profile: Profile{Agent: "codex-acp", Model: "haiku"}, AgentCommand: []string{os.Args[0]},
+		Role: RoleBuilder, Profile: Profile{Agent: "codex-acp"}, AgentCommand: []string{os.Args[0]},
 		Dir: t.TempDir(), Env: map[string]string{"ACP_FAKE_AGENT": "echo"}, Sandbox: sb,
 		Files: map[string][]byte{".codex/auth.json": []byte(`{"a":1}`)},
 	})
