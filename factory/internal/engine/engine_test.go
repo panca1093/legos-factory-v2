@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,7 @@ func newRemote(t *testing.T) string {
 type fakeHarness struct {
 	mu      sync.Mutex
 	edit    func(call int, dir string) error
+	noLoad  bool // resuming a session fails with harness.ErrNoLoad
 	specs   []harness.SessionSpec
 	prompts []string
 }
@@ -52,6 +54,9 @@ func (h *fakeHarness) Start(_ context.Context, s harness.SessionSpec) (harness.S
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.specs = append(h.specs, s)
+	if h.noLoad && s.SessionID != "" {
+		return nil, fmt.Errorf("%w: gone", harness.ErrNoLoad)
+	}
 	id := s.SessionID
 	if id == "" {
 		id = "sess-1"
@@ -324,6 +329,45 @@ func TestCIFailureRequeueResumesSession(t *testing.T) {
 	}
 	if st := status(t, ev.e, id); st != fact.StatusPROpen {
 		t.Fatalf("status = %s", st)
+	}
+}
+
+func TestResumeFailureStartsFreshSession(t *testing.T) {
+	ctx := context.Background()
+	ev := newEnv(t)
+	ev.h.edit = func(call int, dir string) error {
+		return writeFile("out"+string(rune('0'+call))+".txt", "x\n")(call, dir)
+	}
+	id := ev.create(t)
+	if err := ev.e.Run(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	ev.scm.checks = []scm.Check{{Name: "unit-tests", State: "failure"}}
+	if err := ev.e.Observe(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	ev.h.noLoad = true
+	if err := ev.e.Run(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, ev.e, id); st != fact.StatusPROpen {
+		t.Fatalf("status = %s (class %q)", st, failedClass(t, ev.e, id))
+	}
+	if ev.h.starts() != 3 || ev.h.specs[1].SessionID != "sess-1" || ev.h.specs[2].SessionID != "" {
+		t.Fatalf("starts = %d specs = %+v", ev.h.starts(), ev.h.specs)
+	}
+	if p := ev.h.prompts[1]; !strings.Contains(p, "add out.txt") || !strings.Contains(p, "unit-tests") {
+		t.Errorf("prompt = %q", p)
+	}
+	facts, _ := ev.e.Facts.List(ctx, id)
+	found := false
+	for _, f := range facts {
+		if r, _ := fact.Decode[fact.RunStep](f); f.Kind == fact.KindRunStep && r.Step == "resume_failed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no resume_failed run.step")
 	}
 }
 

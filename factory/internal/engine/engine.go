@@ -256,6 +256,23 @@ func requeuePrompt(r fact.WORequeued) string {
 	return s + "\nFix the cause in the repository, then stop."
 }
 
+// builderPrompt: a fresh session has no memory of the objective, so it is restated ahead of any re-queue reason.
+func builderPrompt(v *view, fresh bool) string {
+	prompt := v.objective
+	if v.requeue != nil {
+		if fresh {
+			prompt += "\n\n"
+		} else {
+			prompt = ""
+		}
+		prompt += requeuePrompt(*v.requeue)
+	}
+	if v.openRun != "" {
+		prompt = "Your previous run was interrupted and the worktree may hold partial work. " + prompt
+	}
+	return prompt
+}
+
 func tail(s string, n int) string {
 	if len(s) > n {
 		return s[len(s)-n:]
@@ -398,12 +415,8 @@ func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.S
 
 // build runs one builder turn; done is true when the work order was failed.
 func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, v *view) (done bool, err error) {
-	prompt := v.objective
-	if v.requeue != nil {
-		prompt = requeuePrompt(*v.requeue)
-	}
+	prompt := builderPrompt(v, false)
 	if v.openRun != "" {
-		prompt = "Your previous run was interrupted and the worktree may hold partial work. " + prompt
 		if _, err := e.Facts.Append(ctx, woID, fact.KindRunFinished, fact.RunFinished{Run: v.openRun, StopReason: "interrupted"}); err != nil {
 			return false, err
 		}
@@ -413,10 +426,19 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 	for k, val := range b.Env {
 		env[k] = val
 	}
-	sess, err := e.Harness.Start(ctx, harness.SessionSpec{
+	spec := harness.SessionSpec{
 		Role: harness.RoleBuilder, Profile: b.Profile, AgentCommand: b.AgentCommand,
 		Dir: dir, Env: env, SessionID: v.sessionID, Sandbox: sb,
-	})
+	}
+	sess, err := e.Harness.Start(ctx, spec)
+	if errors.Is(err, harness.ErrNoLoad) {
+		if _, ferr := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Step: "resume_failed", Summary: firstLine(err.Error(), 200)}); ferr != nil {
+			return false, ferr
+		}
+		prompt = builderPrompt(v, true)
+		spec.SessionID = ""
+		sess, err = e.Harness.Start(ctx, spec)
+	}
 	if err != nil {
 		return e.agentFailure(ctx, woID, err, b.Profile)
 	}
