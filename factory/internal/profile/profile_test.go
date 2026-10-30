@@ -432,13 +432,17 @@ func TestCostPrefersPerModelUsage(t *testing.T) {
 
 type smokeHarness struct {
 	write   bool
+	content string // defaults to "smoke ok\n"
+	extra   string // additional file to write
+	stop    string // defaults to end_turn
+	noUsage bool
 	gotEnv  map[string]string
 	gotSpec harness.SessionSpec
 }
 
 func (h *smokeHarness) Start(_ context.Context, s harness.SessionSpec) (harness.Session, error) {
 	h.gotSpec, h.gotEnv = s, s.Env
-	return &smokeSession{h: h, dir: s.Dir, ch: make(chan harness.Event)}, nil
+	return &smokeSession{h: h, dir: s.Dir, ch: make(chan harness.Event, 4)}, nil
 }
 
 type smokeSession struct {
@@ -451,10 +455,19 @@ func (s *smokeSession) ID() string                   { return "s" }
 func (s *smokeSession) Events() <-chan harness.Event { return s.ch }
 func (s *smokeSession) Close() error                 { close(s.ch); return nil }
 func (s *smokeSession) Prompt(context.Context, string) (string, error) {
-	if s.h.write {
-		return "end_turn", os.WriteFile(filepath.Join(s.dir, smokeFile), []byte("smoke ok\n"), 0o644)
+	if !s.h.noUsage {
+		s.ch <- harness.Event{Kind: harness.EventUsage, Usage: harness.Usage{InputTokens: 1, OutputTokens: 1}}
 	}
-	return "end_turn", nil
+	stop := orDefault(s.h.stop, "end_turn")
+	if s.h.extra != "" {
+		if err := os.WriteFile(filepath.Join(s.dir, s.h.extra), []byte("x"), 0o644); err != nil {
+			return "", err
+		}
+	}
+	if s.h.write {
+		return stop, os.WriteFile(filepath.Join(s.dir, smokeFile), []byte(orDefault(s.h.content, "smoke ok\n")), 0o644)
+	}
+	return stop, nil
 }
 
 func TestSmoke(t *testing.T) {
@@ -483,6 +496,32 @@ func TestSmoke(t *testing.T) {
 	}
 	if err := s.Bind(bg, "", harness.RoleBuilder, p.ID); err != nil {
 		t.Fatalf("bind after smoke: %v", err)
+	}
+}
+
+func TestSmokeNegatives(t *testing.T) {
+	cases := []struct {
+		name string
+		h    smokeHarness
+		want string
+	}{
+		{"wrong content", smokeHarness{write: true, content: "hello\n"}, "contains"},
+		{"extra file", smokeHarness{write: true, extra: "other.txt"}, "changed more than"},
+		{"max_tokens stop", smokeHarness{write: true, stop: "max_tokens"}, "stop reason"},
+		{"no usage", smokeHarness{write: true, noUsage: true}, "no token usage"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t, true)
+			p := verifiedProfile(t, s, "sm", false)
+			h := c.h
+			if err := s.Smoke(bg, &h, sandbox.Local{Root: t.TempDir()}, p); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+			if got, _ := s.GetProfile(bg, p.ID); got.VerifiedAt != nil {
+				t.Fatal("failed smoke marked verified")
+			}
+		})
 	}
 }
 
