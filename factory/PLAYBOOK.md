@@ -16,11 +16,7 @@ vitest tests and a CI job named `test`. It lives at `~/Documents/MyBook/Project/
 Its README lists work order ideas, smallest first. `src/payment/**` is a protected path, so a work
 order touching it always waits for you.
 
-If it is not on GitHub yet:
-
-```bash
-cd ~/Documents/MyBook/Project/legos-pos-testbed && gh repo create panca1093/legos-pos-testbed --private --source . --push
-```
+Public on GitHub: https://github.com/panca1093/legos-pos-testbed
 
 ## 2. Credentials
 
