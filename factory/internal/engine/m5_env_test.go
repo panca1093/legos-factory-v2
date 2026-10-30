@@ -34,7 +34,7 @@ func TestLoadProjectEnvBindingAndFallbacks(t *testing.T) {
 	if err != nil || p.Env.Setup != "old" || strings.Join(p.Env.Verify, ",") != "old1" {
 		t.Fatalf("legacy keys: %+v %v", p.Env, err)
 	}
-	p, err = LoadProject(write(`"setup":"old","env":{"setup":"new","verify":["a","b"],"docker":true,
+	p, err = LoadProject(write(`"setup":"old","env":{"setup":"new","verify":["a","b"],"docker":true,"docker_trust_builder":true,
 		"integration":{"command":"run","endpoints":{"kafka":"k:9092"},"secret_env":["TOK"]}}`))
 	if err != nil {
 		t.Fatal(err)
@@ -134,7 +134,7 @@ func verifyFailedFacts(t *testing.T, ev *env, id string) []fact.VerifyFailed {
 }
 
 func TestIntegrationStepEnvAndSecrets(t *testing.T) {
-	t.Setenv("LF_TEST_SECRET", "tok-123")
+	t.Setenv("LF_TEST_SECRET", "tok-12345678")
 	ev := newEnv(t, "echo verify-ran >> ../order.log")
 	ev.p.Env.Integration = &Integration{
 		Command:   `echo "$LF_ENDPOINT_KAFKA $LF_TEST_SECRET" > "$HOME/integration.out"; echo "$LF_TEST_SECRET leaked"; exit 1`,
@@ -153,7 +153,7 @@ func TestIntegrationStepEnvAndSecrets(t *testing.T) {
 		t.Fatalf("verify.failed = %+v", vf)
 	}
 	for _, f := range mustList(t, ev, id) {
-		if strings.Contains(string(f.Payload), "tok-123") {
+		if strings.Contains(string(f.Payload), "tok-12345678") {
 			t.Fatalf("secret in fact %s: %s", f.Kind, f.Payload)
 		}
 	}
@@ -161,7 +161,7 @@ func TestIntegrationStepEnvAndSecrets(t *testing.T) {
 		t.Errorf("output = %q", vf[0].Output)
 	}
 	home := filepath.Join(ev.root, id, "home", "integration.out")
-	if b, err := os.ReadFile(home); err != nil || strings.TrimSpace(string(b)) != "k:9092 tok-123" {
+	if b, err := os.ReadFile(home); err != nil || strings.TrimSpace(string(b)) != "k:9092 tok-12345678" {
 		t.Errorf("integration env: %q %v", b, err)
 	}
 }
@@ -198,8 +198,8 @@ func TestIntegrationMissingSecretFailsClearly(t *testing.T) {
 	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
 		t.Fatal(err)
 	}
-	if st := status(t, ev.e, id); st != fact.StatusFailed {
-		t.Fatalf("status = %s", st)
+	if st := status(t, ev.e, id); st != fact.StatusFailed || failedClass(t, ev.e, id) != fact.ClassConfig {
+		t.Fatalf("status = %s class = %s", st, failedClass(t, ev.e, id))
 	}
 }
 

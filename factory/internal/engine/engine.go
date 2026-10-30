@@ -4,11 +4,13 @@ package engine
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path"
 	"slices"
@@ -58,6 +60,8 @@ type Env struct {
 	Integration *Integration
 	// Docker mounts the host docker socket into the sandbox: the agent gets root-equivalent control of the host daemon.
 	Docker bool
+	// DockerTrustBuilder acknowledges that Docker lets builder code reach the host and the factory's environment; required with integration secrets.
+	DockerTrustBuilder bool
 	// TestPkg is the targeted-test command template, e.g. "go test ./{pkg}/..."; default derived from go.mod.
 	TestPkg string
 }
@@ -90,8 +94,9 @@ type projectFile struct {
 			Endpoints map[string]string `json:"endpoints"`
 			SecretEnv []string          `json:"secret_env"`
 		} `json:"integration"`
-		Docker  bool   `json:"docker"`
-		TestPkg string `json:"test_pkg"`
+		Docker             bool   `json:"docker"`
+		DockerTrustBuilder bool   `json:"docker_trust_builder"`
+		TestPkg            string `json:"test_pkg"`
 	} `json:"env"`
 	ProtectedPaths []string               `json:"protected_paths"`
 	RequiredChecks []string               `json:"required_checks"`
@@ -138,7 +143,7 @@ func LoadProject(path string) (Project, error) {
 	}
 	p := Project{ID: f.ID, RepoURL: f.RepoURL, Repo: f.Repo, DefaultBranch: f.DefaultBranch, SCMKind: f.SCMKind,
 		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername,
-		Env:            Env{Setup: f.Env.Setup, Verify: f.Env.Verify, Docker: f.Env.Docker, TestPkg: f.Env.TestPkg},
+		Env:            Env{Setup: f.Env.Setup, Verify: f.Env.Verify, Docker: f.Env.Docker, DockerTrustBuilder: f.Env.DockerTrustBuilder, TestPkg: f.Env.TestPkg},
 		ProtectedPaths: f.ProtectedPaths, RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues, Fallbacks: f.Fallbacks}
 	if p.DefaultBranch == "" {
 		p.DefaultBranch = "main"
@@ -157,12 +162,18 @@ func LoadProject(path string) (Project, error) {
 	if i := f.Env.Integration; i != nil && i.Command != "" {
 		p.Env.Integration = &Integration{Command: i.Command, Endpoints: i.Endpoints, SecretEnv: i.SecretEnv}
 	}
+	if p.Env.Docker && p.Env.Integration != nil && len(p.Env.Integration.SecretEnv) > 0 && !p.Env.DockerTrustBuilder {
+		return Project{}, fmt.Errorf("%s: env.docker with env.integration.secret_env is refused: the docker socket gives builder code root on the host and access to the factory's environment, secrets included; set env.docker_trust_builder to true to accept that", path)
+	}
 	p.Builder = f.Builder.config()
 	if len(f.Roles) > 0 {
 		p.Roles = map[string]BuilderConfig{}
 		for role, b := range f.Roles {
 			p.Roles[role] = b.config()
 		}
+	}
+	if insp, ok := p.Roles[string(harness.RoleInspector)]; ok && insp.set() && p.Builder.set() && (insp.Profile.Model == "" || p.Builder.Profile.Model == "") {
+		return Project{}, fmt.Errorf("%s: roles.inspector and builder both need profile.model so the engine can verify they differ", path)
 	}
 	if p.ID == "" || p.RepoURL == "" || p.Repo == "" {
 		return Project{}, fmt.Errorf("%s: id, repo_url and repo are required", path)
@@ -622,18 +633,30 @@ func (e *Engine) verifyStep(ctx context.Context, p Project, woID string, sb sand
 		checks = append(checks, check{tier: tierVerify, cmd: cmd})
 	}
 	var secrets []string
+	// The integration command runs builder-authored repo code with these secrets in its environment; output redaction is best effort.
 	if in := p.Env.Integration; in != nil && in.Command != "" {
 		env := map[string]string{}
 		for name, url := range in.Endpoints {
 			env["LF_ENDPOINT_"+strings.ToUpper(name)] = url
 		}
+		var short []string
 		for _, name := range in.SecretEnv {
 			val := os.Getenv(name)
 			if val == "" {
-				return stepStop, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "integration_secret_missing", Message: "host env " + name + " (env.integration.secret_env) is empty"})
+				return stepStop, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassConfig, Reason: "integration_secret_missing", Message: "host env " + name + " (env.integration.secret_env) is empty"})
 			}
 			env[name] = val
+			if len(val) < minRedactableSecret {
+				short = append(short, name)
+				continue
+			}
 			secrets = append(secrets, val)
+		}
+		if len(short) > 0 {
+			msg := fmt.Sprintf("secrets %s are shorter than %d characters and cannot be redacted from integration output", strings.Join(short, ", "), minRedactableSecret)
+			if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Step: "integration_secret_unredactable", Summary: msg}); err != nil {
+				return stepStop, err
+			}
 		}
 		checks = append(checks, check{tier: tierIntegration, cmd: in.Command, env: env})
 	}
@@ -645,12 +668,11 @@ func (e *Engine) verifyStep(ctx context.Context, p Project, woID string, sb sand
 		if code == 0 {
 			continue
 		}
-		out := tail(stdout+stderr, 4000)
+		out := stdout + stderr
 		if c.tier == tierIntegration {
-			for _, sec := range secrets {
-				out = strings.ReplaceAll(out, sec, "***")
-			}
+			out = redactSecrets(out, secrets)
 		}
+		out = tail(out, 4000)
 		if o != nil {
 			return stepAgain, o.verifyFailed(ctx, c.tier, c.cmd, out)
 		}
@@ -661,6 +683,28 @@ func (e *Engine) verifyStep(ctx context.Context, p Project, woID string, sb sand
 	}
 	_, err := e.Facts.Append(ctx, woID, fact.KindVerifyPassed, struct{}{})
 	return stepPublish, err
+}
+
+const minRedactableSecret = 8
+
+// redactSecrets masks each secret as the integration step may print it: raw, base64 (standard and URL alphabets,
+// padded or not) and URL-encoded. Redact before truncating so a secret cut by the tail window cannot leak a prefix.
+// TODO: uncertain — base64 of a secret embedded at a non-aligned offset inside a larger encoded blob is not matched
+func redactSecrets(out string, secrets []string) string {
+	var forms []string
+	for _, sec := range secrets {
+		b := []byte(sec)
+		forms = append(forms, sec, url.QueryEscape(sec), url.PathEscape(sec),
+			base64.StdEncoding.EncodeToString(b), base64.RawStdEncoding.EncodeToString(b),
+			base64.URLEncoding.EncodeToString(b), base64.RawURLEncoding.EncodeToString(b))
+	}
+	slices.SortFunc(forms, func(a, b string) int { return len(b) - len(a) })
+	for _, f := range forms {
+		if len(f) >= minRedactableSecret {
+			out = strings.ReplaceAll(out, f, "***")
+		}
+	}
+	return out
 }
 
 // infraFailure reports whether err means the sandbox died, as opposed to a provider or task error.

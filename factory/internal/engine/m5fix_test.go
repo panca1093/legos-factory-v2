@@ -1,9 +1,14 @@
 package engine
 
 import (
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -126,6 +131,102 @@ func TestIsTestCall(t *testing.T) {
 		if got := isTestCall(harness.Event{Tool: tc.tool, Text: tc.text}, tc.cmd); got != tc.want {
 			t.Errorf("%s %q (cmd %q) = %v", tc.tool, tc.text, tc.cmd, got)
 		}
+	}
+}
+
+func loadProjectJSON(t *testing.T, body string) (Project, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "p.json")
+	if err := os.WriteFile(path, []byte(`{"id":"i","repo_url":"u","repo":"r",`+body+`}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return LoadProject(path)
+}
+
+func TestLoadProjectRefusesDockerWithIntegrationSecrets(t *testing.T) {
+	const integ = `"integration":{"command":"run","secret_env":["TOK"]}`
+	if _, err := loadProjectJSON(t, `"env":{"docker":true,`+integ+`}`); err == nil || !strings.Contains(err.Error(), "docker_trust_builder") {
+		t.Errorf("docker + secrets without trust: %v", err)
+	}
+	if _, err := loadProjectJSON(t, `"env":{"docker":true,"docker_trust_builder":true,`+integ+`}`); err != nil {
+		t.Errorf("explicit trust: %v", err)
+	}
+	if _, err := loadProjectJSON(t, `"env":{"docker":true,"integration":{"command":"run"}}`); err != nil {
+		t.Errorf("docker without secrets: %v", err)
+	}
+	if _, err := loadProjectJSON(t, `"env":{`+integ+`}`); err != nil {
+		t.Errorf("secrets without docker: %v", err)
+	}
+}
+
+func TestLoadProjectInspectorAndBuilderNeedModels(t *testing.T) {
+	agent := func(model string) string {
+		m := ""
+		if model != "" {
+			m = `,"model":"` + model + `"`
+		}
+		return `{"profile":{"agent":"claude-agent-acp"` + m + `},"agent_command":["x"]}`
+	}
+	cases := []struct {
+		name, builder, inspector string
+		ok                       bool
+	}{
+		{"both set", agent("opus"), agent("sonnet"), true},
+		{"builder without model", agent(""), agent("sonnet"), false},
+		{"inspector without model", agent("opus"), agent(""), false},
+	}
+	for _, tc := range cases {
+		_, err := loadProjectJSON(t, `"builder":`+tc.builder+`,"roles":{"inspector":`+tc.inspector+`}`)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v", tc.name, err)
+		}
+	}
+}
+
+func TestRedactSecretsForms(t *testing.T) {
+	sec := "s3cr3t/tok+en=9"
+	out := strings.Join([]string{
+		"raw " + sec,
+		"b64 " + base64.StdEncoding.EncodeToString([]byte(sec)),
+		"b64url " + base64.URLEncoding.EncodeToString([]byte(sec)),
+		"raw64 " + base64.RawStdEncoding.EncodeToString([]byte(sec)),
+		"query " + url.QueryEscape(sec),
+		"path " + url.PathEscape(sec),
+	}, "\n")
+	got := redactSecrets(out, []string{sec})
+	for _, form := range []string{sec, base64.StdEncoding.EncodeToString([]byte(sec)), base64.URLEncoding.EncodeToString([]byte(sec)), url.QueryEscape(sec), url.PathEscape(sec)} {
+		if strings.Contains(got, form) {
+			t.Errorf("%q survived: %s", form, got)
+		}
+	}
+}
+
+func TestIntegrationRedactsBeforeTailingAndWarnsOnShortSecrets(t *testing.T) {
+	t.Setenv("LF_LONG", "abcdefghijklmnop")
+	t.Setenv("LF_SHORT", "abc")
+	ev := newEnv(t, "true")
+	ev.p.Env.Integration = &Integration{
+		Command:   `head -c 3990 /dev/zero | tr '\0' x; echo "$LF_LONG"; echo "$LF_SHORT" ; exit 1`,
+		SecretEnv: []string{"LF_LONG", "LF_SHORT"},
+	}
+	id := ev.create(t)
+	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	vf := verifyFailedFacts(t, ev, id)
+	if len(vf) != 1 || strings.Contains(vf[0].Output, "abcdefghijklmnop") || strings.Contains(vf[0].Output, "klmnop") {
+		t.Fatalf("verify.failed = %+v", vf)
+	}
+	warned := false
+	for _, f := range mustList(t, ev, id) {
+		if f.Kind == fact.KindRunStep {
+			if s, _ := fact.Decode[fact.RunStep](f); s.Step == "integration_secret_unredactable" && strings.Contains(s.Summary, "LF_SHORT") && !strings.Contains(s.Summary, "abc ") {
+				warned = true
+			}
+		}
+	}
+	if !warned {
+		t.Error("no warning for the short secret")
 	}
 }
 

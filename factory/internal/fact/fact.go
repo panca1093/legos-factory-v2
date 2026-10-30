@@ -64,6 +64,7 @@ const (
 	ClassIntegration = "integration"
 	ClassVerify      = "verify"
 	ClassForeman     = "foreman"
+	ClassConfig      = "config"
 )
 
 type WOFailed struct {
