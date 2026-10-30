@@ -140,13 +140,13 @@ func TestModelsFetch(t *testing.T) {
 
 func TestSubscriptionModelsFromPlansFile(t *testing.T) {
 	s := newStore(t, true)
+	if _, err := os.Stat(s.plansFile); err != nil {
+		t.Fatalf("plans file not written by Open: %v", err)
+	}
 	c := mustCred(t, s, Credential{Name: "me", Kind: "subscription", Provider: "claude"}, "tok")
 	ms, err := s.Models(bg, c)
 	if err != nil || len(ms) == 0 {
 		t.Fatalf("defaults: %v %v", ms, err)
-	}
-	if _, err := os.Stat(s.plansFile); err != nil {
-		t.Fatalf("plans file not written: %v", err)
 	}
 	if err := os.WriteFile(s.plansFile, []byte(`{"claude":[{"id":"edited"}]}`), 0o644); err != nil {
 		t.Fatal(err)

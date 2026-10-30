@@ -132,8 +132,6 @@ func (s *Store) planModels(plan string) ([]Model, error) {
 	if s.plansFile != "" {
 		if b, err := os.ReadFile(s.plansFile); err == nil {
 			raw = b
-		} else if os.IsNotExist(err) {
-			_ = os.WriteFile(s.plansFile, defaultPlans, 0o644)
 		}
 	}
 	var plans map[string][]Model

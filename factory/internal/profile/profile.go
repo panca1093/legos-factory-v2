@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -102,6 +103,12 @@ func Open(cfg Config) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if _, err := os.Stat(cfg.PlansFile); cfg.PlansFile != "" && os.IsNotExist(err) {
+		if err := os.WriteFile(cfg.PlansFile, defaultPlans, 0o644); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("write default plans file: %w", err)
+		}
 	}
 	c := cfg.HTTP
 	if c == nil {
