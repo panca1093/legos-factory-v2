@@ -11,6 +11,7 @@
   The integration command runs builder-authored repo code with those secrets in its environment; trust it like the builder. Output is redacted best effort (raw, base64 and URL-encoded forms; secrets under 8 characters cannot be redacted and are flagged with a `integration_secret_unredactable` run step).
 - `roles.inspector` and `builder` JSON configs must both set `profile.model` when both are configured: the engine refuses to inspect with the builder's own model.
 - `env.docker`: mounts the host docker socket into the sandbox (root-equivalent on the host; single-user deployments only). Combined with a non-empty `env.integration.secret_env` the project is refused at load unless `env.docker_trust_builder: true` is also set: the socket lets builder code act as root on the host and read the factory's environment, secrets included.
-- `protected_paths`: placeholders, adjust to the real directories. They always need a human (ADR-F09); enforced from M7.
+- `protected_paths`: placeholders, adjust to the real directories. They always need a human (ADR-F09). A pattern without `/` (`*.sql`, `deploy`) matches a path segment at any depth; one with `/` is anchored at the repo root, and `**` spans any number of directories (`**/billing/**`, `migrations/**`). Matching is case-sensitive. Malformed patterns are rejected at load.
+- `max_level`: highest autonomy level any work order may reach, 0 to 3, default 3 (ADR-F09). Level 3 auto-merges green PRs; 2 always leaves the merge to a human. Set to 2 here because this is money code; raise it once you trust the gate.
 - `required_checks`: CI check names that must pass.
 - Top-level `setup` and `verify` still work as fallbacks when `env` omits them.

@@ -21,16 +21,24 @@ const (
 	KindIntegrationConflict = "integration.conflict"
 	KindEscalated           = "escalated"
 	KindHumanApproved       = "human.approved"
+	// KindAwaitingHuman parks a PR whose effective level below 3 needs a human to merge it.
+	KindAwaitingHuman = "awaiting.human"
 )
 
 const (
 	GatePlan        = "plan"
 	GateEscalation  = "escalation"
+	GatePR          = "pr"
 	DefaultLevelCap = 3
 )
 
 type SpecReady struct {
 	Spec string `json:"spec"`
+}
+
+type AwaitingHuman struct {
+	Gate   string `json:"gate"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type HumanApproved struct {
@@ -103,6 +111,8 @@ type PlanTask struct {
 
 type PlanReady struct {
 	Tasks []PlanTask `json:"tasks"`
+	// Protected lists owned paths that overlap the project's protected paths; any makes the plan gate need a human (SPEC §9).
+	Protected []string `json:"protected,omitempty"`
 }
 
 type ForemanDecision struct {
@@ -204,6 +214,7 @@ type State struct {
 	ConsecutiveRejections int
 	Decisions             []Decision // accepted only
 	LevelCap              int
+	PlanProtected         bool
 	Gate                  string // set while awaiting_human: GatePlan at the level gate, GateEscalation after escalated
 	FailureClass          string
 	EscalatedFrom         Phase
@@ -310,7 +321,7 @@ func (s *State) apply(f fact.Fact) {
 			s.LevelCap = *v.LevelCap
 		}
 	case KindHumanApproved:
-		if v, ok := decode[HumanApproved](f); ok && s.Phase == PhaseAwaitingHuman && s.Gate == v.Gate {
+		if v, ok := decode[HumanApproved](f); ok && v.Gate != GatePR && s.Phase == PhaseAwaitingHuman && s.Gate == v.Gate {
 			s.Epoch++
 			s.Phase, s.Gate = PhaseBuilding, ""
 			if v.Gate == GateEscalation {
@@ -344,6 +355,7 @@ func (s *State) apply(f fact.Fact) {
 			s.PlanRounds++
 			s.Epoch++
 			s.Tasks = nil
+			s.PlanProtected = len(p.Protected) > 0
 			for _, pt := range p.Tasks {
 				s.Tasks = append(s.Tasks, Task{PlanTask: pt, Status: TaskPending})
 			}
@@ -446,6 +458,8 @@ func (s *State) apply(f fact.Fact) {
 		if s.Phase != PhaseAwaitingHuman {
 			s.EscalatedFrom, s.Phase, s.Gate = s.Phase, PhaseAwaitingHuman, GateEscalation
 			s.ConsecutiveRejections = 0
+		} else if s.Gate == GatePR {
+			s.Gate = GateEscalation // a parked PR whose merge was refused stops being polled for merging
 		}
 	case fact.KindVerifyPassed:
 		if s.in(PhaseBuilding, PhaseIntegrating) {
@@ -454,8 +468,15 @@ func (s *State) apply(f fact.Fact) {
 		}
 	case fact.KindVerifyFailed:
 		s.Epoch++
+	case KindAwaitingHuman:
+		if v, ok := decode[AwaitingHuman](f); ok && s.in(PhasePROpen, PhaseCIGreen) {
+			s.EscalatedFrom, s.Phase, s.Gate = s.Phase, PhaseAwaitingHuman, v.Gate
+		}
 	case fact.KindWORequeued:
 		s.Epoch++
+		if s.Phase == PhaseAwaitingHuman && s.Gate == GatePR {
+			s.Phase, s.Gate = PhasePROpen, ""
+		}
 		if r, ok := decode[fact.WORequeued](f); ok && r.Reason == ReasonNeedsRebase {
 			s.setPhase(PhaseNeedsRebase)
 		} else {
@@ -506,7 +527,7 @@ func (s *State) applyDecision(f fact.Fact) {
 		s.SpecRejections++
 		s.setPhase(PhaseSpecifying)
 	case ToolApprovePlan:
-		if s.LevelCap == 0 && s.Phase == PhasePlanReady {
+		if (s.LevelCap == 0 || s.PlanProtected) && s.Phase == PhasePlanReady {
 			s.Phase, s.Gate = PhaseAwaitingHuman, GatePlan
 			return
 		}

@@ -15,5 +15,6 @@
     "services/lsm/internal/domain/state/",
     "services/lsm/internal/domain/money/"
   ],
+  "max_level": 2,
   "required_checks": []
 }
