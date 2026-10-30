@@ -423,9 +423,9 @@ func (f *fakeProfiles) Resolve(context.Context, string, harness.Role) (profile.P
 		Price: profile.Price{InputPerMTok: 3, OutputPerMTok: 15}}, f.err
 }
 
-func (f *fakeProfiles) RunEnv(context.Context, profile.Profile) (harness.Profile, map[string]string, error) {
-	return harness.Profile{Agent: "claude-agent-acp", Provider: "anthropic", Model: "m", BillingKind: "api_key"},
-		map[string]string{"ANTHROPIC_API_KEY": "k"}, nil
+func (f *fakeProfiles) RunEnv(context.Context, profile.Profile) (profile.RunSpec, error) {
+	return profile.RunSpec{Profile: harness.Profile{Agent: "claude-agent-acp", Provider: "anthropic", Model: "m", BillingKind: "api_key"},
+		Env: map[string]string{"ANTHROPIC_API_KEY": "k"}}, nil
 }
 
 func (f *fakeProfiles) Acquire(context.Context, string) (func(), error) {

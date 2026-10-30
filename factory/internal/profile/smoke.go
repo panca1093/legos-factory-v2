@@ -19,7 +19,7 @@ git add -A && git -c user.name=smoke -c user.email=smoke@localhost commit -q -m 
 
 // Smoke runs a builder session on a throwaway Go repo; a created file, passing `go test` and a commit set VerifiedAt.
 func (s *Store) Smoke(ctx context.Context, h harness.Harness, rt sandbox.Runtime, p Profile) error {
-	hp, env, err := s.RunEnv(ctx, p)
+	rs, err := s.RunEnv(ctx, p)
 	if err != nil {
 		return err
 	}
@@ -46,9 +46,9 @@ func (s *Store) Smoke(ctx context.Context, h harness.Harness, rt sandbox.Runtime
 		return fmt.Errorf("smoke repo setup: %v %s%s", err, out, errOut)
 	}
 
-	env["CLAUDE_CONFIG_DIR"] = path.Join(ws.HomeDir(), "smoke")
-	sess, err := h.Start(ctx, harness.SessionSpec{Role: harness.RoleBuilder, Profile: hp, AgentCommand: AgentCommand(p.Agent),
-		Dir: dir, Env: env, Sandbox: sb})
+	rs.Env["CLAUDE_CONFIG_DIR"] = path.Join(ws.HomeDir(), "smoke")
+	sess, err := h.Start(ctx, harness.SessionSpec{Role: harness.RoleBuilder, Profile: rs.Profile, AgentCommand: AgentCommand(p.Agent),
+		Dir: dir, Env: rs.Env, Files: rs.Files, Sandbox: sb})
 	if err != nil {
 		return fmt.Errorf("smoke start: %w", err)
 	}

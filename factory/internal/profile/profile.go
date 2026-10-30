@@ -20,11 +20,10 @@ import (
 )
 
 var (
-	ErrNotFound         = errors.New("not found")
-	ErrSingleOwnerOnly  = errors.New("subscription credentials require single-owner mode")
-	ErrUnverified       = errors.New("profile has not passed the smoke test")
-	ErrNoBinding        = errors.New("no profile bound to role")
-	ErrAuthFileRequired = errors.New("this credential needs a login file in the sandbox, which is not supported yet")
+	ErrNotFound        = errors.New("not found")
+	ErrSingleOwnerOnly = errors.New("subscription credentials require single-owner mode")
+	ErrUnverified      = errors.New("profile has not passed the smoke test")
+	ErrNoBinding       = errors.New("no profile bound to role")
 )
 
 type Config struct {

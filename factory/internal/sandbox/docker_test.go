@@ -64,3 +64,34 @@ func TestDockerLifecycle(t *testing.T) {
 		t.Fatal("volume still exists after delete")
 	}
 }
+
+func TestDockerWriteFile(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not available")
+	}
+	image := os.Getenv("SANDBOX_TEST_IMAGE")
+	if image == "" {
+		image = "alpine:3.20"
+	}
+	ctx := context.Background()
+	d := Docker{Image: image}
+	const id = "dockerwrite"
+	ws, err := d.CreateWorkspace(ctx, id)
+	if err != nil {
+		t.Skipf("docker daemon unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = d.DeleteWorkspace(ctx, id) })
+	sb, err := d.Start(ctx, ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sb.Stop(ctx) })
+	p := ws.HomeDir() + "/.codex/auth.json"
+	if err := sb.WriteFile(ctx, p, []byte(`{"k":"$(x) 'q'"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _, _ := sb.Exec(ctx, "", nil, "sh", "-c", `cat "$1"; stat -c %a "$1"`, "sh", p)
+	if out != "{\"k\":\"$(x) 'q'\"}600\n" {
+		t.Fatalf("out = %q", out)
+	}
+}

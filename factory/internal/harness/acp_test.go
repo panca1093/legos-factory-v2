@@ -528,3 +528,45 @@ func TestCloseKillsProcessTree(t *testing.T) {
 		t.Errorf("second Close: %v", err)
 	}
 }
+
+func TestOpencodeConfigMergedWithSpecEnv(t *testing.T) {
+	s, err := startFake(t, "echo", SessionSpec{Role: RoleInspector, Profile: Profile{Agent: "opencode", Provider: "opencode-go", Model: "kimi"}},
+		`OPENCODE_CONFIG_CONTENT={"provider":{"acme":{"name":"acme"}},"permission":{"edit":"allow","custom":"ask"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prompt(t, s); err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Provider   map[string]any    `json:"provider"`
+		Permission map[string]string `json:"permission"`
+	}
+	if err := json.Unmarshal([]byte(echoOf(t, drain(s)).Env), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider["acme"] == nil || cfg.Permission["custom"] != "ask" || cfg.Permission["edit"] != "deny" || cfg.Permission["external_directory"] != "deny" {
+		t.Fatalf("merged config = %+v", cfg)
+	}
+}
+
+func TestSessionFilesWrittenToHome(t *testing.T) {
+	rt := sandbox.Local{Root: t.TempDir()}
+	ws, _ := rt.CreateWorkspace(context.Background(), "wo1")
+	sb, _ := rt.Start(context.Background(), ws, nil)
+	s, err := ACP{}.Start(context.Background(), SessionSpec{
+		Role: RoleBuilder, Profile: Profile{Agent: "codex-acp", Model: "haiku"}, AgentCommand: []string{os.Args[0]},
+		Dir: t.TempDir(), Env: map[string]string{"ACP_FAKE_AGENT": "echo"}, Sandbox: sb,
+		Files: map[string][]byte{".codex/auth.json": []byte(`{"a":1}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	p := filepath.Join(ws.HomeDir(), ".codex", "auth.json")
+	b, err := os.ReadFile(p)
+	fi, _ := os.Stat(p)
+	if err != nil || string(b) != `{"a":1}` || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("auth file = %q %v %v", b, err, fi)
+	}
+}

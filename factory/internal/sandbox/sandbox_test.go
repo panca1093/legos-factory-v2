@@ -162,3 +162,19 @@ func TestPorts(t *testing.T) {
 		t.Fatalf("reuse after release: %d %v", c, err)
 	}
 }
+
+func TestLocalWriteFile(t *testing.T) {
+	ctx := context.Background()
+	rt := Local{Root: t.TempDir()}
+	ws, _ := rt.CreateWorkspace(ctx, "wo3")
+	sb, _ := rt.Start(ctx, ws, nil)
+	p := filepath.Join(ws.HomeDir(), "a", "b", "auth.json")
+	if err := sb.WriteFile(ctx, p, []byte(`{"k":"$(x)"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	fi, _ := os.Stat(p)
+	if string(b) != `{"k":"$(x)"}` || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("got %q %v", b, fi.Mode())
+	}
+}

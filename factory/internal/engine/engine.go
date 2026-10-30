@@ -104,7 +104,7 @@ func LoadProject(path string) (Project, error) {
 // Profiles resolves a role to a profile and builds its env; *profile.Store implements it.
 type Profiles interface {
 	Resolve(ctx context.Context, projectID string, role harness.Role) (profile.Profile, error)
-	RunEnv(ctx context.Context, p profile.Profile) (harness.Profile, map[string]string, error)
+	RunEnv(ctx context.Context, p profile.Profile) (profile.RunSpec, error)
 	Acquire(ctx context.Context, credID string) (release func(), err error)
 }
 
@@ -419,16 +419,18 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 	}
 	b := p.Builder
 	var price *profile.Price
+	var files map[string][]byte
 	if b.Profile.Agent == "" && e.Profiles != nil {
 		prof, err := e.Profiles.Resolve(ctx, p.ID, harness.RoleBuilder)
 		if err != nil {
 			return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: "resolve builder profile: " + err.Error()})
 		}
-		hp, penv, err := e.Profiles.RunEnv(ctx, prof)
+		rs, err := e.Profiles.RunEnv(ctx, prof)
 		if err != nil {
 			return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: "builder profile env: " + err.Error()})
 		}
-		b = BuilderConfig{Profile: hp, AgentCommand: profile.AgentCommand(prof.Agent), Env: penv}
+		b = BuilderConfig{Profile: rs.Profile, AgentCommand: profile.AgentCommand(prof.Agent), Env: rs.Env}
+		files = rs.Files
 		price = &prof.Price
 		release, err := e.Profiles.Acquire(ctx, prof.CredentialID)
 		if err != nil {
@@ -442,7 +444,7 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 	}
 	sess, err := e.Harness.Start(ctx, harness.SessionSpec{
 		Role: harness.RoleBuilder, Profile: b.Profile, AgentCommand: b.AgentCommand,
-		Dir: dir, Env: env, SessionID: v.sessionID, Sandbox: sb,
+		Dir: dir, Env: env, Files: files, SessionID: v.sessionID, Sandbox: sb,
 	})
 	if err != nil {
 		return e.agentFailure(ctx, woID, err, b.Profile)

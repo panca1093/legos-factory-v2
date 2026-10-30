@@ -83,6 +83,28 @@ func opencodeConfig(role Role, extraDeny []string) string {
 	return string(b)
 }
 
+// mergeJSON deep-merges two JSON objects, winning on conflicts; unparsable base yields over.
+func mergeJSON(base, over string) string {
+	var b, o map[string]any
+	if json.Unmarshal([]byte(base), &b) != nil || json.Unmarshal([]byte(over), &o) != nil {
+		return over
+	}
+	out, _ := json.Marshal(deepMerge(b, o))
+	return string(out)
+}
+
+func deepMerge(a, b map[string]any) map[string]any {
+	for k, v := range b {
+		if bm, ok := v.(map[string]any); ok {
+			if am, ok := a[k].(map[string]any); ok {
+				v = deepMerge(am, bm)
+			}
+		}
+		a[k] = v
+	}
+	return a
+}
+
 func isAgent(s SessionSpec, name string) bool {
 	return s.Profile.Agent == name || (len(s.AgentCommand) > 0 && filepath.Base(s.AgentCommand[0]) == name)
 }
@@ -130,7 +152,15 @@ func (ACP) Start(ctx context.Context, spec SessionSpec) (Session, error) {
 		}
 	}
 	for k, v := range spec.Env {
+		if k == "OPENCODE_CONFIG_CONTENT" && env[k] != "" {
+			v = mergeJSON(v, env[k])
+		}
 		env[k] = v
+	}
+	for rel, data := range spec.Files {
+		if err := spec.Sandbox.WriteFile(ctx, filepath.Join(spec.Sandbox.Workspace().HomeDir(), rel), data, 0o600); err != nil {
+			return nil, fmt.Errorf("acp: write %s: %w", rel, err)
+		}
 	}
 	cmd := spec.Sandbox.Command(spec.Dir, env, spec.AgentCommand...).Exec(context.Background())
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
