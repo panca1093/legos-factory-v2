@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"strings"
 
@@ -92,8 +93,9 @@ func (s *Store) Models(ctx context.Context, c Credential) ([]Model, error) {
 	}
 	var url string
 	hdr := http.Header{}
-	if c.Provider == "anthropic" {
-		url = strings.TrimSuffix(orDefault(c.BaseURL, "https://api.anthropic.com"), "/") + "/v1/models"
+	anthropic := c.Provider == "anthropic"
+	if anthropic {
+		url = strings.TrimSuffix(orDefault(c.BaseURL, "https://api.anthropic.com"), "/") + "/v1/models?limit=1000"
 		hdr.Set("x-api-key", secret)
 		hdr.Set("anthropic-version", "2023-06-01")
 	} else {
@@ -104,27 +106,45 @@ func (s *Store) Models(ctx context.Context, c Credential) ([]Model, error) {
 		url = strings.TrimSuffix(base, "/") + "/models"
 		hdr.Set("Authorization", "Bearer "+secret)
 	}
+	var all []Model
+	pageURL := url
+	for page := 0; page < 20; page++ {
+		var out struct {
+			Data    []Model `json:"data"`
+			HasMore bool    `json:"has_more"`
+			LastID  string  `json:"last_id"`
+		}
+		if err := s.getJSON(ctx, pageURL, hdr, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.Data...)
+		if !anthropic || !out.HasMore || out.LastID == "" {
+			break
+		}
+		pageURL = url + "&after_id=" + neturl.QueryEscape(out.LastID)
+	}
+	return all, nil
+}
+
+func (s *Store) getJSON(ctx context.Context, url string, hdr http.Header, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	req.Header = hdr
+	req.Header = hdr.Clone()
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
+		return fmt.Errorf("GET %s: %s", url, resp.Status)
 	}
-	var out struct {
-		Data []Model `json:"data"`
+	if err := json.Unmarshal(body, out); err != nil {
+		return fmt.Errorf("parse model list: %w", err)
 	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fmt.Errorf("parse model list: %w", err)
-	}
-	return out.Data, nil
+	return nil
 }
 
 func (s *Store) planModels(plan string) ([]Model, error) {

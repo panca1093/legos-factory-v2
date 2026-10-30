@@ -138,6 +138,28 @@ func TestModelsFetch(t *testing.T) {
 	}
 }
 
+func TestAnthropicModelsPaginate(t *testing.T) {
+	s := newStore(t, true)
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		if r.URL.Query().Get("after_id") == "" {
+			json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m1"}}, "has_more": true, "last_id": "m1"})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"id": "m2"}}, "has_more": false})
+	}))
+	t.Cleanup(srv.Close)
+	c := mustCred(t, s, Credential{Name: "an", Kind: "api_key", Provider: "anthropic", BaseURL: srv.URL}, "k")
+	ms, err := s.Models(bg, c)
+	if err != nil || len(ms) != 2 || ms[1].ID != "m2" {
+		t.Fatalf("models = %v, %v", ms, err)
+	}
+	if len(queries) != 2 || queries[0] != "limit=1000" || queries[1] != "limit=1000&after_id=m1" {
+		t.Fatalf("queries = %v", queries)
+	}
+}
+
 func TestSubscriptionModelsFromPlansFile(t *testing.T) {
 	s := newStore(t, true)
 	if _, err := os.Stat(s.plansFile); err != nil {
