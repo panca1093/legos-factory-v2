@@ -42,6 +42,7 @@ type SessionSpec struct {
 	AgentCommand []string
 	Dir          string
 	Env          map[string]string
+	Files        map[string][]byte // path relative to the sandbox home → content, written 0600 before the agent starts
 	ToolPolicy   ToolPolicy
 	Limits       Limits
 	SessionID    string // non-empty: load this agent session instead of creating one

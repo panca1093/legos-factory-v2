@@ -207,15 +207,17 @@ func TestRunEnv(t *testing.T) {
 			map[string]string{"ANTHROPIC_BASE_URL": "http://x", "ANTHROPIC_AUTH_TOKEN": "S"}, nil},
 		{"custom needs base", Credential{Kind: "api_key", Provider: "acme"}, "claude-agent-acp", nil, errors.New("base_url")},
 		{"openai codex", Credential{Kind: "api_key", Provider: "openai"}, "codex-acp", map[string]string{"OPENAI_API_KEY": "S"}, nil},
-		{"chatgpt codex", Credential{Kind: "subscription", Provider: "chatgpt"}, "codex-acp", nil, ErrAuthFileRequired},
+		{"chatgpt codex bad secret", Credential{Kind: "subscription", Provider: "chatgpt"}, "codex-acp", nil, errors.New("JSON object")},
 		{"opencode anthropic", Credential{Kind: "api_key", Provider: "anthropic"}, "opencode", map[string]string{"ANTHROPIC_API_KEY": "S"}, nil},
-		{"opencode go", Credential{Kind: "subscription", Provider: "opencode-go"}, "opencode", nil, ErrAuthFileRequired},
+		{"opencode go bad secret", Credential{Kind: "subscription", Provider: "opencode-go"}, "opencode", nil, errors.New("JSON object")},
+		{"opencode custom needs base", Credential{Kind: "api_key", Provider: "acme"}, "opencode", nil, errors.New("base_url")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.cred.Name = tc.name
 			c := mustCred(t, s, tc.cred, "S")
-			hp, env, err := s.RunEnv(bg, Profile{Agent: tc.agent, CredentialID: c.ID, Model: "M"})
+			rs, err := s.RunEnv(bg, Profile{Agent: tc.agent, CredentialID: c.ID, Model: "M"})
+			hp, env := rs.Profile, rs.Env
 			if tc.err != nil {
 				if err == nil || (!errors.Is(err, tc.err) && !strings.Contains(err.Error(), tc.err.Error())) {
 					t.Fatalf("err = %v, want %v", err, tc.err)
@@ -234,6 +236,57 @@ func TestRunEnv(t *testing.T) {
 				t.Errorf("harness profile = %+v", hp)
 			}
 		})
+	}
+}
+
+func TestRunEnvAuthFiles(t *testing.T) {
+	s := newStore(t, true)
+	const authJSON = `{"opencode-go":{"type":"api","key":"k"}}`
+	cases := []struct {
+		name         string
+		cred         Credential
+		agent        string
+		secret, file string
+	}{
+		{"opencode go", Credential{Kind: "subscription", Provider: "opencode-go"}, "opencode", authJSON, opencodeAuthFile},
+		{"chatgpt codex", Credential{Kind: "subscription", Provider: "chatgpt"}, "codex-acp", `{"tokens":{"access_token":"a"}}`, codexAuthFile},
+		{"chatgpt opencode", Credential{Kind: "subscription", Provider: "chatgpt"}, "opencode", `{"openai":{"type":"oauth"}}`, opencodeAuthFile},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.cred.Name = tc.name
+			c := mustCred(t, s, tc.cred, tc.secret)
+			rs, err := s.RunEnv(bg, Profile{Agent: tc.agent, CredentialID: c.ID, Model: "M"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(rs.Files[tc.file]) != tc.secret || len(rs.Files) != 1 || len(rs.Env) != 0 {
+				t.Fatalf("files=%v env=%v", rs.Files, rs.Env)
+			}
+		})
+	}
+
+	c := mustCred(t, s, Credential{Name: "acme", Kind: "api_key", Provider: "acme", BaseURL: "http://acme/v1"}, "KEY")
+	rs, err := s.RunEnv(bg, Profile{Agent: "opencode", CredentialID: c.ID, Model: "m1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var auth map[string]map[string]string
+	if err := json.Unmarshal(rs.Files[opencodeAuthFile], &auth); err != nil || auth["acme"]["key"] != "KEY" || auth["acme"]["type"] != "api" {
+		t.Fatalf("auth = %s %v", rs.Files[opencodeAuthFile], err)
+	}
+	var cfg struct {
+		Provider map[string]struct {
+			Options map[string]string          `json:"options"`
+			Models  map[string]json.RawMessage `json:"models"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(rs.Env["OPENCODE_CONFIG_CONTENT"]), &cfg); err != nil ||
+		cfg.Provider["acme"].Options["baseURL"] != "http://acme/v1" || cfg.Provider["acme"].Models["m1"] == nil {
+		t.Fatalf("config = %s %v", rs.Env["OPENCODE_CONFIG_CONTENT"], err)
+	}
+	if strings.Contains(rs.Env["OPENCODE_CONFIG_CONTENT"], "KEY") {
+		t.Fatal("key leaked into config env")
 	}
 }
 
@@ -418,5 +471,22 @@ func TestSmoke(t *testing.T) {
 	}
 	if err := s.Bind(bg, "", harness.RoleBuilder, p.ID); err != nil {
 		t.Fatalf("bind after smoke: %v", err)
+	}
+}
+
+func TestSmokeAuthFile(t *testing.T) {
+	s := newStore(t, true)
+	const secret = `{"opencode-go":{"type":"api","key":"k"}}`
+	c := mustCred(t, s, Credential{Name: "go", Kind: "subscription", Provider: "opencode-go"}, secret)
+	p, err := s.CreateProfile(bg, Profile{Name: "gop", Agent: "opencode", CredentialID: c.ID, Model: "kimi-k2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &smokeHarness{write: true}
+	if err := s.Smoke(bg, h, sandbox.Local{Root: t.TempDir()}, p); err != nil {
+		t.Fatal(err)
+	}
+	if string(h.gotSpec.Files[opencodeAuthFile]) != secret {
+		t.Fatalf("files = %v", h.gotSpec.Files)
 	}
 }

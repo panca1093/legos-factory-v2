@@ -160,18 +160,39 @@ var opencodeKeyEnv = map[string]string{
 	"zai": "ZHIPU_API_KEY", "moonshot": "MOONSHOT_API_KEY", "minimax": "MINIMAX_API_KEY",
 }
 
-// RunEnv builds the agent env for a profile; credentials reach the agent only through this map.
-func (s *Store) RunEnv(ctx context.Context, p Profile) (harness.Profile, map[string]string, error) {
+// RunSpec is what a session needs from a profile; Files are relative to the sandbox home.
+type RunSpec struct {
+	Profile harness.Profile
+	Env     map[string]string
+	Files   map[string][]byte
+}
+
+const (
+	opencodeAuthFile = ".local/share/opencode/auth.json"
+	codexAuthFile    = ".codex/auth.json"
+)
+
+// authFile treats the stored secret as the login file itself (as written by `opencode auth login` / `codex login`).
+func authFile(rel, secret string) (map[string][]byte, error) {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(secret), &obj); err != nil || len(obj) == 0 {
+		return nil, fmt.Errorf("subscription secret must be the contents of %s (a JSON object)", rel)
+	}
+	return map[string][]byte{rel: []byte(secret)}, nil
+}
+
+// RunEnv builds the agent env and login files for a profile; credentials reach the agent only through this spec.
+func (s *Store) RunEnv(ctx context.Context, p Profile) (RunSpec, error) {
 	c, err := s.GetCredential(ctx, p.CredentialID)
 	if err != nil {
-		return harness.Profile{}, nil, err
+		return RunSpec{}, err
 	}
 	secret, err := s.Secret(ctx, c.ID)
 	if err != nil {
-		return harness.Profile{}, nil, err
+		return RunSpec{}, err
 	}
-	hp := harness.Profile{Agent: p.Agent, Provider: c.Provider, Model: p.Model, BillingKind: c.Kind}
-	env := map[string]string{}
+	rs := RunSpec{Profile: harness.Profile{Agent: p.Agent, Provider: c.Provider, Model: p.Model, BillingKind: c.Kind}, Env: map[string]string{}}
+	env := rs.Env
 	switch p.Agent {
 	case "claude-agent-acp":
 		switch {
@@ -185,7 +206,7 @@ func (s *Store) RunEnv(ctx context.Context, p Profile) (harness.Profile, map[str
 		default:
 			base := orDefault(c.BaseURL, anthropicBase[c.Provider])
 			if base == "" {
-				return hp, nil, fmt.Errorf("provider %q needs a base_url for claude-agent-acp", c.Provider)
+				return rs, fmt.Errorf("provider %q needs a base_url for claude-agent-acp", c.Provider)
 			}
 			env["ANTHROPIC_BASE_URL"] = base
 			env["ANTHROPIC_AUTH_TOKEN"] = secret
@@ -195,22 +216,39 @@ func (s *Store) RunEnv(ctx context.Context, p Profile) (harness.Profile, map[str
 		}
 	case "codex-acp":
 		if c.Kind == "subscription" {
-			// TODO: ChatGPT login needs codex's auth.json written into CODEX_HOME inside the sandbox.
-			return hp, nil, ErrAuthFileRequired
+			if rs.Files, err = authFile(codexAuthFile, secret); err != nil {
+				return rs, err
+			}
+			break
 		}
 		env["OPENAI_API_KEY"] = secret
 		if c.BaseURL != "" {
 			env["OPENAI_BASE_URL"] = c.BaseURL
 		}
 	case "opencode":
-		name, ok := opencodeKeyEnv[c.Provider]
-		if c.Kind == "subscription" || !ok {
-			// TODO: subscriptions and custom providers need opencode's auth.json; OPENCODE_CONFIG_CONTENT is taken by the harness for permissions.
-			return hp, nil, ErrAuthFileRequired
+		name, known := opencodeKeyEnv[c.Provider]
+		switch {
+		case c.Kind == "subscription":
+			if rs.Files, err = authFile(opencodeAuthFile, secret); err != nil {
+				return rs, err
+			}
+		case known:
+			env[name] = secret
+		default:
+			if c.BaseURL == "" {
+				return rs, fmt.Errorf("custom provider %q needs a base_url for opencode", c.Provider)
+			}
+			auth, _ := json.Marshal(map[string]any{c.Provider: map[string]string{"type": "api", "key": secret}})
+			cfg, _ := json.Marshal(map[string]any{"provider": map[string]any{c.Provider: map[string]any{
+				"npm": "@ai-sdk/openai-compatible", "name": c.Provider,
+				"options": map[string]string{"baseURL": c.BaseURL},
+				"models":  map[string]any{p.Model: map[string]any{}},
+			}}})
+			rs.Files = map[string][]byte{opencodeAuthFile: auth}
+			env["OPENCODE_CONFIG_CONTENT"] = string(cfg)
 		}
-		env[name] = secret
 	default:
-		return hp, nil, fmt.Errorf("unknown agent %q", p.Agent)
+		return rs, fmt.Errorf("unknown agent %q", p.Agent)
 	}
-	return hp, env, nil
+	return rs, nil
 }

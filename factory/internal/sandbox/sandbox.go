@@ -48,6 +48,8 @@ type Sandbox interface {
 	Workspace() Workspace
 	Exec(ctx context.Context, dir string, env map[string]string, args ...string) (stdout, stderr string, exitCode int, err error)
 	Command(dir string, env map[string]string, args ...string) Cmd
+	// WriteFile creates parent dirs and writes data; content never touches argv.
+	WriteFile(ctx context.Context, path string, data []byte, mode os.FileMode) error
 	Stop(ctx context.Context) error
 }
 
@@ -154,6 +156,16 @@ func (s *localSandbox) Exec(ctx context.Context, dir string, env map[string]stri
 	return run(s.Command(dir, env, args...).Exec(ctx))
 }
 
+func (s *localSandbox) WriteFile(_ context.Context, path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, data, mode); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
+}
+
 // Docker runs sandboxes as containers through the docker CLI.
 type Docker struct {
 	Image       string
@@ -254,6 +266,19 @@ func (s *dockerSandbox) Command(dir string, env map[string]string, args ...strin
 
 func (s *dockerSandbox) Exec(ctx context.Context, dir string, env map[string]string, args ...string) (string, string, int, error) {
 	return run(s.Command(dir, env, args...).Exec(ctx))
+}
+
+func (s *dockerSandbox) WriteFile(ctx context.Context, path string, data []byte, mode os.FileMode) error {
+	cmd := s.Command("", nil, "sh", "-c", `mkdir -p "$(dirname "$1")" && cat > "$1" && chmod "$2" "$1"`, "sh", path, fmt.Sprintf("%o", mode.Perm())).Exec(ctx)
+	cmd.Stdin = bytes.NewReader(data)
+	_, stderr, code, err := run(cmd)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("write %s: exit %d: %s", path, code, strings.TrimSpace(stderr))
+	}
+	return nil
 }
 
 func (s *dockerSandbox) Stop(ctx context.Context) error {
