@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -45,6 +46,8 @@ type WOCreated struct {
 	Objective string `json:"objective,omitempty"`
 	// LevelCap is the autonomy cap chosen at creation (SPEC §9); 0 makes the plan gate require a human.
 	LevelCap int `json:"level_cap"`
+	// Line is fixed at creation: true runs the Architect/Foreman line, false the single-builder path; absent in older facts means false.
+	Line bool `json:"line,omitempty"`
 }
 
 type WOFailed struct {
@@ -194,13 +197,26 @@ func (s *Store) Append(ctx context.Context, subject, kind string, payload any) (
 	return insert(ctx, s.db, subject, kind, payload)
 }
 
+// ErrConflict means a fact newer than the caller's view exists for the subject.
+var ErrConflict = errors.New("fact conflict: the subject has newer facts")
+
 // AppendBatch writes all facts in one transaction: either every fact is recorded, in order, or none.
-func (s *Store) AppendBatch(ctx context.Context, subject string, in []NewFact) ([]Fact, error) {
+// A non-zero afterID is the id of the last fact the caller saw; the batch fails with ErrConflict when a newer one exists.
+func (s *Store) AppendBatch(ctx context.Context, subject string, afterID int64, in []NewFact) ([]Fact, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	if afterID != 0 {
+		var newer int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM facts WHERE subject = ? AND id > ?)`, subject, afterID).Scan(&newer); err != nil {
+			return nil, err
+		}
+		if newer != 0 {
+			return nil, ErrConflict
+		}
+	}
 	out := make([]Fact, 0, len(in))
 	for _, n := range in {
 		f, err := insert(ctx, tx, subject, n.Kind, n.Payload)
