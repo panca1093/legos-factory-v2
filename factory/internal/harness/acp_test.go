@@ -237,9 +237,9 @@ func TestReplayedOpencodeStream(t *testing.T) {
 		"tool_update:call_1:read:completed:package main\nfunc main() {}",
 		"tool_call:call_2:shell",
 		"tool_update:call_2:shell:failed:",
-		"usage:{InputTokens:0 OutputTokens:0 CacheReadTokens:0 CacheCreateTokens:0 CostUSD:0.0123}",
+		"usage:{InputTokens:0 OutputTokens:0 CacheReadTokens:0 CacheCreateTokens:0 Models:[] CostUSD:0.0123}",
 		"step:Done.",
-		"usage:{InputTokens:100 OutputTokens:20 CacheReadTokens:7 CacheCreateTokens:0 CostUSD:0}",
+		"usage:{InputTokens:100 OutputTokens:20 CacheReadTokens:7 CacheCreateTokens:0 Models:[] CostUSD:0}",
 		"stop:end_turn",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {

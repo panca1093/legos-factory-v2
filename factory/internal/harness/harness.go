@@ -65,7 +65,18 @@ type Usage struct {
 	OutputTokens      int
 	CacheReadTokens   int
 	CacheCreateTokens int
-	CostUSD           float64 // from usage_update: a cumulative snapshot, unlike the token counts
+	// Models is the per-model breakdown (includes aux calls the aggregate omits); billing prefers it when present.
+	Models []ModelUsage
+	// CostUSD is the agent's own cumulative estimate; never persisted, the factory prices from tokens.
+	CostUSD float64 `json:"-"`
+}
+
+type ModelUsage struct {
+	Model            string
+	InputTokens      int
+	OutputTokens     int
+	CacheReadTokens  int
+	CacheWriteTokens int
 }
 
 type Event struct {

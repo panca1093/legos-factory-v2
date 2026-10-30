@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -95,7 +96,7 @@ func (s *fakeSession) Prompt(_ context.Context, text string) (string, error) {
 	s.h.mu.Unlock()
 	s.events <- harness.Event{Kind: harness.EventStep, Text: "thinking"}
 	s.events <- harness.Event{Kind: harness.EventToolCall, Tool: "edit", Text: "edit file"}
-	if s.h.usage != (harness.Usage{}) {
+	if !reflect.DeepEqual(s.h.usage, harness.Usage{}) {
 		s.events <- harness.Event{Kind: harness.EventUsage, Usage: s.h.usage}
 	}
 	if s.h.edit != nil {
@@ -601,7 +602,7 @@ func (f *fakeProfiles) Acquire(context.Context, string) (func(), error) {
 func TestBuilderFromProfile(t *testing.T) {
 	ctx := context.Background()
 	ev := newEnv(t, "test -f out.txt")
-	ev.h.usage = harness.Usage{InputTokens: 1_000_000, OutputTokens: 100_000, CostUSD: 42}
+	ev.h.usage = harness.Usage{InputTokens: 5, Models: []harness.ModelUsage{{Model: "m", InputTokens: 1_000_000, OutputTokens: 100_000}}, CostUSD: 42}
 	fp := &fakeProfiles{}
 	ev.e.Profiles = fp
 	id := ev.create(t)
@@ -622,7 +623,7 @@ func TestBuilderFromProfile(t *testing.T) {
 	for _, f := range facts {
 		if f.Kind == fact.KindRunFinished {
 			r, _ := fact.Decode[fact.RunFinished](f)
-			if want := 3.0 + 1.5; r.CostUSD != want {
+			if want := 3.0 + 1.5; r.CostUSD != want || strings.Contains(string(r.Usage), "42") {
 				t.Errorf("cost = %v, want %v (harness estimate must be ignored)", r.CostUSD, want)
 			}
 			return

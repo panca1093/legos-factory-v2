@@ -420,12 +420,35 @@ func (s *acpSession) Prompt(ctx context.Context, text string) (string, error) {
 			CachedReadTokens  int `json:"cachedReadTokens"`
 			CachedWriteTokens int `json:"cachedWriteTokens"`
 		} `json:"usage"`
+		Meta struct {
+			Quota struct {
+				ModelUsage []struct {
+					Model      string `json:"model"`
+					TokenCount struct {
+						InputTokens       int `json:"inputTokens"`
+						CachedInputTokens int `json:"cachedInputTokens"`
+						CachedWriteTokens int `json:"cachedWriteTokens"`
+						OutputTokens      int `json:"outputTokens"`
+					} `json:"token_count"`
+				} `json:"model_usage"`
+			} `json:"quota"`
+		} `json:"_meta"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return "", fmt.Errorf("acp: bad prompt result: %w", err)
 	}
-	if u := res.Usage; u != nil {
-		s.emit(Event{Kind: EventUsage, Usage: Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CachedReadTokens, CacheCreateTokens: u.CachedWriteTokens}})
+	var models []ModelUsage
+	for _, m := range res.Meta.Quota.ModelUsage {
+		t := m.TokenCount
+		models = append(models, ModelUsage{Model: m.Model, InputTokens: t.InputTokens, OutputTokens: t.OutputTokens, CacheReadTokens: t.CachedInputTokens, CacheWriteTokens: t.CachedWriteTokens})
+	}
+	if u := res.Usage; u != nil || len(models) > 0 {
+		var ev Usage
+		if u != nil {
+			ev = Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CachedReadTokens, CacheCreateTokens: u.CachedWriteTokens}
+		}
+		ev.Models = models
+		s.emit(Event{Kind: EventUsage, Usage: ev})
 	}
 	s.emit(Event{Kind: EventStop, StopReason: res.StopReason})
 	if ctx.Err() != nil {

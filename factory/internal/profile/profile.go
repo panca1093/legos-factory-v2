@@ -358,7 +358,15 @@ func (s *Store) Acquire(ctx context.Context, credID string) (func(), error) {
 }
 
 // Cost prices usage with the profile's own rates; the harness's cost estimate is never used.
+// Per-model usage wins over the aggregate, which omits aux calls; all models bill at the profile rate (aux models are pinned to the profile model).
 func Cost(p Price, u harness.Usage) float64 {
+	if len(u.Models) > 0 {
+		var total float64
+		for _, m := range u.Models {
+			total += Cost(p, harness.Usage{InputTokens: m.InputTokens, OutputTokens: m.OutputTokens, CacheReadTokens: m.CacheReadTokens, CacheCreateTokens: m.CacheWriteTokens})
+		}
+		return total
+	}
 	return (float64(u.InputTokens)*p.InputPerMTok + float64(u.OutputTokens)*p.OutputPerMTok +
 		float64(u.CacheReadTokens)*p.CacheReadPerMTok + float64(u.CacheCreateTokens)*p.CacheWritePerMTok) / 1e6
 }

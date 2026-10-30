@@ -418,6 +418,18 @@ func TestCost(t *testing.T) {
 	}
 }
 
+func TestCostPrefersPerModelUsage(t *testing.T) {
+	price := Price{InputPerMTok: 3, OutputPerMTok: 15, CacheReadPerMTok: 0.3, CacheWritePerMTok: 3.75}
+	u := harness.Usage{InputTokens: 10, Models: []harness.ModelUsage{
+		{Model: "a", InputTokens: 1_000_000, OutputTokens: 100_000},
+		{Model: "b", InputTokens: 1_000_000, CacheReadTokens: 1_000_000, CacheWriteTokens: 1_000_000},
+	}}
+	want := 3.0 + 1.5 + 3.0 + 0.3 + 3.75
+	if got := Cost(price, u); math.Abs(got-want) > 1e-9 {
+		t.Fatalf("Cost = %v, want %v", got, want)
+	}
+}
+
 type smokeHarness struct {
 	write   bool
 	gotEnv  map[string]string

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
@@ -510,6 +511,7 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 				usage.OutputTokens += ev.Usage.OutputTokens
 				usage.CacheReadTokens += ev.Usage.CacheReadTokens
 				usage.CacheCreateTokens += ev.Usage.CacheCreateTokens
+				usage.Models = mergeModels(usage.Models, ev.Usage.Models)
 			}
 		}
 	}()
@@ -535,6 +537,21 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 	}
 	_, err = e.Facts.Append(ctx, woID, fact.KindRunFinished, fin)
 	return false, err
+}
+
+func mergeModels(dst, src []harness.ModelUsage) []harness.ModelUsage {
+	for _, m := range src {
+		i := slices.IndexFunc(dst, func(d harness.ModelUsage) bool { return d.Model == m.Model })
+		if i < 0 {
+			dst = append(dst, m)
+			continue
+		}
+		dst[i].InputTokens += m.InputTokens
+		dst[i].OutputTokens += m.OutputTokens
+		dst[i].CacheReadTokens += m.CacheReadTokens
+		dst[i].CacheWriteTokens += m.CacheWriteTokens
+	}
+	return dst
 }
 
 func (e *Engine) agentFailure(ctx context.Context, woID string, err error, prof harness.Profile) (bool, error) {
