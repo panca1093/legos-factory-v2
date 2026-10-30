@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,9 +14,17 @@ import (
 
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
+	"legos-factory/factory/internal/harness/harnesstest"
 	"legos-factory/factory/internal/sandbox"
 	"legos-factory/factory/internal/scm"
 )
+
+func TestMain(m *testing.M) {
+	if harnesstest.RunIfFakeAgent() {
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
 
 func sh(t *testing.T, dir string, args ...string) string {
 	t.Helper()
@@ -317,6 +326,12 @@ func TestCIFailureRequeueResumesSession(t *testing.T) {
 	if ev.h.specs[1].SessionID != "sess-1" {
 		t.Errorf("resume session = %q", ev.h.specs[1].SessionID)
 	}
+	if ev.h.specs[0].Dir == "" || ev.h.specs[0].Dir != ev.h.specs[1].Dir {
+		t.Errorf("dirs differ: %q vs %q", ev.h.specs[0].Dir, ev.h.specs[1].Dir)
+	}
+	if c := ev.h.specs[0].Env["CLAUDE_CONFIG_DIR"]; c == "" || c != ev.h.specs[1].Env["CLAUDE_CONFIG_DIR"] {
+		t.Errorf("CLAUDE_CONFIG_DIR differs: %q vs %q", c, ev.h.specs[1].Env["CLAUDE_CONFIG_DIR"])
+	}
 	if !strings.Contains(ev.h.prompts[1], "unit-tests") || strings.Contains(ev.h.prompts[1], "lint") {
 		t.Errorf("prompt = %q", ev.h.prompts[1])
 	}
@@ -555,5 +570,41 @@ func TestResumeAfterCrashMidRun(t *testing.T) {
 	}
 	if st := status(t, ev.e, id); st != fact.StatusPROpen {
 		t.Fatalf("status = %s", st)
+	}
+}
+
+func TestRunThroughRealACPHarness(t *testing.T) {
+	ctx := context.Background()
+	ev := newEnv(t, "test -f built.txt")
+	ev.e.Harness = harness.NewACP()
+	ev.p.Builder = BuilderConfig{AgentCommand: []string{os.Args[0]}, Env: map[string]string{"ACP_FAKE_AGENT": "build"}}
+	id := ev.create(t)
+	if err := ev.e.Run(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, ev.e, id); st != fact.StatusPROpen {
+		t.Fatalf("status = %s (class %q)", st, failedClass(t, ev.e, id))
+	}
+	facts, _ := ev.e.Facts.List(ctx, id)
+	var steps []string
+	var fin fact.RunFinished
+	for _, f := range facts {
+		switch f.Kind {
+		case fact.KindRunStep:
+			r, _ := fact.Decode[fact.RunStep](f)
+			steps = append(steps, r.Step)
+		case fact.KindRunFinished:
+			fin, _ = fact.Decode[fact.RunFinished](f)
+		}
+	}
+	if len(steps) != 1 || steps[0] != "write built.txt" {
+		t.Errorf("steps = %v", steps)
+	}
+	var u harness.Usage
+	if err := json.Unmarshal(fin.Usage, &u); err != nil || u.InputTokens != 11 || u.OutputTokens != 7 || fin.StopReason != "end_turn" {
+		t.Errorf("run.finished = %+v usage = %+v err = %v", fin, u, err)
+	}
+	if sh(t, ev.p.RepoURL, "git", "show", "lf/"+id+":built.txt") == "" {
+		t.Error("builder output not pushed")
 	}
 }
