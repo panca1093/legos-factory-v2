@@ -177,3 +177,14 @@ Cataloger, reaching a real PR with CI green.
 
 **Why:** two earlier runs of the current factory never reached a PR. End-to-end proof
 comes before parallelism and policy.
+
+## ADR-F14: The rebuild is a new module in this repository
+
+**Decision:** the foundation lives in this repository as a new Go module `factory/`,
+developed on `feat/new-legos-architect` with one branch per milestone. `backend/` and
+`frontend/` are frozen. Pieces worth keeping (ACP client, GitHub/Bitbucket clients,
+secret encryption) are copied into `factory/` and adapted, never imported across modules.
+
+**Why:** one place for docs and history; the old backend keeps running unchanged
+until the new factory reaches its M1 check; copying avoids coupling to the old
+model types.
