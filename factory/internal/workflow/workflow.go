@@ -121,11 +121,22 @@ type TaskBuiltPayload struct {
 	SHA  string `json:"sha,omitempty"`
 }
 
+type Finding struct {
+	Severity string `json:"severity"` // blocker | major | minor
+	File     string `json:"file,omitempty"`
+	Line     int    `json:"line,omitempty"`
+	Message  string `json:"message"`
+}
+
+// InspectionDone: only blocker and major findings (Blocking) reject the task; minor ones are advisory.
 type InspectionDone struct {
-	Task         string `json:"task"`
-	Findings     int    `json:"findings"`
-	SeverityMax  string `json:"severity_max,omitempty"`
-	LogicChanged bool   `json:"logic_changed"`
+	Task         string    `json:"task"`
+	Findings     int       `json:"findings"`
+	Blocking     int       `json:"blocking,omitempty"`
+	SeverityMax  string    `json:"severity_max,omitempty"`
+	LogicChanged bool      `json:"logic_changed"`
+	Summary      string    `json:"summary,omitempty"`
+	List         []Finding `json:"list,omitempty"`
 }
 
 type TaskRetry struct {
@@ -161,6 +172,7 @@ type Task struct {
 	Commits          int
 	InspectedCommits int
 	InspectionRounds int
+	LogicChanged     bool // the latest inspection's opinion
 	Retries          int
 	LastFailureClass string
 	LastChange       string
@@ -209,6 +221,11 @@ func (s State) Task(id string) (Task, bool) {
 		}
 	}
 	return Task{}, false
+}
+
+// LogicChanged is true when any task's latest inspection reported a logic change; the autonomy level reads it.
+func (s State) LogicChanged() bool {
+	return slices.ContainsFunc(s.Tasks, func(t Task) bool { return t.LogicChanged })
 }
 
 func (s State) ActiveBuilders() []string {
@@ -371,9 +388,10 @@ func (s *State) apply(f fact.Fact) {
 		if v, ok := decode[InspectionDone](f); ok {
 			if t := s.task(v.Task); t != nil {
 				t.Status = TaskPending
-				if v.Findings == 0 {
+				if v.Blocking == 0 {
 					t.Status = TaskDone
 				}
+				t.LogicChanged = v.LogicChanged
 				s.Epoch++
 				if s.in(PhaseBuilding) && s.allDone() {
 					s.setPhase(PhaseIntegrating)
@@ -384,6 +402,7 @@ func (s *State) apply(f fact.Fact) {
 		if v, ok := decode[TaskRetry](f); ok {
 			if t := s.task(v.Task); t != nil {
 				t.Status = TaskPending
+				t.InspectionRounds = 0
 				t.Retries++
 				t.LastChange = v.Change
 				switch v.Change {

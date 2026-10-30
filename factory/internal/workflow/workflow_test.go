@@ -80,7 +80,7 @@ func (s *sim) built(id string) {
 }
 
 func (s *sim) inspected(id string, findings int) {
-	s.emit(KindInspectionDone, InspectionDone{Task: id, Findings: findings})
+	s.emit(KindInspectionDone, InspectionDone{Task: id, Findings: findings, Blocking: findings})
 }
 
 func pt(id string, deps []string, paths ...string) PlanTask {
