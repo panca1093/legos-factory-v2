@@ -276,15 +276,15 @@ func TestRebaseConflictResumesBuilderThenForcePushesWithLease(t *testing.T) {
 	ev := newEnv(t)
 	ev.h.edit = func(call int, dir string) error {
 		if call == 1 {
-			return writeFile("out.txt", "mine\n")(call, dir)
+			return writeFile("notes.md", "mine\n")(call, dir)
 		}
-		return writeFile("out.txt", "resolved\n")(call, dir)
+		return writeFile("notes.md", "resolved\n")(call, dir)
 	}
 	id := ev.create(t)
 	if err := ev.e.Run(ctx, ev.p, id); err != nil {
 		t.Fatal(err)
 	}
-	pushToMain(t, ev.p.RepoURL, "out.txt", "theirs\n")
+	pushToMain(t, ev.p.RepoURL, "notes.md", "theirs\n")
 	pushToMain(t, ev.p.RepoURL, "other.go", "package x\n")
 
 	observeN(t, ev, id, 1)
@@ -315,7 +315,7 @@ func TestRebaseConflictResumesBuilderThenForcePushesWithLease(t *testing.T) {
 	if st := status(t, ev.e, id); st != fact.StatusPROpen {
 		t.Fatalf("status = %s (%s)", st, failedClass(t, ev.e, id))
 	}
-	if got := sh(t, ev.p.RepoURL, "git", "show", "lf/"+id+":out.txt"); got != "resolved" {
+	if got := sh(t, ev.p.RepoURL, "git", "show", "lf/"+id+":notes.md"); got != "resolved" {
 		t.Errorf("pushed content = %q", got)
 	}
 	sh(t, ev.p.RepoURL, "git", "merge-base", "--is-ancestor", "main", "lf/"+id)
@@ -326,7 +326,7 @@ func TestRebaseConflictResumesBuilderThenForcePushesWithLease(t *testing.T) {
 	if count(k, fact.KindPRPushed) != 1 || count(k, fact.KindPROpened) != 1 || ev.scm.opened != 1 {
 		t.Fatalf("facts = %v opened = %d", k, ev.scm.opened)
 	}
-	if len(ev.h.prompts) != 2 || !strings.Contains(ev.h.prompts[1], "out.txt") || !strings.Contains(ev.h.prompts[1], "Resolve every conflict marker") {
+	if len(ev.h.prompts) != 2 || !strings.Contains(ev.h.prompts[1], "notes.md") || !strings.Contains(ev.h.prompts[1], "Resolve every conflict marker") {
 		t.Fatalf("builder prompts = %q", ev.h.prompts)
 	}
 	if ev.h.specs[1].SessionID == "" {
@@ -340,6 +340,7 @@ func TestRebaseConflictResumesBuilderThenForcePushesWithLease(t *testing.T) {
 func TestRebaseWithoutConflictDoesNotWakeTheBuilder(t *testing.T) {
 	ctx := context.Background()
 	ev := newEnv(t)
+	ev.h.edit = writeFile("notes.md", "mine\n")
 	id := ev.create(t)
 	if err := ev.e.Run(ctx, ev.p, id); err != nil {
 		t.Fatal(err)

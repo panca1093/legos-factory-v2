@@ -123,6 +123,15 @@ func (e *Engine) rebaseStep(ctx context.Context, p Project, woID string, sb sand
 		if err != nil {
 			return false, err
 		}
+		bad, err := sandbox.UnresolvableConflicts(ctx, sb, dir, files)
+		if err != nil {
+			return false, err
+		}
+		if len(bad) > 0 {
+			_ = sandbox.RebaseAbort(context.WithoutCancel(ctx), sb, dir)
+			return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "rebase_conflict",
+				Message: "conflicts in binary, empty or deleted files need a human: " + strings.Join(bad, ", ")})
+		}
 		marked, err := sandbox.HasConflictMarkers(ctx, sb, dir, files)
 		if err != nil {
 			return false, err
@@ -147,11 +156,23 @@ func (e *Engine) rebaseStep(ctx context.Context, p Project, woID string, sb sand
 			return false, err
 		}
 		if len(left) == 0 {
-			return false, nil
+			return e.rebaseNotEmpty(ctx, p, woID, sb, dir)
 		}
 	}
 	_ = sandbox.RebaseAbort(context.WithoutCancel(ctx), sb, dir)
 	return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "rebase_conflict", Message: "builder could not resolve the conflicts with " + p.DefaultBranch})
+}
+
+// rebaseNotEmpty fails the work order when the rebase left nothing of the branch, so an empty branch is never pushed over the PR.
+func (e *Engine) rebaseNotEmpty(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string) (bool, error) {
+	files, err := sandbox.BranchDiff(ctx, sb, dir, "origin/"+p.DefaultBranch)
+	if err != nil {
+		return false, err
+	}
+	if len(files) > 0 {
+		return false, nil
+	}
+	return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "rebase_empty", Message: "after rebasing onto " + p.DefaultBranch + " the branch has no changes left; the pull request was not updated"})
 }
 
 func rebasing(v *view) bool {

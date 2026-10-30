@@ -598,7 +598,11 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 		if err != nil {
 			return err
 		}
-		files, err := sandbox.ChangedFiles(ctx, sb, dir, p.DefaultBranch)
+		diffBase := p.DefaultBranch
+		if rebasing(v) {
+			diffBase = "origin/" + p.DefaultBranch // the local base branch is stale after a rebase onto the fetched one
+		}
+		files, err := sandbox.ChangedFiles(ctx, sb, dir, diffBase)
 		if err != nil {
 			return err
 		}
@@ -1117,6 +1121,9 @@ func (e *Engine) publish(ctx context.Context, p Project, woID string, sb sandbox
 		push = func() error { return sandbox.PushLease(ctx, sb, dir, branch, v.lastHead, gitAuth) }
 	}
 	if err := push(); err != nil {
+		if rebasing(v) && sandbox.IsLeaseRejection(err) {
+			return e.escalateOnce(ctx, woID, "merge", "branch changed outside the factory: "+firstLine(err.Error(), 200))
+		}
 		return err
 	}
 	sha, err := headSHA(ctx, sb, dir)

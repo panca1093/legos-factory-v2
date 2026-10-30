@@ -96,17 +96,69 @@ func RebaseInProgress(ctx context.Context, sb Sandbox, dir string) (bool, error)
 	return false, nil
 }
 
-// HasConflictMarkers reports whether any of files still contains a conflict marker line.
+// HasConflictMarkers reports whether any of files still contains a conflict marker line (<<<<<<<, =======, >>>>>>>).
 func HasConflictMarkers(ctx context.Context, sb Sandbox, dir string, files []string) (bool, error) {
 	if len(files) == 0 {
 		return false, nil
 	}
-	args := append([]string{"grep", "-l", "-e", "^<<<<<<< ", "--"}, files...)
-	_, _, code, err := sb.Exec(ctx, dir, nil, args...)
+	args := append([]string{"grep", "-l", "-e", "^<<<<<<< ", "-e", "^=======$", "-e", "^>>>>>>> ", "--"}, files...)
+	_, stderr, code, err := sb.Exec(ctx, dir, nil, args...)
 	if err != nil {
 		return false, err
 	}
-	return code == 0, nil
+	switch code {
+	case 0:
+		return true, nil
+	case 1:
+		return false, nil
+	}
+	return false, fmt.Errorf("grep for conflict markers: exit %d: %s", code, strings.TrimSpace(stderr))
+}
+
+// UnresolvableConflicts lists unmerged files a builder cannot fix by editing markers: binary, empty or missing from the worktree.
+func UnresolvableConflicts(ctx context.Context, sb Sandbox, dir string, files []string) ([]string, error) {
+	var bad []string
+	for _, f := range files {
+		_, stderr, code, err := sb.Exec(ctx, dir, nil, "grep", "-Il", "-e", "", "--", f)
+		if err != nil {
+			return nil, err
+		}
+		switch code {
+		case 0:
+		case 1, 2:
+			if code == 2 && !strings.Contains(stderr, "No such file") {
+				return nil, fmt.Errorf("grep %s: exit 2: %s", f, strings.TrimSpace(stderr))
+			}
+			bad = append(bad, f)
+		default:
+			return nil, fmt.Errorf("grep %s: exit %d: %s", f, code, strings.TrimSpace(stderr))
+		}
+	}
+	return bad, nil
+}
+
+// BranchDiff lists the files HEAD changes relative to the merge base with base (the shape of a pull request).
+func BranchDiff(ctx context.Context, sb Sandbox, dir, base string) ([]string, error) {
+	out, err := git(ctx, sb, dir, nil, "diff", "--name-only", base+"...HEAD")
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, f := range strings.Split(out, "\n") {
+		if f = strings.TrimSpace(f); f != "" {
+			files = append(files, filepath.ToSlash(f))
+		}
+	}
+	return files, nil
+}
+
+// IsLeaseRejection reports whether err is a push refused because the remote branch is no longer at the expected commit.
+func IsLeaseRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "stale info") || strings.Contains(msg, "[rejected]") || strings.Contains(msg, "[remote rejected]")
 }
 
 // RebaseContinue stages everything and continues; conflicts are the files the next commit stopped on, nil when the rebase is finished.
