@@ -28,6 +28,8 @@ type Profile struct {
 
 type ToolPolicy struct {
 	Deny []string
+	// AllowNone leaves the agent no tools at all, beyond Deny (the Foreman only reasons).
+	AllowNone bool
 }
 
 type Limits struct {

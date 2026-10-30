@@ -130,7 +130,7 @@ func TestNewSessionSetsModelAndEnv(t *testing.T) {
 }
 
 func TestOpencodeConfigBuilderCanEdit(t *testing.T) {
-	c := opencodeConfig(RoleBuilder, []string{"webfetch"})
+	c := opencodeConfig(RoleBuilder, ToolPolicy{Deny: []string{"webfetch"}})
 	if !strings.Contains(c, `"external_directory":"deny"`) || !strings.Contains(c, `"webfetch":"deny"`) || strings.Contains(c, `"edit":"deny"`) {
 		t.Fatalf("builder config = %s", c)
 	}

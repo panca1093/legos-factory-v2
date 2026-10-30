@@ -71,14 +71,17 @@ func NewACP() *ACP { return &ACP{} }
 var readOnlyDeny = []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute"}
 
 // opencodeConfig denies by default: a rejected permission request cancels the whole turn (lesson #3).
-func opencodeConfig(role Role, extraDeny []string) string {
+func opencodeConfig(role Role, policy ToolPolicy) string {
 	perm := map[string]string{"external_directory": "deny"}
+	if policy.AllowNone {
+		perm["*"] = "deny"
+	}
 	if role.ReadOnly() {
 		for _, t := range readOnlyDeny {
 			perm[t] = "deny"
 		}
 	}
-	for _, t := range extraDeny {
+	for _, t := range policy.Deny {
 		perm[t] = "deny"
 	}
 	b, _ := json.Marshal(map[string]any{"permission": perm})
@@ -127,6 +130,9 @@ func claudeMeta(spec SessionSpec) map[string]any {
 		deny = append(deny, claudeReadOnlyDeny...)
 	}
 	deny = append(deny, spec.ToolPolicy.Deny...)
+	if spec.ToolPolicy.AllowNone {
+		opts["tools"] = []string{}
+	}
 	if len(deny) > 0 {
 		opts["settings"] = map[string]any{"permissions": map[string]any{"deny": deny}}
 	}
@@ -143,7 +149,7 @@ func (ACP) Start(ctx context.Context, spec SessionSpec) (Session, error) {
 	env := map[string]string{}
 	if isOpencode(spec) {
 		env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
-		env["OPENCODE_CONFIG_CONTENT"] = opencodeConfig(spec.Role, spec.ToolPolicy.Deny)
+		env["OPENCODE_CONFIG_CONTENT"] = opencodeConfig(spec.Role, spec.ToolPolicy)
 	}
 	if isClaude(spec) {
 		// fallback only: callers (the engine) own the per-session dir; a private one keeps the owner's settings and CLAUDE.md out of the prompt
