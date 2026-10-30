@@ -8,6 +8,8 @@ import (
 	"go/token"
 	"path"
 	"reflect"
+	"slices"
+	"sort"
 	"strings"
 )
 
@@ -17,6 +19,8 @@ type FileChange struct {
 	OldPath string
 	Old     []byte
 	New     []byte
+	// Embedded marks a doc file that a Go package may embed (//go:embed), which makes it code.
+	Embedded bool
 }
 
 type Runner func(ctx context.Context, dir string, args ...string) (string, error)
@@ -52,7 +56,17 @@ func DiffLevel(changes []FileChange, protected []string) (int, []string) {
 }
 
 func nonTrivial(c FileChange) string {
-	if onlyPaths(c, isDoc) || onlyPaths(c, isTest) {
+	if inTestdata(c.Path) || inTestdata(c.OldPath) {
+		return "testdata change: " + c.Path
+	}
+	// Assertion-reduction inside edited tests is out of scope: test-only edits stay level 3 (SPEC §9).
+	if c.Status == "deleted" && isTest(c.Path) {
+		return "test file deleted: " + c.Path
+	}
+	if onlyPaths(c, isDoc) && !c.Embedded {
+		return ""
+	}
+	if onlyPaths(c, isTest) {
 		return ""
 	}
 	if c.Status == "modified" && isGo(c.Path) {
@@ -64,42 +78,91 @@ func nonTrivial(c FileChange) string {
 	return fmt.Sprintf("%s change outside docs/tests: %s", c.Status, c.Path)
 }
 
+func inTestdata(p string) bool {
+	return slices.Contains(strings.Split(p, "/"), "testdata")
+}
+
 func onlyPaths(c FileChange, f func(string) bool) bool {
 	return f(c.Path) && (c.OldPath == "" || f(c.OldPath))
 }
 
 func isDoc(p string) bool {
 	switch strings.ToLower(path.Ext(p)) {
-	case ".md", ".mdx", ".txt", ".rst", ".adoc":
+	case ".md", ".mdx", ".rst", ".adoc":
 		return true
 	}
-	return strings.HasPrefix(p, "docs/")
+	return false
 }
 
 func isGo(p string) bool   { return path.Ext(p) == ".go" }
 func isTest(p string) bool { return strings.HasSuffix(p, "_test.go") }
 
+// matchesProtected is case-sensitive. A pattern without "/" matches any path segment at any depth; otherwise it is
+// anchored at the repo root, "**" spans zero or more segments, and matching a leading directory protects everything below it.
 func matchesProtected(p string, patterns []string) bool {
+	segs := strings.Split(strings.Trim(p, "/"), "/")
 	for _, pat := range patterns {
-		pat = strings.TrimPrefix(strings.TrimSpace(pat), "./")
+		pat = strings.Trim(strings.TrimPrefix(strings.TrimSpace(pat), "./"), "/")
 		if pat == "" {
 			continue
 		}
-		if dir, ok := strings.CutSuffix(pat, "/**"); ok {
-			if strings.HasPrefix(p, strings.TrimSuffix(dir, "/")+"/") {
-				return true
+		if !strings.Contains(pat, "/") {
+			for _, s := range segs {
+				if pat == "**" {
+					return true
+				}
+				if ok, _ := path.Match(pat, s); ok {
+					return true
+				}
 			}
 			continue
 		}
-		dir := strings.TrimSuffix(pat, "/")
-		if p == dir || strings.HasPrefix(p, dir+"/") {
-			return true
-		}
-		if ok, _ := path.Match(pat, p); ok {
+		if matchSegs(strings.Split(pat, "/"), segs) {
 			return true
 		}
 	}
 	return false
+}
+
+func matchSegs(pat, segs []string) bool {
+	if len(pat) == 0 {
+		return true
+	}
+	if pat[0] == "**" {
+		for i := 0; i <= len(segs); i++ {
+			if matchSegs(pat[1:], segs[i:]) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(segs) == 0 {
+		return false
+	}
+	if ok, _ := path.Match(pat[0], segs[0]); !ok {
+		return false
+	}
+	return matchSegs(pat[1:], segs[1:])
+}
+
+// ValidatePattern rejects protected patterns that could never match as intended.
+func ValidatePattern(pat string) error {
+	t := strings.Trim(strings.TrimPrefix(strings.TrimSpace(pat), "./"), "/")
+	if t == "" || strings.HasPrefix(strings.TrimSpace(pat), "/") {
+		return fmt.Errorf("protected pattern %q: must be a non-empty repo-relative path", pat)
+	}
+	for _, seg := range strings.Split(t, "/") {
+		switch {
+		case seg == "" || seg == "." || seg == "..":
+			return fmt.Errorf("protected pattern %q: invalid segment %q", pat, seg)
+		case strings.Contains(seg, "**") && seg != "**":
+			return fmt.Errorf("protected pattern %q: ** must be a whole path segment", pat)
+		}
+		if _, err := path.Match(seg, ""); err != nil {
+			return fmt.Errorf("protected pattern %q: %w", pat, err)
+		}
+	}
+	return nil
 }
 
 // ProtectedIn returns the owned paths (files, directories or globs) that overlap a protected pattern in either direction.
@@ -137,26 +200,63 @@ func overlaps(owned string, protected []string) bool {
 
 func astEqual(a, b []byte) bool {
 	fset := token.NewFileSet()
-	fa, err := parser.ParseFile(fset, "a.go", a, parser.SkipObjectResolution)
+	fa, err := parser.ParseFile(fset, "a.go", a, parser.SkipObjectResolution|parser.ParseComments)
 	if err != nil {
 		return false
 	}
-	fb, err := parser.ParseFile(fset, "b.go", b, parser.SkipObjectResolution)
+	fb, err := parser.ParseFile(fset, "b.go", b, parser.SkipObjectResolution|parser.ParseComments)
 	if err != nil {
+		return false
+	}
+	if importsC(fa) || importsC(fb) {
+		return false
+	}
+	if !slices.Equal(directives(fa), directives(fb)) {
 		return false
 	}
 	return deepEqual(reflect.ValueOf(fa), reflect.ValueOf(fb))
 }
 
+func importsC(f *ast.File) bool {
+	for _, im := range f.Imports {
+		if im.Path != nil && im.Path.Value == `"C"` {
+			return true
+		}
+	}
+	return false
+}
+
+var directivePrefixes = []string{"//go:", "// +build", "//+build", "//export ", "//line ", "/*line "}
+
+// directives returns the sorted compiler/linker directive comments, which change behavior without changing the AST.
+func directives(f *ast.File) []string {
+	var out []string
+	for _, g := range f.Comments {
+		for _, c := range g.List {
+			for _, pre := range directivePrefixes {
+				if strings.HasPrefix(c.Text, pre) {
+					out = append(out, c.Text)
+					break
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 var (
-	posType   = reflect.TypeOf(token.Pos(0))
-	objType   = reflect.TypeOf((*ast.Object)(nil))
-	scopeType = reflect.TypeOf((*ast.Scope)(nil))
+	posType     = reflect.TypeOf(token.Pos(0))
+	objType     = reflect.TypeOf((*ast.Object)(nil))
+	scopeType   = reflect.TypeOf((*ast.Scope)(nil))
+	commentType = reflect.TypeOf((*ast.CommentGroup)(nil))
+	commentList = reflect.TypeOf([]*ast.CommentGroup(nil))
 )
 
-// deepEqual compares AST values ignoring positions; comments are absent because ParseComments is off.
+// deepEqual compares AST values ignoring positions and comment text; directive comments are compared separately.
 func deepEqual(a, b reflect.Value) bool {
-	if a.Type() == posType || a.Type() == objType || a.Type() == scopeType {
+	switch a.Type() {
+	case posType, objType, scopeType, commentType, commentList:
 		return true
 	}
 	switch a.Kind() {
@@ -261,7 +361,47 @@ func Collect(ctx context.Context, dir, base string, run Runner) ([]FileChange, e
 		}
 		changes = append(changes, c)
 	}
-	return changes, nil
+	return changes, markEmbedded(ctx, dir, base, run, changes)
+}
+
+// markEmbedded flags doc changes at or below a directory holding a Go file with //go:embed in either tree.
+func markEmbedded(ctx context.Context, dir, base string, run Runner, changes []FileChange) error {
+	var docs []int
+	for i, c := range changes {
+		if isDoc(c.Path) || (c.OldPath != "" && isDoc(c.OldPath)) {
+			docs = append(docs, i)
+		}
+	}
+	if len(docs) == 0 {
+		return nil
+	}
+	embedDirs := map[string]bool{}
+	for _, rev := range []string{"HEAD", base} {
+		out, err := run(ctx, dir, "sh", "-c", `git grep -l -e '^//go:embed' "$1" -- '*.go' || true`, "sh", rev)
+		if err != nil {
+			return fmt.Errorf("git grep: %w", err)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if f, ok := strings.CutPrefix(line, rev+":"); ok && f != "" {
+				embedDirs[path.Dir(f)] = true
+			}
+		}
+	}
+	under := func(p string) bool {
+		for d := path.Dir(p); ; d = path.Dir(d) {
+			if embedDirs[d] {
+				return true
+			}
+			if d == "." || d == "/" {
+				return false
+			}
+		}
+	}
+	for _, i := range docs {
+		c := &changes[i]
+		c.Embedded = under(c.Path) || (c.OldPath != "" && under(c.OldPath))
+	}
+	return nil
 }
 
 func show(ctx context.Context, dir string, run Runner, spec string) ([]byte, error) {

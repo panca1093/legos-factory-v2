@@ -21,7 +21,8 @@ const (
 
 // computeLevel applies SPEC §9 to the diff of dir against origin/<base>. Without a recorded inspection (single-builder
 // path) the inspector level is 2: nothing vouched that the logic is unchanged. A diff that cannot be read counts as level 0.
-func computeLevel(ctx context.Context, p Project, sb sandbox.Sandbox, dir, sha string, st workflow.State) fact.AutonomyLevel {
+func computeLevel(ctx context.Context, p Project, sb sandbox.Sandbox, dir, sha string, facts []fact.Fact) fact.AutonomyLevel {
+	st := workflow.Fold(facts)
 	run := func(ctx context.Context, dir string, args ...string) (string, error) {
 		stdout, stderr, code, err := sb.Exec(ctx, dir, nil, args...)
 		if err != nil {
@@ -33,6 +34,10 @@ func computeLevel(ctx context.Context, p Project, sb sandbox.Sandbox, dir, sha s
 		return stdout, nil
 	}
 	l := fact.AutonomyLevel{HeadSHA: sha, Cap: st.LevelCap}
+	if p.MaxLevel != nil && *p.MaxLevel < l.Cap {
+		l.Cap = *p.MaxLevel
+		l.Reasons = append(l.Reasons, fmt.Sprintf("project max_level %d", l.Cap))
+	}
 	changes, err := autonomy.Collect(ctx, dir, "origin/"+p.DefaultBranch, run)
 	if err != nil {
 		l.DiffLevel, l.Reasons = 0, []string{"diff unreadable, treated as protected: " + firstLine(err.Error(), 200)}
@@ -45,6 +50,10 @@ func computeLevel(ctx context.Context, p Project, sb sandbox.Sandbox, dir, sha s
 		if st.LogicChanged() {
 			l.Reasons = append(l.Reasons, "inspector reported a logic change")
 		}
+		if uninspectedCommits(facts) {
+			l.InspectorLevel = 2
+			l.Reasons = append(l.Reasons, "commits after the last inspection (CI fix or rebase) were not inspected")
+		}
 	} else {
 		l.Reasons = append(l.Reasons, "no inspection on the single-builder path")
 	}
@@ -53,6 +62,22 @@ func computeLevel(ctx context.Context, p Project, sb sandbox.Sandbox, dir, sha s
 		l.Reasons = append(l.Reasons, fmt.Sprintf("work order capped at level %d", l.Cap))
 	}
 	return l
+}
+
+// uninspectedCommits is true when a re-queue (CI fix, rebase) came after the last inspection: its commits were never inspected.
+func uninspectedCommits(facts []fact.Fact) bool {
+	last := -1
+	for i, f := range facts {
+		if f.Kind == workflow.KindInspectionDone {
+			last = i
+		}
+	}
+	for _, f := range facts[last+1:] {
+		if f.Kind == fact.KindWORequeued {
+			return true
+		}
+	}
+	return false
 }
 
 func prBody(objective string, l fact.AutonomyLevel) string {

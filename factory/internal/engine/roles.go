@@ -740,9 +740,9 @@ func (o *orch) inspect(ctx context.Context, st workflow.State) error {
 }
 
 const inspectorFormat = "Reply with ONE JSON object in a final ```json block and nothing after it: " +
-	`{"findings":[{"severity":"blocker|major|minor","file":"path","line":0,"message":"..."}],"logic_changed":false,"summary":"..."}. ` +
+	`{"findings":[{"severity":"blocker|major|minor","file":"path","line":0,"message":"..."}],"logic_changed":true|false,"summary":"..."}. Both findings and logic_changed are required. ` +
 	"blocker = wrong or unsafe behavior; major = a defect or missing test that must be fixed before merge; minor = style or optional. " +
-	"logic_changed is true when the diff changes business logic or behavior rather than only structure, tests, docs or wiring."
+	"logic_changed is true when the diff changes business logic or behavior rather than only structure, tests, docs or wiring; when unsure, answer true."
 
 const (
 	maxInspectDiff     = 60000
@@ -1016,7 +1016,7 @@ func parseInspection(reply string) (inspection, error) {
 	}
 	var in struct {
 		Findings     *[]workflow.Finding `json:"findings"`
-		LogicChanged bool                `json:"logic_changed"`
+		LogicChanged *bool               `json:"logic_changed"`
 		Summary      string              `json:"summary"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
@@ -1025,7 +1025,8 @@ func parseInspection(reply string) (inspection, error) {
 	if in.Findings == nil {
 		return inspection{}, errors.New(`inspection JSON has no "findings" array (use [] when there are none)`)
 	}
-	return inspection{Findings: *in.Findings, LogicChanged: in.LogicChanged, Summary: in.Summary}, nil
+	logic := in.LogicChanged == nil || *in.LogicChanged // an omitted field must not read as "no logic change"
+	return inspection{Findings: *in.Findings, LogicChanged: logic, Summary: in.Summary}, nil
 }
 
 var severityRank = map[string]int{"minor": 1, "major": 2, "blocker": 3}

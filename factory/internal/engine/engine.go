@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"legos-factory/factory/internal/autonomy"
 	"legos-factory/factory/internal/catalog"
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
@@ -51,6 +52,8 @@ type Project struct {
 	ProtectedPaths []string
 	// MergeMethod is squash|merge|rebase; empty means squash.
 	MergeMethod string
+	// MaxLevel caps the autonomy level of every work order (0-3); nil means 3 (ADR-F09).
+	MaxLevel    *int
 	MaxRequeues int // 0 means defaultMaxRequeues
 	// Fallbacks lists profile ids per role, in the order retry_task other_model moves through them.
 	Fallbacks map[string][]string
@@ -103,6 +106,7 @@ type projectFile struct {
 	} `json:"env"`
 	ProtectedPaths []string               `json:"protected_paths"`
 	MergeMethod    string                 `json:"merge_method"`
+	MaxLevel       *int                   `json:"max_level"`
 	RequiredChecks []string               `json:"required_checks"`
 	MaxRequeues    int                    `json:"max_requeues"`
 	Fallbacks      map[string][]string    `json:"fallbacks"`
@@ -149,6 +153,17 @@ func LoadProject(path string) (Project, error) {
 		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername,
 		Env:            Env{Setup: f.Env.Setup, Verify: f.Env.Verify, Docker: f.Env.Docker, DockerTrustBuilder: f.Env.DockerTrustBuilder, TestPkg: f.Env.TestPkg},
 		ProtectedPaths: f.ProtectedPaths, MergeMethod: f.MergeMethod, RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues, Fallbacks: f.Fallbacks}
+	if f.MaxLevel != nil {
+		if *f.MaxLevel < 0 || *f.MaxLevel > workflow.DefaultLevelCap {
+			return Project{}, fmt.Errorf("%s: max_level must be 0..%d, got %d", path, workflow.DefaultLevelCap, *f.MaxLevel)
+		}
+		p.MaxLevel = f.MaxLevel
+	}
+	for _, pat := range p.ProtectedPaths {
+		if err := autonomy.ValidatePattern(pat); err != nil {
+			return Project{}, fmt.Errorf("%s: %w", path, err)
+		}
+	}
 	if p.DefaultBranch == "" {
 		p.DefaultBranch = "main"
 	}
@@ -1112,7 +1127,7 @@ func (e *Engine) publish(ctx context.Context, p Project, woID string, sb sandbox
 	if err != nil {
 		return err
 	}
-	level := computeLevel(ctx, p, sb, dir, sha, workflow.Fold(facts))
+	level := computeLevel(ctx, p, sb, dir, sha, facts)
 	if _, err := e.Facts.Append(ctx, woID, fact.KindAutonomyLevel, level); err != nil {
 		return err
 	}

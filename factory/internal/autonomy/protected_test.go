@@ -27,3 +27,44 @@ func TestProtectedIn(t *testing.T) {
 		t.Errorf("no protected paths: %v", got)
 	}
 }
+
+func TestMatchesProtected(t *testing.T) {
+	cases := []struct {
+		pat, path string
+		want      bool
+	}{
+		{"**/billing/**", "billing/x.go", true},
+		{"**/billing/**", "services/a/billing/x/y.go", true},
+		{"**/billing/**", "services/a/billings/x.go", false},
+		{"*.sql", "a/b/c/x.sql", true},
+		{"*.sql", "x.sqlx", false},
+		{"*.sql", "x.SQL", false},
+		{"migrations/**", "migrations/001/up.sql", true},
+		{"migrations/**", "app/migrations/001.go", false},
+		{"services/*/money", "services/lsm/money/x.go", true},
+		{"services/*/money", "services/lsm/x/money/x.go", false},
+		{"a/**/z", "a/z/f.go", true},
+		{"a/**/z", "a/b/c/z/f.go", true},
+		{"deploy", "src/deploy/x.yaml", true},
+		{"./deploy/", "deploy/x.yaml", true},
+		{"Deploy", "deploy/x.yaml", false},
+	}
+	for _, c := range cases {
+		if got := matchesProtected(c.path, []string{c.pat}); got != c.want {
+			t.Errorf("%q vs %q = %v, want %v", c.pat, c.path, got, c.want)
+		}
+	}
+}
+
+func TestValidatePattern(t *testing.T) {
+	for _, ok := range []string{"a/**", "**/b/**", "*.sql", "x/[ab]/y", "./deploy/"} {
+		if err := ValidatePattern(ok); err != nil {
+			t.Errorf("%q rejected: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "/", "/abs", "a/[", "a/**b", "../x", "a//b"} {
+		if ValidatePattern(bad) == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}
