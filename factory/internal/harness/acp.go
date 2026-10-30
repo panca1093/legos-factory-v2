@@ -122,8 +122,8 @@ func (ACP) Start(ctx context.Context, spec SessionSpec) (Session, error) {
 		env["OPENCODE_CONFIG_CONTENT"] = opencodeConfig(spec.Role, spec.ToolPolicy.Deny)
 	}
 	if isClaude(spec) {
-		// a private config dir keeps the owner's settings, plugins and CLAUDE.md out (100-150k tokens per prompt otherwise)
-		env["CLAUDE_CONFIG_DIR"] = filepath.Join(spec.Sandbox.Workspace().HomeDir(), ".claude-factory")
+		// fallback only: callers (the engine) own the per-session dir; a private one keeps the owner's settings and CLAUDE.md out of the prompt
+		env["CLAUDE_CONFIG_DIR"] = filepath.Join(spec.Sandbox.Workspace().HomeDir(), string(spec.Role)+"-session")
 		env["IS_SANDBOX"] = "1"
 		if spec.Profile.Model != "" {
 			env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = spec.Profile.Model

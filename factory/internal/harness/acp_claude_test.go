@@ -49,7 +49,7 @@ func TestClaudeSessionSetup(t *testing.T) {
 	if !strings.Contains(log, wantMeta) || strings.Contains(log, "set_config_option") {
 		t.Errorf("log = %s", log)
 	}
-	if len(e.Claude) != 3 || !strings.HasSuffix(e.Claude[0], "/home/.claude-factory") || e.Claude[1] != "1" || e.Claude[2] != "sonnet" {
+	if len(e.Claude) != 3 || !strings.HasSuffix(e.Claude[0], "/home/inspector-session") || e.Claude[1] != "1" || e.Claude[2] != "sonnet" {
 		t.Errorf("env = %v", e.Claude)
 	}
 	if e.Env != "" {
