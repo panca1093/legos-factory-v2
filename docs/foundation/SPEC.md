@@ -188,13 +188,32 @@ The factory injects these; it never provisions the env's infrastructure.
 
 1. Peak memory of verify (race tests) and integration runs. These set the
    container limits and the VM size. Not yet measured: the local loan-platform
-   checkout has inconsistent `vendor/modules.txt`.
-2. Bitbucket branch protection: does L3 auto-merge need a bot account with merge
-   rights?
-3. Claude subscription tokens in a self-hosted factory: confirm the terms of use
-   before enabling.
-4. Which providers pass the Builder smoke test through `claude-agent-acp`
-   (GLM, Kimi K3.1, MiniMax)?
-5. Where the rebuild lives: new module in this repo vs a new repository; what to keep
-   from `backend/` (store, scheduler, SCM integrations, ACP adapter).
-6. K (inspection rounds) and M (Foreman rejections) defaults.
+   checkout has inconsistent `vendor/modules.txt`. Until measured, container limits
+   are config values (default 4 CPU, 8 GiB).
+
+## 14. Resolved questions (2026-10-30)
+
+| # | Question | Answer |
+|---|---|---|
+| 2 | Bitbucket auto-merge rights | The factory merges with the project's SCM credential. If branch protection refuses the merge, the work order goes to `awaiting_human`; no bot account is required. |
+| 3 | Claude subscription tokens | Allowed (single-owner, F12). |
+| 4 | Which providers serve Builder through `claude-agent-acp` | The user's choice in config. Any profile that passes the smoke test may bind to Builder; no provider list is hard-coded. |
+| 5 | Where the rebuild lives | This repository, new Go module `factory/` on branch `feat/new-legos-architect`. `backend/` is frozen; the ACP client, SCM clients and secret encryption are ported (copied and adapted), not imported. |
+| 6 | K and M defaults | K = 3 inspection rounds per task, M = 3 consecutive Foreman rejections. Both are config values. |
+
+## 15. Code layout
+
+One Go module `factory/` (`module legos-factory/factory`), SQLite via `modernc.org/sqlite`.
+
+| Package | Owns |
+|---|---|
+| `cmd/factory` | process entry, config loading |
+| `internal/fact` | fact store, derived status (F06) |
+| `internal/harness` | ACP client, `Harness`/`Session`, normalized events (§7) |
+| `internal/sandbox` | workspace volume, container lifecycle, worktrees, ports (§10) |
+| `internal/scm` | push, PR, checks, merge (GitHub, Bitbucket) |
+| `internal/profile` | credentials, catalog, profiles, smoke test, semaphores, cost (§8) |
+| `internal/workflow` | work-order state machine and guards (§5, §6) |
+| `internal/engine` | runs work orders: roles, Foreman loop, verify, integration, retries |
+| `internal/autonomy` | `diff_level`, effective level (§9) |
+| `internal/api` | HTTP API for projects, credentials, profiles, work orders |
