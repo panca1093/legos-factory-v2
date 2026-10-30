@@ -584,7 +584,10 @@ type fakeProfiles struct {
 	err                error
 }
 
-func (f *fakeProfiles) Resolve(context.Context, string, harness.Role) (profile.Profile, error) {
+func (f *fakeProfiles) Resolve(_ context.Context, _ string, role harness.Role) (profile.Profile, error) {
+	if role != harness.RoleBuilder {
+		return profile.Profile{}, profile.ErrNoBinding
+	}
 	return profile.Profile{ID: "prof-1", Agent: "claude-agent-acp", CredentialID: "cred-1", Model: "m",
 		Price: profile.Price{InputPerMTok: 3, OutputPerMTok: 15}}, f.err
 }
