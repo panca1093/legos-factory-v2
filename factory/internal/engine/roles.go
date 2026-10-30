@@ -45,6 +45,10 @@ const (
 	maxConflictRounds = 2
 )
 
+// decisionIgnorable are the facts parallel builders keep appending; a Foreman decision does not depend on them.
+var decisionIgnorable = []string{fact.KindRunStarted, fact.KindRunStep, fact.KindRunFinished,
+	fact.KindSandboxStarted, fact.KindSandboxStopped, fact.KindSandboxRestarted}
+
 // readOnlyDeny is the Architect's explicit tool policy, on top of what the harness denies for read-only roles.
 var readOnlyDeny = []string{"Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "edit", "write", "patch", "apply_patch", "bash"}
 
@@ -526,7 +530,7 @@ func (o *orch) decide(ctx context.Context, reply string) (cerr, err error) {
 		if o.beforeAppend != nil {
 			o.beforeAppend()
 		}
-		_, err = o.e.Facts.AppendBatch(ctx, o.woID, facts[len(facts)-1].ID, nf)
+		_, err = o.e.Facts.AppendBatch(ctx, o.woID, facts[len(facts)-1].ID, nf, decisionIgnorable...)
 		if errors.Is(err, fact.ErrConflict) {
 			continue
 		}

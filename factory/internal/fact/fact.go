@@ -233,16 +233,23 @@ func (s *Store) Append(ctx context.Context, subject, kind string, payload any) (
 var ErrConflict = errors.New("fact conflict: the subject has newer facts")
 
 // AppendBatch writes all facts in one transaction: either every fact is recorded, in order, or none.
-// A non-zero afterID is the id of the last fact the caller saw; the batch fails with ErrConflict when a newer one exists.
-func (s *Store) AppendBatch(ctx context.Context, subject string, afterID int64, in []NewFact) ([]Fact, error) {
+// A non-zero afterID is the id of the last fact the caller saw; the batch fails with ErrConflict when a newer one exists,
+// not counting facts of the ignorable kinds (activity the caller's decision does not depend on).
+func (s *Store) AppendBatch(ctx context.Context, subject string, afterID int64, in []NewFact, ignorable ...string) ([]Fact, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
 	if afterID != 0 {
+		q := `SELECT EXISTS(SELECT 1 FROM facts WHERE subject = ? AND id > ?`
+		args := []any{subject, afterID}
+		for _, k := range ignorable {
+			q += ` AND kind != ?`
+			args = append(args, k)
+		}
 		var newer int
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM facts WHERE subject = ? AND id > ?)`, subject, afterID).Scan(&newer); err != nil {
+		if err := tx.QueryRowContext(ctx, q+`)`, args...).Scan(&newer); err != nil {
 			return nil, err
 		}
 		if newer != 0 {
