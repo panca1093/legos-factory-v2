@@ -257,11 +257,14 @@ func (s *dockerSandbox) Command(dir string, env map[string]string, args ...strin
 	if dir != "" {
 		argv = append(argv, "-w", dir)
 	}
+	// -e NAME (no value) keeps secrets out of the host's ps; the docker CLI reads them from its own environment.
+	cliEnv := os.Environ()
 	for _, kv := range envList(env) {
-		argv = append(argv, "-e", kv)
+		argv = append(argv, "-e", strings.SplitN(kv, "=", 2)[0])
+		cliEnv = append(cliEnv, kv)
 	}
 	argv = append(argv, s.id)
-	return Cmd{Argv: append(argv, args...)}
+	return Cmd{Argv: append(argv, args...), Env: cliEnv}
 }
 
 func (s *dockerSandbox) Exec(ctx context.Context, dir string, env map[string]string, args ...string) (string, string, int, error) {

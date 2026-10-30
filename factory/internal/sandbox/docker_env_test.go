@@ -1,0 +1,23 @@
+package sandbox
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestDockerCommandKeepsEnvValuesOutOfArgv(t *testing.T) {
+	s := &dockerSandbox{d: Docker{}, id: "cid"}
+	cmd := s.Command("/ws", map[string]string{"API_KEY": "s3cret"}, "agent")
+	for _, a := range cmd.Argv {
+		if strings.Contains(a, "s3cret") {
+			t.Fatalf("secret in argv: %v", cmd.Argv)
+		}
+	}
+	if !reflect.DeepEqual(cmd.Argv, []string{"docker", "exec", "-i", "-w", "/ws", "-e", "API_KEY", "cid", "agent"}) {
+		t.Fatalf("argv=%v", cmd.Argv)
+	}
+	if !strings.Contains(strings.Join(cmd.Env, "\n"), "API_KEY=s3cret") {
+		t.Fatal("value missing from Cmd.Env")
+	}
+}
