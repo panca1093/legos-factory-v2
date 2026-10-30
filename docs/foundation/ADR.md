@@ -56,7 +56,7 @@ No translation proxy or router: models without an Anthropic-compatible endpoint 
 
 **Why:** one adapter, one event parser and one test suite against captured real streams (lesson #5). The ACP client already works. Provider tool-use quality still differs, so the smoke test decides; a router adds a failure point and lossy translation.
 
-**Verified (spike 2026-10-30, SPEC §7):** model and tool denies are set at `session/new` via `_meta.claudeCode.options` (`model`, `settings.permissions.deny`); for this agent a `reject_once` permission reply fails only that tool call, so lesson #3 applies to OpenCode only. Each run uses its own `CLAUDE_CONFIG_DIR` on the volume so the owner's settings never leak in; `session/load` works from a new process with the same config dir and cwd. Container credential passthrough is still unverified live.
+**Verified (spike 2026-10-30, SPEC §7):** model and tool denies are set at `session/new` via `_meta.claudeCode.options` (`model`, `settings.permissions.deny`); for this agent a `reject_once` permission reply fails only that tool call, so the turn-cancel part of lesson #3 applies to OpenCode only. Each session uses its own `CLAUDE_CONFIG_DIR` on the volume so the owner's settings never leak in; `session/load` works from a new process with the same config dir and cwd. Container credential passthrough is still unverified live.
 
 ## ADR-F04: Credentials are API keys or subscription tokens; models derive from them
 

@@ -12,7 +12,7 @@ previous one's check passes.
 | Measure peak memory and CPU of `make vet-lsm test-lsm`, `make test-bre`, `make test-integration` (clean loan-platform copy) | Numbers written into SPEC §10 — **deferred**: needs a clean loan-platform checkout (SPEC §13 Q1); limits are config until then |
 | Measure one Claude Code and one OpenCode session's RSS under a real build task | Numbers written into SPEC §10 — **deferred** to the M1 live check (needs a real run) |
 | Check Bitbucket branch protection for auto-merge | SPEC §13 Q2 answered — **done** (SPEC §14) |
-| Spike `claude-agent-acp`: model selection at session creation, settings-based tool deny, credential env passthrough, `session/load` from a volume in a new container | Findings written into SPEC §7 — **done** |
+| Spike `claude-agent-acp`: model selection at session creation, settings-based tool deny, credential env passthrough, `session/load` from a volume in a new container | Findings written into SPEC §7 — **done**, except credential passthrough and `session/load` inside a container (moved to the M1 live check) |
 
 ## M1 — Walking skeleton (F13)
 
