@@ -194,12 +194,12 @@ func TestDependencyMergeConflictFailsTaskUnlessSerialized(t *testing.T) {
 	cfg := BuilderConfig{Profile: harness.Profile{Agent: "claude-agent-acp"}, AgentCommand: []string{"claude-agent-acp"}}
 	o.p.Builder = cfg
 
-	if err := o.buildTask(ctx, b, mustListFacts(t, o)); err != nil {
+	if err := o.buildTask(ctx, b, mustListFacts(t, o), 30000); err != nil {
 		t.Fatal(err)
 	}
 	facts := mustListFacts(t, o)
 	last := facts[len(facts)-1]
-	if f, _ := fact.Decode[fact.TaskFailed](last); last.Kind != fact.KindTaskFailed || f.Class != "dependency_conflict" {
+	if f, _ := fact.Decode[fact.TaskFailed](last); last.Kind != fact.KindTaskFailed || f.Class != fact.ClassIntegration || f.Reason != "dependency_conflict" {
 		t.Fatalf("last fact = %s %s", last.Kind, last.Payload)
 	}
 	if len(h.promptsFor(harness.RoleBuilder)) != 0 {
@@ -212,7 +212,7 @@ func TestDependencyMergeConflictFailsTaskUnlessSerialized(t *testing.T) {
 	if _, err := o.e.Facts.Append(ctx, o.woID, workflow.KindTasksSerialized, workflow.TasksSerialized{A: "a", B: "b"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := o.buildTask(ctx, b, mustListFacts(t, o)); err != nil {
+	if err := o.buildTask(ctx, b, mustListFacts(t, o), 30000); err != nil {
 		t.Fatal(err)
 	}
 	if got := o.branchFile(t, taskBranch(o.woID, "b"), "shared.txt"); got != "A" {
@@ -257,7 +257,7 @@ func TestBuildOutsideOwnedPathsFailsAsPathViolation(t *testing.T) {
 			failed, _ = fact.Decode[fact.TaskFailed](f)
 		}
 	}
-	if failed.Class != "path_violation" || !strings.Contains(failed.Message, "stray/leak.txt") || strings.Contains(failed.Message, "pkg/out.txt") {
+	if failed.Class != "task" || failed.Reason != "path_violation" || !strings.Contains(failed.Message, "stray/leak.txt") || strings.Contains(failed.Message, "pkg/out.txt") {
 		t.Errorf("failure = %+v", failed)
 	}
 	if fp := h.promptsFor(harness.RoleForeman); !strings.Contains(fp[len(fp)-1], "path_violation") {

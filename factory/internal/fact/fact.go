@@ -18,19 +18,21 @@ const (
 	KindWOFailed       = "wo.failed"
 	KindSandboxStarted = "sandbox.started"
 	KindSandboxStopped = "sandbox.stopped"
-	KindRunStarted     = "run.started"
-	KindRunStep        = "run.step"
-	KindRunFinished    = "run.finished"
-	KindTaskCommitted  = "task.committed"
-	KindTaskFailed     = "task.failed"
-	KindVerifyPassed   = "verify.passed"
-	KindVerifyFailed   = "verify.failed"
-	KindPROpened       = "pr.opened"
-	KindPRPushed       = "pr.pushed"
-	KindCheckObserved  = "check.observed"
-	KindChecksStable   = "checks.stable"
-	KindPRMerged       = "pr.merged"
-	KindPRClosed       = "pr.closed"
+	// KindSandboxRestarted records an infra failure answered by a new sandbox on the same volume.
+	KindSandboxRestarted = "sandbox.restarted"
+	KindRunStarted       = "run.started"
+	KindRunStep          = "run.step"
+	KindRunFinished      = "run.finished"
+	KindTaskCommitted    = "task.committed"
+	KindTaskFailed       = "task.failed"
+	KindVerifyPassed     = "verify.passed"
+	KindVerifyFailed     = "verify.failed"
+	KindPROpened         = "pr.opened"
+	KindPRPushed         = "pr.pushed"
+	KindCheckObserved    = "check.observed"
+	KindChecksStable     = "checks.stable"
+	KindPRMerged         = "pr.merged"
+	KindPRClosed         = "pr.closed"
 )
 
 type Fact struct {
@@ -50,8 +52,19 @@ type WOCreated struct {
 	Line bool `json:"line,omitempty"`
 }
 
+// Failure classes (ADR-F10).
+const (
+	ClassProvider    = "provider"
+	ClassInfra       = "infra"
+	ClassTask        = "task"
+	ClassIntegration = "integration"
+	ClassVerify      = "verify"
+	ClassForeman     = "foreman"
+)
+
 type WOFailed struct {
 	Class    string `json:"class"`
+	Reason   string `json:"reason,omitempty"`
 	Message  string `json:"message"`
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
@@ -93,9 +106,18 @@ type TaskCommitted struct {
 }
 
 type TaskFailed struct {
-	Task    string `json:"task"`
-	Class   string `json:"class"`
-	Message string `json:"message"`
+	Task     string `json:"task"`
+	Class    string `json:"class"`
+	Reason   string `json:"reason,omitempty"`
+	Message  string `json:"message"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+}
+
+type SandboxRestarted struct {
+	Workspace string `json:"workspace"`
+	Attempt   int    `json:"attempt"`
+	Message   string `json:"message"`
 }
 
 type VerifyFailed struct {

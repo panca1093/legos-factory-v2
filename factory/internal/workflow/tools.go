@@ -29,6 +29,7 @@ type Limits struct {
 	MaxInspectionRounds      int
 	MaxRetries               int
 	MaxConsecutiveRejections int
+	BuilderFallbacks         int // number of fallback builder profiles other_model can move through
 }
 
 func DefaultLimits() Limits {
@@ -174,8 +175,8 @@ func (s State) check(c Call, lim Limits) error {
 		if !slices.Contains([]string{ChangeSame, ChangeOtherModel, ChangeSplit}, c.Change) {
 			return fmt.Errorf("change %q invalid; use same, other_model or split", c.Change)
 		}
-		if c.Change != ChangeSame {
-			return fmt.Errorf("change %q is not available yet: other_model and split arrive in M4; use same or escalate_to_human", c.Change)
+		if c.Change == ChangeOtherModel && t.ModelChanges >= lim.BuilderFallbacks {
+			return fmt.Errorf("no fallback model left for task %s (%d configured, %d used); use same, split or escalate_to_human", t.ID, lim.BuilderFallbacks, t.ModelChanges)
 		}
 	case ToolSerialize:
 		if c.A == c.B {
@@ -334,6 +335,44 @@ func CleanPath(p string) (string, error) {
 	return c, nil
 }
 
+// Within reports whether every file under sub is also under one of the parent paths (strict containment, unlike the overlap test).
+func Within(sub string, parents []string) bool {
+	x := prefix(sub)
+	for _, p := range parents {
+		y := prefix(p)
+		if y == "" || x == y || strings.HasPrefix(x, y+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidateSplit checks sub-tasks against the plan as it would stand after replacing task id: ids are fresh, owned paths
+// stay within the parent's, and the resulting plan is valid.
+func (s State) ValidateSplit(id string, subs []PlanTask) error {
+	parent, ok := s.Task(id)
+	if !ok {
+		return fmt.Errorf("unknown task %q", id)
+	}
+	if len(subs) < 2 {
+		return fmt.Errorf("a split needs at least 2 tasks, got %d", len(subs))
+	}
+	for _, t := range subs {
+		if slices.ContainsFunc(s.Tasks, func(o Task) bool { return o.ID == t.ID }) {
+			return fmt.Errorf("task id %q already exists in the plan", t.ID)
+		}
+		for _, p := range t.Paths {
+			if !Within(p, parent.Paths) {
+				return fmt.Errorf("task %s owns %q which is not within the parent's paths %v", t.ID, p, parent.Paths)
+			}
+		}
+	}
+	next := s
+	next.Tasks = slices.Clone(s.Tasks)
+	next.applySplit(PlanSplit{Task: id, Tasks: subs})
+	return next.checkPlan()
+}
+
 // Owned reports whether file falls under one of the owned paths, with the same prefix semantics as the parallel-overlap guard.
 func Owned(file string, owned []string) bool {
 	for _, o := range owned {
@@ -376,7 +415,7 @@ func overlap(as, bs []string) (string, string, bool) {
 func (s State) Rejection(tool string, args json.RawMessage, err error, lim Limits) []NewFact {
 	out := []NewFact{{Kind: KindForemanDecision, Payload: ForemanDecision{Tool: tool, Args: args, Reason: err.Error()}}}
 	if s.ConsecutiveRejections+1 >= lim.MaxConsecutiveRejections {
-		out = append(out, NewFact{Kind: KindEscalated, Payload: Escalated{Reason: fmt.Sprintf("%d consecutive rejected Foreman calls; last: %s", s.ConsecutiveRejections+1, err)}})
+		out = append(out, NewFact{Kind: KindEscalated, Payload: Escalated{Reason: fmt.Sprintf("%d consecutive rejected Foreman calls; last: %s", s.ConsecutiveRejections+1, err), Class: fact.ClassForeman}})
 	}
 	return out
 }
@@ -436,7 +475,7 @@ func Tools() []ToolDef {
 		{ToolRejectPlan, "Send the plan back to the Architect with a reason. Only valid when the plan is ready and revision rounds remain.", schema(`"reason":`+strProp, "reason")},
 		{ToolDispatchBuild, "Start Builders on pending tasks whose dependencies are done. At most 3 builders run at once and their owned paths must not overlap.", schema(`"task_ids":`+idsProp, "task_ids")},
 		{ToolRequestInspection, "Start an Inspector on a built task that has new commits since its last inspection.", schema(`"task_id":`+strProp, "task_id")},
-		{ToolRetryTask, "Re-run a failed task. Only change \"same\" is available for now (other_model and split arrive later).", schema(`"task_id":`+strProp+`,"change":{"type":"string","enum":["same","other_model","split"]}`, "task_id", "change")},
+		{ToolRetryTask, "Re-run a failed task. same: the same builder tries again; other_model: switch to the next fallback model (rejected when none is left); split: the Architect replaces the task with smaller tasks within its owned paths. Each retry uses the task's retry budget.", schema(`"task_id":`+strProp+`,"change":{"type":"string","enum":["same","other_model","split"]}`, "task_id", "change")},
 		{ToolSerialize, "Resolve a recorded integration conflict by re-running task_b on top of task_a.", schema(`"task_a":`+strProp+`,"task_b":`+strProp, "task_a", "task_b")},
 		{ToolEscalateToHuman, "Hand the work order to a human. Always allowed.", schema(`"reason":`+strProp, "reason")},
 	}
