@@ -25,6 +25,7 @@ var (
 	ErrSingleOwnerOnly = errors.New("subscription credentials require single-owner mode")
 	ErrUnverified      = errors.New("profile has not passed the smoke test")
 	ErrNoBinding       = errors.New("no profile bound to role")
+	ErrSameModel       = errors.New("inspector and builder must use different models")
 )
 
 type Config struct {
@@ -344,6 +345,11 @@ func (s *Store) Bind(ctx context.Context, projectID string, role harness.Role, p
 	}
 	if role == harness.RoleBuilder && p.VerifiedAt == nil {
 		return fmt.Errorf("bind builder to %s: %w", p.Name, ErrUnverified)
+	}
+	if other, ok := map[harness.Role]harness.Role{harness.RoleInspector: harness.RoleBuilder, harness.RoleBuilder: harness.RoleInspector}[role]; ok {
+		if op, rerr := s.Resolve(ctx, projectID, other); rerr == nil && p.Model != "" && op.Model != "" && op.Model == p.Model {
+			return fmt.Errorf("bind %s to %s: %s already uses model %q: %w", role, p.Name, other, p.Model, ErrSameModel)
+		}
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO role_bindings(project,role,profile_id) VALUES(?,?,?)
 		ON CONFLICT(project,role) DO UPDATE SET profile_id=excluded.profile_id`, projectID, string(role), profileID)

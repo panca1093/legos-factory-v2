@@ -331,8 +331,13 @@ func TestRunEnvAuthFiles(t *testing.T) {
 
 func verifiedProfile(t *testing.T, s *Store, name string, verified bool) Profile {
 	t.Helper()
+	return modelProfile(t, s, name, "claude-sonnet-4-5", verified)
+}
+
+func modelProfile(t *testing.T, s *Store, name, model string, verified bool) Profile {
+	t.Helper()
 	c := mustCred(t, s, Credential{Name: name, Kind: "subscription", Provider: "claude"}, "tok")
-	p, err := s.CreateProfile(bg, Profile{Name: name, Agent: "claude-agent-acp", CredentialID: c.ID, Model: "claude-sonnet-4-5"})
+	p, err := s.CreateProfile(bg, Profile{Name: name, Agent: "claude-agent-acp", CredentialID: c.ID, Model: model})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +351,7 @@ func verifiedProfile(t *testing.T, s *Store, name string, verified bool) Profile
 
 func TestBindAndResolve(t *testing.T) {
 	s := newStore(t, true)
-	unv := verifiedProfile(t, s, "unv", false)
+	unv := modelProfile(t, s, "unv", "claude-haiku-4-5", false)
 	ver := verifiedProfile(t, s, "ver", true)
 
 	if err := s.Bind(bg, "", harness.RoleBuilder, unv.ID); !errors.Is(err, ErrUnverified) {
@@ -379,6 +384,50 @@ func TestBindAndResolve(t *testing.T) {
 	}
 	if got, _ := s.Resolve(bg, "p1", harness.RoleBuilder); got.ID != ver.ID {
 		t.Fatalf("rebind not applied: %+v", got)
+	}
+}
+
+func TestBindRefusesSameModelForInspectorAndBuilder(t *testing.T) {
+	s := newStore(t, true)
+	sonnet := verifiedProfile(t, s, "sonnet", true)
+	sonnet2 := verifiedProfile(t, s, "sonnet2", true)
+	haiku := modelProfile(t, s, "haiku", "claude-haiku-4-5", true)
+
+	if err := s.Bind(bg, "", harness.RoleBuilder, sonnet.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Bind(bg, "p1", harness.RoleInspector, sonnet2.ID); !errors.Is(err, ErrSameModel) {
+		t.Fatalf("inspector on the global builder's model: %v", err)
+	}
+	if err := s.Bind(bg, "p1", harness.RoleInspector, haiku.ID); err != nil {
+		t.Fatalf("inspector on another model: %v", err)
+	}
+	if err := s.Bind(bg, "p1", harness.RoleBuilder, sonnet2.ID); err != nil {
+		t.Fatalf("project builder on another model than the project inspector: %v", err)
+	}
+	if err := s.Bind(bg, "p1", harness.RoleBuilder, haiku.ID); !errors.Is(err, ErrSameModel) {
+		t.Fatalf("builder on the inspector's model: %v", err)
+	}
+	if err := s.Bind(bg, "p1", harness.RoleForeman, haiku.ID); err != nil {
+		t.Fatalf("other roles are not constrained: %v", err)
+	}
+	if got, _ := s.Resolve(bg, "p1", harness.RoleBuilder); got.ID != sonnet2.ID {
+		t.Fatalf("refused bind changed the binding: %+v", got)
+	}
+}
+
+func TestBindSkipsSameModelCheckWhenAModelIsEmpty(t *testing.T) {
+	s := newStore(t, true)
+	a := modelProfile(t, s, "no-model-a", "claude-haiku-4-5", true)
+	b := modelProfile(t, s, "no-model-b", "claude-haiku-4-5", true)
+	if _, err := s.db.ExecContext(bg, `UPDATE profiles SET model=''`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Bind(bg, "", harness.RoleBuilder, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Bind(bg, "", harness.RoleInspector, b.ID); err != nil {
+		t.Fatalf("empty models are not provably equal: %v", err)
 	}
 }
 

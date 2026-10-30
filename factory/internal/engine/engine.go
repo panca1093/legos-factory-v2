@@ -4,11 +4,13 @@ package engine
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path"
 	"slices"
@@ -39,30 +41,64 @@ type Project struct {
 	SCMBaseURL    string
 	SCMUsername   string
 	SCMToken      string // loaded from env at startup; never serialized or put in facts
-	Setup         string
-	Verify        []string
+	Env           Env
 	Builder       BuilderConfig
 	// Roles is the JSON fallback for roles without a profile binding: foreman, architect, inspector, cataloger.
 	Roles          map[string]BuilderConfig
 	RequiredChecks []string
+	// ProtectedPaths always need a human (ADR-F09); enforced from M7.
+	ProtectedPaths []string
 	MaxRequeues    int // 0 means defaultMaxRequeues
 	// Fallbacks lists profile ids per role, in the order retry_task other_model moves through them.
 	Fallbacks map[string][]string
 }
 
+// Env is the project's environment binding (SPEC §11): the factory injects it and never provisions infrastructure.
+type Env struct {
+	Setup       string
+	Verify      []string
+	Integration *Integration
+	// Docker mounts the host docker socket into the sandbox: the agent gets root-equivalent control of the host daemon.
+	Docker bool
+	// DockerTrustBuilder acknowledges that Docker lets builder code reach the host and the factory's environment; required with integration secrets.
+	DockerTrustBuilder bool
+	// TestPkg is the targeted-test command template, e.g. "go test ./{pkg}/..."; default derived from go.mod.
+	TestPkg string
+}
+
+// Integration runs once after verify passes against an environment the project already has.
+type Integration struct {
+	Command   string
+	Endpoints map[string]string // exposed as LF_ENDPOINT_<NAME>
+	SecretEnv []string          // names of host env vars passed to this step only, by name
+}
+
 func (b BuilderConfig) set() bool { return b.Profile.Agent != "" || len(b.AgentCommand) > 0 }
 
 type projectFile struct {
-	ID             string                 `json:"id"`
-	RepoURL        string                 `json:"repo_url"`
-	Repo           string                 `json:"repo"`
-	DefaultBranch  string                 `json:"default_branch"`
-	SCMKind        string                 `json:"scm_kind"`
-	SCMBaseURL     string                 `json:"scm_base_url"`
-	SCMUsername    string                 `json:"scm_username"`
-	SCMTokenEnv    string                 `json:"scm_token_env"`
-	Setup          string                 `json:"setup"`
-	Verify         []string               `json:"verify"`
+	ID            string   `json:"id"`
+	RepoURL       string   `json:"repo_url"`
+	Repo          string   `json:"repo"`
+	DefaultBranch string   `json:"default_branch"`
+	SCMKind       string   `json:"scm_kind"`
+	SCMBaseURL    string   `json:"scm_base_url"`
+	SCMUsername   string   `json:"scm_username"`
+	SCMTokenEnv   string   `json:"scm_token_env"`
+	Setup         string   `json:"setup"`
+	Verify        []string `json:"verify"`
+	Env           struct {
+		Setup       string   `json:"setup"`
+		Verify      []string `json:"verify"`
+		Integration *struct {
+			Command   string            `json:"command"`
+			Endpoints map[string]string `json:"endpoints"`
+			SecretEnv []string          `json:"secret_env"`
+		} `json:"integration"`
+		Docker             bool   `json:"docker"`
+		DockerTrustBuilder bool   `json:"docker_trust_builder"`
+		TestPkg            string `json:"test_pkg"`
+	} `json:"env"`
+	ProtectedPaths []string               `json:"protected_paths"`
 	RequiredChecks []string               `json:"required_checks"`
 	MaxRequeues    int                    `json:"max_requeues"`
 	Fallbacks      map[string][]string    `json:"fallbacks"`
@@ -106,8 +142,9 @@ func LoadProject(path string) (Project, error) {
 		return Project{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	p := Project{ID: f.ID, RepoURL: f.RepoURL, Repo: f.Repo, DefaultBranch: f.DefaultBranch, SCMKind: f.SCMKind,
-		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername, Setup: f.Setup, Verify: f.Verify,
-		RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues, Fallbacks: f.Fallbacks}
+		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername,
+		Env:            Env{Setup: f.Env.Setup, Verify: f.Env.Verify, Docker: f.Env.Docker, DockerTrustBuilder: f.Env.DockerTrustBuilder, TestPkg: f.Env.TestPkg},
+		ProtectedPaths: f.ProtectedPaths, RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues, Fallbacks: f.Fallbacks}
 	if p.DefaultBranch == "" {
 		p.DefaultBranch = "main"
 	}
@@ -116,12 +153,27 @@ func LoadProject(path string) (Project, error) {
 			return Project{}, fmt.Errorf("env %s (scm_token_env) is empty", f.SCMTokenEnv)
 		}
 	}
+	if p.Env.Setup == "" {
+		p.Env.Setup = f.Setup
+	}
+	if len(p.Env.Verify) == 0 {
+		p.Env.Verify = f.Verify
+	}
+	if i := f.Env.Integration; i != nil && i.Command != "" {
+		p.Env.Integration = &Integration{Command: i.Command, Endpoints: i.Endpoints, SecretEnv: i.SecretEnv}
+	}
+	if p.Env.Docker && p.Env.Integration != nil && len(p.Env.Integration.SecretEnv) > 0 && !p.Env.DockerTrustBuilder {
+		return Project{}, fmt.Errorf("%s: env.docker with env.integration.secret_env is refused: the docker socket gives builder code root on the host and access to the factory's environment, secrets included; set env.docker_trust_builder to true to accept that", path)
+	}
 	p.Builder = f.Builder.config()
 	if len(f.Roles) > 0 {
 		p.Roles = map[string]BuilderConfig{}
 		for role, b := range f.Roles {
 			p.Roles[role] = b.config()
 		}
+	}
+	if insp, ok := p.Roles[string(harness.RoleInspector)]; ok && insp.set() && p.Builder.set() && (insp.Profile.Model == "" || p.Builder.Profile.Model == "") {
+		return Project{}, fmt.Errorf("%s: roles.inspector and builder both need profile.model so the engine can verify they differ", path)
 	}
 	if p.ID == "" || p.RepoURL == "" || p.Repo == "" {
 		return Project{}, fmt.Errorf("%s: id, repo_url and repo are required", path)
@@ -349,8 +401,8 @@ func requeuePrompt(r fact.WORequeued) string {
 }
 
 // builderPrompt: a fresh session has no memory of the objective, so it is restated ahead of any re-queue reason.
-func builderPrompt(v *view, fresh bool) string {
-	prompt := v.objective
+func builderPrompt(v *view, fresh bool, testCmd string) string {
+	prompt := v.objective + testPrompt(testCmd)
 	if v.requeue != nil {
 		if fresh {
 			prompt += "\n\n"
@@ -363,6 +415,40 @@ func builderPrompt(v *view, fresh bool) string {
 		prompt = "Your previous run was interrupted and the worktree may hold partial work. " + prompt
 	}
 	return prompt
+}
+
+var nonShellTools = []string{"edit", "multiedit", "write", "read", "patch", "apply_patch", "notebookedit", "glob", "grep", "ls", "webfetch", "websearch"}
+
+// isTestCall reports whether a tool call is a shell command that runs tests; file tools merely mentioning "test" do not count.
+func isTestCall(ev harness.Event, testCmd string) bool {
+	if slices.Contains(nonShellTools, strings.ToLower(strings.TrimSpace(ev.Tool))) {
+		return false
+	}
+	text := strings.ToLower(ev.Tool + " " + ev.Text)
+	prefix, _, _ := strings.Cut(strings.ToLower(testCmd), "{pkg}")
+	if prefix = strings.TrimSpace(prefix); prefix != "" && strings.Contains(text, prefix) {
+		return true
+	}
+	return slices.ContainsFunc([]string{"go test", "npm test", "make test"}, func(c string) bool { return strings.Contains(text, c) })
+}
+
+// testCommand is the tier-1 targeted test command shown to the builder; "" when neither configured nor derivable.
+func (e *Engine) testCommand(ctx context.Context, p Project, sb sandbox.Sandbox, dir string) string {
+	if p.Env.TestPkg != "" {
+		return p.Env.TestPkg
+	}
+	if _, _, code, err := sb.Exec(ctx, dir, nil, "test", "-f", "go.mod"); err == nil && code == 0 {
+		return "go test ./{pkg}/..."
+	}
+	return ""
+}
+
+func testPrompt(cmd string) string {
+	s := "\n\nBefore finishing, run targeted tests for the packages you touched, without -race"
+	if cmd != "" {
+		s += ", with `" + strings.ReplaceAll(cmd, "{pkg}", "<pkg>") + "`"
+	}
+	return s + ". State the exact command and its result in your final message."
 }
 
 func tail(s string, n int) string {
@@ -425,6 +511,7 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 	if err != nil {
 		return err
 	}
+	ws.Docker = p.Env.Docker
 	sb, err := e.Runtime.Start(ctx, ws, nil)
 	if err != nil {
 		return err
@@ -521,6 +608,11 @@ const (
 	stepStop
 )
 
+const (
+	tierVerify      = "verify"
+	tierIntegration = "integration"
+)
+
 // verifyStep drives the line (when there is one) to a verifiable branch and runs the verify commands once. A verify
 // failure in the line goes back to the owning builders (stepAgain); on the single-builder path it fails the work order.
 func (e *Engine) verifyStep(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, o *orch, v *view) (step, error) {
@@ -532,25 +624,87 @@ func (e *Engine) verifyStep(ctx context.Context, p Project, woID string, sb sand
 	if v.cycleHas(fact.KindVerifyPassed) {
 		return stepPublish, nil
 	}
-	for _, cmd := range p.Verify {
-		stdout, stderr, code, err := sb.Exec(ctx, dir, nil, "sh", "-c", cmd)
+	type check struct {
+		tier, cmd string
+		env       map[string]string
+	}
+	var checks []check
+	for _, cmd := range p.Env.Verify {
+		checks = append(checks, check{tier: tierVerify, cmd: cmd})
+	}
+	var secrets []string
+	// The integration command runs builder-authored repo code with these secrets in its environment; output redaction is best effort.
+	if in := p.Env.Integration; in != nil && in.Command != "" {
+		env := map[string]string{}
+		for name, url := range in.Endpoints {
+			env["LF_ENDPOINT_"+strings.ToUpper(name)] = url
+		}
+		var short []string
+		for _, name := range in.SecretEnv {
+			val := os.Getenv(name)
+			if val == "" {
+				return stepStop, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassConfig, Reason: "integration_secret_missing", Message: "host env " + name + " (env.integration.secret_env) is empty"})
+			}
+			env[name] = val
+			if len(val) < minRedactableSecret {
+				short = append(short, name)
+				continue
+			}
+			secrets = append(secrets, val)
+		}
+		if len(short) > 0 {
+			msg := fmt.Sprintf("secrets %s are shorter than %d characters and cannot be redacted from integration output", strings.Join(short, ", "), minRedactableSecret)
+			if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Step: "integration_secret_unredactable", Summary: msg}); err != nil {
+				return stepStop, err
+			}
+		}
+		checks = append(checks, check{tier: tierIntegration, cmd: in.Command, env: env})
+	}
+	for _, c := range checks {
+		stdout, stderr, code, err := sb.Exec(ctx, dir, c.env, "sh", "-c", c.cmd)
 		if err != nil {
 			return stepStop, err
 		}
 		if code == 0 {
 			continue
 		}
-		out := tail(stdout+stderr, 4000)
-		if o != nil {
-			return stepAgain, o.verifyFailed(ctx, cmd, out)
+		out := stdout + stderr
+		if c.tier == tierIntegration {
+			out = redactSecrets(out, secrets)
 		}
-		if _, err := e.Facts.Append(ctx, woID, fact.KindVerifyFailed, fact.VerifyFailed{Commands: []string{cmd}, Output: out}); err != nil {
+		out = tail(out, 4000)
+		if o != nil {
+			return stepAgain, o.verifyFailed(ctx, c.tier, c.cmd, out)
+		}
+		if _, err := e.Facts.Append(ctx, woID, fact.KindVerifyFailed, fact.VerifyFailed{Tier: c.tier, Commands: []string{c.cmd}, Output: out}); err != nil {
 			return stepStop, err
 		}
-		return stepStop, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassVerify, Reason: "verify_failed", Message: fmt.Sprintf("%s: exit %d", cmd, code)})
+		return stepStop, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassVerify, Reason: "verify_failed", Message: fmt.Sprintf("%s (%s): exit %d", c.cmd, c.tier, code)})
 	}
 	_, err := e.Facts.Append(ctx, woID, fact.KindVerifyPassed, struct{}{})
 	return stepPublish, err
+}
+
+const minRedactableSecret = 8
+
+// redactSecrets masks each secret as the integration step may print it: raw, base64 (standard and URL alphabets,
+// padded or not) and URL-encoded. Redact before truncating so a secret cut by the tail window cannot leak a prefix.
+// TODO: uncertain — base64 of a secret embedded at a non-aligned offset inside a larger encoded blob is not matched
+func redactSecrets(out string, secrets []string) string {
+	var forms []string
+	for _, sec := range secrets {
+		b := []byte(sec)
+		forms = append(forms, sec, url.QueryEscape(sec), url.PathEscape(sec),
+			base64.StdEncoding.EncodeToString(b), base64.RawStdEncoding.EncodeToString(b),
+			base64.URLEncoding.EncodeToString(b), base64.RawURLEncoding.EncodeToString(b))
+	}
+	slices.SortFunc(forms, func(a, b string) int { return len(b) - len(a) })
+	for _, f := range forms {
+		if len(f) >= minRedactableSecret {
+			out = strings.ReplaceAll(out, f, "***")
+		}
+	}
+	return out
 }
 
 // infraFailure reports whether err means the sandbox died, as opposed to a provider or task error.
@@ -578,7 +732,7 @@ func (e *Engine) restartSandbox(ctx context.Context, woID string, old sandbox.Sa
 }
 
 func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir, task string) (failed bool, err error) {
-	if p.Setup == "" {
+	if p.Env.Setup == "" {
 		return false, nil
 	}
 	ws := sb.Workspace()
@@ -588,7 +742,7 @@ func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.S
 	} else if code == 0 {
 		return false, nil
 	}
-	stdout, stderr, code, err := sb.Exec(ctx, dir, nil, "sh", "-c", p.Setup)
+	stdout, stderr, code, err := sb.Exec(ctx, dir, nil, "sh", "-c", p.Env.Setup)
 	if err != nil {
 		return false, err
 	}
@@ -647,6 +801,46 @@ func (e *Engine) agentConfigN(ctx context.Context, p Project, role harness.Role,
 	return e.profileConfig(ctx, prof, role)
 }
 
+// roleModel names the model a role would run on without acquiring a credential slot; fallback n > 0 selects the
+// n-th fallback profile. An empty or unresolvable model is an error: callers must not treat it as "different".
+func (e *Engine) roleModel(ctx context.Context, p Project, role harness.Role, n int) (string, error) {
+	var model string
+	switch explicit := p.Builder; {
+	case n > 0:
+		ids := p.Fallbacks[string(role)]
+		if e.Profiles == nil || n > len(ids) {
+			return "", fmt.Errorf("no fallback %d configured for role %s", n, role)
+		}
+		prof, err := e.Profiles.GetProfile(ctx, ids[n-1])
+		if err != nil {
+			return "", fmt.Errorf("fallback profile %s: %w", ids[n-1], err)
+		}
+		model = prof.Model
+	default:
+		if role != harness.RoleBuilder {
+			explicit = p.Roles[string(role)]
+		}
+		usable := explicit.Profile.Agent != ""
+		if role != harness.RoleBuilder {
+			usable = explicit.set()
+		}
+		switch {
+		case usable:
+			model = explicit.Profile.Model
+		case e.Profiles != nil:
+			prof, err := e.Profiles.Resolve(ctx, p.ID, role)
+			if err != nil {
+				return "", fmt.Errorf("resolve %s profile: %w", role, err)
+			}
+			model = prof.Model
+		}
+	}
+	if model == "" {
+		return "", fmt.Errorf("the %s model is not known", role)
+	}
+	return model, nil
+}
+
 func (e *Engine) profileConfig(ctx context.Context, prof profile.Profile, role harness.Role) (agentCfg, error) {
 	rs, err := e.Profiles.RunEnv(ctx, prof)
 	if err != nil {
@@ -671,6 +865,7 @@ type convo struct {
 	openRun   string // an interrupted run to close before starting
 	env       map[string]string
 	prompt    func(fresh bool) string
+	testCmd   string // the builder's targeted-test command; shell calls running it (or go/npm/make test) count as testing
 }
 
 // converse runs the turn, retrying transient provider failures with exponential backoff (bounded, outside any task
@@ -742,6 +937,7 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 
 	var usage harness.Usage
 	var last string
+	var testSeen bool
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
@@ -754,6 +950,9 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 				}
 				if ev.Kind == harness.EventStep {
 					last = ev.Text
+				}
+				if ev.Kind == harness.EventToolCall && isTestCall(ev, c.testCmd) {
+					testSeen = true
 				}
 				if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: step, Summary: firstLine(ev.Text, 200)}); err != nil {
 					e.log().Warn("record run step", "wo", woID, "err", err)
@@ -789,6 +988,11 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 		}
 		return "", perr, nil
 	}
+	if c.role == harness.RoleBuilder && !testSeen {
+		if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: "no_targeted_tests", Summary: "builder finished without running any test command"}); err != nil {
+			return "", nil, err
+		}
+	}
 	raw, _ := json.Marshal(usage)
 	fin := fact.RunFinished{Run: run, StopReason: stop, Usage: raw}
 	if b.price != nil {
@@ -808,9 +1012,10 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "agent_error", Message: err.Error()})
 	}
 	defer cfg.release()
+	testCmd := e.testCommand(ctx, p, sb, dir)
 	_, agentErr, err := e.converse(ctx, woID, sb, convo{
-		role: harness.RoleBuilder, task: task, dir: dir, cfg: cfg, sessionID: v.sessionID, openRun: v.openRun,
-		prompt: func(fresh bool) string { return builderPrompt(v, fresh) },
+		role: harness.RoleBuilder, task: task, dir: dir, cfg: cfg, sessionID: v.sessionID, openRun: v.openRun, testCmd: testCmd,
+		prompt: func(fresh bool) string { return builderPrompt(v, fresh, testCmd) },
 	})
 	if err != nil {
 		return false, err

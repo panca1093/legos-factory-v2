@@ -1,0 +1,19 @@
+{
+  "id": "loan-platform",
+  "repo_url": "git@bitbucket.org:amartha/loan-platform.git",
+  "repo": "amartha/loan-platform",
+  "default_branch": "main",
+  "scm_kind": "bitbucket",
+  "env": {
+    "setup": "",
+    "verify": ["make vet-lsm", "make test-lsm"],
+    "test_pkg": "go test ./{pkg}/...",
+    "docker": false
+  },
+  "protected_paths": [
+    "services/lsm/migrations/",
+    "services/lsm/internal/domain/state/",
+    "services/lsm/internal/domain/money/"
+  ],
+  "required_checks": []
+}

@@ -20,6 +20,8 @@ import (
 type Workspace struct {
 	ID   string
 	root string
+	// Docker gives the sandbox the host docker socket, for projects whose verify or integration step needs docker.
+	Docker bool
 }
 
 func (w Workspace) Root() string                   { return w.root }
@@ -217,22 +219,7 @@ func (d Docker) DeleteWorkspace(ctx context.Context, woID string) error {
 }
 
 func (d Docker) Start(ctx context.Context, ws Workspace, env map[string]string) (Sandbox, error) {
-	args := []string{"run", "-d", "--rm", "--label", "legos-factory=1", "--label", "legos-factory-wo=" + ws.ID,
-		"-v", volumeName(ws.ID) + ":" + wsMount,
-		"-v", "lf-cache-go:/cache/go", "-v", "lf-cache-gomod:/cache/gomod", "-v", "lf-cache-npm:/cache/npm",
-		"-w", wsMount,
-		"-e", "HOME=" + ws.HomeDir(), "-e", "GOCACHE=/cache/go", "-e", "GOMODCACHE=/cache/gomod", "-e", "npm_config_cache=/cache/npm"}
-	if d.CPUs > 0 {
-		args = append(args, "--cpus", fmt.Sprint(d.CPUs))
-	}
-	if d.MemoryBytes > 0 {
-		args = append(args, "--memory", fmt.Sprint(d.MemoryBytes))
-	}
-	for _, kv := range envList(env) {
-		args = append(args, "-e", kv)
-	}
-	args = append(args, d.Image, "sleep", "infinity")
-	id, err := d.docker(ctx, args...)
+	id, err := d.docker(ctx, d.runArgs(ws, env)...)
 	if err != nil {
 		return nil, err
 	}
@@ -242,6 +229,28 @@ func (d Docker) Start(ctx context.Context, ws Workspace, env map[string]string) 
 		return nil, fmt.Errorf("init workspace home: %v %s", err, stderr)
 	}
 	return sb, nil
+}
+
+func (d Docker) runArgs(ws Workspace, env map[string]string) []string {
+	args := []string{"run", "-d", "--rm", "--label", "legos-factory=1", "--label", "legos-factory-wo=" + ws.ID,
+		"-v", volumeName(ws.ID) + ":" + wsMount,
+		"-v", "lf-cache-go:/cache/go", "-v", "lf-cache-gomod:/cache/gomod", "-v", "lf-cache-npm:/cache/npm",
+		"-w", wsMount,
+		"-e", "HOME=" + ws.HomeDir(), "-e", "GOCACHE=/cache/go", "-e", "GOMODCACHE=/cache/gomod", "-e", "npm_config_cache=/cache/npm"}
+	if ws.Docker {
+		// Root-equivalent access to the host daemon: acceptable only for the single-user self-hosted deployment (ADR-F08).
+		args = append(args, "-v", "/var/run/docker.sock:/var/run/docker.sock")
+	}
+	if d.CPUs > 0 {
+		args = append(args, "--cpus", fmt.Sprint(d.CPUs))
+	}
+	if d.MemoryBytes > 0 {
+		args = append(args, "--memory", fmt.Sprint(d.MemoryBytes))
+	}
+	for _, kv := range envList(env) {
+		args = append(args, "-e", kv)
+	}
+	return append(args, d.Image, "sleep", "infinity")
 }
 
 type dockerSandbox struct {

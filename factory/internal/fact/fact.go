@@ -64,6 +64,7 @@ const (
 	ClassIntegration = "integration"
 	ClassVerify      = "verify"
 	ClassForeman     = "foreman"
+	ClassConfig      = "config"
 )
 
 type WOFailed struct {
@@ -131,6 +132,7 @@ type SandboxRestarted struct {
 }
 
 type VerifyFailed struct {
+	Tier     string   `json:"tier,omitempty"` // "verify" (tier 2) or "integration" (tier 3)
 	Commands []string `json:"commands"`
 	Output   string   `json:"output"`
 }
