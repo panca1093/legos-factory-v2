@@ -261,6 +261,9 @@ func (e *Engine) FollowUp(ctx context.Context, p Project, parentWO, objective st
 			}
 		}
 	}
+	if st != fact.StatusMerged && base == "" {
+		return "", fmt.Errorf("%w: the parent has no pull request branch to continue from", ErrNotAllowed)
+	}
 	id := newID("wo-")
 	_, err = e.Facts.Append(ctx, id, fact.KindWOCreated, fact.WOCreated{Project: p.ID, Objective: objective, LevelCap: parent.LevelCap,
 		Line: e.lineConfigured(ctx, p), ParentWO: parentWO, BaseBranch: base})
