@@ -592,11 +592,12 @@ func (s *Server) getWorkOrder(w http.ResponseWriter, r *http.Request) {
 		"status": status, "stalled": stalled, "facts": page, "more": more, "running": s.isRunning(id)})
 }
 
-// approveWorkOrder records the human approval a level gate waits for; the caller then starts a run to continue.
+// approveWorkOrder records the human approval a level gate (gate "plan", the default) or an escalation (gate "escalation") waits for; the caller then starts a run to continue.
 func (s *Server) approveWorkOrder(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var in struct {
 		Gate string `json:"gate"`
+		Note string `json:"note"`
 	}
 	if r.ContentLength != 0 && !decode(w, r, &in) {
 		return
@@ -617,7 +618,7 @@ func (s *Server) approveWorkOrder(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, "work order is not waiting for approval of the "+in.Gate+" gate")
 		return
 	}
-	if _, err := s.Engine.Facts.Append(r.Context(), id, workflow.KindHumanApproved, workflow.HumanApproved{Gate: in.Gate}); err != nil {
+	if _, err := s.Engine.Facts.Append(r.Context(), id, workflow.KindHumanApproved, workflow.HumanApproved{Gate: in.Gate, Note: in.Note}); err != nil {
 		s.fail(w, r, err, "")
 		return
 	}
