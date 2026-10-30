@@ -160,6 +160,23 @@ func TestAnthropicModelsPaginate(t *testing.T) {
 	}
 }
 
+func TestOpencodeKnownProviderBaseURL(t *testing.T) {
+	s := newStore(t, true)
+	c := mustCred(t, s, Credential{Name: "proxy", Kind: "api_key", Provider: "anthropic", BaseURL: "http://proxy.local/v1"}, "S")
+	rs, err := s.RunEnv(bg, Profile{Agent: "opencode", CredentialID: c.ID, Model: "M"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Provider map[string]struct {
+			Options map[string]string `json:"options"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal([]byte(rs.Env["OPENCODE_CONFIG_CONTENT"]), &cfg); err != nil || cfg.Provider["anthropic"].Options["baseURL"] != "http://proxy.local/v1" || rs.Env["ANTHROPIC_API_KEY"] != "S" {
+		t.Fatalf("env = %v err = %v", rs.Env, err)
+	}
+}
+
 func TestSubscriptionModelsFromPlansFile(t *testing.T) {
 	s := newStore(t, true)
 	if _, err := os.Stat(s.plansFile); err != nil {

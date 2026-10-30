@@ -252,6 +252,12 @@ func (s *Store) RunEnv(ctx context.Context, p Profile) (RunSpec, error) {
 			}
 		case known:
 			env[name] = secret
+			if c.BaseURL != "" {
+				cfg, _ := json.Marshal(map[string]any{"provider": map[string]any{c.Provider: map[string]any{
+					"options": map[string]string{"baseURL": c.BaseURL},
+				}}})
+				env["OPENCODE_CONFIG_CONTENT"] = string(cfg)
+			}
 		default:
 			if c.BaseURL == "" {
 				return rs, fmt.Errorf("custom provider %q needs a base_url for opencode", c.Provider)
