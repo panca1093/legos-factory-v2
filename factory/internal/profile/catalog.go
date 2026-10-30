@@ -172,11 +172,15 @@ func orDefault(s, d string) string {
 	return d
 }
 
-// TODO: confirm opencode's env var names for zai/moonshot/minimax (taken from models.dev conventions).
+// opencodeKeyEnv was checked live against opencode 2.1.3: each variable makes that provider's models appear in session/new
+// (zai needs ZHIPU_API_KEY, ZAI_API_KEY alone enables nothing). OPENCODE_API_KEY enables opencode/* and opencode-go/*.
 var opencodeKeyEnv = map[string]string{
-	"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
+	"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "opencode-go": "OPENCODE_API_KEY",
 	"zai": "ZHIPU_API_KEY", "moonshot": "MOONSHOT_API_KEY", "minimax": "MINIMAX_API_KEY",
 }
+
+// opencodeProviderID maps our provider names to opencode's, which prefix model refs ("moonshotai/kimi-k3").
+var opencodeProviderID = map[string]string{"moonshot": "moonshotai"}
 
 // RunSpec is what a session needs from a profile; Files are relative to the sandbox home.
 type RunSpec struct {
@@ -189,6 +193,11 @@ const (
 	opencodeAuthFile = ".local/share/opencode/auth.json"
 	codexAuthFile    = ".codex/auth.json"
 )
+
+func isJSONObject(secret string) bool {
+	var obj map[string]any
+	return json.Unmarshal([]byte(secret), &obj) == nil && len(obj) > 0
+}
 
 // authFile treats the stored secret as the login file itself (as written by `opencode auth login` / `codex login`).
 func authFile(rel, secret string) (map[string][]byte, error) {
@@ -241,12 +250,16 @@ func (s *Store) RunEnv(ctx context.Context, p Profile) (RunSpec, error) {
 		}
 		env["OPENAI_API_KEY"] = secret
 		if c.BaseURL != "" {
+			// TODO: uncertain — OPENAI_BASE_URL did not redirect codex-acp's requests in a live check; a gateway likely needs CODEX_CONFIG model_providers, unverified
 			env["OPENAI_BASE_URL"] = c.BaseURL
 		}
 	case "opencode":
 		name, known := opencodeKeyEnv[c.Provider]
 		switch {
+		case c.Kind == "subscription" && known && !isJSONObject(secret):
+			env[name] = secret
 		case c.Kind == "subscription":
+			// TODO: uncertain — opencode 2.1.3 ignored this auth.json for built-in providers in a live check; v2 imports `opencode auth export` JSON, shape unverified
 			if rs.Files, err = authFile(opencodeAuthFile, secret); err != nil {
 				return rs, err
 			}
@@ -262,14 +275,16 @@ func (s *Store) RunEnv(ctx context.Context, p Profile) (RunSpec, error) {
 			if c.BaseURL == "" {
 				return rs, fmt.Errorf("custom provider %q needs a base_url for opencode", c.Provider)
 			}
-			auth, _ := json.Marshal(map[string]any{c.Provider: map[string]string{"type": "api", "key": secret}})
+			// the key goes in the config: a live check showed provider options.apiKey reaches the endpoint as a Bearer token, auth.json did not
 			cfg, _ := json.Marshal(map[string]any{"provider": map[string]any{c.Provider: map[string]any{
 				"npm": "@ai-sdk/openai-compatible", "name": c.Provider,
-				"options": map[string]string{"baseURL": c.BaseURL},
+				"options": map[string]string{"baseURL": c.BaseURL, "apiKey": secret},
 				"models":  map[string]any{p.Model: map[string]any{}},
 			}}})
-			rs.Files = map[string][]byte{opencodeAuthFile: auth}
 			env["OPENCODE_CONFIG_CONTENT"] = string(cfg)
+		}
+		if id := opencodeProviderID[c.Provider]; id != "" {
+			rs.Profile.Provider = id
 		}
 	default:
 		return rs, fmt.Errorf("unknown agent %q", p.Agent)

@@ -9,8 +9,9 @@ RUN apt-get update \
 
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" | tar -C /usr/local -xz
 
-# TODO: uncertain — @opencode/cli assumed to be the OpenCode v2 CLI (npm latest 2.2.2; opencode-ai is 1.x), verify its ACP entrypoint on first image build
-RUN npm i -g @agentclientprotocol/claude-agent-acp@0.99.1 @opencode/cli@2.2.2
+# codex-acp bundles its @openai/codex binary (linux x64/arm64 optional deps); @zed-industries/codex-acp is deprecated
+# TODO: uncertain — `opencode acp` was exercised on the 2.1.3 binary only; npm bin of @opencode/cli@2.2.2 is `opencode`, verify ACP on first image build
+RUN npm i -g @agentclientprotocol/claude-agent-acp@0.99.1 @opencode/cli@2.2.2 @agentclientprotocol/codex-acp@2.5.0
 
 ENV PATH=/usr/local/go/bin:$PATH \
     HOME=/ws/home \
