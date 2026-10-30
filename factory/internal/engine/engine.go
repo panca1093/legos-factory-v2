@@ -251,6 +251,8 @@ func (v *view) cycleHas(kind string) bool {
 func load(facts []fact.Fact) (*view, error) {
 	v := &view{facts: facts}
 	start := 0
+	var lastFailed *fact.WOFailed
+	var lastVerify *fact.VerifyFailed
 	for i, f := range facts {
 		switch f.Kind {
 		case fact.KindWOCreated:
@@ -266,6 +268,21 @@ func load(facts []fact.Fact) (*view, error) {
 				return nil, err
 			}
 			v.requeue = &r
+		case fact.KindVerifyFailed:
+			if vf, err := fact.Decode[fact.VerifyFailed](f); err == nil {
+				lastVerify = &vf
+			}
+		case fact.KindWOFailed:
+			if wf, err := fact.Decode[fact.WOFailed](f); err == nil {
+				lastFailed = &wf
+			}
+		case fact.KindWORetried:
+			// a retry after a verify failure rebuilds from the verify output instead of re-verifying the same commit
+			if lastFailed != nil && lastFailed.Class == fact.ClassVerify && lastVerify != nil && !v.line {
+				start = i
+				v.requeue = &fact.WORequeued{Reason: "verify_failed", Failing: lastVerify.Commands, Details: lastVerify.Output}
+			}
+			lastFailed = nil
 		case fact.KindRunStarted:
 			r, err := fact.Decode[fact.RunStarted](f)
 			if err != nil {
@@ -321,6 +338,9 @@ func (e *Engine) failProvider(ctx context.Context, woID string, err error, prof 
 }
 
 func requeuePrompt(r fact.WORequeued) string {
+	if r.Reason == "verify_failed" {
+		return "Verification failed in the sandbox. Failing commands: " + strings.Join(r.Failing, ", ") + ".\n" + r.Details + "\nFix the cause in the repository, then stop."
+	}
 	s := "CI failed on your pull request. Failing checks: " + strings.Join(r.Failing, ", ") + "."
 	if r.Details != "" {
 		s += "\n" + r.Details
