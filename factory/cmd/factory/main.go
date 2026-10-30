@@ -18,12 +18,6 @@ import (
 	"legos-factory/factory/internal/scm"
 )
 
-type stubHarness struct{}
-
-func (stubHarness) Start(context.Context, harness.SessionSpec) (harness.Session, error) {
-	return nil, errors.New("ACP harness not wired yet")
-}
-
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "factory:", err)
@@ -70,7 +64,7 @@ func run(args []string) error {
 	e := &engine.Engine{
 		Facts:   store,
 		Runtime: runtime,
-		Harness: stubHarness{}, // TODO: wire harness.NewACP() once the ACP harness lands
+		Harness: harness.NewACP(),
 		SCM: func(p engine.Project) (scm.Provider, error) {
 			return scm.New(p.SCMKind, p.SCMBaseURL, p.SCMUsername, p.SCMToken, &http.Client{Timeout: 30 * time.Second})
 		},

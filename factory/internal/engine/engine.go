@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -408,9 +409,13 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		}
 	}
 	b := p.Builder
+	env := map[string]string{"CLAUDE_CONFIG_DIR": path.Join(sb.Workspace().HomeDir(), "builder-"+task)}
+	for k, val := range b.Env {
+		env[k] = val
+	}
 	sess, err := e.Harness.Start(ctx, harness.SessionSpec{
 		Role: harness.RoleBuilder, Profile: b.Profile, AgentCommand: b.AgentCommand,
-		Dir: dir, Env: b.Env, SessionID: v.sessionID, Sandbox: sb,
+		Dir: dir, Env: env, SessionID: v.sessionID, Sandbox: sb,
 	})
 	if err != nil {
 		return e.agentFailure(ctx, woID, err, b.Profile)
