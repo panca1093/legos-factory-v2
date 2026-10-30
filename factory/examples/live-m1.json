@@ -1,0 +1,19 @@
+{
+  "id": "testbed",
+  "repo_url": "https://github.com/panca1093/legos-factory-testbed.git",
+  "repo": "panca1093/legos-factory-testbed",
+  "default_branch": "main",
+  "scm_kind": "github",
+  "scm_token_env": "LF_GITHUB_TOKEN",
+  "env": {
+    "setup": "",
+    "verify": ["go vet ./...", "go test ./..."],
+    "test_pkg": "go test ./{pkg}/..."
+  },
+  "builder": {
+    "profile": {"agent": "claude-agent-acp", "provider": "anthropic", "model": "claude-sonnet-5-5", "billing_kind": "subscription"},
+    "env": {"CLAUDE_CODE_OAUTH_TOKEN": "${CLAUDE_CODE_OAUTH_TOKEN}"}
+  },
+  "max_level": 2,
+  "required_checks": ["test"]
+}
