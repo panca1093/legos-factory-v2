@@ -255,7 +255,12 @@ var (
 
 // toolKind classifies (claude-agent-acp titles a pending Write "Preparing file…"; opencode uses the bare tool name) a tool call by the first word of its title; shell calls are neither.
 func toolKind(ev harness.Event) string {
-	f := strings.Fields(ev.Tool)
+	title := ev.Tool
+	// OpenCode titles some calls "<description>: <tool>"; the tool name is the suffix.
+	if i := strings.LastIndex(title, ": "); i >= 0 && !strings.Contains(title[i+2:], " ") {
+		title = title[i+2:]
+	}
+	f := strings.Fields(title)
 	if len(f) == 0 {
 		return ""
 	}

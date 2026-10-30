@@ -354,7 +354,9 @@ func TestLockfileNoiseWarnsInLineModeEvenWhenOwned(t *testing.T) {
 }
 
 func TestToolKindOnCapturedFixtures(t *testing.T) {
-	want := map[string]string{"Preparing file…": "edit", "ToolSearch": "", "read": "read", "shell": ""}
+	want := map[string]string{"Preparing file…": "edit", "ToolSearch": "", "read": "read", "shell": "",
+		"edit": "edit", "subagent": "", "Create notes.txt: read": "read", "Edit files": "edit",
+		"Run `touch notes.txt`": "", "Run `cat main.go`": ""}
 	seen := map[string]bool{}
 	files, _ := filepath.Glob("../harness/testdata/*.jsonl")
 	if len(files) == 0 {
