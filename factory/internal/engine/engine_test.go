@@ -96,11 +96,11 @@ func (s *fakeSession) Prompt(_ context.Context, text string) (string, error) {
 	s.h.prompts = append(s.h.prompts, text)
 	s.h.mu.Unlock()
 	s.events <- harness.Event{Kind: harness.EventStep, Text: "thinking"}
-	tool := "edit file"
+	tool, name := "edit file", "edit"
 	if s.h.toolText != "" {
-		tool = s.h.toolText
+		tool, name = s.h.toolText, "bash"
 	}
-	s.events <- harness.Event{Kind: harness.EventToolCall, Tool: "edit", Text: tool}
+	s.events <- harness.Event{Kind: harness.EventToolCall, Tool: name, Text: tool}
 	if !reflect.DeepEqual(s.h.usage, harness.Usage{}) {
 		s.events <- harness.Event{Kind: harness.EventUsage, Usage: s.h.usage}
 	}

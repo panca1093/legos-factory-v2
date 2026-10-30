@@ -109,6 +109,26 @@ func TestInspectorTestsUseConfiguredCommand(t *testing.T) {
 	}
 }
 
+func TestIsTestCall(t *testing.T) {
+	for _, tc := range []struct {
+		tool, text, cmd string
+		want            bool
+	}{
+		{"bash", "go test ./pkg/...", "", true},
+		{"Bash", "npm test", "", true},
+		{"bash", "make test-unit", "", true},
+		{"bash", "pytest tests/", "pytest {pkg}", true},
+		{"bash", "pytest tests/", "", false},
+		{"bash", "cat latest.txt", "", false},
+		{"edit", "go test", "", false},
+		{"Write", "pytest tests/", "pytest {pkg}", false},
+	} {
+		if got := isTestCall(harness.Event{Tool: tc.tool, Text: tc.text}, tc.cmd); got != tc.want {
+			t.Errorf("%s %q (cmd %q) = %v", tc.tool, tc.text, tc.cmd, got)
+		}
+	}
+}
+
 func TestParseInspectionRequiresFindingsKey(t *testing.T) {
 	for _, r := range []string{"```json\n{}\n```", "```json\n{\"summary\":\"ok\"}\n```", "```json\n{\"findings\":null}\n```"} {
 		if _, err := parseInspection(r); err == nil {

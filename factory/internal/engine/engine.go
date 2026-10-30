@@ -406,6 +406,21 @@ func builderPrompt(v *view, fresh bool, testCmd string) string {
 	return prompt
 }
 
+var nonShellTools = []string{"edit", "multiedit", "write", "read", "patch", "apply_patch", "notebookedit", "glob", "grep", "ls", "webfetch", "websearch"}
+
+// isTestCall reports whether a tool call is a shell command that runs tests; file tools merely mentioning "test" do not count.
+func isTestCall(ev harness.Event, testCmd string) bool {
+	if slices.Contains(nonShellTools, strings.ToLower(strings.TrimSpace(ev.Tool))) {
+		return false
+	}
+	text := strings.ToLower(ev.Tool + " " + ev.Text)
+	prefix, _, _ := strings.Cut(strings.ToLower(testCmd), "{pkg}")
+	if prefix = strings.TrimSpace(prefix); prefix != "" && strings.Contains(text, prefix) {
+		return true
+	}
+	return slices.ContainsFunc([]string{"go test", "npm test", "make test"}, func(c string) bool { return strings.Contains(text, c) })
+}
+
 // testCommand is the tier-1 targeted test command shown to the builder; "" when neither configured nor derivable.
 func (e *Engine) testCommand(ctx context.Context, p Project, sb sandbox.Sandbox, dir string) string {
 	if p.Env.TestPkg != "" {
@@ -766,6 +781,7 @@ type convo struct {
 	openRun   string // an interrupted run to close before starting
 	env       map[string]string
 	prompt    func(fresh bool) string
+	testCmd   string // the builder's targeted-test command; shell calls running it (or go/npm/make test) count as testing
 }
 
 // converse runs the turn, retrying transient provider failures with exponential backoff (bounded, outside any task
@@ -851,7 +867,7 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 				if ev.Kind == harness.EventStep {
 					last = ev.Text
 				}
-				if ev.Kind == harness.EventToolCall && strings.Contains(strings.ToLower(ev.Tool+" "+ev.Text), "test") {
+				if ev.Kind == harness.EventToolCall && isTestCall(ev, c.testCmd) {
 					testSeen = true
 				}
 				if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: step, Summary: firstLine(ev.Text, 200)}); err != nil {
@@ -912,9 +928,10 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "agent_error", Message: err.Error()})
 	}
 	defer cfg.release()
+	testCmd := e.testCommand(ctx, p, sb, dir)
 	_, agentErr, err := e.converse(ctx, woID, sb, convo{
-		role: harness.RoleBuilder, task: task, dir: dir, cfg: cfg, sessionID: v.sessionID, openRun: v.openRun,
-		prompt: func(fresh bool) string { return builderPrompt(v, fresh, e.testCommand(ctx, p, sb, dir)) },
+		role: harness.RoleBuilder, task: task, dir: dir, cfg: cfg, sessionID: v.sessionID, openRun: v.openRun, testCmd: testCmd,
+		prompt: func(fresh bool) string { return builderPrompt(v, fresh, testCmd) },
 	})
 	if err != nil {
 		return false, err

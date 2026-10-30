@@ -1234,7 +1234,8 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 	}
 	defer cfg.release()
 	sid, open := roleSession(facts, harness.RoleBuilder, t.ID)
-	prompt := taskPrompt(o.objective, latestSpec(facts), t, facts, e.testCommand(ctx, o.p, o.sb, dir))
+	testCmd := e.testCommand(ctx, o.p, o.sb, dir)
+	prompt := taskPrompt(o.objective, latestSpec(facts), t, facts, testCmd)
 	if fs := pendingFindings(facts, t.ID); len(fs) > 0 {
 		n := newNonce()
 		prompt += "\n\nAn Inspector reviewed your last commit and reported these findings. Fix every blocker and major one (minor ones are optional), then stop. " +
@@ -1245,7 +1246,7 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 		note = "Your previous run was interrupted and the worktree may hold partial work. "
 	}
 	_, agentErr, err := e.converse(ctx, o.woID, o.sb, convo{
-		role: harness.RoleBuilder, task: t.ID, dir: dir, cfg: cfg, sessionID: sid, openRun: open,
+		role: harness.RoleBuilder, task: t.ID, dir: dir, cfg: cfg, sessionID: sid, openRun: open, testCmd: testCmd,
 		env:    map[string]string{"PORT": strconv.Itoa(port)},
 		prompt: func(bool) string { return note + prompt },
 	})

@@ -97,7 +97,7 @@ func TestNoTargetedTestsWarning(t *testing.T) {
 	for _, tc := range []struct {
 		tool string
 		want int
-	}{{"", 1}, {"go test ./pkg/...", 0}} {
+	}{{"", 1}, {"go test ./pkg/...", 0}, {"cat latest_notes.txt", 1}} {
 		ev := newEnv(t)
 		ev.h.toolText = tc.tool
 		id := ev.create(t)
