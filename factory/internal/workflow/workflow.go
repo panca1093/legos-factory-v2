@@ -164,8 +164,9 @@ type Task struct {
 	Retries          int
 	LastFailureClass string
 	LastChange       string
-	ModelChanges     int  // other_model retries so far; selects the fallback profile
-	SplitPending     bool // retried with split and not yet replaced by sub-tasks
+	ModelChanges     int    // other_model retries so far; selects the fallback profile
+	SplitPending     bool   // retried with split and not yet replaced by sub-tasks
+	SplitFrom        string // the task this one replaced; a split task cannot be split again
 }
 
 type Conflict struct {
@@ -503,7 +504,7 @@ func (s *State) applySplit(v PlanSplit) {
 	ids := make([]string, len(v.Tasks))
 	for j, pt := range v.Tasks {
 		pt.DependsOn = append(slices.Clone(pt.DependsOn), parent.DependsOn...)
-		subs[j] = Task{PlanTask: pt, Status: TaskPending}
+		subs[j] = Task{PlanTask: pt, Status: TaskPending, Retries: parent.Retries, SplitFrom: v.Task}
 		ids[j] = pt.ID
 	}
 	tasks := append(slices.Clone(s.Tasks[:i]), subs...)
@@ -515,6 +516,7 @@ func (s *State) applySplit(v PlanSplit) {
 		}
 	}
 	s.Tasks = tasks
+	s.Conflicts = slices.DeleteFunc(slices.Clone(s.Conflicts), func(c Conflict) bool { return c.A == v.Task || c.B == v.Task })
 	s.Epoch++
 }
 

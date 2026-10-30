@@ -175,6 +175,9 @@ func (s State) check(c Call, lim Limits) error {
 		if !slices.Contains([]string{ChangeSame, ChangeOtherModel, ChangeSplit}, c.Change) {
 			return fmt.Errorf("change %q invalid; use same, other_model or split", c.Change)
 		}
+		if c.Change == ChangeSplit && t.SplitFrom != "" {
+			return fmt.Errorf("task %s already came from splitting %s; use same or other_model, or escalate_to_human", t.ID, t.SplitFrom)
+		}
 		if c.Change == ChangeOtherModel && t.ModelChanges >= lim.BuilderFallbacks {
 			return fmt.Errorf("no fallback model left for task %s (%d configured, %d used); use same, split or escalate_to_human", t.ID, lim.BuilderFallbacks, t.ModelChanges)
 		}
@@ -260,7 +263,9 @@ func (s State) checkDispatch(ids []string, lim Limits) error {
 }
 
 // CanDispatch reports whether dispatching the task alone would be accepted now.
-func (s State) CanDispatch(id string, lim Limits) bool { return s.checkDispatch([]string{id}, lim) == nil }
+func (s State) CanDispatch(id string, lim Limits) bool {
+	return s.checkDispatch([]string{id}, lim) == nil
+}
 
 func (s State) checkPlan() error {
 	if len(s.Tasks) == 0 {
