@@ -301,6 +301,22 @@ func TestIllegalCallsRejectedAndStateUnchanged(t *testing.T) {
 			s.building(fan...)
 			s.emit(KindIntegrationConflict, IntegrationConflict{A: "a", B: "b"})
 		}, Serialize("a", "b"), "needs integrating"},
+		{"retry other_model not yet", func(s *sim) {
+			s.building(fan...)
+			s.must(DispatchBuild([]string{"a"}))
+			s.emit(fact.KindTaskFailed, fact.TaskFailed{Task: "a", Class: "timeout"})
+		}, RetryTask("a", ChangeOtherModel), "M4"},
+		{"serialize reversed order", func(s *sim) {
+			s.integrating(pt("a", nil, "a/"), pt("b", nil, "b/"))
+			s.emit(KindIntegrationConflict, IntegrationConflict{A: "a", B: "b"})
+		}, Serialize("b", "a"), "recorded order"},
+		{"serialize cycle", func(s *sim) {
+			s.integrating(pt("a", nil, "a/"), pt("b", []string{"a"}, "b/"))
+			s.emit(KindIntegrationConflict, IntegrationConflict{A: "b", B: "a"})
+		}, Serialize("b", "a"), "cycle"},
+		{"empty owned paths", func(s *sim) { s.planReady(pt("a", nil)) }, ApprovePlan(""), "no owned_paths"},
+		{"owned path escapes repo", func(s *sim) { s.planReady(pt("a", nil, "src/../../x")) }, ApprovePlan(""), "escapes"},
+		{"owned path absolute", func(s *sim) { s.planReady(pt("a", nil, "/etc")) }, ApprovePlan(""), "absolute"},
 		{"serialize twice", func(s *sim) {
 			s.building(pt("a", nil, "a/"), pt("b", nil, "b/"))
 			s.must(DispatchBuild([]string{"a", "b"}))
@@ -494,5 +510,61 @@ func TestUnknownToolRejectedWithDecision(t *testing.T) {
 	nf, err := s.state().Apply(Call{Tool: "rm_rf"}, s.lim)
 	if err == nil || nf[0].Kind != KindForemanDecision {
 		t.Fatalf("err=%v facts=%v", err, nf)
+	}
+}
+
+func (s *sim) integrating(tasks ...PlanTask) {
+	s.building(tasks...)
+	for _, t := range tasks {
+		s.must(DispatchBuild([]string{t.ID}))
+		s.built(t.ID)
+		s.must(RequestInspection(t.ID))
+		s.inspected(t.ID, 0)
+	}
+}
+
+func TestDuplicateOfAppliedDecisionIsRejected(t *testing.T) {
+	s := newSim(t)
+	s.building(pt("a", nil, "a/"))
+	s.must(EscalateToHuman("first"))
+	nf, err := s.state().Apply(EscalateToHuman("second"), s.lim)
+	if err == nil || !strings.Contains(err.Error(), "already decided: escalate_to_human") {
+		t.Fatalf("err = %v", err)
+	}
+	if nf[0].Payload.(ForemanDecision).Accepted {
+		t.Fatal("duplicate recorded as accepted")
+	}
+}
+
+func TestEscalationApprovalReturnsToEscalatedPhase(t *testing.T) {
+	s := newSim(t)
+	s.specReady()
+	s.call(ApprovePlan("n"))
+	s.call(ApprovePlan("n"))
+	s.call(ApprovePlan("n"))
+	st := s.state()
+	if st.Phase != PhaseAwaitingHuman || st.Gate != GateEscalation || st.EscalatedFrom != PhaseSpecReady {
+		t.Fatalf("state = %+v", st)
+	}
+	s.emit(KindHumanApproved, HumanApproved{Gate: GatePlan})
+	s.phase(PhaseAwaitingHuman)
+	before := st.Epoch
+	s.emit(KindHumanApproved, HumanApproved{Gate: GateEscalation, Note: "go on"})
+	st = s.state()
+	if st.Phase != PhaseSpecReady || st.Gate != "" || st.ConsecutiveRejections != 0 || st.Epoch <= before {
+		t.Fatalf("after approval: %+v", st)
+	}
+	s.must(ApproveSpec("ok"))
+	s.phase(PhasePlanning)
+}
+
+func TestEscalationWhileParkedKeepsGate(t *testing.T) {
+	s := newSim(t)
+	s.facts[0].Payload = []byte(`{"objective":"x","level_cap":0}`)
+	s.planReady(pt("a", nil, "a/"))
+	s.must(ApprovePlan("ok"))
+	s.emit(KindEscalated, Escalated{Reason: "late"})
+	if st := s.state(); st.Gate != GatePlan {
+		t.Fatalf("gate = %q", st.Gate)
 	}
 }

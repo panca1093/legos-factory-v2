@@ -24,6 +24,7 @@ const (
 
 const (
 	GatePlan        = "plan"
+	GateEscalation  = "escalation"
 	DefaultLevelCap = 3
 )
 
@@ -33,6 +34,7 @@ type SpecReady struct {
 
 type HumanApproved struct {
 	Gate string `json:"gate"`
+	Note string `json:"note,omitempty"`
 }
 
 const (
@@ -178,7 +180,7 @@ type State struct {
 	ConsecutiveRejections int
 	Decisions             []Decision // accepted only
 	LevelCap              int
-	Gate                  string // set while awaiting_human at a level gate
+	Gate                  string // set while awaiting_human: GatePlan at the level gate, GateEscalation after escalated
 	FailureClass          string
 	EscalatedFrom         Phase
 
@@ -268,6 +270,9 @@ func (s *State) apply(f fact.Fact) {
 		if v, ok := decode[HumanApproved](f); ok && s.Phase == PhaseAwaitingHuman && s.Gate == v.Gate {
 			s.Epoch++
 			s.Phase, s.Gate = PhaseBuilding, ""
+			if v.Gate == GateEscalation {
+				s.Phase, s.ConsecutiveRejections = s.EscalatedFrom, 0
+			}
 		}
 	case fact.KindRunStarted:
 		r, ok := decode[fact.RunStarted](f)
@@ -378,9 +383,10 @@ func (s *State) apply(f fact.Fact) {
 			s.Epoch++
 		}
 	case KindEscalated:
-		s.EscalatedFrom = s.Phase
-		s.Phase = PhaseAwaitingHuman
-		s.ConsecutiveRejections = 0
+		if s.Phase != PhaseAwaitingHuman {
+			s.EscalatedFrom, s.Phase, s.Gate = s.Phase, PhaseAwaitingHuman, GateEscalation
+			s.ConsecutiveRejections = 0
+		}
 	case fact.KindVerifyPassed:
 		if s.in(PhaseBuilding, PhaseIntegrating) {
 			s.Epoch++

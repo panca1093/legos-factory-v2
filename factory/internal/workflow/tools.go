@@ -3,6 +3,7 @@ package workflow
 import (
 	"encoding/json"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 
@@ -173,13 +174,27 @@ func (s State) check(c Call, lim Limits) error {
 		if !slices.Contains([]string{ChangeSame, ChangeOtherModel, ChangeSplit}, c.Change) {
 			return fmt.Errorf("change %q invalid; use same, other_model or split", c.Change)
 		}
+		if c.Change != ChangeSame {
+			return fmt.Errorf("change %q is not available yet: other_model and split arrive in M4; use same or escalate_to_human", c.Change)
+		}
 	case ToolSerialize:
 		if c.A == c.B {
 			return fmt.Errorf("cannot serialize task %q with itself", c.A)
 		}
 		for _, cf := range s.Conflicts {
-			if pairMatches(cf.A, cf.B, c.A, c.B) && !cf.Serialized {
-				return s.needPhase(PhaseIntegrating)
+			if cf.A == c.A && cf.B == c.B && !cf.Serialized {
+				if err := s.needPhase(PhaseIntegrating); err != nil {
+					return err
+				}
+				if s.ancestors(c.A)[c.B] {
+					return fmt.Errorf("task %s depends on %s; serializing %s onto %s would create a cycle", c.A, c.B, c.B, c.A)
+				}
+				return nil
+			}
+		}
+		for _, cf := range s.Conflicts {
+			if cf.A == c.B && cf.B == c.A && !cf.Serialized {
+				return fmt.Errorf("the recorded order is task_a=%s (already integrated), task_b=%s (conflicting); task_b is the one re-run on top of task_a", cf.A, cf.B)
 			}
 		}
 		return fmt.Errorf("no unresolved integration conflict recorded between %s and %s", c.A, c.B)
@@ -255,6 +270,14 @@ func (s State) checkPlan() error {
 		ids[t.ID] = true
 	}
 	for _, t := range s.Tasks {
+		if len(t.Paths) == 0 {
+			return fmt.Errorf("task %s has no owned_paths; every task must own at least one path", t.ID)
+		}
+		for _, p := range t.Paths {
+			if _, err := CleanPath(p); err != nil {
+				return fmt.Errorf("task %s: %w", t.ID, err)
+			}
+		}
 		for _, d := range t.DependsOn {
 			if !ids[d] {
 				return fmt.Errorf("task %s depends on unknown task %s", t.ID, d)
@@ -297,11 +320,35 @@ func (s State) ancestors(id string) map[string]bool {
 	return out
 }
 
+// CleanPath normalizes an owned path and rejects empty, absolute and repo-escaping ones.
+func CleanPath(p string) (string, error) {
+	c := path.Clean(strings.TrimSpace(p))
+	switch {
+	case strings.TrimSpace(p) == "":
+		return "", fmt.Errorf("empty owned path")
+	case path.IsAbs(c):
+		return "", fmt.Errorf("owned path %q is absolute; use a path relative to the repository root", p)
+	case c == ".." || strings.HasPrefix(c, "../"):
+		return "", fmt.Errorf("owned path %q escapes the repository", p)
+	}
+	return c, nil
+}
+
+// Owned reports whether file falls under one of the owned paths, with the same prefix semantics as the parallel-overlap guard.
+func Owned(file string, owned []string) bool {
+	for _, o := range owned {
+		if pathsOverlap(file, o) {
+			return true
+		}
+	}
+	return false
+}
+
 // prefix reduces a simple glob to its literal directory prefix on segment boundaries; "" matches everything.
 func prefix(p string) string {
 	var keep []string
 	for _, seg := range strings.Split(strings.Trim(strings.TrimPrefix(p, "./"), "/"), "/") {
-		if seg == "" || strings.ContainsAny(seg, "*?[") {
+		if seg == "" || seg == "." || strings.ContainsAny(seg, "*?[") {
 			break
 		}
 		keep = append(keep, seg)
@@ -336,7 +383,11 @@ func (s State) Rejection(tool string, args json.RawMessage, err error, lim Limit
 
 // Apply returns the facts to append for call, in order. A rejected call still yields a rejection decision (plus escalated at the M-th in a row) and the Check error.
 func (s State) Apply(call Call, lim Limits) ([]NewFact, error) {
-	if err := s.Check(call, lim); err != nil {
+	err := s.Check(call, lim)
+	if _, dup := s.Decided(call); err == nil && dup {
+		err = fmt.Errorf("%s rejected: already decided: %s", call.Tool, call.Tool)
+	}
+	if err != nil {
 		return s.Rejection(call.Tool, call.Args(), err, lim), err
 	}
 	reason := call.Note
@@ -385,7 +436,7 @@ func Tools() []ToolDef {
 		{ToolRejectPlan, "Send the plan back to the Architect with a reason. Only valid when the plan is ready and revision rounds remain.", schema(`"reason":`+strProp, "reason")},
 		{ToolDispatchBuild, "Start Builders on pending tasks whose dependencies are done. At most 3 builders run at once and their owned paths must not overlap.", schema(`"task_ids":`+idsProp, "task_ids")},
 		{ToolRequestInspection, "Start an Inspector on a built task that has new commits since its last inspection.", schema(`"task_id":`+strProp, "task_id")},
-		{ToolRetryTask, "Re-run a failed task. change: same, other_model, or split.", schema(`"task_id":`+strProp+`,"change":{"type":"string","enum":["same","other_model","split"]}`, "task_id", "change")},
+		{ToolRetryTask, "Re-run a failed task. Only change \"same\" is available for now (other_model and split arrive later).", schema(`"task_id":`+strProp+`,"change":{"type":"string","enum":["same","other_model","split"]}`, "task_id", "change")},
 		{ToolSerialize, "Resolve a recorded integration conflict by re-running task_b on top of task_a.", schema(`"task_a":`+strProp+`,"task_b":`+strProp, "task_a", "task_b")},
 		{ToolEscalateToHuman, "Hand the work order to a human. Always allowed.", schema(`"reason":`+strProp, "reason")},
 	}
