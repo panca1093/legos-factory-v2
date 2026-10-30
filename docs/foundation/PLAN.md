@@ -16,6 +16,8 @@ previous one's check passes.
 
 ## M1 — Walking skeleton (F13)
 
+Status 2026-10-30: code done and reviewed; **milestone check pending** (live run on a test repo, needs owner credentials).
+
 One work order, one builder, no Foreman loop, no Cataloger, no parallelism.
 
 | Task | Verify |
@@ -33,6 +35,8 @@ open and CI green.
 
 ## M2 — Profiles and credentials (F02–F04)
 
+Status 2026-10-30: code done and reviewed; **milestone check pending** (live GLM/Kimi builder run).
+
 | Task | Verify |
 |---|---|
 | Credential kinds: API key, subscription token; encrypted storage reused | Tokens never returned by the API (test) |
@@ -47,6 +51,8 @@ builder and a Sonnet profile elsewhere.
 
 ## M3 — Foreman and Architect (F05)
 
+Status 2026-10-30: done and reviewed (scripted agents). Foreman protocol: ADR-F15.
+
 | Task | Verify |
 |---|---|
 | Workflow state machine with guards for §6 tools | Table tests: every illegal transition rejected |
@@ -56,6 +62,8 @@ builder and a Sonnet profile elsewhere.
 | M consecutive rejections → escalate | Test |
 
 ## M4 — Parallel builders and integration (F07, F10)
+
+Status 2026-10-30: done and reviewed (scripted agents).
 
 | Task | Verify |
 |---|---|
@@ -67,6 +75,8 @@ builder and a Sonnet profile elsewhere.
 
 ## M5 — Inspector and verification tiers (F08)
 
+Status 2026-10-30: done and reviewed; loan-platform example in `factory/examples/` not yet run against the real repo.
+
 | Task | Verify |
 |---|---|
 | Inspector per task; findings back to the same builder session; ≤K rounds | Test: findings resume the builder; K+1 escalates to Foreman |
@@ -77,12 +87,16 @@ builder and a Sonnet profile elsewhere.
 
 ## M6 — Cataloger
 
+Status 2026-10-30: done and reviewed; the read-steps comparison vs M5 needs live runs.
+
 | Task | Verify |
 |---|---|
 | Context pack per (repo, commit), cached | Cache hit on the second work order at the same commit |
 | Builder and Architect consume the pack | Builder read-only steps before first edit drop vs M5 baseline (lesson #7) |
 
 ## M7 — Autonomy and PR lifecycle (F09, F11)
+
+Status 2026-10-30: done and reviewed; end-to-end auto-merge on a real repo pending.
 
 | Task | Verify |
 |---|---|
@@ -92,6 +106,8 @@ builder and a Sonnet profile elsewhere.
 | Rebase when main moves; follow-up work order on a PR branch | Tests |
 
 ## M8 — More agents on ACP
+
+Status 2026-10-30: done and reviewed; image builds and all three agents answer ACP `initialize` in it; subscription smoke tests pending (owner logins).
 
 | Task | Verify |
 |---|---|
