@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
@@ -452,6 +453,19 @@ func TestRestartExecutesRecordedDecisionWithoutAskingForeman(t *testing.T) {
 	}
 }
 
+func waitBuilt(t *testing.T, ev *env, id, task string) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		facts, _ := ev.e.Facts.List(context.Background(), id)
+		for _, f := range facts {
+			if v, _ := fact.Decode[workflow.TaskBuiltPayload](f); f.Kind == workflow.KindTaskBuilt && v.Task == task {
+				return
+			}
+		}
+	}
+	t.Errorf("task %s never built", task)
+}
+
 func TestIntegrationConflictSerializeRebuildsOnDependency(t *testing.T) {
 	h := newScripted()
 	var ev *env
@@ -460,9 +474,7 @@ func TestIntegrationConflictSerializeRebuildsOnDependency(t *testing.T) {
 	h.build = func(task string, n int, dir string) error {
 		content := strings.ToUpper(task) + "\n"
 		if task == "b" && n == 1 {
-			if _, err := ev.e.Facts.Append(context.Background(), id, workflow.KindIntegrationConflict, workflow.IntegrationConflict{A: "a", B: "b", Files: []string{"shared.txt"}}); err != nil {
-				return err
-			}
+			waitBuilt(t, ev, id, "a") // a builds first, so the Foreman's scripted replies line up with the facts
 		}
 		if n > 1 {
 			content = "B on A\n" // second build of b sees a's file
@@ -471,6 +483,17 @@ func TestIntegrationConflictSerializeRebuildsOnDependency(t *testing.T) {
 			}
 		}
 		return writeIn(task+"/shared.txt", content)(task, n, dir)
+	}
+	foremanCalls := 0
+	h.onRole = func(s harness.SessionSpec) { // lands after the Foreman's last turn, so its next resumed prompt lists the conflict
+		if s.Role != harness.RoleForeman {
+			return
+		}
+		if foremanCalls++; foremanCalls == 5 {
+			if _, err := ev.e.Facts.Append(context.Background(), id, workflow.KindIntegrationConflict, workflow.IntegrationConflict{A: "a", B: "b", Files: []string{"shared.txt"}}); err != nil {
+				t.Error(err)
+			}
+		}
 	}
 	h.say(harness.RoleArchitect, "spec", planJSON(taskA+","+taskB))
 	h.say(harness.RoleForeman, call("approve_spec", `{}`), call("approve_plan", `{}`),
