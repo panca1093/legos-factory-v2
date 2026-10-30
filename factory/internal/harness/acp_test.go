@@ -76,6 +76,8 @@ type echo struct {
 	Env    string
 	Extra  string
 	Claude []string
+	Home   string
+	XDG    string
 }
 
 func echoOf(t *testing.T, evs []Event) echo {
@@ -118,6 +120,9 @@ func TestNewSessionSetsModelAndEnv(t *testing.T) {
 		if !strings.Contains(e.Env, `"`+tool+`":"deny"`) {
 			t.Errorf("read-only config must deny %s: %s", tool, e.Env)
 		}
+	}
+	if !strings.HasSuffix(e.XDG, filepath.Join("inspector-session", ".local", "share")) {
+		t.Errorf("XDG_DATA_HOME = %q", e.XDG)
 	}
 	if e.Extra != "1" {
 		t.Errorf("spec.Env not passed: %q", e.Extra)
@@ -406,7 +411,7 @@ func TestOpencodeConfigMergedWithSpecEnv(t *testing.T) {
 	}
 }
 
-func TestSessionFilesWrittenToHome(t *testing.T) {
+func TestSessionFilesInSessionDirAndRemovedOnClose(t *testing.T) {
 	rt := sandbox.Local{Root: t.TempDir()}
 	ws, _ := rt.CreateWorkspace(context.Background(), "wo1")
 	sb, _ := rt.Start(context.Background(), ws, nil)
@@ -418,11 +423,23 @@ func TestSessionFilesWrittenToHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = s.Close()
-	p := filepath.Join(ws.HomeDir(), ".codex", "auth.json")
+	p := filepath.Join(ws.HomeDir(), "builder-session", ".codex", "auth.json")
 	b, err := os.ReadFile(p)
 	fi, _ := os.Stat(p)
 	if err != nil || string(b) != `{"a":1}` || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("auth file = %q %v %v", b, err, fi)
+	}
+	if _, err := os.Stat(filepath.Join(ws.HomeDir(), ".codex", "auth.json")); err == nil {
+		t.Fatal("auth file leaked into shared home")
+	}
+	if _, err := prompt(t, s); err != nil {
+		t.Fatal(err)
+	}
+	e := echoOf(t, drain(s))
+	if !strings.Contains(e.Home, filepath.Join(ws.HomeDir(), "builder-session", ".codex")) {
+		t.Errorf("CODEX_HOME = %q", e.Home)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("auth file not removed on Close: %v", err)
 	}
 }

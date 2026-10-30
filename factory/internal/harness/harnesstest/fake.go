@@ -84,7 +84,7 @@ func fakeAgent(scenario string) {
 			promptID = m.ID
 			switch scenario {
 			case "echo":
-				b, _ := json.Marshal(map[string]any{"log": log, "env": os.Getenv("OPENCODE_CONFIG_CONTENT"), "extra": os.Getenv("EXTRA"),
+				b, _ := json.Marshal(map[string]any{"log": log, "env": os.Getenv("OPENCODE_CONFIG_CONTENT"), "extra": os.Getenv("EXTRA"), "home": os.Getenv("CODEX_HOME"), "xdg": os.Getenv("XDG_DATA_HOME"),
 					"claude": []string{os.Getenv("CLAUDE_CONFIG_DIR"), os.Getenv("IS_SANDBOX"), os.Getenv("ANTHROPIC_DEFAULT_HAIKU_MODEL")}})
 				chunk(string(b))
 				reply(m.ID, map[string]any{"stopReason": "end_turn"})

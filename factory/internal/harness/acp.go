@@ -15,6 +15,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"legos-factory/factory/internal/sandbox"
 )
 
 // ACP drives an Agent Client Protocol agent (opencode acp, claude-agent-acp, ...) over
@@ -83,7 +85,7 @@ func opencodeConfig(role Role, extraDeny []string) string {
 	return string(b)
 }
 
-// mergeJSON deep-merges two JSON objects, winning on conflicts; unparsable base yields over.
+// mergeJSON deep-merges two JSON objects; over (the role config) wins on conflicts, and an unparsable base yields over.
 func mergeJSON(base, over string) string {
 	var b, o map[string]any
 	if json.Unmarshal([]byte(base), &b) != nil || json.Unmarshal([]byte(over), &o) != nil {
@@ -157,10 +159,25 @@ func (ACP) Start(ctx context.Context, spec SessionSpec) (Session, error) {
 		}
 		env[k] = v
 	}
+	sessDir := env["CLAUDE_CONFIG_DIR"]
+	if sessDir == "" {
+		sessDir = filepath.Join(spec.Sandbox.Workspace().HomeDir(), string(spec.Role)+"-session")
+	}
+	// login files live in the per-session dir, not the shared home, so read-only roles never see them
+	if _, ok := env["XDG_DATA_HOME"]; !ok && isOpencode(spec) {
+		env["XDG_DATA_HOME"] = filepath.Join(sessDir, ".local", "share")
+	}
+	if _, ok := env["CODEX_HOME"]; !ok && isAgent(spec, "codex-acp") {
+		env["CODEX_HOME"] = filepath.Join(sessDir, ".codex")
+	}
+	var written []string
 	for rel, data := range spec.Files {
-		if err := spec.Sandbox.WriteFile(ctx, filepath.Join(spec.Sandbox.Workspace().HomeDir(), rel), data, 0o600); err != nil {
+		p := filepath.Join(sessDir, rel)
+		if err := spec.Sandbox.WriteFile(ctx, p, data, 0o600); err != nil {
+			removeFiles(spec.Sandbox, written)
 			return nil, fmt.Errorf("acp: write %s: %w", rel, err)
 		}
+		written = append(written, p)
 	}
 	cmd := spec.Sandbox.Command(spec.Dir, env, spec.AgentCommand...).Exec(context.Background())
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -176,10 +193,11 @@ func (ACP) Start(ctx context.Context, spec SessionSpec) (Session, error) {
 	s := &acpSession{
 		cmd: cmd, w: stdin, spec: spec, stderr: &tailBuffer{max: 2048},
 		events: make(chan Event, 1024), quit: make(chan struct{}), exited: make(chan struct{}),
-		tools: map[string]string{},
+		tools: map[string]string{}, files: written,
 	}
 	cmd.Stderr = s.stderr
 	if err := cmd.Start(); err != nil {
+		removeFiles(spec.Sandbox, written)
 		return nil, fmt.Errorf("acp: start %s: %w", strings.Join(spec.AgentCommand, " "), err)
 	}
 	go s.readLoop(stdout)
@@ -212,6 +230,16 @@ type acpSession struct {
 	muted    bool // session/load replays history as updates
 	text     strings.Builder
 	tools    map[string]string // tool call id → title
+	files    []string          // login files to delete on Close
+}
+
+func removeFiles(sb sandbox.Sandbox, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, _, _, _ = sb.Exec(ctx, "", nil, append([]string{"rm", "-f"}, paths...)...)
 }
 
 type acpMsg struct {
@@ -415,6 +443,7 @@ func (s *acpSession) Close() error {
 			_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
 		}
 		<-s.exited
+		removeFiles(s.spec.Sandbox, s.files)
 		s.emu.Lock()
 		s.closed = true
 		close(s.events)
