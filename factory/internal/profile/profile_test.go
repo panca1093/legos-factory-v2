@@ -343,6 +343,22 @@ func TestBindAndResolve(t *testing.T) {
 	}
 }
 
+func TestDeleteCredentialDropsSemaphore(t *testing.T) {
+	s := newStore(t, true)
+	c := mustCred(t, s, Credential{Name: "sem", Kind: "api_key", Provider: "anthropic"}, "k")
+	rel, err := s.Acquire(bg, c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel()
+	if err := s.DeleteCredential(bg, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.sems[c.ID]; ok {
+		t.Fatal("semaphore kept after delete")
+	}
+}
+
 func TestAcquireConcurrency(t *testing.T) {
 	s := newStore(t, false)
 	c := mustCred(t, s, Credential{Name: "a", Kind: "api_key", Provider: "anthropic", Concurrency: 2}, "k")

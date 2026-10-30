@@ -200,8 +200,13 @@ func (s *Store) DeleteCredential(ctx context.Context, id string) error {
 	if n > 0 {
 		return fmt.Errorf("credential %s is used by %d profile(s)", id, n)
 	}
-	_, err := s.db.ExecContext(ctx, `DELETE FROM credentials WHERE id=?`, id)
-	return err
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM credentials WHERE id=?`, id); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	delete(s.sems, id)
+	s.mu.Unlock()
+	return nil
 }
 
 // Secret is the only way to read a credential's secret.
