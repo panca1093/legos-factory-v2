@@ -79,6 +79,7 @@ type RunFinished struct {
 	Run        string          `json:"run"`
 	StopReason string          `json:"stop_reason"`
 	Usage      json.RawMessage `json:"usage,omitempty"`
+	CostUSD    float64         `json:"cost_usd,omitempty"`
 }
 
 type TaskCommitted struct {

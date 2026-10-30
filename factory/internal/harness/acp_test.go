@@ -76,6 +76,8 @@ type echo struct {
 	Env    string
 	Extra  string
 	Claude []string
+	Home   string
+	XDG    string
 }
 
 func echoOf(t *testing.T, evs []Event) echo {
@@ -118,6 +120,9 @@ func TestNewSessionSetsModelAndEnv(t *testing.T) {
 		if !strings.Contains(e.Env, `"`+tool+`":"deny"`) {
 			t.Errorf("read-only config must deny %s: %s", tool, e.Env)
 		}
+	}
+	if !strings.HasSuffix(e.XDG, filepath.Join("inspector-session", ".local", "share")) {
+		t.Errorf("XDG_DATA_HOME = %q", e.XDG)
 	}
 	if e.Extra != "1" {
 		t.Errorf("spec.Env not passed: %q", e.Extra)
@@ -232,9 +237,9 @@ func TestReplayedOpencodeStream(t *testing.T) {
 		"tool_update:call_1:read:completed:package main\nfunc main() {}",
 		"tool_call:call_2:shell",
 		"tool_update:call_2:shell:failed:",
-		"usage:{InputTokens:0 OutputTokens:0 CacheReadTokens:0 CacheCreateTokens:0 CostUSD:0.0123}",
+		"usage:{InputTokens:0 OutputTokens:0 CacheReadTokens:0 CacheCreateTokens:0 Models:[] CostUSD:0.0123}",
 		"step:Done.",
-		"usage:{InputTokens:100 OutputTokens:20 CacheReadTokens:7 CacheCreateTokens:0 CostUSD:0}",
+		"usage:{InputTokens:100 OutputTokens:20 CacheReadTokens:7 CacheCreateTokens:0 Models:[] CostUSD:0}",
 		"stop:end_turn",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -382,5 +387,59 @@ func TestCloseKillsProcessTree(t *testing.T) {
 	}
 	if err := s.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
+	}
+}
+
+func TestOpencodeConfigMergedWithSpecEnv(t *testing.T) {
+	s, err := startFake(t, "echo", SessionSpec{Role: RoleInspector, Profile: Profile{Agent: "opencode", Provider: "opencode-go", Model: "kimi"}},
+		`OPENCODE_CONFIG_CONTENT={"provider":{"acme":{"name":"acme"}},"permission":{"edit":"allow","custom":"ask"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prompt(t, s); err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Provider   map[string]any    `json:"provider"`
+		Permission map[string]string `json:"permission"`
+	}
+	if err := json.Unmarshal([]byte(echoOf(t, drain(s)).Env), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Provider["acme"] == nil || cfg.Permission["custom"] != "ask" || cfg.Permission["edit"] != "deny" || cfg.Permission["external_directory"] != "deny" {
+		t.Fatalf("merged config = %+v", cfg)
+	}
+}
+
+func TestSessionFilesInSessionDirAndRemovedOnClose(t *testing.T) {
+	rt := sandbox.Local{Root: t.TempDir()}
+	ws, _ := rt.CreateWorkspace(context.Background(), "wo1")
+	sb, _ := rt.Start(context.Background(), ws, nil)
+	s, err := ACP{}.Start(context.Background(), SessionSpec{
+		Role: RoleBuilder, Profile: Profile{Agent: "codex-acp", Model: "haiku"}, AgentCommand: []string{os.Args[0]},
+		Dir: t.TempDir(), Env: map[string]string{"ACP_FAKE_AGENT": "echo"}, Sandbox: sb,
+		Files: map[string][]byte{".codex/auth.json": []byte(`{"a":1}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(ws.HomeDir(), "builder-session", ".codex", "auth.json")
+	b, err := os.ReadFile(p)
+	fi, _ := os.Stat(p)
+	if err != nil || string(b) != `{"a":1}` || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("auth file = %q %v %v", b, err, fi)
+	}
+	if _, err := os.Stat(filepath.Join(ws.HomeDir(), ".codex", "auth.json")); err == nil {
+		t.Fatal("auth file leaked into shared home")
+	}
+	if _, err := prompt(t, s); err != nil {
+		t.Fatal(err)
+	}
+	e := echoOf(t, drain(s))
+	if !strings.Contains(e.Home, filepath.Join(ws.HomeDir(), "builder-session", ".codex")) {
+		t.Errorf("CODEX_HOME = %q", e.Home)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatalf("auth file not removed on Close: %v", err)
 	}
 }

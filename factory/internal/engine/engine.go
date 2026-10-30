@@ -11,11 +11,13 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"time"
 
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
+	"legos-factory/factory/internal/profile"
 	"legos-factory/factory/internal/sandbox"
 	"legos-factory/factory/internal/scm"
 )
@@ -105,13 +107,21 @@ func LoadProject(path string) (Project, error) {
 	return p, nil
 }
 
+// Profiles resolves a role to a profile and builds its env; *profile.Store implements it.
+type Profiles interface {
+	Resolve(ctx context.Context, projectID string, role harness.Role) (profile.Profile, error)
+	RunEnv(ctx context.Context, p profile.Profile) (profile.RunSpec, error)
+	Acquire(ctx context.Context, credID string) (release func(), err error)
+}
+
 type Engine struct {
-	Facts   *fact.Store
-	Runtime sandbox.Runtime
-	Harness harness.Harness
-	SCM     func(Project) (scm.Provider, error)
-	Now     func() time.Time
-	Log     *slog.Logger
+	Profiles Profiles // optional; used when the project has no explicit builder
+	Facts    *fact.Store
+	Runtime  sandbox.Runtime
+	Harness  harness.Harness
+	SCM      func(Project) (scm.Provider, error)
+	Now      func() time.Time
+	Log      *slog.Logger
 	// StableAfter is how long an all-success check set must stay unchanged before ci_green when no required checks are configured; 0 means 60s.
 	StableAfter time.Duration
 }
@@ -433,13 +443,33 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		}
 	}
 	b := p.Builder
+	var price *profile.Price
+	var files map[string][]byte
+	if b.Profile.Agent == "" && e.Profiles != nil {
+		prof, err := e.Profiles.Resolve(ctx, p.ID, harness.RoleBuilder)
+		if err != nil {
+			return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: "resolve builder profile: " + err.Error()})
+		}
+		rs, err := e.Profiles.RunEnv(ctx, prof)
+		if err != nil {
+			return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: "builder profile env: " + err.Error()})
+		}
+		b = BuilderConfig{Profile: rs.Profile, AgentCommand: profile.AgentCommand(prof.Agent), Env: rs.Env}
+		files = rs.Files
+		price = &prof.Price
+		release, err := e.Profiles.Acquire(ctx, prof.CredentialID)
+		if err != nil {
+			return false, err
+		}
+		defer release()
+	}
 	env := map[string]string{"CLAUDE_CONFIG_DIR": path.Join(sb.Workspace().HomeDir(), "builder-"+task)}
 	for k, val := range b.Env {
 		env[k] = val
 	}
 	spec := harness.SessionSpec{
 		Role: harness.RoleBuilder, Profile: b.Profile, AgentCommand: b.AgentCommand,
-		Dir: dir, Env: env, SessionID: v.sessionID, Sandbox: sb,
+		Dir: dir, Env: env, Files: files, SessionID: v.sessionID, Sandbox: sb,
 	}
 	sess, err := e.Harness.Start(ctx, spec)
 	if errors.Is(err, harness.ErrNoLoad) {
@@ -481,6 +511,7 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 				usage.OutputTokens += ev.Usage.OutputTokens
 				usage.CacheReadTokens += ev.Usage.CacheReadTokens
 				usage.CacheCreateTokens += ev.Usage.CacheCreateTokens
+				usage.Models = mergeModels(usage.Models, ev.Usage.Models)
 			}
 		}
 	}()
@@ -500,8 +531,27 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		return e.agentFailure(ctx, woID, perr, b.Profile)
 	}
 	raw, _ := json.Marshal(usage)
-	_, err = e.Facts.Append(ctx, woID, fact.KindRunFinished, fact.RunFinished{Run: run, StopReason: stop, Usage: raw})
+	fin := fact.RunFinished{Run: run, StopReason: stop, Usage: raw}
+	if price != nil {
+		fin.CostUSD = profile.Cost(*price, usage)
+	}
+	_, err = e.Facts.Append(ctx, woID, fact.KindRunFinished, fin)
 	return false, err
+}
+
+func mergeModels(dst, src []harness.ModelUsage) []harness.ModelUsage {
+	for _, m := range src {
+		i := slices.IndexFunc(dst, func(d harness.ModelUsage) bool { return d.Model == m.Model })
+		if i < 0 {
+			dst = append(dst, m)
+			continue
+		}
+		dst[i].InputTokens += m.InputTokens
+		dst[i].OutputTokens += m.OutputTokens
+		dst[i].CacheReadTokens += m.CacheReadTokens
+		dst[i].CacheWriteTokens += m.CacheWriteTokens
+	}
+	return dst
 }
 
 func (e *Engine) agentFailure(ctx context.Context, woID string, err error, prof harness.Profile) (bool, error) {
