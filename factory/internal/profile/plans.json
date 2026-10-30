@@ -1,0 +1,5 @@
+{
+  "claude": [{"id": "claude-opus-4-1"}, {"id": "claude-sonnet-4-5"}, {"id": "claude-haiku-4-5"}],
+  "opencode-go": [{"id": "glm-4.6"}, {"id": "kimi-k2"}, {"id": "qwen3-coder"}],
+  "chatgpt": [{"id": "gpt-5"}, {"id": "gpt-5-codex"}]
+}

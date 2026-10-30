@@ -11,6 +11,7 @@ import (
 
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
+	"legos-factory/factory/internal/profile"
 	"legos-factory/factory/internal/sandbox"
 	"legos-factory/factory/internal/scm"
 )
@@ -44,6 +45,7 @@ func newRemote(t *testing.T) string {
 type fakeHarness struct {
 	mu      sync.Mutex
 	edit    func(call int, dir string) error
+	usage   harness.Usage
 	specs   []harness.SessionSpec
 	prompts []string
 }
@@ -78,6 +80,9 @@ func (s *fakeSession) Prompt(_ context.Context, text string) (string, error) {
 	s.h.mu.Unlock()
 	s.events <- harness.Event{Kind: harness.EventStep, Text: "thinking"}
 	s.events <- harness.Event{Kind: harness.EventToolCall, Tool: "edit", Text: "edit file"}
+	if s.h.usage != (harness.Usage{}) {
+		s.events <- harness.Event{Kind: harness.EventUsage, Usage: s.h.usage}
+	}
 	if s.h.edit != nil {
 		if err := s.h.edit(s.call, s.spec.Dir); err != nil {
 			return "", err
@@ -404,6 +409,85 @@ func TestResumeAfterCrashMidRun(t *testing.T) {
 		t.Errorf("spec=%q prompt=%q", ev.h.specs[0].SessionID, ev.h.prompts[0])
 	}
 	if st := status(t, ev.e, id); st != fact.StatusPROpen {
+		t.Fatalf("status = %s", st)
+	}
+}
+
+type fakeProfiles struct {
+	released, acquired int
+	err                error
+}
+
+func (f *fakeProfiles) Resolve(context.Context, string, harness.Role) (profile.Profile, error) {
+	return profile.Profile{ID: "prof-1", Agent: "claude-agent-acp", CredentialID: "cred-1", Model: "m",
+		Price: profile.Price{InputPerMTok: 3, OutputPerMTok: 15}}, f.err
+}
+
+func (f *fakeProfiles) RunEnv(context.Context, profile.Profile) (harness.Profile, map[string]string, error) {
+	return harness.Profile{Agent: "claude-agent-acp", Provider: "anthropic", Model: "m", BillingKind: "api_key"},
+		map[string]string{"ANTHROPIC_API_KEY": "k"}, nil
+}
+
+func (f *fakeProfiles) Acquire(context.Context, string) (func(), error) {
+	f.acquired++
+	return func() { f.released++ }, nil
+}
+
+func TestBuilderFromProfile(t *testing.T) {
+	ctx := context.Background()
+	ev := newEnv(t, "test -f out.txt")
+	ev.h.usage = harness.Usage{InputTokens: 1_000_000, OutputTokens: 100_000, CostUSD: 42}
+	fp := &fakeProfiles{}
+	ev.e.Profiles = fp
+	id := ev.create(t)
+	if err := ev.e.Run(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, ev.e, id); st != fact.StatusPROpen {
+		t.Fatalf("status = %s", st)
+	}
+	spec := ev.h.specs[0]
+	if spec.Env["ANTHROPIC_API_KEY"] != "k" || spec.Profile.Provider != "anthropic" || spec.AgentCommand[0] != "claude-agent-acp" {
+		t.Errorf("spec = %+v", spec)
+	}
+	if fp.acquired != 1 || fp.released != 1 {
+		t.Errorf("acquire/release = %d/%d", fp.acquired, fp.released)
+	}
+	facts, _ := ev.e.Facts.List(ctx, id)
+	for _, f := range facts {
+		if f.Kind == fact.KindRunFinished {
+			r, _ := fact.Decode[fact.RunFinished](f)
+			if want := 3.0 + 1.5; r.CostUSD != want {
+				t.Errorf("cost = %v, want %v (harness estimate must be ignored)", r.CostUSD, want)
+			}
+			return
+		}
+	}
+	t.Fatal("no run.finished")
+}
+
+func TestExplicitBuilderBeatsProfiles(t *testing.T) {
+	ev := newEnv(t, "test -f out.txt")
+	fp := &fakeProfiles{}
+	ev.e.Profiles = fp
+	ev.p.Builder = BuilderConfig{Profile: harness.Profile{Agent: "claude-agent-acp", Model: "json"}, AgentCommand: []string{"x"}}
+	id := ev.create(t)
+	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	if fp.acquired != 0 || ev.h.specs[0].Profile.Model != "json" {
+		t.Errorf("profiles used despite explicit builder: %+v", ev.h.specs[0])
+	}
+}
+
+func TestNoBuilderBindingFailsWorkOrder(t *testing.T) {
+	ev := newEnv(t)
+	ev.e.Profiles = &fakeProfiles{err: profile.ErrNoBinding}
+	id := ev.create(t)
+	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, ev.e, id); st != fact.StatusFailed {
 		t.Fatalf("status = %s", st)
 	}
 }

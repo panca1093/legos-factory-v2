@@ -16,6 +16,7 @@ import (
 
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
+	"legos-factory/factory/internal/profile"
 	"legos-factory/factory/internal/sandbox"
 	"legos-factory/factory/internal/scm"
 )
@@ -100,13 +101,21 @@ func LoadProject(path string) (Project, error) {
 	return p, nil
 }
 
+// Profiles resolves a role to a profile and builds its env; *profile.Store implements it.
+type Profiles interface {
+	Resolve(ctx context.Context, projectID string, role harness.Role) (profile.Profile, error)
+	RunEnv(ctx context.Context, p profile.Profile) (harness.Profile, map[string]string, error)
+	Acquire(ctx context.Context, credID string) (release func(), err error)
+}
+
 type Engine struct {
-	Facts   *fact.Store
-	Runtime sandbox.Runtime
-	Harness harness.Harness
-	SCM     func(Project) (scm.Provider, error)
-	Now     func() time.Time
-	Log     *slog.Logger
+	Profiles Profiles // optional; used when the project has no explicit builder
+	Facts    *fact.Store
+	Runtime  sandbox.Runtime
+	Harness  harness.Harness
+	SCM      func(Project) (scm.Provider, error)
+	Now      func() time.Time
+	Log      *slog.Logger
 }
 
 const task = "main"
@@ -409,6 +418,24 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		}
 	}
 	b := p.Builder
+	var price *profile.Price
+	if b.Profile.Agent == "" && e.Profiles != nil {
+		prof, err := e.Profiles.Resolve(ctx, p.ID, harness.RoleBuilder)
+		if err != nil {
+			return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: "resolve builder profile: " + err.Error()})
+		}
+		hp, penv, err := e.Profiles.RunEnv(ctx, prof)
+		if err != nil {
+			return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: "builder profile env: " + err.Error()})
+		}
+		b = BuilderConfig{Profile: hp, AgentCommand: profile.AgentCommand(prof.Agent), Env: penv}
+		price = &prof.Price
+		release, err := e.Profiles.Acquire(ctx, prof.CredentialID)
+		if err != nil {
+			return false, err
+		}
+		defer release()
+	}
 	env := map[string]string{"CLAUDE_CONFIG_DIR": path.Join(sb.Workspace().HomeDir(), "builder-"+task)}
 	for k, val := range b.Env {
 		env[k] = val
@@ -470,7 +497,11 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		return e.agentFailure(ctx, woID, perr, b.Profile)
 	}
 	raw, _ := json.Marshal(usage)
-	_, err = e.Facts.Append(ctx, woID, fact.KindRunFinished, fact.RunFinished{Run: run, StopReason: stop, Usage: raw})
+	fin := fact.RunFinished{Run: run, StopReason: stop, Usage: raw}
+	if price != nil {
+		fin.CostUSD = profile.Cost(*price, usage)
+	}
+	_, err = e.Facts.Append(ctx, woID, fact.KindRunFinished, fin)
 	return false, err
 }
 
