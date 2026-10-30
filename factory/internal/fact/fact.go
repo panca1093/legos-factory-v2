@@ -59,6 +59,13 @@ type RunStarted struct {
 	Provider    string `json:"provider,omitempty"`
 	Model       string `json:"model,omitempty"`
 	BillingKind string `json:"billing_kind,omitempty"`
+	SessionID   string `json:"session_id,omitempty"`
+}
+
+type WORequeued struct {
+	Reason  string   `json:"reason"`
+	Failing []string `json:"failing,omitempty"`
+	Details string   `json:"details,omitempty"`
 }
 
 type RunStep struct {
