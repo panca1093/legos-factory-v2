@@ -2,16 +2,16 @@ package engine
 
 import (
 	"context"
-	"os"
+	"fmt"
 	"path"
-	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"legos-factory/factory/internal/catalog"
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
-	"legos-factory/factory/internal/workflow"
 )
 
 const (
@@ -31,42 +31,99 @@ func (e *Engine) roleConfigured(ctx context.Context, p Project, role harness.Rol
 	return false
 }
 
+const (
+	maxManifestBytes  = 64 << 10
+	catalogRetryAfter = 24 * time.Hour
+)
+
+// catalogLock serialises cataloging per (repo, commit) within the process, so concurrent work orders share one run.
+func (e *Engine) catalogLock(ctx context.Context, key string) (func(), error) {
+	v, _ := e.catLocks.LoadOrStore(key, make(chan struct{}, 1))
+	ch := v.(chan struct{})
+	select {
+	case ch <- struct{}{}:
+		return func() { <-ch }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// pinnedCommit is the base commit of the first catalog.ready fact: re-entries keep the pack they started with.
+func pinnedCommit(facts []fact.Fact) string {
+	for _, f := range facts {
+		if f.Kind == fact.KindCatalogReady {
+			if r, err := fact.Decode[fact.CatalogReady](f); err == nil && r.Commit != "" {
+				return r.Commit
+			}
+		}
+	}
+	return ""
+}
+
 // catalogPack returns the context pack for the base commit: cached, else deterministic plus an optional read-only
 // Cataloger session. nil means no pack (phase disabled or nothing recognizable); the order proceeds without it.
 func (e *Engine) catalogPack(ctx context.Context, o *orch, facts []fact.Fact) (*catalog.Pack, error) {
 	if e.Catalog == nil {
 		return nil, nil
 	}
-	commit, err := o.git(ctx, o.dir, "rev-parse", o.p.DefaultBranch)
-	if err != nil {
-		e.log().Warn("catalog: base commit", "wo", o.woID, "err", err)
-		return nil, nil
+	commit := pinnedCommit(facts)
+	reentry := commit != ""
+	if !reentry {
+		var err error
+		if commit, err = o.git(ctx, o.dir, "rev-parse", o.p.DefaultBranch); err != nil {
+			e.log().Warn("catalog: base commit", "wo", o.woID, "err", err)
+			return nil, nil
+		}
 	}
-	if pack, ok, err := e.Catalog.Get(ctx, o.p.Repo, commit); err != nil {
+	unlock, err := e.catalogLock(ctx, o.p.Repo+"@"+commit)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	pack, ok, err := e.Catalog.Get(ctx, o.p.Repo, commit)
+	if err != nil {
 		e.log().Warn("catalog: lookup", "wo", o.woID, "err", err)
 		return nil, nil
-	} else if ok {
-		return &pack, e.catalogReady(ctx, o.woID, facts, pack, true)
 	}
-	pack := e.deterministicPack(ctx, o)
-	if e.roleConfigured(ctx, o.p, harness.RoleCataloger) {
-		got, ok, err := e.runCataloger(ctx, o)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
+	configured := !reentry && e.roleConfigured(ctx, o.p, harness.RoleCataloger)
+	retry := ok && pack.Source == catalog.SourceDeterministic && configured && e.now().Sub(pack.CreatedAt) >= catalogRetryAfter
+	if ok && !retry {
+		return e.usePack(ctx, o, facts, pack, true)
+	}
+	if !ok {
+		pack = e.deterministicPack(ctx, o, commit)
+	}
+	pack.Source = catalog.SourceDeterministic
+	if configured {
+		got, found, err := e.runCataloger(ctx, o, commit)
+		switch {
+		case err != nil && ctx.Err() != nil:
+			return nil, ctx.Err()
+		case err != nil:
+			e.log().Warn("catalog: cataloger failed", "wo", o.woID, "err", err)
+			if _, aerr := e.Facts.Append(ctx, o.woID, fact.KindRunStep, fact.RunStep{Step: "catalog_failed", Summary: firstLine(err.Error(), 200)}); aerr != nil {
+				return nil, aerr
+			}
+		case found:
 			pack = catalog.Merge(pack, got)
+			pack.Source = catalog.SourceCataloger
 		}
 	}
 	pack.Repo, pack.Commit = o.p.Repo, commit
+	pack.CreatedAt = e.now().UTC()
+	if err := e.Catalog.Put(ctx, pack); err != nil {
+		e.log().Warn("catalog: store", "wo", o.woID, "err", err)
+	}
+	return e.usePack(ctx, o, facts, pack, false)
+}
+
+// usePack treats a pack without files as the "nothing recognizable" marker.
+func (e *Engine) usePack(ctx context.Context, o *orch, facts []fact.Fact, pack catalog.Pack, hit bool) (*catalog.Pack, error) {
 	if len(pack.Files) == 0 {
 		e.log().Warn("catalog: nothing recognizable", "wo", o.woID)
 		return nil, nil
 	}
-	if err := e.Catalog.Put(ctx, pack); err != nil {
-		e.log().Warn("catalog: store", "wo", o.woID, "err", err)
-	}
-	return &pack, e.catalogReady(ctx, o.woID, facts, pack, false)
+	return &pack, e.catalogReady(ctx, o.woID, facts, pack, hit)
 }
 
 func (e *Engine) catalogReady(ctx context.Context, woID string, facts []fact.Fact, p catalog.Pack, hit bool) error {
@@ -81,40 +138,87 @@ func (e *Engine) catalogReady(ctx context.Context, woID string, facts []fact.Fac
 	return err
 }
 
-// deterministicPack stages the manifest files on the host because the sandbox filesystem may not be host-visible.
-func (e *Engine) deterministicPack(ctx context.Context, o *orch) catalog.Pack {
-	tmp, err := os.MkdirTemp("", "lf-catalog-")
+type treeEntry struct{ mode, path string }
+
+// commitTree lists the blobs of a commit from git, never the worktree; symlinks are kept but flagged by mode.
+func (o *orch) commitTree(ctx context.Context, commit string) ([]treeEntry, error) {
+	argv := []string{"git", "ls-tree", "-r", "-z", commit}
+	out, stderr, code, err := o.sb.Exec(ctx, o.dir, nil, argv...)
+	if err != nil || code != 0 {
+		return nil, fmt.Errorf("git ls-tree: %v %s", err, firstLine(stderr, 200))
+	}
+	var tree []treeEntry
+	for _, rec := range strings.Split(out, "\x00") {
+		meta, p, ok := strings.Cut(rec, "\t")
+		if !ok {
+			continue
+		}
+		tree = append(tree, treeEntry{mode: strings.Fields(meta)[0], path: p})
+	}
+	return tree, nil
+}
+
+// showBlob reads a regular file at commit through git, skipping symlinks and files over maxManifestBytes.
+func (o *orch) showBlob(ctx context.Context, commit, name string) (string, bool) {
+	spec := commit + ":" + name
+	size, _, code, err := o.sb.Exec(ctx, o.dir, nil, "git", "cat-file", "-s", spec)
+	if n, perr := strconv.Atoi(strings.TrimSpace(size)); err != nil || code != 0 || perr != nil || n > maxManifestBytes {
+		return "", false
+	}
+	out, _, code, err := o.sb.Exec(ctx, o.dir, nil, "git", "show", spec)
+	return out, err == nil && code == 0
+}
+
+// deterministicPack reads manifests from the base commit through git, so nothing in the worktree can influence it.
+func (e *Engine) deterministicPack(ctx context.Context, o *orch, commit string) catalog.Pack {
+	tree, err := o.commitTree(ctx, commit)
 	if err != nil {
 		return catalog.Pack{}
 	}
-	defer os.RemoveAll(tmp)
-	for _, n := range []string{"go.mod", "package.json", "Makefile", "README.md", "README"} {
-		if out, _, code, err := o.sb.Exec(ctx, o.dir, nil, "cat", n); err == nil && code == 0 {
-			_ = os.WriteFile(filepath.Join(tmp, n), []byte(out), 0o644)
+	files := map[string]string{}
+	var dirs []string
+	for _, t := range tree {
+		if t.mode == "120000" {
+			continue
+		}
+		if !strings.Contains(t.path, "/") {
+			if slices.Contains(manifestNames, t.path) {
+				if body, ok := o.showBlob(ctx, commit, t.path); ok {
+					files[t.path] = body
+				}
+			}
+		} else if d, _, _ := strings.Cut(t.path, "/"); !strings.HasPrefix(d, ".") && !slices.Contains(dirs, d) {
+			dirs = append(dirs, d)
 		}
 	}
-	run := func(ctx context.Context, _ string, args ...string) (string, error) {
-		out, _, _, err := o.sb.Exec(ctx, o.dir, nil, args...)
-		return out, err
-	}
-	p, err := catalog.Deterministic(ctx, run, tmp)
+	p, err := catalog.Deterministic(files, dirs)
 	if err != nil {
 		return catalog.Pack{}
 	}
 	return p
 }
 
-// runCataloger returns ok=false when the reply stays unusable after one re-ask; the deterministic pack then stands alone.
-func (e *Engine) runCataloger(ctx context.Context, o *orch) (catalog.Pack, bool, error) {
-	tree, _ := o.git(ctx, o.dir, "ls-files")
-	if len(tree) > maxTreeBytes {
+var manifestNames = []string{"go.mod", "package.json", "Makefile", "README.md", "README"}
+
+// runCataloger returns found=false when the reply stays unusable after one re-ask; the deterministic pack then stands alone.
+func (e *Engine) runCataloger(ctx context.Context, o *orch, commit string) (catalog.Pack, bool, error) {
+	o.catalogCommit = commit
+	var names []string
+	if tree, err := o.commitTree(ctx, commit); err == nil {
+		for _, t := range tree {
+			names = append(names, t.path)
+		}
+	}
+	list := strings.Join(names, "\n")
+	if len(list) > maxTreeBytes {
 		cut := maxTreeBytes
-		if i := strings.LastIndex(tree[:cut], "\n"); i >= 0 {
+		if i := strings.LastIndex(list[:cut], "\n"); i >= 0 {
 			cut = i
 		}
-		tree = tree[:cut] + "\n…(truncated)"
+		list = list[:cut] + "\n…(truncated)"
 	}
-	prompt := catalog.Prompt(o.objective, tree)
+	n := newNonce()
+	prompt := catalog.Prompt(untrustedNote(n, "TREE") + "\n" + fence("TREE", n, list))
 	reply, err := o.runRole(ctx, harness.RoleCataloger, "cataloger", prompt, prompt)
 	if err != nil {
 		return catalog.Pack{}, false, err
@@ -144,19 +248,12 @@ func packBlock(pack *catalog.Pack) string {
 		untrustedNote(n, "PACK") + "\n" + fence("PACK", n, catalog.Render(*pack, maxPackBytes))
 }
 
-func packTestPkg(pack *catalog.Pack) string {
-	if pack == nil {
-		return ""
-	}
-	return pack.Commands["test_pkg"]
-}
-
 var (
 	readTools = []string{"read", "grep", "glob", "ls", "list", "search", "find", "view", "notebookread"}
-	editTools = []string{"edit", "multiedit", "write", "patch", "apply_patch", "notebookedit", "create"}
+	editTools = []string{"edit", "multiedit", "write", "patch", "apply_patch", "notebookedit", "create", "preparing"}
 )
 
-// toolKind classifies a tool call by the first word of its title; shell calls are neither.
+// toolKind classifies (claude-agent-acp titles a pending Write "Preparing file…"; opencode uses the bare tool name) a tool call by the first word of its title; shell calls are neither.
 func toolKind(ev harness.Event) string {
 	f := strings.Fields(ev.Tool)
 	if len(f) == 0 {
@@ -172,34 +269,29 @@ func toolKind(ev harness.Event) string {
 	return ""
 }
 
-// lockfileSibling maps a lockfile to the manifest whose change explains it; "" means it is noise whenever not owned.
-var lockfileSibling = map[string]string{
-	"package-lock.json": "", "yarn.lock": "", "pnpm-lock.yaml": "", "npm-shrinkwrap.json": "",
+// lockfileManifest maps a lockfile to the manifest (same directory) whose change explains it.
+var lockfileManifest = map[string]string{
+	"package-lock.json": "package.json", "yarn.lock": "package.json", "pnpm-lock.yaml": "package.json", "npm-shrinkwrap.json": "package.json",
 	"go.sum": "go.mod", "Cargo.lock": "Cargo.toml", "poetry.lock": "pyproject.toml", "Pipfile.lock": "Pipfile",
 	"composer.lock": "composer.json", "Gemfile.lock": "Gemfile",
 }
 
-// lockfileNoise lists changed lockfiles outside the owned paths whose manifest did not change alongside (lesson #7).
-func lockfileNoise(files, owned []string) []string {
+// lockfileNoise lists changed lockfiles whose manifest did not change alongside, owned or not (lesson #7).
+func lockfileNoise(files []string) []string {
 	var out []string
 	for _, f := range files {
-		sib, ok := lockfileSibling[path.Base(f)]
-		if !ok || workflow.Owned(f, owned) {
-			continue
+		if m, ok := lockfileManifest[path.Base(f)]; ok && !slices.Contains(files, path.Join(path.Dir(f), m)) {
+			out = append(out, f)
 		}
-		if sib != "" && slices.Contains(files, path.Join(path.Dir(f), sib)) {
-			continue
-		}
-		out = append(out, f)
 	}
 	return out
 }
 
-func (e *Engine) warnLockfileNoise(ctx context.Context, woID, run string, files, owned []string) error {
-	noise := lockfileNoise(files, owned)
+func (e *Engine) warnLockfileNoise(ctx context.Context, woID, run string, files []string) error {
+	noise := lockfileNoise(files)
 	if len(noise) == 0 {
 		return nil
 	}
-	_, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: "lockfile_noise", Summary: "warning: lockfile changes outside the owned paths: " + strings.Join(noise, ", ")})
+	_, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: "lockfile_noise", Summary: "warning: lockfile changes without their manifest: " + strings.Join(noise, ", ")})
 	return err
 }

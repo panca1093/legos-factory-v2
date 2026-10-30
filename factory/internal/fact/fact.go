@@ -110,8 +110,9 @@ type RunFinished struct {
 	StopReason string          `json:"stop_reason"`
 	Usage      json.RawMessage `json:"usage,omitempty"`
 	CostUSD    float64         `json:"cost_usd,omitempty"`
-	// ReadsBeforeEdit counts a builder's read-only tool calls before its first edit (lesson #7).
-	ReadsBeforeEdit int `json:"reads_before_edit,omitempty"`
+	// ReadsBeforeEdit counts a builder's read-only tool calls before its first edit (lesson #7); Edited tells whether one happened.
+	ReadsBeforeEdit int  `json:"reads_before_edit"`
+	Edited          bool `json:"edited"`
 }
 
 type CatalogReady struct {

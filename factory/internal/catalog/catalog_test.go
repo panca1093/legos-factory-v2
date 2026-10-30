@@ -2,8 +2,6 @@ package catalog
 
 import (
 	"context"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -75,44 +73,22 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func lsRunner(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	return string(out), err
-}
-
-func write(t *testing.T, dir, name, body string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestDeterministic(t *testing.T) {
-	ctx := context.Background()
 	t.Run("go", func(t *testing.T) {
-		d := t.TempDir()
-		write(t, d, "go.mod", "module example.com/x\n\ngo 1.22\n")
-		write(t, d, "README.md", "# X\n\nX does things.\nSecond line.\n\nOther para.\n")
-		if err := os.Mkdir(filepath.Join(d, "internal"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		p, err := Deterministic(ctx, lsRunner, d)
+		files := map[string]string{"go.mod": "module example.com/x\n\ngo 1.22\n", "README.md": "# X\n\nX does things.\nSecond line.\n\nOther para.\n"}
+		p, err := Deterministic(files, []string{"internal"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if p.Commands["test_pkg"] != "go test ./{pkg}" || p.Commands["test"] != "go test ./..." {
-			t.Fatalf("%+v", p.Commands)
+		if p.Commands["test_pkg"] != "go test ./{pkg}/..." || p.Commands["test"] != "go test ./..." || p.Source != SourceDeterministic {
+			t.Fatalf("%+v", p)
 		}
 		if !strings.Contains(p.Summary, "X does things. Second line.") || !strings.Contains(p.Summary, "example.com/x") || !strings.Contains(p.Summary, "internal") || strings.Contains(p.Summary, "Other") {
 			t.Fatalf("summary %q", p.Summary)
 		}
 	})
 	t.Run("node", func(t *testing.T) {
-		d := t.TempDir()
-		write(t, d, "package.json", `{"name":"web","scripts":{"build":"vite build","test":"vitest","start":"vite"}}`)
-		p, err := Deterministic(ctx, nil, d)
+		p, err := Deterministic(map[string]string{"package.json": `{"name":"web","scripts":{"build":"vite build","test":"vitest","start":"vite"}}`}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,9 +97,7 @@ func TestDeterministic(t *testing.T) {
 		}
 	})
 	t.Run("makefile", func(t *testing.T) {
-		d := t.TempDir()
-		write(t, d, "Makefile", ".PHONY: build test\nbuild:\n\tcc\ntest:\n\t./t\nvet:\n\techo\nclean:\n\trm\n")
-		p, err := Deterministic(ctx, nil, d)
+		p, err := Deterministic(map[string]string{"Makefile": ".PHONY: build test\nbuild:\n\tcc\ntest:\n\t./t\nvet:\n\techo\nclean:\n\trm\n"}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -132,10 +106,17 @@ func TestDeterministic(t *testing.T) {
 		}
 	})
 	t.Run("empty", func(t *testing.T) {
-		if _, err := Deterministic(ctx, nil, t.TempDir()); err == nil {
+		if _, err := Deterministic(nil, nil); err == nil {
 			t.Fatal("want error")
 		}
 	})
+}
+
+func TestPromptIsObjectiveNeutralAndCarriesTree(t *testing.T) {
+	p := Prompt("<<<TREE-n>>>\na.go\n<<<END-TREE-n>>>")
+	if strings.Contains(strings.ToLower(p), "objective") || !strings.Contains(p, "<<<TREE-n>>>") {
+		t.Fatalf("prompt = %q", p)
+	}
 }
 
 func TestMerge(t *testing.T) {

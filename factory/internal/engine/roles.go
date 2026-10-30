@@ -40,7 +40,8 @@ type orch struct {
 
 	stopBuilders func() // cancels the running builders; set while building (guarded by mu)
 
-	pack *catalog.Pack // context pack of the base commit; nil when cataloging is off
+	pack          *catalog.Pack // context pack of the base commit; nil when cataloging is off
+	catalogCommit string        // base commit the Cataloger reads
 }
 
 // errWOFailed means the work order was already marked failed; callers stop without error.
@@ -163,6 +164,9 @@ func (o *orch) runRole(ctx context.Context, role harness.Role, task, prompt, fre
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
+		if role == harness.RoleCataloger {
+			return "", err
+		}
 		return "", o.fail(ctx, fact.WOFailed{Class: fact.ClassTask, Reason: "no_profile", Message: err.Error()})
 	}
 	defer cfg.release()
@@ -182,10 +186,10 @@ func (o *orch) runRole(ctx context.Context, role harness.Role, task, prompt, fre
 		dir, err = o.foremanDir(ctx)
 	case harness.RoleArchitect:
 		policy = harness.ToolPolicy{Deny: readOnlyDeny}
-		dir, err = o.baseDir(ctx, "_architect")
+		dir, err = o.baseDir(ctx, "_architect", o.p.DefaultBranch)
 	case harness.RoleCataloger:
 		policy = harness.ToolPolicy{Deny: readOnlyDeny}
-		dir, err = o.baseDir(ctx, "_cataloger")
+		dir, err = o.baseDir(ctx, "_cataloger", o.catalogCommit)
 	case harness.RoleInspector:
 		policy = harness.ToolPolicy{Deny: readOnlyDeny}
 		dir = o.sb.Workspace().WorktreeDir(task)
@@ -209,6 +213,9 @@ func (o *orch) runRole(ctx context.Context, role harness.Role, task, prompt, fre
 	if err != nil {
 		return "", err
 	}
+	if agentErr != nil && role == harness.RoleCataloger {
+		return "", fmt.Errorf("cataloger agent: %w", agentErr)
+	}
 	if agentErr != nil {
 		done, ferr := e.agentFailure(ctx, o.woID, agentErr, cfg.Profile)
 		if ferr != nil {
@@ -231,18 +238,18 @@ func (o *orch) foremanDir(ctx context.Context) (string, error) {
 }
 
 // baseDir is a detached worktree at the base commit, reset on every use, so nothing a read-only role writes can reach the PR.
-func (o *orch) baseDir(ctx context.Context, name string) (string, error) {
+func (o *orch) baseDir(ctx context.Context, name, ref string) (string, error) {
 	ws := o.sb.Workspace()
 	dir := ws.WorktreeDir(name)
 	if _, err := o.git(ctx, dir, "rev-parse", "--git-dir"); err != nil {
 		if _, err := o.git(ctx, ws.RepoDir(), "worktree", "prune"); err != nil {
 			return "", err
 		}
-		if _, err := o.git(ctx, ws.RepoDir(), "worktree", "add", "--detach", "--force", dir, o.p.DefaultBranch); err != nil {
+		if _, err := o.git(ctx, ws.RepoDir(), "worktree", "add", "--detach", "--force", dir, ref); err != nil {
 			return "", err
 		}
 	}
-	if _, err := o.git(ctx, dir, "reset", "--hard", o.p.DefaultBranch); err != nil {
+	if _, err := o.git(ctx, dir, "reset", "--hard", ref); err != nil {
 		return "", err
 	}
 	if _, err := o.git(ctx, dir, "clean", "-fdxq"); err != nil {
@@ -764,7 +771,7 @@ func (o *orch) inspectTask(ctx context.Context, t workflow.Task) (workflow.Inspe
 	nonce := newNonce()
 	prompt := "You are the Inspector. Review one task's changes; you cannot modify files.\n\nObjective: " + o.objective +
 		"\n\nSpecification:\n" + latestSpec(facts) + "\n\nTask (" + t.ID + "): " + t.Description +
-		"\nOwned paths: " + strings.Join(t.Paths, ", ") + "\n\n" + untrustedNote(nonce, "DIFF", "TESTS") +
+		"\nOwned paths: " + strings.Join(t.Paths, ", ") + packBlock(o.pack) + "\n\n" + untrustedNote(nonce, "DIFF", "TESTS") +
 		"\n\nDiff against " + o.p.DefaultBranch + " (the checkout is at the task commit):\n" + fence("DIFF", nonce, diff) + "\n"
 	if out := o.touchedTests(ctx, dir, t); out != "" {
 		prompt += "\nTest output:\n" + fence("TESTS", nonce, out) + "\n"
@@ -803,7 +810,7 @@ func newNonce() string {
 	return hex.EncodeToString(b)
 }
 
-var delimRe = regexp.MustCompile(`<<<(?:END-)?(?:DIFF|TESTS|FINDINGS|PACK)-[^>\s]*>>>`)
+var delimRe = regexp.MustCompile(`<<<(?:END-)?(?:DIFF|TESTS|FINDINGS|PACK|TREE)-[^>\s]*>>>`)
 
 // fence delimits untrusted text with per-call random markers; look-alike markers inside it are removed.
 func fence(label, nonce, content string) string {
@@ -952,11 +959,7 @@ func (o *orch) restoreRefs(ctx context.Context, dir string, before refSnap, own 
 // touchedTests runs the packages the task changed with the project's test command (default go test when the repo has a
 // go.mod or go.work); other stacks get no test output until the project configures one.
 func (o *orch) touchedTests(ctx context.Context, dir string, t workflow.Task) string {
-	tmpl := o.p.Env.TestPkg
-	if tmpl == "" {
-		tmpl = packTestPkg(o.pack)
-	}
-	anyFile := tmpl != "" && !strings.HasPrefix(tmpl, "go ") || o.p.Env.TestPkg != ""
+	tmpl := ownerTestPkg(o.p)
 	if tmpl == "" {
 		_, e1 := o.git(ctx, dir, "ls-files", "--error-unmatch", "go.mod")
 		_, e2 := o.git(ctx, dir, "ls-files", "--error-unmatch", "go.work")
@@ -971,7 +974,7 @@ func (o *orch) touchedTests(ctx context.Context, dir string, t workflow.Task) st
 	}
 	var pkgs []string
 	for _, f := range strings.Split(names, "\n") {
-		if f == "" || (!anyFile && !strings.HasSuffix(f, ".go")) {
+		if f == "" || (ownerTestPkg(o.p) == "" && !strings.HasSuffix(f, ".go")) {
 			continue
 		}
 		if p := path.Dir(f); !slices.Contains(pkgs, p) {
@@ -985,7 +988,7 @@ func (o *orch) touchedTests(ctx context.Context, dir string, t workflow.Task) st
 	defer cancel()
 	var b strings.Builder
 	for _, p := range pkgs {
-		cmd := strings.ReplaceAll(tmpl, "{pkg}", p)
+		cmd := strings.ReplaceAll(tmpl, "{pkg}", shellQuote(p))
 		stdout, stderr, code, err := o.sb.Exec(tctx, dir, nil, "sh", "-c", cmd)
 		if err != nil {
 			fmt.Fprintf(&b, "%s\ncould not run: %s\n", cmd, firstLine(err.Error(), 200))
@@ -1246,7 +1249,7 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 	}
 	defer cfg.release()
 	sid, open := roleSession(facts, harness.RoleBuilder, t.ID)
-	testCmd := e.testCommand(ctx, o.p, o.sb, dir, o.pack)
+	testCmd := e.testCommand(ctx, o.p, o.sb, dir)
 	prompt := taskPrompt(o.objective, latestSpec(facts), t, facts, testCmd, o.pack)
 	if fs := pendingFindings(facts, t.ID); len(fs) > 0 {
 		n := newNonce()
@@ -1296,22 +1299,18 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 	if err != nil {
 		return err
 	}
-	var stray []string
+	var stray, all []string
 	for _, f := range strings.Split(changed, "\n") {
-		if f != "" && !workflow.Owned(f, t.Paths) && !slices.Contains(stray, f) {
+		if f == "" || slices.Contains(all, f) {
+			continue
+		}
+		all = append(all, f)
+		if !workflow.Owned(f, t.Paths) {
 			stray = append(stray, f)
 		}
 	}
-	if len(stray) == 0 {
-		var all []string
-		for _, f := range strings.Split(changed, "\n") {
-			if f != "" && !slices.Contains(all, f) {
-				all = append(all, f)
-			}
-		}
-		if err := e.warnLockfileNoise(ctx, o.woID, "", all, t.Paths); err != nil {
-			return err
-		}
+	if err := e.warnLockfileNoise(ctx, o.woID, "", all); err != nil {
+		return err
 	}
 	if len(stray) > 0 {
 		return o.taskFailed(ctx, t.ID, fact.ClassTask, "path_violation", fmt.Sprintf("changed files outside the owned paths %v: %s", t.Paths, strings.Join(stray, ", ")), cfg.Profile)

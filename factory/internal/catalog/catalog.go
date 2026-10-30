@@ -6,10 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path"
-	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -30,7 +29,13 @@ type Pack struct {
 	Conventions []string          `json:"conventions"`
 	Commands    map[string]string `json:"commands"` // build, test, test_pkg (with {pkg}), lint, run
 	CreatedAt   time.Time         `json:"created_at"`
+	Source      string            `json:"source,omitempty"` // SourceCataloger or SourceDeterministic
 }
+
+const (
+	SourceCataloger     = "cataloger"
+	SourceDeterministic = "deterministic"
+)
 
 // The pack is repo-level: keyed by (repo, commit) and reused across objectives, so
 // objective_key is "" for it; the column leaves room for per-objective packs later.
@@ -87,11 +92,9 @@ func (s *Store) Put(ctx context.Context, p Pack) error {
 	return err
 }
 
-func Prompt(objective, repoTree string) string {
-	return fmt.Sprintf(`You are the Cataloger. Explore this repository (read-only, at the base commit) and produce a context pack for the agents who will plan and build the objective below. Do not modify anything.
-
-Objective:
-%s
+// Prompt is repo-level and objective-neutral; treeBlock is the already fenced repository tree.
+func Prompt(treeBlock string) string {
+	return fmt.Sprintf(`You are the Cataloger. Explore this repository (read-only, at the base commit) and produce a general context pack for the agents who will later plan and build changes in it. Do not modify anything.
 
 Repository tree:
 %s
@@ -105,11 +108,10 @@ Output exactly ONE JSON object in a final `+"```json"+` fenced block, with this 
 }
 
 Rules:
-- files: 5-25 repo-relative paths, most relevant to the objective first; no absolute paths, no "..".
-- summary, conventions and commands stay general to the repo, not tied to this objective.
-- commands must include how to run tests for a single package or directory via test_pkg; omit keys that do not apply.
+- files: 5-25 repo-relative paths that matter most for understanding the repo; no absolute paths, no "..".
+- commands must include how to run tests for a single package or directory via test_pkg; omit keys that do not apply. They are advice for readers and are never executed automatically.
 - Prefer targeted reading over exhaustive exploration; do not run package installs or builds that change tracked files.
-`, objective, repoTree)
+`, treeBlock)
 }
 
 var fenceRe = regexp.MustCompile("(?s)```(?:json)?[ \t]*\n(.*?)```")
@@ -217,18 +219,17 @@ func Merge(base, over Pack) Pack {
 
 var targetRe = regexp.MustCompile(`(?m)^([A-Za-z0-9_.-]+):`)
 
-// Deterministic builds a pack from manifest files in dir; run (optional) lists top-level dirs via ls.
-func Deterministic(ctx context.Context, run func(ctx context.Context, dir string, args ...string) (string, error), dir string) (Pack, error) {
-	p := Pack{Commands: map[string]string{}, CreatedAt: time.Now().UTC()}
-	has := func(name string) bool { _, err := os.Stat(filepath.Join(dir, name)); return err == nil }
-	read := func(name string) string { b, _ := os.ReadFile(filepath.Join(dir, name)); return string(b) }
+// Deterministic builds a pack from the manifest files (name -> content, read from the base commit) and top-level dirs.
+func Deterministic(files map[string]string, dirs []string) (Pack, error) {
+	p := Pack{Commands: map[string]string{}, CreatedAt: time.Now().UTC(), Source: SourceDeterministic}
+	has := func(name string) bool { _, ok := files[name]; return ok }
+	read := func(name string) string { return files[name] }
 	setDefault := func(k, v string) {
 		if _, ok := p.Commands[k]; !ok {
 			p.Commands[k] = v
 		}
 	}
 	var layout []string
-
 	if has("go.mod") {
 		mod := ""
 		for _, l := range strings.Split(read("go.mod"), "\n") {
@@ -241,7 +242,7 @@ func Deterministic(ctx context.Context, run func(ctx context.Context, dir string
 		p.Files = append(p.Files, PackFile{"go.mod", "Go module definition"})
 		p.Commands["build"] = "go build ./..."
 		p.Commands["test"] = "go test ./..."
-		p.Commands["test_pkg"] = "go test ./{pkg}"
+		p.Commands["test_pkg"] = "go test ./{pkg}/..."
 		p.Commands["lint"] = "go vet ./..."
 	}
 	if has("package.json") {
@@ -287,23 +288,13 @@ func Deterministic(ctx context.Context, run func(ctx context.Context, dir string
 			break
 		}
 	}
-	if run != nil {
-		if out, err := run(ctx, dir, "ls", "-1p"); err == nil {
-			var dirs []string
-			for _, l := range strings.Split(out, "\n") {
-				l = strings.TrimSpace(l)
-				if strings.HasSuffix(l, "/") && !strings.HasPrefix(l, ".") {
-					dirs = append(dirs, strings.TrimSuffix(l, "/"))
-				}
-			}
-			sort.Strings(dirs)
-			if len(dirs) > 0 {
-				layout = append(layout, "top-level dirs: "+strings.Join(dirs, ", "))
-			}
-		}
+	if len(dirs) > 0 {
+		sorted := slices.Clone(dirs)
+		sort.Strings(sorted)
+		layout = append(layout, "top-level dirs: "+strings.Join(sorted, ", "))
 	}
 	if len(p.Files) == 0 {
-		return Pack{}, errors.New("catalog: no recognizable manifest in " + dir)
+		return Pack{}, errors.New("catalog: no recognizable manifest")
 	}
 	if len(layout) > 0 {
 		l := strings.Join(layout, "; ")

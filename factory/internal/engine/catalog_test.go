@@ -82,7 +82,7 @@ func TestCatalogCacheHitOnSecondWorkOrder(t *testing.T) {
 		t.Fatal("pack not stored")
 	}
 	for _, p := range h.promptsFor(harness.RoleBuilder) {
-		if !strings.Contains(p, "Tiny repo for tests") || !strings.Contains(p, "<<<PACK-") || !strings.Contains(p, "`echo test <pkg>`") {
+		if !strings.Contains(p, "Tiny repo for tests") || !strings.Contains(p, "<<<PACK-") || strings.Contains(p, "`echo test <pkg>`") {
 			t.Fatalf("builder prompt lacks the pack: %q", p)
 		}
 	}
@@ -193,33 +193,22 @@ func TestCatalogPackReachesArchitectAndLineBuilder(t *testing.T) {
 	}
 }
 
-func TestPackTestPkgPreferredUnlessConfigured(t *testing.T) {
-	pack := &catalog.Pack{Commands: map[string]string{"test_pkg": "make t PKG={pkg}"}}
-	ev := newEnv(t)
-	if got := ev.e.testCommand(context.Background(), ev.p, nil, "", pack); got != "make t PKG={pkg}" {
-		t.Errorf("pack test_pkg = %q", got)
-	}
-	ev.p.Env.TestPkg = "configured {pkg}"
-	if got := ev.e.testCommand(context.Background(), ev.p, nil, "", pack); got != "configured {pkg}" {
-		t.Errorf("configured test_pkg = %q", got)
-	}
-}
-
 func TestLockfileNoise(t *testing.T) {
 	cases := []struct {
-		name         string
-		files, owned []string
-		want         []string
+		name  string
+		files []string
+		want  []string
 	}{
-		{"npm lock always noise", []string{"web/package-lock.json", "web/package.json", "web/a.js"}, nil, []string{"web/package-lock.json"}},
-		{"owned lock is fine", []string{"web/package-lock.json"}, []string{"web/"}, nil},
-		{"go.sum alone", []string{"go.sum", "a.go"}, nil, []string{"go.sum"}},
-		{"go.sum with go.mod", []string{"go.sum", "go.mod"}, nil, nil},
-		{"yarn", []string{"yarn.lock"}, []string{"other/"}, []string{"yarn.lock"}},
-		{"clean", []string{"a.go"}, nil, nil},
+		{"npm lock without manifest", []string{"web/package-lock.json", "web/a.js"}, []string{"web/package-lock.json"}},
+		{"npm lock with manifest", []string{"web/package-lock.json", "web/package.json"}, nil},
+		{"manifest in other dir", []string{"web/package-lock.json", "package.json"}, []string{"web/package-lock.json"}},
+		{"go.sum alone", []string{"go.sum", "a.go"}, []string{"go.sum"}},
+		{"go.sum with go.mod", []string{"go.sum", "go.mod"}, nil},
+		{"yarn", []string{"yarn.lock"}, []string{"yarn.lock"}},
+		{"clean", []string{"a.go"}, nil},
 	}
 	for _, tc := range cases {
-		if got := lockfileNoise(tc.files, tc.owned); !reflect.DeepEqual(got, tc.want) {
+		if got := lockfileNoise(tc.files); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
 		}
 	}

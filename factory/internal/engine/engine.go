@@ -193,13 +193,14 @@ type Profiles interface {
 type Engine struct {
 	Profiles Profiles // optional; used when the project has no explicit builder
 	// Catalog caches context packs per (repo, commit); nil skips the cataloging phase.
-	Catalog *catalog.Store
-	Facts   *fact.Store
-	Runtime sandbox.Runtime
-	Harness harness.Harness
-	SCM     func(Project) (scm.Provider, error)
-	Now     func() time.Time
-	Log     *slog.Logger
+	Catalog  *catalog.Store
+	catLocks sync.Map // "repo@commit" -> chan struct{}
+	Facts    *fact.Store
+	Runtime  sandbox.Runtime
+	Harness  harness.Harness
+	SCM      func(Project) (scm.Provider, error)
+	Now      func() time.Time
+	Log      *slog.Logger
 	// Ports allocates the PORT of each builder worktree; nil means a default range.
 	Ports *sandbox.Ports
 	// RetryBase is the first backoff after a transient provider failure (doubling, capped); TransientRetries bounds the retries.
@@ -429,18 +430,15 @@ func isTestCall(ev harness.Event, testCmd string) bool {
 	}
 	text := strings.ToLower(ev.Tool + " " + ev.Text)
 	prefix, _, _ := strings.Cut(strings.ToLower(testCmd), "{pkg}")
-	if prefix = strings.TrimSpace(prefix); prefix != "" && strings.Contains(text, prefix) {
+	if prefix = strings.TrimSpace(prefix); len(prefix) >= 6 && strings.Contains(text, prefix) {
 		return true
 	}
 	return slices.ContainsFunc([]string{"go test", "npm test", "make test"}, func(c string) bool { return strings.Contains(text, c) })
 }
 
 // testCommand is the tier-1 targeted test command shown to the builder; "" when neither configured nor derivable.
-func (e *Engine) testCommand(ctx context.Context, p Project, sb sandbox.Sandbox, dir string, pack *catalog.Pack) string {
-	if p.Env.TestPkg != "" {
-		return p.Env.TestPkg
-	}
-	if c := packTestPkg(pack); c != "" {
+func (e *Engine) testCommand(ctx context.Context, p Project, sb sandbox.Sandbox, dir string) string {
+	if c := ownerTestPkg(p); c != "" {
 		return c
 	}
 	if _, _, code, err := sb.Exec(ctx, dir, nil, "test", "-f", "go.mod"); err == nil && code == 0 {
@@ -579,7 +577,7 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 		if len(files) == 0 || (!changed && sha == v.lastHead) {
 			return e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "no_changes", Message: "builder produced no changes"})
 		}
-		if err := e.warnLockfileNoise(ctx, woID, "", files, nil); err != nil {
+		if err := e.warnLockfileNoise(ctx, woID, "", files); err != nil {
 			return err
 		}
 		if _, err := e.Facts.Append(ctx, woID, fact.KindTaskCommitted, fact.TaskCommitted{Task: task, SHA: sha}); err != nil {
@@ -1024,7 +1022,7 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 	raw, _ := json.Marshal(usage)
 	fin := fact.RunFinished{Run: run, StopReason: stop, Usage: raw}
 	if c.role == harness.RoleBuilder {
-		fin.ReadsBeforeEdit = reads
+		fin.ReadsBeforeEdit, fin.Edited = reads, edited
 	}
 	if b.price != nil {
 		fin.CostUSD = profile.Cost(*b.price, usage)
@@ -1043,7 +1041,7 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "agent_error", Message: err.Error()})
 	}
 	defer cfg.release()
-	testCmd := e.testCommand(ctx, p, sb, dir, pack)
+	testCmd := e.testCommand(ctx, p, sb, dir)
 	_, agentErr, err := e.converse(ctx, woID, sb, convo{
 		role: harness.RoleBuilder, task: task, dir: dir, cfg: cfg, sessionID: v.sessionID, openRun: v.openRun, testCmd: testCmd,
 		prompt: func(fresh bool) string { return builderPrompt(v, fresh, testCmd, pack) },
@@ -1244,3 +1242,18 @@ func (e *Engine) checksFinal(p Project, observed map[string]string, allSuccess, 
 	}
 	return allSuccess && !changed && !lastChange.IsZero() && e.now().Sub(lastChange) >= after
 }
+
+// validTemplate accepts only single-line templates with a {pkg} placeholder and no shell control syntax.
+func validTemplate(t string) bool {
+	return len(t) <= 200 && strings.Contains(t, "{pkg}") && !strings.ContainsAny(t, "\n\r`;|") && !strings.Contains(t, "$(") && !strings.Contains(t, "&&")
+}
+
+// ownerTestPkg is the only configured source of an executable test command; an invalid template is ignored.
+func ownerTestPkg(p Project) string {
+	if validTemplate(p.Env.TestPkg) {
+		return p.Env.TestPkg
+	}
+	return ""
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
