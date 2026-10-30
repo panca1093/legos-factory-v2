@@ -255,8 +255,9 @@ func (s *Store) RunEnv(ctx context.Context, p Profile) (RunSpec, error) {
 		}
 	case "opencode":
 		name, known := opencodeKeyEnv[c.Provider]
+		id := orDefault(opencodeProviderID[c.Provider], c.Provider)
 		switch {
-		case c.Kind == "subscription" && known && !isJSONObject(secret):
+		case c.Kind == "subscription" && c.Provider == "opencode-go" && !isJSONObject(secret):
 			env[name] = secret
 		case c.Kind == "subscription":
 			// TODO: uncertain — opencode 2.1.3 ignored this auth.json for built-in providers in a live check; v2 imports `opencode auth export` JSON, shape unverified
@@ -266,7 +267,7 @@ func (s *Store) RunEnv(ctx context.Context, p Profile) (RunSpec, error) {
 		case known:
 			env[name] = secret
 			if c.BaseURL != "" {
-				cfg, _ := json.Marshal(map[string]any{"provider": map[string]any{c.Provider: map[string]any{
+				cfg, _ := json.Marshal(map[string]any{"provider": map[string]any{id: map[string]any{
 					"options": map[string]string{"baseURL": c.BaseURL},
 				}}})
 				env["OPENCODE_CONFIG_CONTENT"] = string(cfg)
@@ -283,9 +284,7 @@ func (s *Store) RunEnv(ctx context.Context, p Profile) (RunSpec, error) {
 			}}})
 			env["OPENCODE_CONFIG_CONTENT"] = string(cfg)
 		}
-		if id := opencodeProviderID[c.Provider]; id != "" {
-			rs.Profile.Provider = id
-		}
+		rs.Profile.Provider = id
 	default:
 		return rs, fmt.Errorf("unknown agent %q", p.Agent)
 	}
