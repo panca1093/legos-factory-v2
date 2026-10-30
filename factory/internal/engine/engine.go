@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"legos-factory/factory/internal/catalog"
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
 	"legos-factory/factory/internal/profile"
@@ -191,12 +192,14 @@ type Profiles interface {
 
 type Engine struct {
 	Profiles Profiles // optional; used when the project has no explicit builder
-	Facts    *fact.Store
-	Runtime  sandbox.Runtime
-	Harness  harness.Harness
-	SCM      func(Project) (scm.Provider, error)
-	Now      func() time.Time
-	Log      *slog.Logger
+	// Catalog caches context packs per (repo, commit); nil skips the cataloging phase.
+	Catalog *catalog.Store
+	Facts   *fact.Store
+	Runtime sandbox.Runtime
+	Harness harness.Harness
+	SCM     func(Project) (scm.Provider, error)
+	Now     func() time.Time
+	Log     *slog.Logger
 	// Ports allocates the PORT of each builder worktree; nil means a default range.
 	Ports *sandbox.Ports
 	// RetryBase is the first backoff after a transient provider failure (doubling, capped); TransientRetries bounds the retries.
@@ -401,8 +404,8 @@ func requeuePrompt(r fact.WORequeued) string {
 }
 
 // builderPrompt: a fresh session has no memory of the objective, so it is restated ahead of any re-queue reason.
-func builderPrompt(v *view, fresh bool, testCmd string) string {
-	prompt := v.objective + testPrompt(testCmd)
+func builderPrompt(v *view, fresh bool, testCmd string, pack *catalog.Pack) string {
+	prompt := v.objective + packBlock(pack) + testPrompt(testCmd)
 	if v.requeue != nil {
 		if fresh {
 			prompt += "\n\n"
@@ -433,9 +436,12 @@ func isTestCall(ev harness.Event, testCmd string) bool {
 }
 
 // testCommand is the tier-1 targeted test command shown to the builder; "" when neither configured nor derivable.
-func (e *Engine) testCommand(ctx context.Context, p Project, sb sandbox.Sandbox, dir string) string {
+func (e *Engine) testCommand(ctx context.Context, p Project, sb sandbox.Sandbox, dir string, pack *catalog.Pack) string {
 	if p.Env.TestPkg != "" {
 		return p.Env.TestPkg
+	}
+	if c := packTestPkg(pack); c != "" {
+		return c
 	}
 	if _, _, code, err := sb.Exec(ctx, dir, nil, "test", "-f", "go.mod"); err == nil && code == 0 {
 		return "go test ./{pkg}/..."
@@ -540,15 +546,25 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 		return err
 	}
 
+	co := &orch{e: e, p: p, woID: woID, sb: sb, dir: dir, objective: v.objective}
+	pack, err := e.catalogPack(ctx, co, v.facts)
+	if errors.Is(err, errWOFailed) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	co.pack = pack
+
 	line := v.requeue == nil && v.line
 	var o *orch
 	if line {
-		lim := workflow.DefaultLimits()
-		lim.BuilderFallbacks = len(p.Fallbacks[string(harness.RoleBuilder)])
-		o = &orch{e: e, p: p, woID: woID, sb: sb, dir: dir, objective: v.objective, lim: lim}
+		o = co
+		o.lim = workflow.DefaultLimits()
+		o.lim.BuilderFallbacks = len(p.Fallbacks[string(harness.RoleBuilder)])
 	} else if !v.cycleHas(fact.KindTaskCommitted) {
 		if !v.finished {
-			if done, err := e.build(ctx, p, woID, sb, dir, v); err != nil || done {
+			if done, err := e.build(ctx, p, woID, sb, dir, v, pack); err != nil || done {
 				return err
 			}
 		}
@@ -562,6 +578,9 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 		}
 		if len(files) == 0 || (!changed && sha == v.lastHead) {
 			return e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "no_changes", Message: "builder produced no changes"})
+		}
+		if err := e.warnLockfileNoise(ctx, woID, "", files, nil); err != nil {
+			return err
 		}
 		if _, err := e.Facts.Append(ctx, woID, fact.KindTaskCommitted, fact.TaskCommitted{Task: task, SHA: sha}); err != nil {
 			return err
@@ -937,7 +956,8 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 
 	var usage harness.Usage
 	var last string
-	var testSeen bool
+	var testSeen, edited bool
+	reads := 0
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
@@ -953,6 +973,14 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 				}
 				if ev.Kind == harness.EventToolCall && isTestCall(ev, c.testCmd) {
 					testSeen = true
+				}
+				if ev.Kind == harness.EventToolCall && !edited {
+					switch toolKind(ev) {
+					case "edit":
+						edited = true
+					case "read":
+						reads++
+					}
 				}
 				if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: step, Summary: firstLine(ev.Text, 200)}); err != nil {
 					e.log().Warn("record run step", "wo", woID, "err", err)
@@ -995,6 +1023,9 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 	}
 	raw, _ := json.Marshal(usage)
 	fin := fact.RunFinished{Run: run, StopReason: stop, Usage: raw}
+	if c.role == harness.RoleBuilder {
+		fin.ReadsBeforeEdit = reads
+	}
 	if b.price != nil {
 		fin.CostUSD = profile.Cost(*b.price, usage)
 	}
@@ -1003,7 +1034,7 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 }
 
 // build runs one builder turn; done is true when the work order was failed.
-func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, v *view) (done bool, err error) {
+func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, v *view, pack *catalog.Pack) (done bool, err error) {
 	cfg, err := e.agentConfig(ctx, p, harness.RoleBuilder)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -1012,10 +1043,10 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "agent_error", Message: err.Error()})
 	}
 	defer cfg.release()
-	testCmd := e.testCommand(ctx, p, sb, dir)
+	testCmd := e.testCommand(ctx, p, sb, dir, pack)
 	_, agentErr, err := e.converse(ctx, woID, sb, convo{
 		role: harness.RoleBuilder, task: task, dir: dir, cfg: cfg, sessionID: v.sessionID, openRun: v.openRun, testCmd: testCmd,
-		prompt: func(fresh bool) string { return builderPrompt(v, fresh, testCmd) },
+		prompt: func(fresh bool) string { return builderPrompt(v, fresh, testCmd, pack) },
 	})
 	if err != nil {
 		return false, err
