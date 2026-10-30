@@ -147,10 +147,7 @@ func fakeAgent(scenario string) {
 			case "permission":
 				send(map[string]any{"id": "perm-1", "method": "session/request_permission", "params": map[string]any{
 					"toolCall": map[string]any{"toolCallId": "t9", "title": "x", "kind": os.Getenv("ACP_FAKE_KIND"), "locations": []any{map[string]any{"path": os.Getenv("ACP_FAKE_PATH")}}},
-					"options": []any{
-						map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"},
-						map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
-					},
+					"options": permissionOptions(os.Getenv("ACP_FAKE_OPTS")),
 				}})
 				in.Scan()
 				var r struct {
@@ -161,6 +158,12 @@ func fakeAgent(scenario string) {
 				_ = json.Unmarshal(in.Bytes(), &r)
 				chunk(r.Result.Outcome.OptionID)
 				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "toolkind":
+				send(map[string]any{"method": "session/update", "params": map[string]any{"update": map[string]any{
+					"sessionUpdate": "tool_call", "toolCallId": "k1", "title": "Create notes.txt: read", "kind": "read", "status": "pending"}}})
+				send(map[string]any{"method": "session/update", "params": map[string]any{"update": map[string]any{
+					"sessionUpdate": "tool_call_update", "toolCallId": "k1", "status": "completed"}}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "quota":
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Go usage limit exceeded"}})
 			case "funds":
@@ -170,7 +173,7 @@ func fakeAgent(scenario string) {
 			case "refusal":
 				reply(m.ID, map[string]any{"stopReason": "refusal"})
 			case "crash":
-				fmt.Fprintln(os.Stderr, "fatal: provider exploded")
+				fmt.Fprintln(os.Stderr, "fatal: provider exploded", os.Getenv("ACP_FAKE_LEAK"))
 				os.Exit(3)
 			case "hang":
 			}
@@ -211,4 +214,13 @@ func fixtureReply(path, method string, id any) map[string]any {
 		}
 	}
 	panic("no " + method + " exchange in " + path)
+}
+
+// permissionOptions is the option list of a permission request; "allow_only" offers no reject option.
+func permissionOptions(mode string) []any {
+	allow := map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"}
+	if mode == "allow_only" {
+		return []any{allow}
+	}
+	return []any{map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"}, allow}
 }

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -244,7 +245,7 @@ func (ACP) Start(ctx context.Context, spec SessionSpec) (Session, error) {
 	s := &acpSession{
 		cmd: cmd, w: stdin, spec: spec, kind: kind, apiKeyAuth: env["CODEX_API_KEY"] != "" || env["OPENAI_API_KEY"] != "", stderr: &tailBuffer{max: 2048},
 		events: make(chan Event, 1024), quit: make(chan struct{}), exited: make(chan struct{}),
-		tools: map[string]string{}, files: written,
+		tools: map[string]string{}, toolKinds: map[string]string{}, files: written,
 	}
 	cmd.Stderr = s.stderr
 	if err := cmd.Start(); err != nil {
@@ -277,12 +278,13 @@ type acpSession struct {
 	closed bool
 	once   sync.Once
 
-	promptMu sync.Mutex
-	mu       sync.Mutex
-	muted    bool // session/load replays history as updates
-	text     strings.Builder
-	tools    map[string]string // tool call id → title
-	files    []string          // login files to delete on Close
+	promptMu  sync.Mutex
+	mu        sync.Mutex
+	muted     bool // session/load replays history as updates
+	text      strings.Builder
+	tools     map[string]string // tool call id → title
+	toolKinds map[string]string // tool call id → ACP tool kind
+	files     []string          // login files to delete on Close
 
 	apiKeyAuth bool // codex-acp rejects session/new until authenticate selects the API-key method
 }
@@ -673,8 +675,44 @@ func codexInfoName(raw json.RawMessage) string {
 	return ""
 }
 
+// secrets lists the credential values a stderr tail must not leak: long env values and apiKeys inside the opencode config.
+func (s *acpSession) secrets() []string {
+	var out []string
+	for _, v := range s.spec.Env {
+		if len(v) >= 8 {
+			out = append(out, v)
+		}
+	}
+	var cfg any
+	if json.Unmarshal([]byte(s.spec.Env["OPENCODE_CONFIG_CONTENT"]), &cfg) == nil {
+		var walk func(any)
+		walk = func(n any) {
+			switch n := n.(type) {
+			case map[string]any:
+				for k, v := range n {
+					if str, ok := v.(string); ok && k == "apiKey" && str != "" {
+						out = append(out, str)
+					}
+					walk(v)
+				}
+			case []any:
+				for _, v := range n {
+					walk(v)
+				}
+			}
+		}
+		walk(cfg)
+	}
+	slices.SortFunc(out, func(a, b string) int { return len(b) - len(a) })
+	return out
+}
+
 func (s *acpSession) exitErr(method string, cause error) error {
-	if tail := strings.TrimSpace(s.stderr.String()); tail != "" {
+	tail := strings.TrimSpace(s.stderr.String())
+	for _, v := range s.secrets() {
+		tail = strings.ReplaceAll(tail, v, "[redacted]")
+	}
+	if tail != "" {
 		return fmt.Errorf("acp %s: agent exited: %s", method, tail)
 	}
 	if cause != nil {
@@ -731,6 +769,7 @@ func (s *acpSession) onUpdate(params json.RawMessage) {
 			Kind       string `json:"sessionUpdate"`
 			ToolCallID string `json:"toolCallId"`
 			Title      string `json:"title"`
+			ToolKind   string `json:"kind"`
 			Status     string `json:"status"`
 			Meta       struct {
 				ClaudeCode struct {
@@ -775,16 +814,20 @@ func (s *acpSession) onUpdate(params json.RawMessage) {
 		s.flushText()
 		s.mu.Lock()
 		s.tools[u.ToolCallID] = u.Title
+		s.toolKinds[u.ToolCallID] = u.ToolKind
 		s.mu.Unlock()
-		s.emit(Event{Kind: EventToolCall, ToolCallID: u.ToolCallID, Tool: u.Title, Status: u.Status})
+		s.emit(Event{Kind: EventToolCall, ToolCallID: u.ToolCallID, Tool: u.Title, ToolKind: u.ToolKind, Status: u.Status})
 	case "tool_call_update":
 		s.mu.Lock()
 		if u.Title != "" {
 			s.tools[u.ToolCallID] = u.Title
 		}
-		title := s.tools[u.ToolCallID]
+		if u.ToolKind != "" {
+			s.toolKinds[u.ToolCallID] = u.ToolKind
+		}
+		title, kind := s.tools[u.ToolCallID], s.toolKinds[u.ToolCallID]
 		s.mu.Unlock()
-		s.emit(Event{Kind: EventToolUpdate, ToolCallID: u.ToolCallID, Tool: title, Status: u.Status, Text: toolText(u.Content)})
+		s.emit(Event{Kind: EventToolUpdate, ToolCallID: u.ToolCallID, Tool: title, ToolKind: kind, Status: u.Status, Text: toolText(u.Content)})
 	}
 }
 
@@ -827,7 +870,10 @@ func (s *acpSession) answerPermission(m acpMsg) {
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	k := p.ToolCall.Kind
-	if s.spec.Role.ReadOnly() && k != "read" && k != "search" && k != "think" {
+	// codex only asks before commands and file changes, so a read-only role rejects every request whatever its kind
+	harmless := (k == "read" || k == "search" || k == "think") && s.kind != agentCodex
+	blocked := s.spec.Role.ReadOnly() && !harmless
+	if blocked {
 		s.emit(Event{Kind: EventError, Tool: p.ToolCall.Title, Err: fmt.Errorf("permission requested by read-only role %s for %s", s.spec.Role, k)})
 	}
 	for _, l := range p.ToolCall.Locations {
@@ -836,8 +882,9 @@ func (s *acpSession) answerPermission(m acpMsg) {
 		}
 	}
 	prefer := []string{"allow_once", "allow_always"}
-	rejects := s.kind == agentClaude || s.kind == agentCodex // a reject fails only that call there; on opencode it cancels the turn
-	if rejects && (s.spec.Role.ReadOnly() && k != "read" && k != "search" && k != "think" || s.spec.ToolPolicy.AllowNone) {
+	// a reject fails only that call on claude and codex but cancels the turn on opencode, which only the tool-less Foreman accepts
+	rejects := s.kind == agentClaude || s.kind == agentCodex
+	if rejects && blocked || s.spec.ToolPolicy.AllowNone {
 		prefer = []string{"reject_once", "reject_always"}
 	}
 	outcome := map[string]any{"outcome": "cancelled"}
