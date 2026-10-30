@@ -87,18 +87,34 @@ func envList(env map[string]string) []string {
 // Local runs commands on the host inside directories under Root; for tests and laptop dev.
 type Local struct{ Root string }
 
-func (l Local) wsRoot(woID string) string { return filepath.Join(l.Root, woID) }
+func (l Local) wsRoot(woID string) (string, error) {
+	root, err := filepath.Abs(l.Root)
+	return filepath.Join(root, woID), err
+}
 
 func (l Local) CreateWorkspace(_ context.Context, woID string) (Workspace, error) {
-	ws := Workspace{ID: woID, root: l.wsRoot(woID)}
+	root, err := l.wsRoot(woID)
+	if err != nil {
+		return Workspace{}, err
+	}
+	ws := Workspace{ID: woID, root: root}
 	return ws, os.MkdirAll(ws.HomeDir(), 0o755)
 }
 
 func (l Local) DeleteWorkspace(_ context.Context, woID string) error {
-	return os.RemoveAll(l.wsRoot(woID))
+	root, err := l.wsRoot(woID)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(root)
 }
 
 func (l Local) Start(_ context.Context, ws Workspace, env map[string]string) (Sandbox, error) {
+	root, err := filepath.Abs(ws.root)
+	if err != nil {
+		return nil, err
+	}
+	ws.root = root
 	return &localSandbox{ws: ws, env: env}, nil
 }
 

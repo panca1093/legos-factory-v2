@@ -131,6 +131,31 @@ func TestLocalCommandEnvAndExec(t *testing.T) {
 	}
 }
 
+func TestLocalRelativeRootResolvesAbsolute(t *testing.T) {
+	ctx := context.Background()
+	t.Chdir(t.TempDir())
+	rt := Local{Root: "work"}
+	ws, err := rt.CreateWorkspace(ctx, "wo3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(ws.Root()) || !filepath.IsAbs(ws.RepoDir()) {
+		t.Fatalf("workspace paths not absolute: %s", ws.Root())
+	}
+	sb, err := rt.Start(ctx, ws, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _, code, err := sb.Exec(ctx, ws.HomeDir(), nil, "pwd")
+	if err != nil || code != 0 {
+		t.Fatalf("exec: %v %d", err, code)
+	}
+	want, _ := filepath.EvalSymlinks(ws.HomeDir())
+	if got, _ := filepath.EvalSymlinks(strings.TrimSpace(out)); got != want {
+		t.Fatalf("pwd = %s want %s", got, want)
+	}
+}
+
 func TestGitAuthRedaction(t *testing.T) {
 	a := &GitAuth{Username: "u", Token: "s3cr3t/tok"}
 	if got := a.apply("https://example.com/r.git"); !strings.Contains(got, "u:s3cr3t%2Ftok@example.com") {

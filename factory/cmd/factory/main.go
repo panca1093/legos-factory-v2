@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"time"
 
 	"legos-factory/factory/internal/engine"
@@ -55,7 +56,11 @@ func run(args []string) error {
 	var runtime sandbox.Runtime
 	switch *rt {
 	case "local":
-		runtime = sandbox.Local{Root: *root}
+		abs, err := filepath.Abs(*root)
+		if err != nil {
+			return err
+		}
+		runtime = sandbox.Local{Root: abs}
 	case "docker":
 		runtime = sandbox.Docker{Image: *image}
 	default:
