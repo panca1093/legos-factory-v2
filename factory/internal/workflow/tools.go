@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"legos-factory/factory/internal/fact"
 )
 
 const (
@@ -95,10 +97,7 @@ func (c Call) key() string {
 	return strings.Join(append([]string{c.Tool, c.TaskID, c.Change, c.A, c.B}, ids...), "\x00")
 }
 
-type NewFact struct {
-	Kind    string
-	Payload any
-}
+type NewFact = fact.NewFact
 
 // Check returns nil when the call is legal in this state; the error text goes back to the Foreman verbatim.
 func (s State) Check(call Call, lim Limits) error {
@@ -326,33 +325,38 @@ func overlap(as, bs []string) (string, string, bool) {
 	return "", "", false
 }
 
+// Rejection records a refused Foreman reply (an illegal call, or one that did not parse) and escalates at the M-th in a row.
+func (s State) Rejection(tool string, args json.RawMessage, err error, lim Limits) []NewFact {
+	out := []NewFact{{Kind: KindForemanDecision, Payload: ForemanDecision{Tool: tool, Args: args, Reason: err.Error()}}}
+	if s.ConsecutiveRejections+1 >= lim.MaxConsecutiveRejections {
+		out = append(out, NewFact{Kind: KindEscalated, Payload: Escalated{Reason: fmt.Sprintf("%d consecutive rejected Foreman calls; last: %s", s.ConsecutiveRejections+1, err)}})
+	}
+	return out
+}
+
 // Apply returns the facts to append for call, in order. A rejected call still yields a rejection decision (plus escalated at the M-th in a row) and the Check error.
 func (s State) Apply(call Call, lim Limits) ([]NewFact, error) {
 	if err := s.Check(call, lim); err != nil {
-		out := []NewFact{{KindForemanDecision, ForemanDecision{Tool: call.Tool, Args: call.Args(), Reason: err.Error()}}}
-		if s.ConsecutiveRejections+1 >= lim.MaxConsecutiveRejections {
-			out = append(out, NewFact{KindEscalated, Escalated{Reason: fmt.Sprintf("%d consecutive rejected Foreman calls; last: %s", s.ConsecutiveRejections+1, err)}})
-		}
-		return out, err
+		return s.Rejection(call.Tool, call.Args(), err, lim), err
 	}
 	reason := call.Note
 	if reason == "" {
 		reason = call.Reason
 	}
-	out := []NewFact{{KindForemanDecision, ForemanDecision{Tool: call.Tool, Args: call.Args(), Accepted: true, Reason: reason}}}
+	out := []NewFact{{Kind: KindForemanDecision, Payload: ForemanDecision{Tool: call.Tool, Args: call.Args(), Accepted: true, Reason: reason}}}
 	switch call.Tool {
 	case ToolDispatchBuild:
 		for _, id := range call.TaskIDs {
-			out = append(out, NewFact{KindTaskDispatched, TaskRef{Task: id}})
+			out = append(out, NewFact{Kind: KindTaskDispatched, Payload: TaskRef{Task: id}})
 		}
 	case ToolRequestInspection:
-		out = append(out, NewFact{KindInspectionRequested, TaskRef{Task: call.TaskID}})
+		out = append(out, NewFact{Kind: KindInspectionRequested, Payload: TaskRef{Task: call.TaskID}})
 	case ToolRetryTask:
-		out = append(out, NewFact{KindTaskRetry, TaskRetry{Task: call.TaskID, Change: call.Change}})
+		out = append(out, NewFact{Kind: KindTaskRetry, Payload: TaskRetry{Task: call.TaskID, Change: call.Change}})
 	case ToolSerialize:
-		out = append(out, NewFact{KindTasksSerialized, TasksSerialized{A: call.A, B: call.B}})
+		out = append(out, NewFact{Kind: KindTasksSerialized, Payload: TasksSerialized{A: call.A, B: call.B}})
 	case ToolEscalateToHuman:
-		out = append(out, NewFact{KindEscalated, Escalated{Reason: call.Reason}})
+		out = append(out, NewFact{Kind: KindEscalated, Payload: Escalated{Reason: call.Reason}})
 	}
 	return out, nil
 }

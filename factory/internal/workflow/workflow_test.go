@@ -17,7 +17,7 @@ type sim struct {
 
 func newSim(t *testing.T) *sim {
 	s := &sim{t: t, lim: DefaultLimits()}
-	s.emit(fact.KindWOCreated, fact.WOCreated{Objective: "x"})
+	s.emit(fact.KindWOCreated, fact.WOCreated{Objective: "x", LevelCap: 3})
 	return s
 }
 
@@ -467,6 +467,25 @@ func TestToolsSchemas(t *testing.T) {
 	}
 	if _, err := ParseCall("nope", nil); err == nil {
 		t.Error("unknown tool accepted")
+	}
+}
+
+func TestLevelZeroPlanGateWaitsForHuman(t *testing.T) {
+	s := newSim(t)
+	s.facts[0].Payload = []byte(`{"objective":"x","level_cap":0}`)
+	s.planReady(PlanTask{ID: "a", Paths: []string{"a/"}})
+	s.must(ApprovePlan("ok"))
+	s.phase(PhaseAwaitingHuman)
+	s.emit(KindHumanApproved, HumanApproved{Gate: "spec"})
+	s.phase(PhaseAwaitingHuman)
+	s.emit(KindHumanApproved, HumanApproved{Gate: GatePlan})
+	s.phase(PhaseBuilding)
+	s.must(DispatchBuild([]string{"a"}))
+}
+
+func TestMissingLevelCapDefaultsToThree(t *testing.T) {
+	if got := Fold([]fact.Fact{{Kind: fact.KindWOCreated, Payload: []byte(`{"objective":"x"}`)}}).LevelCap; got != DefaultLevelCap {
+		t.Fatalf("level cap = %d", got)
 	}
 }
 

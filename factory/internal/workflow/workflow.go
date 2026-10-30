@@ -19,7 +19,21 @@ const (
 	KindTasksSerialized     = "tasks.serialized"
 	KindIntegrationConflict = "integration.conflict"
 	KindEscalated           = "escalated"
+	KindHumanApproved       = "human.approved"
 )
+
+const (
+	GatePlan        = "plan"
+	DefaultLevelCap = 3
+)
+
+type SpecReady struct {
+	Spec string `json:"spec"`
+}
+
+type HumanApproved struct {
+	Gate string `json:"gate"`
+}
 
 const (
 	RoleCataloger = "cataloger"
@@ -164,6 +178,7 @@ type State struct {
 	ConsecutiveRejections int
 	Decisions             []Decision // accepted only
 	LevelCap              int
+	Gate                  string // set while awaiting_human at a level gate
 	FailureClass          string
 	EscalatedFrom         Phase
 
@@ -243,10 +258,16 @@ func (s *State) apply(f fact.Fact) {
 	switch f.Kind {
 	case fact.KindWOCreated:
 		s.Epoch++
+		s.LevelCap = DefaultLevelCap
 		if v, ok := decode[struct {
-			LevelCap int `json:"level_cap"`
-		}](f); ok {
-			s.LevelCap = v.LevelCap
+			LevelCap *int `json:"level_cap"`
+		}](f); ok && v.LevelCap != nil {
+			s.LevelCap = *v.LevelCap
+		}
+	case KindHumanApproved:
+		if v, ok := decode[HumanApproved](f); ok && s.Phase == PhaseAwaitingHuman && s.Gate == v.Gate {
+			s.Epoch++
+			s.Phase, s.Gate = PhaseBuilding, ""
 		}
 	case fact.KindRunStarted:
 		r, ok := decode[fact.RunStarted](f)
@@ -420,6 +441,10 @@ func (s *State) applyDecision(f fact.Fact) {
 		s.SpecRejections++
 		s.setPhase(PhaseSpecifying)
 	case ToolApprovePlan:
+		if s.LevelCap == 0 && s.Phase == PhasePlanReady {
+			s.Phase, s.Gate = PhaseAwaitingHuman, GatePlan
+			return
+		}
 		s.setPhase(PhaseBuilding)
 	case ToolRejectPlan:
 		s.PlanRejections++
