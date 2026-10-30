@@ -9,8 +9,8 @@ RUN apt-get update \
 
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" | tar -C /usr/local -xz
 
-# TODO: uncertain — exact npm package names/versions for the ACP adapter and OpenCode, verify on first image build
-RUN npm i -g @zed-industries/claude-agent-acp opencode-ai@latest
+# TODO: uncertain — @opencode/cli assumed to be the OpenCode v2 CLI (npm latest 2.2.2; opencode-ai is 1.x), verify its ACP entrypoint on first image build
+RUN npm i -g @agentclientprotocol/claude-agent-acp@0.99.1 @opencode/cli@2.2.2
 
 ENV PATH=/usr/local/go/bin:$PATH \
     HOME=/ws/home \
