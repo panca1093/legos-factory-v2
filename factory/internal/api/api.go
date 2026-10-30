@@ -128,7 +128,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, credID 
 		writeErr(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, profile.ErrUnverified):
 		writeErr(w, http.StatusConflict, err.Error())
-	case errors.Is(err, profile.ErrSingleOwnerOnly), errors.Is(err, profile.ErrAuthFileRequired):
+	case errors.Is(err, profile.ErrSingleOwnerOnly):
 		writeErr(w, http.StatusUnprocessableEntity, err.Error())
 	default:
 		msg := s.redact(r.Context(), err.Error(), credID)
