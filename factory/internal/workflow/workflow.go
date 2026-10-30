@@ -277,7 +277,9 @@ func (s *State) apply(f fact.Fact) {
 		}
 		return
 	}
-	if s.Phase.Terminal() {
+	// builders still finishing when the order failed keep reporting; dropping those would rebuild their tasks after a retry
+	lateTaskFact := s.Phase == PhaseFailed && (f.Kind == KindTaskBuilt || f.Kind == fact.KindTaskFailed)
+	if s.Phase.Terminal() && !lateTaskFact {
 		return
 	}
 	switch f.Kind {

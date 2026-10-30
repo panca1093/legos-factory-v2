@@ -33,6 +33,8 @@ type orch struct {
 	mu      sync.Mutex    // guards failed and serializes git worktree creation
 	failed  bool          // wo.failed was recorded; builders racing to fail the order record it once
 	builder chan struct{} // MaxBuilders slots, created on first use
+
+	stopBuilders func() // cancels the running builders; set while building (guarded by mu)
 }
 
 // errWOFailed means the work order was already marked failed; callers stop without error.
@@ -106,7 +108,10 @@ func (o *orch) fail(ctx context.Context, f fact.WOFailed) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if !o.failed {
-		if err := o.e.fail(ctx, o.woID, f); err != nil {
+		if o.stopBuilders != nil {
+			o.stopBuilders()
+		}
+		if err := o.e.fail(context.WithoutCancel(ctx), o.woID, f); err != nil {
 			return err
 		}
 		o.failed = true
@@ -589,6 +594,14 @@ func (o *orch) building(ctx context.Context) error {
 	}
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	o.mu.Lock()
+	o.stopBuilders = cancel
+	o.mu.Unlock()
+	defer func() {
+		o.mu.Lock()
+		o.stopBuilders = nil
+		o.mu.Unlock()
+	}()
 	results := make(chan buildResult)
 	active := map[string]bool{}
 	var firstErr error
