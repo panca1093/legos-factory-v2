@@ -56,7 +56,7 @@ No translation proxy or router: models without an Anthropic-compatible endpoint 
 
 **Why:** one adapter, one event parser and one test suite against captured real streams (lesson #5). The ACP client already works. Provider tool-use quality still differs, so the smoke test decides; a router adds a failure point and lossy translation.
 
-**To verify (PLAN M0):** permission deny via Claude Code settings (an ACP rejection cancels the turn, lesson #3); how the model is set at session creation; credential env (`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`) reaches the SDK; `session/load` from the workspace volume in a new container.
+**Verified (spike 2026-10-30, SPEC §7):** model and tool denies are set at `session/new` via `_meta.claudeCode.options` (`model`, `settings.permissions.deny`); for this agent a `reject_once` permission reply fails only that tool call, so the turn-cancel part of lesson #3 applies to OpenCode only. Each session uses its own `CLAUDE_CONFIG_DIR` on the volume so the owner's settings never leak in; `session/load` works from a new process with the same config dir and cwd. Container credential passthrough is still unverified live.
 
 ## ADR-F04: Credentials are API keys or subscription tokens; models derive from them
 
@@ -177,3 +177,14 @@ Cataloger, reaching a real PR with CI green.
 
 **Why:** two earlier runs of the current factory never reached a PR. End-to-end proof
 comes before parallelism and policy.
+
+## ADR-F14: The rebuild is a new module in this repository
+
+**Decision:** the foundation lives in this repository as a new Go module `factory/`,
+developed on `feat/new-legos-architect` with one branch per milestone. `backend/` and
+`frontend/` are frozen. Pieces worth keeping (ACP client, GitHub/Bitbucket clients,
+secret encryption) are copied into `factory/` and adapted, never imported across modules.
+
+**Why:** one place for docs and history; the old backend keeps running unchanged
+until the new factory reaches its M1 check; copying avoids coupling to the old
+model types.
