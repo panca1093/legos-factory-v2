@@ -351,6 +351,9 @@ func (s *State) apply(f fact.Fact) {
 				t.LastFailureClass = v.Class
 				t.SplitPending = false
 				s.Epoch++
+				if s.in(PhaseIntegrating, PhaseVerifying) {
+					s.setPhase(PhaseBuilding)
+				}
 			}
 		}
 	case KindInspectionRequested:
@@ -427,7 +430,6 @@ func (s *State) apply(f fact.Fact) {
 		}
 	case fact.KindVerifyFailed:
 		s.Epoch++
-		s.setPhase(PhaseBuilding)
 	case fact.KindWORequeued:
 		s.Epoch++
 		if r, ok := decode[fact.WORequeued](f); ok && r.Reason == ReasonNeedsRebase {
