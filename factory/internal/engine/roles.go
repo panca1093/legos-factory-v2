@@ -525,8 +525,8 @@ func (o *orch) decide(ctx context.Context, reply string) (cerr, err error) {
 		if facts, err := o.e.Facts.List(ctx, o.woID); err != nil {
 			return nil, err
 		} else if t, ok := workflow.Fold(facts).Task(call.TaskID); ok && t.Status == workflow.TaskBuilt {
-			if model, same := o.inspectorSameModel(ctx, t); same {
-				return nil, o.escalate(ctx, fact.ClassTask, fmt.Sprintf("inspector_same_model: Inspector and Builder both use %q; bind a different model to the inspector role", model))
+			if reason := o.inspectorModelProblem(ctx, t); reason != "" {
+				return nil, o.escalate(ctx, fact.ClassTask, reason)
 			}
 		}
 	}
@@ -1078,19 +1078,26 @@ func pendingFindings(facts []fact.Fact, id string) []workflow.Finding {
 	return out
 }
 
-// inspectorSameModel reports whether the task's builder and the Inspector resolve to one model string.
-func (o *orch) inspectorSameModel(ctx context.Context, t workflow.Task) (string, bool) {
-	b, err := o.e.agentConfigN(ctx, o.p, harness.RoleBuilder, t.ModelChanges)
+// inspectorModelProblem is the escalation reason when the Inspector may not review the task: its model equals the
+// builder's (current or any configured fallback), or either model cannot be determined. "" means it may.
+func (o *orch) inspectorModelProblem(ctx context.Context, t workflow.Task) string {
+	im, err := o.e.roleModel(ctx, o.p, harness.RoleInspector, 0)
 	if err != nil {
-		return "", false
+		return "inspector_model_unknown: " + err.Error()
 	}
-	b.release()
-	i, err := o.e.agentConfig(ctx, o.p, harness.RoleInspector)
+	bm, err := o.e.roleModel(ctx, o.p, harness.RoleBuilder, t.ModelChanges)
 	if err != nil {
-		return "", false
+		return "inspector_model_unknown: " + err.Error()
 	}
-	i.release()
-	return b.Profile.Model, b.Profile.Model != "" && b.Profile.Model == i.Profile.Model
+	if bm == im {
+		return fmt.Sprintf("inspector_same_model: Inspector and Builder both use %q; bind a different model to the inspector role", im)
+	}
+	for n := 1; n <= len(o.p.Fallbacks[string(harness.RoleBuilder)]); n++ {
+		if fm, err := o.e.roleModel(ctx, o.p, harness.RoleBuilder, n); err == nil && fm == im {
+			return fmt.Sprintf("inspector_same_model: builder fallback %d uses the Inspector's model %q; change the fallback or the inspector role", n, im)
+		}
+	}
+	return ""
 }
 
 func splitPending(st workflow.State) *workflow.Task {

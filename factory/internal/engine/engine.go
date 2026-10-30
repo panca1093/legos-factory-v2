@@ -801,6 +801,46 @@ func (e *Engine) agentConfigN(ctx context.Context, p Project, role harness.Role,
 	return e.profileConfig(ctx, prof, role)
 }
 
+// roleModel names the model a role would run on without acquiring a credential slot; fallback n > 0 selects the
+// n-th fallback profile. An empty or unresolvable model is an error: callers must not treat it as "different".
+func (e *Engine) roleModel(ctx context.Context, p Project, role harness.Role, n int) (string, error) {
+	var model string
+	switch explicit := p.Builder; {
+	case n > 0:
+		ids := p.Fallbacks[string(role)]
+		if e.Profiles == nil || n > len(ids) {
+			return "", fmt.Errorf("no fallback %d configured for role %s", n, role)
+		}
+		prof, err := e.Profiles.GetProfile(ctx, ids[n-1])
+		if err != nil {
+			return "", fmt.Errorf("fallback profile %s: %w", ids[n-1], err)
+		}
+		model = prof.Model
+	default:
+		if role != harness.RoleBuilder {
+			explicit = p.Roles[string(role)]
+		}
+		usable := explicit.Profile.Agent != ""
+		if role != harness.RoleBuilder {
+			usable = explicit.set()
+		}
+		switch {
+		case usable:
+			model = explicit.Profile.Model
+		case e.Profiles != nil:
+			prof, err := e.Profiles.Resolve(ctx, p.ID, role)
+			if err != nil {
+				return "", fmt.Errorf("resolve %s profile: %w", role, err)
+			}
+			model = prof.Model
+		}
+	}
+	if model == "" {
+		return "", fmt.Errorf("the %s model is not known", role)
+	}
+	return model, nil
+}
+
 func (e *Engine) profileConfig(ctx context.Context, prof profile.Profile, role harness.Role) (agentCfg, error) {
 	rs, err := e.Profiles.RunEnv(ctx, prof)
 	if err != nil {

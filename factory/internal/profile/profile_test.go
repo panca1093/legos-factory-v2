@@ -416,6 +416,21 @@ func TestBindRefusesSameModelForInspectorAndBuilder(t *testing.T) {
 	}
 }
 
+func TestBindSkipsSameModelCheckWhenAModelIsEmpty(t *testing.T) {
+	s := newStore(t, true)
+	a := modelProfile(t, s, "no-model-a", "claude-haiku-4-5", true)
+	b := modelProfile(t, s, "no-model-b", "claude-haiku-4-5", true)
+	if _, err := s.db.ExecContext(bg, `UPDATE profiles SET model=''`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Bind(bg, "", harness.RoleBuilder, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Bind(bg, "", harness.RoleInspector, b.ID); err != nil {
+		t.Fatalf("empty models are not provably equal: %v", err)
+	}
+}
+
 func TestDeleteCredentialDropsSemaphore(t *testing.T) {
 	s := newStore(t, true)
 	c := mustCred(t, s, Credential{Name: "sem", Kind: "api_key", Provider: "anthropic"}, "k")

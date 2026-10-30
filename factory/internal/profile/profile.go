@@ -347,7 +347,7 @@ func (s *Store) Bind(ctx context.Context, projectID string, role harness.Role, p
 		return fmt.Errorf("bind builder to %s: %w", p.Name, ErrUnverified)
 	}
 	if other, ok := map[harness.Role]harness.Role{harness.RoleInspector: harness.RoleBuilder, harness.RoleBuilder: harness.RoleInspector}[role]; ok {
-		if op, rerr := s.Resolve(ctx, projectID, other); rerr == nil && op.Model == p.Model {
+		if op, rerr := s.Resolve(ctx, projectID, other); rerr == nil && p.Model != "" && op.Model != "" && op.Model == p.Model {
 			return fmt.Errorf("bind %s to %s: %s already uses model %q: %w", role, p.Name, other, p.Model, ErrSameModel)
 		}
 	}

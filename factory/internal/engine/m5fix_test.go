@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"legos-factory/factory/internal/profile"
 	"net/url"
 	"os"
 	"os/exec"
@@ -227,6 +228,39 @@ func TestIntegrationRedactsBeforeTailingAndWarnsOnShortSecrets(t *testing.T) {
 	}
 	if !warned {
 		t.Error("no warning for the short secret")
+	}
+}
+
+func TestInspectorModelUnknownOrFallbackSameModelEscalates(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*env)
+		want  string
+	}{
+		{"builder model unknown", func(ev *env) { ev.p.Builder = BuilderConfig{} }, "inspector_model_unknown"},
+		{"inspector model unknown", func(ev *env) {
+			ev.p.Roles["inspector"] = BuilderConfig{Profile: harness.Profile{Agent: "claude-agent-acp"}, AgentCommand: []string{"x"}}
+		}, "inspector_model_unknown"},
+		{"fallback uses the inspector's model", func(ev *env) {
+			ev.e.Profiles = &fakeProfiles{byID: map[string]profile.Profile{"fb1": {ID: "fb1", Model: "sonnet"}}}
+			ev.p.Fallbacks = map[string][]string{"builder": {"fb1"}}
+		}, "inspector_same_model"},
+	} {
+		h, ev := inspectorLine(t, nil, dispatch(), inspectCall())
+		tc.setup(ev)
+		_, facts := runWO(t, ev)
+		if len(h.promptsFor(harness.RoleInspector)) != 0 {
+			t.Errorf("%s: inspector ran", tc.name)
+		}
+		var esc workflow.Escalated
+		for _, f := range facts {
+			if f.Kind == workflow.KindEscalated {
+				esc, _ = fact.Decode[workflow.Escalated](f)
+			}
+		}
+		if !strings.HasPrefix(esc.Reason, tc.want) || esc.Class != fact.ClassTask {
+			t.Errorf("%s: escalation = %+v", tc.name, esc)
+		}
 	}
 }
 

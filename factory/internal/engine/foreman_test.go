@@ -144,6 +144,7 @@ func lineEnv(t *testing.T, h *scripted, verify ...string) *env {
 	ev.e.Harness = h
 	cfg := BuilderConfig{Profile: harness.Profile{Agent: "claude-agent-acp", Model: "opus"}, AgentCommand: []string{"claude-agent-acp"}}
 	insp := BuilderConfig{Profile: harness.Profile{Agent: "claude-agent-acp", Model: "sonnet"}, AgentCommand: []string{"claude-agent-acp"}}
+	ev.p.Builder = BuilderConfig{Profile: harness.Profile{Agent: "claude-agent-acp", Model: "haiku"}, AgentCommand: []string{"claude-agent-acp"}}
 	ev.p.Roles = map[string]BuilderConfig{"foreman": cfg, "architect": cfg, "inspector": insp}
 	return ev
 }
