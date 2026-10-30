@@ -594,7 +594,8 @@ func (o *orch) building(ctx context.Context) error {
 	var firstErr error
 	finish := func(r buildResult) {
 		delete(active, r.id)
-		if r.err != nil && firstErr == nil && !errors.Is(r.err, context.Canceled) {
+		stopped := cctx.Err() != nil && !errors.Is(r.err, errWOFailed) // errors after our own cancel are fallout
+		if r.err != nil && firstErr == nil && !stopped && !errors.Is(r.err, context.Canceled) {
 			firstErr = r.err
 		}
 	}

@@ -16,18 +16,20 @@ import (
 
 // scripted answers each role from its own reply queue; an exhausted Foreman queue escalates so tests end cleanly.
 type scripted struct {
-	mu      sync.Mutex
-	replies map[harness.Role][]string
-	prompts map[harness.Role][]string
-	specs   []harness.SessionSpec
-	builds  map[string]int
-	build   func(task string, n int, dir string) error
-	onRole  func(spec harness.SessionSpec) // runs while a non-builder role is prompted
-	started int
+	mu       sync.Mutex
+	replies  map[harness.Role][]string
+	prompts  map[harness.Role][]string
+	specs    []harness.SessionSpec
+	builds   map[string]int
+	injected map[harness.Role]int
+	build    func(task string, n int, dir string) error
+	onRole   func(spec harness.SessionSpec)                    // runs while a non-builder role is prompted
+	inject   func(role harness.Role, task string, n int) error // fails the n-th prompt of (role, task) before it does anything
+	started  int
 }
 
 func newScripted() *scripted {
-	return &scripted{replies: map[harness.Role][]string{}, prompts: map[harness.Role][]string{}, builds: map[string]int{}}
+	return &scripted{replies: map[harness.Role][]string{}, prompts: map[harness.Role][]string{}, builds: map[string]int{}, injected: map[harness.Role]int{}}
 }
 
 func (h *scripted) say(role harness.Role, replies ...string) *scripted {
@@ -81,8 +83,17 @@ func (s *scriptedSession) Prompt(_ context.Context, text string) (string, error)
 		h.builds[task]++
 		n = h.builds[task]
 	}
-	build, onRole := h.build, h.onRole
+	build, onRole, inject := h.build, h.onRole, h.inject
 	h.mu.Unlock()
+	if inject != nil {
+		h.mu.Lock()
+		h.injected[role+"/"+harness.Role(task)]++
+		k := h.injected[role+"/"+harness.Role(task)]
+		h.mu.Unlock()
+		if err := inject(role, task, k); err != nil {
+			return "", err
+		}
+	}
 	if role != harness.RoleBuilder && onRole != nil {
 		onRole(s.spec)
 	}
