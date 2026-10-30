@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,9 +13,11 @@ import (
 	"os/signal"
 	"time"
 
+	"legos-factory/factory/internal/api"
 	"legos-factory/factory/internal/engine"
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
+	"legos-factory/factory/internal/profile"
 	"legos-factory/factory/internal/sandbox"
 	"legos-factory/factory/internal/scm"
 )
@@ -27,7 +31,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: factory create|run|watch|status [flags]")
+		return errors.New("usage: factory create|run|watch|status|serve [flags]")
 	}
 	cmd := args[0]
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
@@ -38,6 +42,12 @@ func run(args []string) error {
 	projectPath := fs.String("project", "", "project JSON file")
 	objective := fs.String("objective", "", "work order objective (create)")
 	wo := fs.String("wo", "", "work order id")
+	addr := fs.String("addr", ":8090", "listen address (serve)")
+	tokenEnv := fs.String("token-env", "FACTORY_OWNER_TOKEN", "env var holding the owner bearer token (serve)")
+	keyEnv := fs.String("key-env", "FACTORY_SECRET_KEY", "env var holding the 32-byte credential key, hex or base64 (serve)")
+	projectsDir := fs.String("projects-dir", "projects", "project JSON directory (serve)")
+	plansFile := fs.String("plans", "plans.json", "subscription plans file (serve)")
+	singleOwner := fs.Bool("single-owner", true, "allow subscription credentials (serve)")
 	interval := fs.Duration("interval", 30*time.Second, "poll interval (watch)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -71,6 +81,9 @@ func run(args []string) error {
 		Log: slog.Default(),
 	}
 
+	if cmd == "serve" {
+		return serve(ctx, e, *db, *addr, *tokenEnv, *keyEnv, *projectsDir, *plansFile, *singleOwner)
+	}
 	if cmd == "status" {
 		return printStatus(ctx, e, *wo)
 	}
@@ -106,6 +119,48 @@ func run(args []string) error {
 		return watch(ctx, e, p, *wo, *interval)
 	}
 	return fmt.Errorf("unknown command %q", cmd)
+}
+
+func decodeKey(s string) ([]byte, error) {
+	if b, err := hex.DecodeString(s); err == nil && len(b) == 32 {
+		return b, nil
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil && len(b) == 32 {
+			return b, nil
+		}
+	}
+	return nil, errors.New("secret key must be 32 bytes, hex or base64 encoded")
+}
+
+func serve(ctx context.Context, e *engine.Engine, db, addr, tokenEnv, keyEnv, projectsDir, plansFile string, singleOwner bool) error {
+	token := os.Getenv(tokenEnv)
+	if token == "" {
+		return fmt.Errorf("env %s (owner token) is empty", tokenEnv)
+	}
+	key, err := decodeKey(os.Getenv(keyEnv))
+	if err != nil {
+		return fmt.Errorf("env %s: %w", keyEnv, err)
+	}
+	ps, err := profile.Open(profile.Config{DB: db, Key: key, SingleOwner: singleOwner, PlansFile: plansFile})
+	if err != nil {
+		return err
+	}
+	defer ps.Close()
+	e.Profiles = ps
+	h := &api.Server{Token: token, Profiles: ps, Engine: e, ProjectsDir: projectsDir, BaseCtx: ctx, Log: e.Log}
+	srv := &http.Server{Addr: addr, Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		<-ctx.Done()
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(sctx)
+	}()
+	e.Log.Info("serving", "addr", addr)
+	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
 }
 
 func printStatus(ctx context.Context, e *engine.Engine, wo string) error {
