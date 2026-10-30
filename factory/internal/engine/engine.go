@@ -458,9 +458,11 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 					Message: fmt.Sprintf("sandbox failed %d times: %v", restarts+1, err)})
 			}
 			restarts++
-			if sb, err = e.restartSandbox(ctx, woID, sb, err, restarts); err != nil {
-				return err
+			nsb, rerr := e.restartSandbox(ctx, woID, sb, err, restarts)
+			if rerr != nil {
+				return rerr
 			}
+			sb = nsb
 			if o != nil {
 				o.sb = sb
 			}

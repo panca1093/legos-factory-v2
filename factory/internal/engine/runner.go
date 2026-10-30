@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -195,7 +196,13 @@ func (r *Runner) work(ctx context.Context, c candidate) {
 	}
 }
 
-func (r *Runner) exec(ctx context.Context, c candidate) error {
+func (r *Runner) exec(ctx context.Context, c candidate) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			r.Engine.log().Error("runner step panicked", "wo", c.id, "panic", p, "stack", string(debug.Stack()))
+			err = fmt.Errorf("panic: %v", p)
+		}
+	}()
 	p, err := r.Projects(c.project)
 	if err != nil {
 		return err
