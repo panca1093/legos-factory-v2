@@ -1,6 +1,37 @@
 package workflow
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"legos-factory/factory/internal/fact"
+)
+
+func TestTotalInspectionsSurviveRetryAndCapBlocksRetry(t *testing.T) {
+	s := newSim(t)
+	s.building(pt("a", nil, "a/"))
+	round := func() {
+		s.must(DispatchBuild([]string{"a"}))
+		s.built("a")
+		s.must(RequestInspection("a"))
+		s.inspected("a", 1)
+	}
+	for range 3 {
+		round()
+	}
+	s.emit(fact.KindTaskFailed, fact.TaskFailed{Task: "a", Class: fact.ClassTask, Reason: "inspector_rejected"})
+	s.must(RetryTask("a", ChangeSame))
+	if a, _ := s.state().Task("a"); a.InspectionRounds != 0 || a.TotalInspections != 3 {
+		t.Fatalf("after retry rounds=%d total=%d", a.InspectionRounds, a.TotalInspections)
+	}
+	for range 3 {
+		round()
+	}
+	s.emit(fact.KindTaskFailed, fact.TaskFailed{Task: "a", Class: fact.ClassTask, Reason: "inspector_rejected"})
+	if err := s.call(RetryTask("a", ChangeSame)); err == nil || !strings.Contains(err.Error(), "lifetime cap") {
+		t.Fatalf("retry past the lifetime cap: %v", err)
+	}
+}
 
 func TestInspectionBlockingDecidesAndLogicChangedAggregates(t *testing.T) {
 	s := newSim(t)

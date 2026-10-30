@@ -32,6 +32,9 @@ type Limits struct {
 	BuilderFallbacks         int // number of fallback builder profiles other_model can move through
 }
 
+// MaxTotalInspections bounds a task's inspections across retries, which reset the per-attempt round count.
+func (l Limits) MaxTotalInspections() int { return l.MaxInspectionRounds * 2 }
+
 func DefaultLimits() Limits {
 	return Limits{MaxBuilders: 3, MaxSpecRounds: 3, MaxPlanRounds: 3, MaxInspectionRounds: 3, MaxRetries: 2, MaxConsecutiveRejections: 3}
 }
@@ -155,6 +158,9 @@ func (s State) check(c Call, lim Limits) error {
 		if t.Commits <= t.InspectedCommits {
 			return fmt.Errorf("task %s has no new commits since its last inspection", t.ID)
 		}
+		if t.TotalInspections >= lim.MaxTotalInspections() {
+			return fmt.Errorf("task %s used its lifetime cap of %d inspections; escalate_to_human", t.ID, lim.MaxTotalInspections())
+		}
 		if t.InspectionRounds >= lim.MaxInspectionRounds {
 			return fmt.Errorf("task %s used all %d inspection rounds; retry_task or escalate_to_human", t.ID, lim.MaxInspectionRounds)
 		}
@@ -171,6 +177,9 @@ func (s State) check(c Call, lim Limits) error {
 		}
 		if t.Retries >= lim.MaxRetries {
 			return fmt.Errorf("task %s used all %d retries; escalate_to_human", t.ID, lim.MaxRetries)
+		}
+		if t.TotalInspections >= lim.MaxTotalInspections() {
+			return fmt.Errorf("task %s was rejected by the Inspector in its lifetime cap of %d inspections; a retry cannot reset that, escalate_to_human", t.ID, lim.MaxTotalInspections())
 		}
 		if !slices.Contains([]string{ChangeSame, ChangeOtherModel, ChangeSplit}, c.Change) {
 			return fmt.Errorf("change %q invalid; use same, other_model or split", c.Change)

@@ -86,7 +86,7 @@ func TestInspectorFindingsResumeBuilderSessionAndFixLands(t *testing.T) {
 		t.Error("logic_changed not aggregated")
 	}
 	ip := h.promptsFor(harness.RoleInspector)
-	if len(ip) != 2 || !strings.Contains(ip[0], "```diff") || !strings.Contains(ip[0], "+v1") || !strings.Contains(ip[1], "+v2") {
+	if len(ip) != 2 || !strings.Contains(ip[0], "<<<DIFF-") || !strings.Contains(ip[0], "<<<END-DIFF-") || !strings.Contains(ip[0], "+v1") || !strings.Contains(ip[1], "+v2") {
 		t.Errorf("inspector prompts = %q", ip)
 	}
 	for _, s := range h.specs {
@@ -211,25 +211,34 @@ func TestInspectorSameModelEscalatesBeforeInspecting(t *testing.T) {
 	}
 }
 
-func TestInspectorUnparseableReplyIsReAskedOnceThenIgnored(t *testing.T) {
-	h, ev := inspectorLine(t, []string{"no json here", "still nothing"}, dispatch(), inspectCall())
-	id, facts := runWO(t, ev)
-	if st := status(t, ev.e, id); st != fact.StatusPROpen {
-		t.Fatalf("status = %s", st)
-	}
-	if got := len(h.promptsFor(harness.RoleInspector)); got != 2 {
-		t.Errorf("inspector prompts = %d, want one re-ask", got)
-	}
-	n := 0
-	for _, f := range facts {
-		if f.Kind == fact.KindRunStep {
-			if s, _ := fact.Decode[fact.RunStep](f); s.Step == "inspector_unparseable" {
-				n++
+func TestInspectorUnparseableReplyIsReAskedOnceThenBlocks(t *testing.T) {
+	for _, reply := range []string{"no json here", `{}`, `{"summary":"ok"}`} {
+		h, ev := inspectorLine(t, []string{reply, reply}, dispatch(), inspectCall(), dispatch())
+		id, facts := runWO(t, ev)
+		if st := status(t, ev.e, id); st == fact.StatusPROpen {
+			t.Fatalf("%q: an unusable verdict passed the task", reply)
+		}
+		if got := len(h.promptsFor(harness.RoleInspector)); got != 2 {
+			t.Errorf("%q: inspector prompts = %d, want one re-ask", reply, got)
+		}
+		n := 0
+		var done workflow.InspectionDone
+		for _, f := range facts {
+			if f.Kind == fact.KindRunStep {
+				if s, _ := fact.Decode[fact.RunStep](f); s.Step == "inspector_unparseable" {
+					n++
+				}
+			}
+			if f.Kind == workflow.KindInspectionDone {
+				done, _ = fact.Decode[workflow.InspectionDone](f)
 			}
 		}
-	}
-	if n != 1 {
-		t.Errorf("inspector_unparseable steps = %d", n)
+		if n != 1 || done.Blocking != 1 || done.SeverityMax != "blocker" || !strings.Contains(done.List[0].Message, "inspector_unparseable") {
+			t.Errorf("%q: steps %d, inspection.done = %+v", reply, n, done)
+		}
+		if p := h.promptsFor(harness.RoleBuilder); len(p) != 2 || !strings.Contains(p[1], "inspector_unparseable") {
+			t.Errorf("%q: the builder is not sent back with the blocker: %q", reply, p)
+		}
 	}
 }
 

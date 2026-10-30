@@ -172,6 +172,7 @@ type Task struct {
 	Commits          int
 	InspectedCommits int
 	InspectionRounds int
+	TotalInspections int  // never reset by a retry; bounds the task's lifetime inspections
 	LogicChanged     bool // the latest inspection's opinion
 	Retries          int
 	LastFailureClass string
@@ -381,6 +382,7 @@ func (s *State) apply(f fact.Fact) {
 			if t := s.task(v.Task); t != nil {
 				t.Status = TaskInspecting
 				t.InspectionRounds++
+				t.TotalInspections++
 				t.InspectedCommits = t.Commits
 			}
 		}
