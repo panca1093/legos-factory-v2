@@ -580,6 +580,23 @@ func TestSmokeNegatives(t *testing.T) {
 	}
 }
 
+func TestRecordSmoke(t *testing.T) {
+	s := newStore(t, true)
+	p := verifiedProfile(t, s, "rs", false)
+	if err := s.RecordSmoke(bg, p.ID, "boom"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetProfile(bg, p.ID); got.SmokeError != "boom" || got.SmokeAt == nil {
+		t.Fatalf("got %+v", got)
+	}
+	if err := s.RecordSmoke(bg, p.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetProfile(bg, p.ID); got.SmokeError != "" || got.SmokeAt == nil {
+		t.Fatalf("got %+v", got)
+	}
+}
+
 func TestSmokeAuthFile(t *testing.T) {
 	s := newStore(t, true)
 	const secret = `{"opencode-go":{"type":"api","key":"k"}}`

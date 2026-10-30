@@ -61,6 +61,8 @@ type Profile struct {
 	Price          Price      `json:"price"`
 	VerifiedAt     *time.Time `json:"verified_at,omitempty"`
 	ModelUnchecked bool       `json:"model_unchecked,omitempty"` // custom provider whose catalog could not be fetched
+	SmokeError     string     `json:"smoke_error,omitempty"`     // last smoke failure; empty after a pass
+	SmokeAt        *time.Time `json:"smoke_at,omitempty"`        // when the last smoke finished
 }
 
 type Store struct {
@@ -82,7 +84,8 @@ CREATE TABLE IF NOT EXISTS credentials (
 CREATE TABLE IF NOT EXISTS profiles (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, agent TEXT NOT NULL, credential_id TEXT NOT NULL, model TEXT NOT NULL,
   price_in REAL NOT NULL DEFAULT 0, price_out REAL NOT NULL DEFAULT 0, price_cache_read REAL NOT NULL DEFAULT 0,
-  price_cache_write REAL NOT NULL DEFAULT 0, verified_at TEXT, model_unchecked INTEGER NOT NULL DEFAULT 0);
+  price_cache_write REAL NOT NULL DEFAULT 0, verified_at TEXT, model_unchecked INTEGER NOT NULL DEFAULT 0,
+  smoke_error TEXT NOT NULL DEFAULT '', smoke_at TEXT);
 CREATE TABLE IF NOT EXISTS role_bindings (
   project TEXT NOT NULL, role TEXT NOT NULL, profile_id TEXT NOT NULL, PRIMARY KEY (project, role));`
 
@@ -104,6 +107,9 @@ func Open(cfg Config) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// databases created before the smoke columns existed; "duplicate column" on a current schema is expected
+	_, _ = db.Exec(`ALTER TABLE profiles ADD COLUMN smoke_error TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE profiles ADD COLUMN smoke_at TEXT`)
 	if _, err := os.Stat(cfg.PlansFile); cfg.PlansFile != "" && os.IsNotExist(err) {
 		if err := os.WriteFile(cfg.PlansFile, defaultPlans, 0o644); err != nil {
 			db.Close()
@@ -230,21 +236,30 @@ func (s *Store) Secret(ctx context.Context, id string) (string, error) {
 	return string(plain), err
 }
 
-const profCols = `id,name,agent,credential_id,model,price_in,price_out,price_cache_read,price_cache_write,verified_at,model_unchecked`
+const profCols = `id,name,agent,credential_id,model,price_in,price_out,price_cache_read,price_cache_write,verified_at,model_unchecked,smoke_error,smoke_at`
 
 func scanProfile(r interface{ Scan(...any) error }) (Profile, error) {
 	var p Profile
-	var verified sql.NullString
+	var verified, smokeAt sql.NullString
 	err := r.Scan(&p.ID, &p.Name, &p.Agent, &p.CredentialID, &p.Model, &p.Price.InputPerMTok, &p.Price.OutputPerMTok,
-		&p.Price.CacheReadPerMTok, &p.Price.CacheWritePerMTok, &verified, &p.ModelUnchecked)
-	if err == nil && verified.Valid {
-		t, perr := time.Parse(time.RFC3339Nano, verified.String)
+		&p.Price.CacheReadPerMTok, &p.Price.CacheWritePerMTok, &verified, &p.ModelUnchecked, &p.SmokeError, &smokeAt)
+	if err != nil {
+		return p, err
+	}
+	for _, f := range []struct {
+		s   sql.NullString
+		dst **time.Time
+	}{{verified, &p.VerifiedAt}, {smokeAt, &p.SmokeAt}} {
+		if !f.s.Valid {
+			continue
+		}
+		t, perr := time.Parse(time.RFC3339Nano, f.s.String)
 		if perr != nil {
 			return p, perr
 		}
-		p.VerifiedAt = &t
+		*f.dst = &t
 	}
-	return p, err
+	return p, nil
 }
 
 // CreateProfile validates agent and model against the credential's compatibility matrix and catalog.
@@ -271,7 +286,7 @@ func (s *Store) CreateProfile(ctx context.Context, p Profile) (Profile, error) {
 		return Profile{}, fmt.Errorf("list models: %w", err)
 	}
 	p.ID, p.VerifiedAt = newID("prof-"), nil
-	_, err = s.db.ExecContext(ctx, `INSERT INTO profiles(`+profCols+`) VALUES(?,?,?,?,?,?,?,?,?,NULL,?)`,
+	_, err = s.db.ExecContext(ctx, `INSERT INTO profiles(`+profCols+`) VALUES(?,?,?,?,?,?,?,?,?,NULL,?,'',NULL)`,
 		p.ID, p.Name, p.Agent, p.CredentialID, p.Model, p.Price.InputPerMTok, p.Price.OutputPerMTok,
 		p.Price.CacheReadPerMTok, p.Price.CacheWritePerMTok, p.ModelUnchecked)
 	return p, err
@@ -312,6 +327,12 @@ func (s *Store) DeleteProfile(ctx context.Context, id string) error {
 
 func (s *Store) markVerified(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE profiles SET verified_at=? WHERE id=?`, s.now().UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
+// RecordSmoke stores the outcome of the latest smoke run; errMsg "" means it passed.
+func (s *Store) RecordSmoke(ctx context.Context, id, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE profiles SET smoke_error=?, smoke_at=? WHERE id=?`, errMsg, s.now().UTC().Format(time.RFC3339Nano), id)
 	return err
 }
 

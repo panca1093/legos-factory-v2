@@ -41,6 +41,7 @@ type Server struct {
 
 	mu      sync.Mutex
 	running map[string]bool
+	smoking map[string]bool
 }
 
 var (
@@ -285,32 +286,50 @@ func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// smoke runs in the background; clients poll GET /profiles/{id} for verified_at, smoke_error and smoke_at.
 func (s *Server) smoke(w http.ResponseWriter, r *http.Request) {
 	p, err := s.Profiles.GetProfile(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, r, err, "")
 		return
 	}
+	s.mu.Lock()
+	if s.smoking[p.ID] {
+		s.mu.Unlock()
+		writeErr(w, http.StatusConflict, "smoke already running for this profile")
+		return
+	}
+	if s.smoking == nil {
+		s.smoking = map[string]bool{}
+	}
+	s.smoking[p.ID] = true
+	s.mu.Unlock()
+
 	d := s.SmokeTimeout
 	if d == 0 {
 		d = 10 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), d)
-	defer cancel()
-	if err := s.Profiles.Smoke(ctx, s.Engine.Harness, s.Engine.Runtime, p); err != nil {
-		code := http.StatusUnprocessableEntity
-		if errors.Is(err, profile.ErrNotFound) {
-			code = http.StatusNotFound
+	base := s.BaseCtx
+	if base == nil {
+		base = context.Background()
+	}
+	go func() {
+		defer func() {
+			s.mu.Lock()
+			delete(s.smoking, p.ID)
+			s.mu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(base, d)
+		defer cancel()
+		msg := ""
+		if err := s.Profiles.Smoke(ctx, s.Engine.Harness, s.Engine.Runtime, p); err != nil {
+			msg = s.redact(context.WithoutCancel(ctx), err.Error(), p.CredentialID)
 		}
-		writeErr(w, code, s.redact(r.Context(), err.Error(), p.CredentialID))
-		return
-	}
-	p, err = s.Profiles.GetProfile(r.Context(), p.ID)
-	if err != nil {
-		s.fail(w, r, err, "")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"verified_at": p.VerifiedAt})
+		if err := s.Profiles.RecordSmoke(context.WithoutCancel(ctx), p.ID, msg); err != nil {
+			s.log().Warn("record smoke", "profile", p.ID, "err", err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "running"})
 }
 
 // --- bindings ---
