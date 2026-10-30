@@ -22,6 +22,7 @@ type scripted struct {
 	specs   []harness.SessionSpec
 	builds  map[string]int
 	build   func(task string, n int, dir string) error
+	onRole  func(spec harness.SessionSpec) // runs while a non-builder role is prompted
 	started int
 }
 
@@ -80,8 +81,11 @@ func (s *scriptedSession) Prompt(_ context.Context, text string) (string, error)
 		h.builds[task]++
 		n = h.builds[task]
 	}
-	build := h.build
+	build, onRole := h.build, h.onRole
 	h.mu.Unlock()
+	if role != harness.RoleBuilder && onRole != nil {
+		onRole(s.spec)
+	}
 	if role == harness.RoleBuilder {
 		if build != nil {
 			if err := build(task, n, s.spec.Dir); err != nil {
@@ -196,7 +200,7 @@ func TestLineHappyPathToPR(t *testing.T) {
 			t.Errorf("foreman does not deny %s", tool)
 		}
 	}
-	if len(roles[harness.RoleArchitect].ToolPolicy.Deny) != 0 || !harness.RoleArchitect.ReadOnly() {
+	if !contains(roles[harness.RoleArchitect].ToolPolicy.Deny, "Edit") || !contains(roles[harness.RoleArchitect].ToolPolicy.Deny, "Bash") || roles[harness.RoleArchitect].ToolPolicy.AllowNone || !harness.RoleArchitect.ReadOnly() {
 		t.Errorf("architect policy = %+v", roles[harness.RoleArchitect].ToolPolicy)
 	}
 	if p := h.promptsFor(harness.RoleBuilder); len(p) != 1 || !strings.Contains(p[0], "add out.txt") || !strings.Contains(p[0], "The spec: add pkg/out.txt.") || !strings.Contains(p[0], "pkg/") {
@@ -439,22 +443,31 @@ func TestRestartExecutesRecordedDecisionWithoutAskingForeman(t *testing.T) {
 
 func TestIntegrationConflictSerializeRebuildsOnDependency(t *testing.T) {
 	h := newScripted()
+	var ev *env
+	var id string
+	// owned-path enforcement makes a genuine git conflict unreachable, so b's first build records one the way integrate would
 	h.build = func(task string, n int, dir string) error {
 		content := strings.ToUpper(task) + "\n"
+		if task == "b" && n == 1 {
+			if _, err := ev.e.Facts.Append(context.Background(), id, workflow.KindIntegrationConflict, workflow.IntegrationConflict{A: "a", B: "b", Files: []string{"shared.txt"}}); err != nil {
+				return err
+			}
+		}
 		if n > 1 {
-			content = "A\nB on A\n" // second build of b sees a's file
-			if b, err := os.ReadFile(filepath.Join(dir, "shared.txt")); err != nil || string(b) != "A\n" {
+			content = "B on A\n" // second build of b sees a's file
+			if b, err := os.ReadFile(filepath.Join(dir, "a/shared.txt")); err != nil || string(b) != "A\n" {
 				return fmt.Errorf("b was not rebuilt on top of a: %q %v", b, err)
 			}
 		}
-		return writeIn("shared.txt", content)(task, n, dir)
+		return writeIn(task+"/shared.txt", content)(task, n, dir)
 	}
 	h.say(harness.RoleArchitect, "spec", planJSON(taskA+","+taskB))
 	h.say(harness.RoleForeman, call("approve_spec", `{}`), call("approve_plan", `{}`),
 		call("dispatch_build", `{"task_ids":["a","b"]}`), call("request_inspection", `{"task_id":"a"}`), call("request_inspection", `{"task_id":"b"}`),
+		call("serialize", `{"task_a":"b","task_b":"a"}`),
 		call("serialize", `{"task_a":"a","task_b":"b"}`), call("dispatch_build", `{"task_ids":["b"]}`), call("request_inspection", `{"task_id":"b"}`))
-	ev := lineEnv(t, h)
-	id := ev.create(t)
+	ev = lineEnv(t, h)
+	id = ev.create(t)
 	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
 		t.Fatal(err)
 	}
@@ -464,17 +477,23 @@ func TestIntegrationConflictSerializeRebuildsOnDependency(t *testing.T) {
 	if st := status(t, ev.e, id); st != fact.StatusPROpen {
 		t.Fatalf("status = %s (%s)", st, failedClass(t, ev.e, id))
 	}
-	if got := sh(t, ev.p.RepoURL, "git", "show", "lf/"+id+":shared.txt"); got != "A\nB on A" {
-		t.Errorf("shared.txt = %q", got)
+	if got := sh(t, ev.p.RepoURL, "git", "show", "lf/"+id+":b/shared.txt"); got != "B on A" {
+		t.Errorf("b/shared.txt = %q", got)
+	}
+	if log := sh(t, ev.p.RepoURL, "git", "log", "--format=%s", "lf/"+id); strings.Count(log, "lf: merge a") != 1 || strings.Count(log, "lf: merge b") != 1 {
+		t.Errorf("tasks not merged exactly once:\n%s", log)
 	}
 	var conflictPrompt string
 	for _, p := range h.promptsFor(harness.RoleForeman) {
-		if strings.Contains(p, "Integration conflict between a and b") {
+		if strings.Contains(p, "integration.conflict") && strings.Contains(p, "shared.txt") {
 			conflictPrompt = p
 		}
 	}
-	if conflictPrompt == "" || !strings.Contains(conflictPrompt, "shared.txt") {
+	if conflictPrompt == "" {
 		t.Error("Foreman was not shown the conflict")
+	}
+	if acc, rej := decisions(t, ev, id); len(rej) != 1 || rej[0] != "serialize" || !contains(acc, "serialize") {
+		t.Errorf("reversed serialize not rejected once: accepted %v rejected %v", acc, rej)
 	}
 }
 

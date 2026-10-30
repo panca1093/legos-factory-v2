@@ -188,7 +188,7 @@ func (e *Engine) Create(ctx context.Context, p Project, objective string) (strin
 // CreateAt creates a work order with an autonomy cap; 0 makes the plan gate wait for a human.
 func (e *Engine) CreateAt(ctx context.Context, p Project, objective string, level int) (string, error) {
 	id := newID("wo-")
-	_, err := e.Facts.Append(ctx, id, fact.KindWOCreated, fact.WOCreated{Project: p.ID, Objective: objective, LevelCap: level})
+	_, err := e.Facts.Append(ctx, id, fact.KindWOCreated, fact.WOCreated{Project: p.ID, Objective: objective, LevelCap: level, Line: e.lineConfigured(ctx, p)})
 	return id, err
 }
 
@@ -209,6 +209,7 @@ type view struct {
 	facts     []fact.Fact
 	cycle     []fact.Fact // facts since the latest wo.requeued, inclusive
 	objective string
+	line      bool
 	requeue   *fact.WORequeued
 	sessionID string
 	prOpened  bool
@@ -236,7 +237,7 @@ func load(facts []fact.Fact) (*view, error) {
 			if err != nil {
 				return nil, err
 			}
-			v.objective = c.Objective
+			v.objective, v.line = c.Objective, c.Line
 		case fact.KindWORequeued:
 			start = i
 			r, err := fact.Decode[fact.WORequeued](f)
@@ -395,7 +396,7 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 		return err
 	}
 
-	line := v.requeue == nil && e.orchestrated(ctx, p, facts)
+	line := v.requeue == nil && v.line
 	if line {
 		o := &orch{e: e, p: p, woID: woID, sb: sb, dir: dir, objective: v.objective, lim: workflow.DefaultLimits()}
 		if ready, err := o.run(ctx); err != nil || !ready {

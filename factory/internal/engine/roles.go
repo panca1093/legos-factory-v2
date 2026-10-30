@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"slices"
 	"strings"
@@ -24,12 +25,20 @@ type orch struct {
 	dir       string // the work-order worktree on lf/<wo>
 	objective string
 	lim       workflow.Limits
+
+	beforeAppend func() // test seam: runs between folding and appending a Foreman decision
 }
 
 // errWOFailed means the work order was already marked failed; callers stop without error.
 var errWOFailed = errors.New("work order failed")
 
-const maxLineSteps = 500
+const (
+	maxLineSteps      = 60
+	maxConflictRounds = 2
+)
+
+// readOnlyDeny is the Architect's explicit tool policy, on top of what the harness denies for read-only roles.
+var readOnlyDeny = []string{"Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "edit", "write", "patch", "apply_patch", "bash"}
 
 // foremanDeny removes every agent tool: the Foreman only reasons over the facts in its prompt (ADR-F15).
 var foremanDeny = []string{
@@ -38,12 +47,9 @@ var foremanDeny = []string{
 	"read", "list", "glob", "grep", "edit", "write", "patch", "bash", "webfetch", "websearch", "task", "todowrite", "todoread", "skill",
 }
 
-// orchestrated reports whether the work order runs the SDLC line (Architect and Foreman) instead of the single-builder path.
-func (e *Engine) orchestrated(ctx context.Context, p Project, facts []fact.Fact) bool {
+// lineConfigured reports whether the project has a Foreman or Architect configured or bound; it is recorded at creation.
+func (e *Engine) lineConfigured(ctx context.Context, p Project) bool {
 	if p.Roles[string(harness.RoleForeman)].set() || p.Roles[string(harness.RoleArchitect)].set() {
-		return true
-	}
-	if workflow.Fold(facts).Phase != workflow.PhaseQueued {
 		return true
 	}
 	if e.Profiles != nil {
@@ -143,15 +149,24 @@ func (o *orch) runRole(ctx context.Context, role harness.Role, task, prompt, fre
 		freshPrompt = prompt
 	}
 	var policy harness.ToolPolicy
-	if role == harness.RoleForeman {
-		policy.Deny = foremanDeny
+	dir := o.dir
+	switch role {
+	case harness.RoleForeman:
+		policy = harness.ToolPolicy{Deny: foremanDeny, AllowNone: true}
+		dir, err = o.foremanDir(ctx)
+	case harness.RoleArchitect:
+		policy = harness.ToolPolicy{Deny: readOnlyDeny}
+		dir, err = o.architectDir(ctx)
+	}
+	if err != nil {
+		return "", err
 	}
 	note := ""
 	if open != "" && role != harness.RoleForeman {
 		note = "Your previous run was interrupted. "
 	}
 	reply, agentErr, err := e.converse(ctx, o.woID, o.sb, convo{
-		role: role, task: task, dir: o.dir, cfg: cfg, policy: policy, sessionID: sid, openRun: open,
+		role: role, task: task, dir: dir, cfg: cfg, policy: policy, sessionID: sid, openRun: open,
 		prompt: func(fresh bool) string {
 			if fresh {
 				return note + freshPrompt
@@ -172,6 +187,36 @@ func (o *orch) runRole(ctx context.Context, role harness.Role, task, prompt, fre
 		}
 	}
 	return reply, nil
+}
+
+// foremanDir is an empty directory, so the repo's CLAUDE.md/AGENTS.md never reach the tool-less Foreman.
+func (o *orch) foremanDir(ctx context.Context) (string, error) {
+	dir := path.Join(o.sb.Workspace().HomeDir(), "foreman-cwd")
+	if _, stderr, code, err := o.sb.Exec(ctx, "", nil, "mkdir", "-p", dir); err != nil || code != 0 {
+		return "", fmt.Errorf("create %s: %v %s", dir, err, stderr)
+	}
+	return dir, nil
+}
+
+// architectDir is a detached worktree at the base commit, reset on every use, so nothing the Architect writes can reach the PR.
+func (o *orch) architectDir(ctx context.Context) (string, error) {
+	ws := o.sb.Workspace()
+	dir := ws.WorktreeDir("_architect")
+	if _, err := o.git(ctx, dir, "rev-parse", "--git-dir"); err != nil {
+		if _, err := o.git(ctx, ws.RepoDir(), "worktree", "prune"); err != nil {
+			return "", err
+		}
+		if _, err := o.git(ctx, ws.RepoDir(), "worktree", "add", "--detach", "--force", dir, o.p.DefaultBranch); err != nil {
+			return "", err
+		}
+	}
+	if _, err := o.git(ctx, dir, "reset", "--hard", o.p.DefaultBranch); err != nil {
+		return "", err
+	}
+	if _, err := o.git(ctx, dir, "clean", "-fdxq"); err != nil {
+		return "", err
+	}
+	return dir, nil
 }
 
 // --- Architect ---
@@ -291,7 +336,14 @@ func parsePlan(reply string) (workflow.PlanReady, error) {
 		if !taskIDRe.MatchString(t.ID) || t.ID == task || strings.HasSuffix(t.ID, ".lock") {
 			return workflow.PlanReady{}, fmt.Errorf("task id %q is not allowed (letters, digits, '.', '_', '-'; not %q)", t.ID, task)
 		}
-		out.Tasks = append(out.Tasks, workflow.PlanTask{ID: t.ID, Description: t.Description, Paths: t.OwnedPaths, DependsOn: t.DependsOn})
+		paths := make([]string, len(t.OwnedPaths))
+		for i, p := range t.OwnedPaths {
+			paths[i] = p
+			if c, err := workflow.CleanPath(p); err == nil {
+				paths[i] = c // invalid ones stay as written so approve_plan names them to the Foreman
+			}
+		}
+		out.Tasks = append(out.Tasks, workflow.PlanTask{ID: t.ID, Description: t.Description, Paths: paths, DependsOn: t.DependsOn})
 	}
 	return out, nil
 }
@@ -413,26 +465,16 @@ func lastFailures(facts []fact.Fact) map[string]string {
 func (o *orch) foreman(ctx context.Context, st workflow.State, facts []fact.Fact) error {
 	full := o.foremanPrompt(st, facts)
 	prompt := full
+	if sid, _ := roleSession(facts, harness.RoleForeman, "foreman"); sid != "" {
+		prompt = foremanDelta(st, facts)
+	}
 	for {
 		reply, err := o.runRole(ctx, harness.RoleForeman, "foreman", prompt, full)
 		if err != nil {
 			return err
 		}
-		if facts, err = o.e.Facts.List(ctx, o.woID); err != nil {
-			return err
-		}
-		st = workflow.Fold(facts)
-		var nf []fact.NewFact
-		call, cerr := parseForemanReply(reply)
-		if cerr != nil {
-			nf = st.Rejection("", nil, cerr, o.lim)
-		} else {
-			if _, dup := st.Decided(call); dup {
-				return nil
-			}
-			nf, cerr = st.Apply(call, o.lim)
-		}
-		if _, err := o.e.Facts.AppendBatch(ctx, o.woID, nf); err != nil {
+		cerr, err := o.decide(ctx, reply)
+		if err != nil {
 			return err
 		}
 		if cerr == nil {
@@ -447,6 +489,78 @@ func (o *orch) foreman(ctx context.Context, st workflow.State, facts []fact.Fact
 		prompt = "tool error: " + cerr.Error()
 		full = full + "\n\n" + prompt
 	}
+}
+
+// decide records the Foreman's reply against the facts it was folded from; when another writer got in first it re-folds
+// and judges the same call against the newer state. cerr is the tool error to hand back to the Foreman.
+func (o *orch) decide(ctx context.Context, reply string) (cerr, err error) {
+	call, perr := parseForemanReply(reply)
+	for range 3 {
+		facts, err := o.e.Facts.List(ctx, o.woID)
+		if err != nil {
+			return nil, err
+		}
+		st := workflow.Fold(facts)
+		var nf []fact.NewFact
+		if perr != nil {
+			cerr, nf = perr, st.Rejection("", nil, perr, o.lim)
+		} else {
+			nf, cerr = st.Apply(call, o.lim)
+		}
+		if o.beforeAppend != nil {
+			o.beforeAppend()
+		}
+		_, err = o.e.Facts.AppendBatch(ctx, o.woID, facts[len(facts)-1].ID, nf)
+		if errors.Is(err, fact.ErrConflict) {
+			continue
+		}
+		return cerr, err
+	}
+	return nil, fact.ErrConflict
+}
+
+// foremanDelta is the prompt for a resumed Foreman session: what changed since its last turn, not the whole context again.
+func foremanDelta(st workflow.State, facts []fact.Fact) string {
+	var since int64
+	for _, f := range facts {
+		if f.Kind == fact.KindRunStarted {
+			if r, err := fact.Decode[fact.RunStarted](f); err == nil && r.Role == string(harness.RoleForeman) {
+				since = f.ID
+			}
+		}
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Update since your last turn. Phase: %s; rejected calls in a row: %d.\n", st.Phase, st.ConsecutiveRejections)
+	if len(st.Tasks) > 0 {
+		b.WriteString("Tasks:")
+		for _, t := range st.Tasks {
+			fmt.Fprintf(&b, " %s[%s]", t.ID, t.Status)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("New facts:\n")
+	n := 0
+	for _, f := range facts {
+		if f.ID <= since {
+			continue
+		}
+		switch f.Kind {
+		case fact.KindRunStarted, fact.KindRunStep, fact.KindRunFinished, fact.KindSandboxStarted, fact.KindSandboxStopped, workflow.KindForemanDecision:
+			continue
+		case workflow.KindSpecReady:
+			fmt.Fprintf(&b, "- spec.ready:\n%s\n", latestSpec([]fact.Fact{f}))
+		case workflow.KindPlanReady:
+			fmt.Fprintf(&b, "- plan.ready: %s\n", f.Payload)
+		default:
+			fmt.Fprintf(&b, "- %s %s\n", f.Kind, firstLine(string(f.Payload), 600))
+		}
+		n++
+	}
+	if n == 0 {
+		b.WriteString("- none\n")
+	}
+	b.WriteString("\nEnd your reply with exactly one JSON object and nothing after it: {\"tool\": \"<name>\", \"args\": {...}}.")
+	return b.String()
 }
 
 // --- building and integration ---
@@ -533,9 +647,12 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 	}
 	for _, dep := range t.DependsOn {
 		db := taskBranch(o.woID, dep)
-		if _, err := o.git(ctx, dir, "merge", "--no-edit", db); err != nil {
-			// serialized re-run: start over on top of the dependency
+		if _, merr := o.git(ctx, dir, "merge", "--no-edit", db); merr != nil {
 			_, _ = o.git(ctx, dir, "merge", "--abort")
+			if !serializedOnto(facts, dep, t.ID) {
+				return o.taskFailed(ctx, t.ID, "dependency_conflict", "merging dependency "+dep+" into "+t.ID+": "+firstLine(merr.Error(), 300))
+			}
+			// serialized re-run: start over on top of the dependency
 			if _, err := o.git(ctx, dir, "reset", "--hard", db); err != nil {
 				return err
 			}
@@ -578,20 +695,49 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 	if err != nil {
 		return err
 	}
-	args := []string{"rev-list", "--no-merges", "--count", "HEAD", "^" + o.p.DefaultBranch}
+	own := []string{"HEAD", "^" + o.p.DefaultBranch}
 	for _, dep := range t.DependsOn {
-		args = append(args, "^"+taskBranch(o.woID, dep))
+		own = append(own, "^"+taskBranch(o.woID, dep))
 	}
-	n, err := o.git(ctx, dir, args...)
+	n, err := o.git(ctx, dir, append([]string{"rev-list", "--no-merges", "--count"}, own...)...)
 	if err != nil {
 		return err
 	}
 	if n == "0" {
-		_, err = e.Facts.Append(ctx, o.woID, fact.KindTaskFailed, fact.TaskFailed{Task: t.ID, Class: "task_no_changes", Message: "builder produced no changes"})
+		return o.taskFailed(ctx, t.ID, "task_no_changes", "builder produced no changes")
+	}
+	changed, err := o.git(ctx, dir, append([]string{"log", "--no-merges", "--name-only", "--pretty=format:"}, own...)...)
+	if err != nil {
 		return err
+	}
+	var stray []string
+	for _, f := range strings.Split(changed, "\n") {
+		if f != "" && !workflow.Owned(f, t.Paths) && !slices.Contains(stray, f) {
+			stray = append(stray, f)
+		}
+	}
+	if len(stray) > 0 {
+		return o.taskFailed(ctx, t.ID, "path_violation", fmt.Sprintf("changed files outside the owned paths %v: %s", t.Paths, strings.Join(stray, ", ")))
 	}
 	_, err = e.Facts.Append(ctx, o.woID, workflow.KindTaskBuilt, workflow.TaskBuiltPayload{Task: t.ID, SHA: sha})
 	return err
+}
+
+func (o *orch) taskFailed(ctx context.Context, id, class, msg string) error {
+	_, err := o.e.Facts.Append(ctx, o.woID, fact.KindTaskFailed, fact.TaskFailed{Task: id, Class: class, Message: msg})
+	return err
+}
+
+// serializedOnto reports whether the Foreman serialized task onto dep, which licenses discarding its earlier work to rebuild on dep.
+func serializedOnto(facts []fact.Fact, dep, task string) bool {
+	for _, f := range facts {
+		if f.Kind == workflow.KindTasksSerialized {
+			if v, err := fact.Decode[workflow.TasksSerialized](f); err == nil && v.A == dep && v.B == task {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // integrate merges the task branches into lf/<wo> one by one (M4 refines conflict handling); ready is true when all merged.
@@ -601,10 +747,19 @@ func (o *orch) integrate(ctx context.Context, st workflow.State, facts []fact.Fa
 			return false, o.foreman(ctx, st, facts)
 		}
 	}
+	order, oerr := topoOrder(st.Tasks)
+	if oerr != nil {
+		return false, o.escalate(ctx, oerr.Error())
+	}
 	_, _ = o.git(ctx, o.dir, "merge", "--abort")
+	// start from the base every time so a rebuilt task is merged once, never on top of its stale earlier merge
+	if _, err := o.git(ctx, o.dir, "reset", "--hard", o.p.DefaultBranch); err != nil {
+		return false, err
+	}
 	var merged []workflow.Task
-	for _, t := range topoOrder(st.Tasks) {
-		if _, err := o.git(ctx, o.dir, "merge", "--no-ff", "--no-edit", "-m", "lf: merge "+t.ID, taskBranch(o.woID, t.ID)); err == nil {
+	for _, t := range order {
+		_, merr := o.git(ctx, o.dir, "merge", "--no-ff", "--no-edit", "-m", "lf: merge "+t.ID, taskBranch(o.woID, t.ID))
+		if merr == nil {
 			merged = append(merged, t)
 			continue
 		}
@@ -613,6 +768,9 @@ func (o *orch) integrate(ctx context.Context, st workflow.State, facts []fact.Fa
 			return false, ferr
 		}
 		_, _ = o.git(ctx, o.dir, "merge", "--abort")
+		if strings.TrimSpace(files) == "" {
+			return false, merr
+		}
 		conflicted := strings.Fields(files)
 		other := ""
 		for _, m := range merged {
@@ -631,13 +789,22 @@ func (o *orch) integrate(ctx context.Context, st workflow.State, facts []fact.Fa
 		if other == "" {
 			return false, o.fail(ctx, fact.WOFailed{Class: "integration_failed", Message: "task " + t.ID + " conflicts with the base branch: " + files})
 		}
+		rounds := 0
+		for _, c := range st.Conflicts {
+			if c.A == other && c.B == t.ID {
+				rounds++
+			}
+		}
+		if rounds >= maxConflictRounds {
+			return false, o.escalate(ctx, fmt.Sprintf("tasks %s and %s still conflict after %d serialize rounds (files %v)", other, t.ID, rounds, conflicted))
+		}
 		_, err := o.e.Facts.Append(ctx, o.woID, workflow.KindIntegrationConflict, workflow.IntegrationConflict{A: other, B: t.ID, Files: conflicted})
 		return false, err
 	}
 	return true, nil
 }
 
-func topoOrder(tasks []workflow.Task) []workflow.Task {
+func topoOrder(tasks []workflow.Task) ([]workflow.Task, error) {
 	var out []workflow.Task
 	done := map[string]bool{}
 	for len(out) < len(tasks) {
@@ -650,8 +817,8 @@ func topoOrder(tasks []workflow.Task) []workflow.Task {
 			out = append(out, t)
 		}
 		if !progressed {
-			break
+			return nil, fmt.Errorf("tasks cannot be ordered: dependency cycle or unknown dependency among %d tasks", len(tasks)-len(out))
 		}
 	}
-	return out
+	return out, nil
 }
