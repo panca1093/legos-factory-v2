@@ -197,6 +197,8 @@ type State struct {
 	// Epoch counts the facts the Foreman reacts to; a decision is replayable only within its epoch.
 	Epoch   int
 	prFacts []fact.Fact
+
+	beforeFail Phase
 }
 
 func (s State) Task(id string) (Task, bool) {
@@ -264,6 +266,16 @@ func decode[T any](f fact.Fact) (T, bool) {
 }
 
 func (s *State) apply(f fact.Fact) {
+	if f.Kind == fact.KindWORetried && s.Phase == PhaseFailed {
+		s.Epoch++
+		s.Phase, s.FailureClass = s.beforeFail, ""
+		for i := range s.Tasks {
+			if s.Tasks[i].Status == TaskFailed {
+				s.Tasks[i].Status = TaskPending
+			}
+		}
+		return
+	}
 	if s.Phase.Terminal() {
 		return
 	}
@@ -442,7 +454,7 @@ func (s *State) apply(f fact.Fact) {
 		if v, ok := decode[fact.WOFailed](f); ok {
 			s.FailureClass = v.Class
 		}
-		s.Phase = PhaseFailed
+		s.beforeFail, s.Phase = s.Phase, PhaseFailed
 	}
 }
 

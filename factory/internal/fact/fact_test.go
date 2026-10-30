@@ -75,6 +75,12 @@ func TestDerive(t *testing.T) {
 		{"closed", []step{created, open, {KindPRClosed, nil}}, StatusClosed},
 		{"failed", []step{created, run, {KindWOFailed, WOFailed{Class: "out_of_funds"}}}, StatusFailed},
 		{"cancelled", []step{created, run, {KindWOCancelled, nil}}, StatusCancelled},
+		{"retry resumes prior status", []step{created, run, {KindWOFailed, WOFailed{}}, {KindWORetried, WORetried{By: "human"}}}, StatusBuilding},
+		{"retry restores a failed pr", []step{created, open, chk("ci", "failure", "aaa"), {KindWOFailed, WOFailed{}}, {KindWORetried, nil}}, StatusCIFailed},
+		{"facts between failure and retry are ignored", []step{created, run, {KindWOFailed, WOFailed{}}, open, {KindWORetried, nil}}, StatusBuilding},
+		{"fails again after retry", []step{created, run, {KindWOFailed, WOFailed{}}, {KindWORetried, nil}, {KindWOFailed, WOFailed{}}}, StatusFailed},
+		{"retry without failure is a no-op", []step{created, run, {KindWORetried, nil}}, StatusBuilding},
+		{"retry does not revive cancelled", []step{created, {KindWOCancelled, nil}, {KindWORetried, nil}}, StatusCancelled},
 		{"terminal is final", []step{created, {KindWOFailed, WOFailed{}}, run, requeue}, StatusFailed},
 	}
 	for _, tc := range tests {

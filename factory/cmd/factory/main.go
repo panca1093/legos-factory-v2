@@ -49,6 +49,7 @@ func run(args []string) error {
 	keyEnv := fs.String("key-env", "FACTORY_SECRET_KEY", "env var holding the 32-byte credential key, hex or base64 (serve)")
 	projectsDir := fs.String("projects-dir", "projects", "project JSON directory (serve)")
 	plansFile := fs.String("plans", "plans.json", "subscription plans file (serve)")
+	slots := fs.Int("slots", 3, "concurrent sandboxes (serve)")
 	singleOwner := fs.Bool("single-owner", true, "allow subscription credentials (serve)")
 	interval := fs.Duration("interval", 30*time.Second, "poll interval (watch)")
 	if err := fs.Parse(args[1:]); err != nil {
@@ -88,7 +89,7 @@ func run(args []string) error {
 	}
 
 	if cmd == "serve" {
-		return serve(ctx, e, *db, *addr, *tokenEnv, *keyEnv, *projectsDir, *plansFile, *singleOwner)
+		return serve(ctx, e, *db, *addr, *tokenEnv, *keyEnv, *projectsDir, *plansFile, *singleOwner, *slots)
 	}
 	if cmd == "status" {
 		return printStatus(ctx, e, *wo)
@@ -142,7 +143,7 @@ func decodeKey(s string) ([]byte, error) {
 	return nil, errors.New("secret key must be 32 bytes, hex or base64 encoded")
 }
 
-func serve(ctx context.Context, e *engine.Engine, db, addr, tokenEnv, keyEnv, projectsDir, plansFile string, singleOwner bool) error {
+func serve(ctx context.Context, e *engine.Engine, db, addr, tokenEnv, keyEnv, projectsDir, plansFile string, singleOwner bool, slots int) error {
 	token := os.Getenv(tokenEnv)
 	if token == "" {
 		return fmt.Errorf("env %s (owner token) is empty", tokenEnv)
@@ -158,6 +159,10 @@ func serve(ctx context.Context, e *engine.Engine, db, addr, tokenEnv, keyEnv, pr
 	defer ps.Close()
 	e.Profiles = ps
 	h := &api.Server{Token: token, Profiles: ps, Engine: e, ProjectsDir: projectsDir, BaseCtx: ctx, Log: e.Log}
+	h.Runner = &engine.Runner{Engine: e, Slots: slots, Projects: h.LoadProject}
+	runnerDone := make(chan struct{})
+	go func() { h.Runner.Start(ctx); close(runnerDone) }()
+	defer func() { <-runnerDone }()
 	srv := &http.Server{Addr: addr, Handler: h.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()

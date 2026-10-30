@@ -16,6 +16,7 @@ const (
 	KindWORequeued     = "wo.requeued"
 	KindWOCancelled    = "wo.cancelled"
 	KindWOFailed       = "wo.failed"
+	KindWORetried      = "wo.retried"
 	KindSandboxStarted = "sandbox.started"
 	KindSandboxStopped = "sandbox.stopped"
 	// KindSandboxRestarted records an infra failure answered by a new sandbox on the same volume.
@@ -50,6 +51,9 @@ type WOCreated struct {
 	LevelCap int `json:"level_cap"`
 	// Line is fixed at creation: true runs the Architect/Foreman line, false the single-builder path; absent in older facts means false.
 	Line bool `json:"line,omitempty"`
+	// ParentWO and BaseBranch mark a follow-up: its worktree starts from the parent's PR branch instead of the default branch (ADR-F11).
+	ParentWO   string `json:"parent_wo,omitempty"`
+	BaseBranch string `json:"base_branch,omitempty"`
 }
 
 // Failure classes (ADR-F10).
@@ -68,6 +72,12 @@ type WOFailed struct {
 	Message  string `json:"message"`
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
+}
+
+// WORetried is a human un-failing a failed work order; it resumes from the facts already recorded.
+type WORetried struct {
+	By   string `json:"by"`
+	Note string `json:"note,omitempty"`
 }
 
 type RunStarted struct {

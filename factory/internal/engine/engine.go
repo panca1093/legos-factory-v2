@@ -226,16 +226,17 @@ func (e *Engine) Status(ctx context.Context, woID string) (fact.Status, bool, er
 }
 
 type view struct {
-	facts     []fact.Fact
-	cycle     []fact.Fact // facts since the latest wo.requeued, inclusive
-	objective string
-	line      bool
-	requeue   *fact.WORequeued
-	sessionID string
-	prOpened  bool
-	lastHead  string
-	openRun   string // run.started in the cycle without a matching run.finished
-	finished  bool   // cycle has a finished run
+	facts      []fact.Fact
+	cycle      []fact.Fact // facts since the latest wo.requeued, inclusive
+	objective  string
+	line       bool
+	requeue    *fact.WORequeued
+	sessionID  string
+	prOpened   bool
+	lastHead   string
+	baseBranch string
+	openRun    string // run.started in the cycle without a matching run.finished
+	finished   bool   // cycle has a finished run
 }
 
 func (v *view) cycleHas(kind string) bool {
@@ -257,7 +258,7 @@ func load(facts []fact.Fact) (*view, error) {
 			if err != nil {
 				return nil, err
 			}
-			v.objective, v.line = c.Objective, c.Line
+			v.objective, v.line, v.baseBranch = c.Objective, c.Line, c.BaseBranch
 		case fact.KindWORequeued:
 			start = i
 			r, err := fact.Decode[fact.WORequeued](f)
@@ -290,6 +291,8 @@ func load(facts []fact.Fact) (*view, error) {
 	v.cycle = facts[start:]
 	for _, f := range v.cycle {
 		switch f.Kind {
+		case fact.KindWORetried:
+			v.openRun, v.finished = "", false
 		case fact.KindRunStarted:
 			r, _ := fact.Decode[fact.RunStarted](f)
 			v.openRun = r.Run
@@ -375,6 +378,9 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 	}
 	if v.cycleHas(fact.KindPROpened) || v.cycleHas(fact.KindPRPushed) {
 		return nil
+	}
+	if v.baseBranch != "" {
+		p.DefaultBranch = v.baseBranch
 	}
 
 	prov, err := e.SCM(p)
@@ -874,6 +880,8 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 			head, known, lastChange = o.HeadSHA, map[string]string{}, time.Time{}
 		case fact.KindWORequeued:
 			requeues++
+		case fact.KindWORetried:
+			requeues = 0
 		case fact.KindCheckObserved:
 			c, err := fact.Decode[fact.CheckObserved](f)
 			if err != nil {
