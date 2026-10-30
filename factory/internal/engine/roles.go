@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"legos-factory/factory/internal/autonomy"
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
 	"legos-factory/factory/internal/sandbox"
@@ -331,6 +332,9 @@ func (o *orch) plan(ctx context.Context, facts []fact.Fact) error {
 		if plan, perr = parsePlan(reply); perr != nil {
 			plan = workflow.PlanReady{} // the Foreman's approve_plan guard rejects an empty plan
 		}
+	}
+	for _, t := range plan.Tasks {
+		plan.Protected = append(plan.Protected, autonomy.ProtectedIn(t.Paths, o.p.ProtectedPaths)...)
 	}
 	_, err = o.e.Facts.Append(ctx, o.woID, workflow.KindPlanReady, plan)
 	return err

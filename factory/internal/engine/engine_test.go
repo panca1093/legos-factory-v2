@@ -119,12 +119,17 @@ type fakeSCM struct {
 	checks    []scm.Check
 	state     string
 	checksSHA string
+	body      string
+	mergeErr  error
+	merges    []string
+	mergeable string
 }
 
 func (f *fakeSCM) OpenPR(_ context.Context, r scm.PRRequest) (scm.PR, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.opened++
+	f.body = r.Body
 	f.pr = &scm.PR{Number: 7, URL: "http://pr/7", Head: r.Head}
 	return *f.pr, nil
 }
@@ -149,6 +154,24 @@ func (f *fakeSCM) PRState(context.Context, string, int) (string, error) {
 	return f.state, nil
 }
 func (f *fakeSCM) GitAuth() scm.GitAuth { return scm.GitAuth{} }
+func (f *fakeSCM) Merge(_ context.Context, _ string, _ int, method string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.merges = append(f.merges, method)
+	if f.mergeErr != nil {
+		return f.mergeErr
+	}
+	f.state = "merged"
+	return nil
+}
+func (f *fakeSCM) Mergeable(context.Context, string, int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mergeable == "" {
+		return "clean", nil
+	}
+	return f.mergeable, nil
+}
 
 type env struct {
 	e    *Engine
@@ -468,8 +491,8 @@ func TestCIGreenNeedsStableSetWithoutRequiredChecks(t *testing.T) {
 		t.Fatalf("green on the change pass: %s", st)
 	}
 	now = now.Add(2 * time.Minute)
-	observeN(t, ev, id, 2)
-	if st := status(t, ev.e, id); st != fact.StatusCIGreen {
+	observeN(t, ev, id, 2) // the single-builder path is level 2, so green parks at the pr gate
+	if st := fact.Derive(mustList(t, ev, id)); st != fact.StatusCIGreen {
 		t.Fatalf("status = %s", st)
 	}
 	if n := count(ev.kinds(t, ev.e, id), fact.KindChecksStable); n != 1 {

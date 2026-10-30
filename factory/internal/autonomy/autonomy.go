@@ -102,6 +102,39 @@ func matchesProtected(p string, patterns []string) bool {
 	return false
 }
 
+// ProtectedIn returns the owned paths (files, directories or globs) that overlap a protected pattern in either direction.
+func ProtectedIn(owned, protected []string) []string {
+	var hit []string
+	for _, o := range owned {
+		o = strings.Trim(strings.TrimPrefix(strings.TrimSpace(o), "./"), "/")
+		o = globStatic(o)
+		if overlaps(o, protected) {
+			hit = append(hit, o)
+		}
+	}
+	return hit
+}
+
+func globStatic(p string) string {
+	if i := strings.IndexAny(p, "*?["); i >= 0 {
+		return strings.Trim(p[:strings.LastIndex(p[:i], "/")+1], "/")
+	}
+	return p
+}
+
+func overlaps(owned string, protected []string) bool {
+	if owned == "" || owned == "." || matchesProtected(owned, protected) {
+		return true
+	}
+	for _, pat := range protected {
+		pat = strings.Trim(globStatic(strings.TrimPrefix(strings.TrimSpace(pat), "./")), "/")
+		if pat != "" && (pat == owned || strings.HasPrefix(pat, owned+"/")) {
+			return true
+		}
+	}
+	return false
+}
+
 func astEqual(a, b []byte) bool {
 	fset := token.NewFileSet()
 	fa, err := parser.ParseFile(fset, "a.go", a, parser.SkipObjectResolution)

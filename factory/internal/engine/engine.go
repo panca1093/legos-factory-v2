@@ -46,9 +46,11 @@ type Project struct {
 	// Roles is the JSON fallback for roles without a profile binding: foreman, architect, inspector, cataloger.
 	Roles          map[string]BuilderConfig
 	RequiredChecks []string
-	// ProtectedPaths always need a human (ADR-F09); enforced from M7.
+	// ProtectedPaths always need a human (ADR-F09).
 	ProtectedPaths []string
-	MaxRequeues    int // 0 means defaultMaxRequeues
+	// MergeMethod is squash|merge|rebase; empty means squash.
+	MergeMethod string
+	MaxRequeues int // 0 means defaultMaxRequeues
 	// Fallbacks lists profile ids per role, in the order retry_task other_model moves through them.
 	Fallbacks map[string][]string
 }
@@ -99,6 +101,7 @@ type projectFile struct {
 		TestPkg            string `json:"test_pkg"`
 	} `json:"env"`
 	ProtectedPaths []string               `json:"protected_paths"`
+	MergeMethod    string                 `json:"merge_method"`
 	RequiredChecks []string               `json:"required_checks"`
 	MaxRequeues    int                    `json:"max_requeues"`
 	Fallbacks      map[string][]string    `json:"fallbacks"`
@@ -144,7 +147,7 @@ func LoadProject(path string) (Project, error) {
 	p := Project{ID: f.ID, RepoURL: f.RepoURL, Repo: f.Repo, DefaultBranch: f.DefaultBranch, SCMKind: f.SCMKind,
 		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername,
 		Env:            Env{Setup: f.Env.Setup, Verify: f.Env.Verify, Docker: f.Env.Docker, DockerTrustBuilder: f.Env.DockerTrustBuilder, TestPkg: f.Env.TestPkg},
-		ProtectedPaths: f.ProtectedPaths, RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues, Fallbacks: f.Fallbacks}
+		ProtectedPaths: f.ProtectedPaths, MergeMethod: f.MergeMethod, RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues, Fallbacks: f.Fallbacks}
 	if p.DefaultBranch == "" {
 		p.DefaultBranch = "main"
 	}
@@ -174,6 +177,9 @@ func LoadProject(path string) (Project, error) {
 	}
 	if insp, ok := p.Roles[string(harness.RoleInspector)]; ok && insp.set() && p.Builder.set() && (insp.Profile.Model == "" || p.Builder.Profile.Model == "") {
 		return Project{}, fmt.Errorf("%s: roles.inspector and builder both need profile.model so the engine can verify they differ", path)
+	}
+	if !slices.Contains([]string{"", "squash", "merge", "rebase"}, p.MergeMethod) {
+		return Project{}, fmt.Errorf("%s: merge_method must be squash, merge or rebase, got %q", path, p.MergeMethod)
 	}
 	if p.ID == "" || p.RepoURL == "" || p.Repo == "" {
 		return Project{}, fmt.Errorf("%s: id, repo_url and repo are required", path)
@@ -390,6 +396,9 @@ func (e *Engine) failProvider(ctx context.Context, woID string, err error, prof 
 }
 
 func requeuePrompt(r fact.WORequeued) string {
+	if r.Reason == workflow.ReasonNeedsRebase {
+		return rebaseRequeuePrompt(r)
+	}
 	if r.Reason == "verify_failed" {
 		return "Verification failed in the sandbox. Failing commands: " + strings.Join(r.Failing, ", ") + ".\n" + r.Details + "\nFix the cause in the repository, then stop."
 	}
@@ -547,7 +556,11 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 		lim.BuilderFallbacks = len(p.Fallbacks[string(harness.RoleBuilder)])
 		o = &orch{e: e, p: p, woID: woID, sb: sb, dir: dir, objective: v.objective, lim: lim}
 	} else if !v.cycleHas(fact.KindTaskCommitted) {
-		if !v.finished {
+		if rebasing(v) {
+			if done, err := e.rebaseStep(ctx, p, woID, sb, dir, gitAuth, v); err != nil || done {
+				return err
+			}
+		} else if !v.finished {
 			if done, err := e.build(ctx, p, woID, sb, dir, v); err != nil || done {
 				return err
 			}
@@ -560,7 +573,7 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 		if err != nil {
 			return err
 		}
-		if len(files) == 0 || (!changed && sha == v.lastHead) {
+		if len(files) == 0 || (!changed && sha == v.lastHead && !rebasing(v)) {
 			return e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "no_changes", Message: "builder produced no changes"})
 		}
 		if _, err := e.Facts.Append(ctx, woID, fact.KindTaskCommitted, fact.TaskCommitted{Task: task, SHA: sha}); err != nil {
@@ -1055,11 +1068,23 @@ func (e *Engine) agentFailure(ctx context.Context, woID string, err error, prof 
 }
 
 func (e *Engine) publish(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir, branch string, gitAuth *sandbox.GitAuth, prov scm.Provider, v *view) error {
-	if err := sandbox.Push(ctx, sb, dir, branch, gitAuth); err != nil {
+	push := func() error { return sandbox.Push(ctx, sb, dir, branch, gitAuth) }
+	if rebasing(v) {
+		push = func() error { return sandbox.PushLease(ctx, sb, dir, branch, v.lastHead, gitAuth) }
+	}
+	if err := push(); err != nil {
 		return err
 	}
 	sha, err := headSHA(ctx, sb, dir)
 	if err != nil {
+		return err
+	}
+	facts, err := e.Facts.List(ctx, woID)
+	if err != nil {
+		return err
+	}
+	level := computeLevel(ctx, p, sb, dir, sha, workflow.Fold(facts))
+	if _, err := e.Facts.Append(ctx, woID, fact.KindAutonomyLevel, level); err != nil {
 		return err
 	}
 	pr, found, err := prov.FindPR(ctx, p.Repo, branch)
@@ -1072,7 +1097,7 @@ func (e *Engine) publish(ctx context.Context, p Project, woID string, sb sandbox
 	}
 	if !found {
 		pr, err = prov.OpenPR(ctx, scm.PRRequest{Repo: p.Repo, Head: branch, Base: p.DefaultBranch,
-			Title: firstLine(v.objective, 70), Body: v.objective})
+			Title: firstLine(v.objective, 70), Body: prBody(v.objective, level)})
 		if err != nil {
 			return e.failProvider(ctx, woID, err, harness.Profile{})
 		}
@@ -1103,7 +1128,7 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 	var number int
 	var head string
 	var lastChange time.Time
-	requeues := 0
+	requeues, rebases := 0, 0
 	known := map[string]string{} // check name -> last observed state for head
 	for _, f := range facts {
 		switch f.Kind {
@@ -1120,9 +1145,13 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 			}
 			head, known, lastChange = o.HeadSHA, map[string]string{}, time.Time{}
 		case fact.KindWORequeued:
-			requeues++
+			if r, err := fact.Decode[fact.WORequeued](f); err == nil && r.Reason == workflow.ReasonNeedsRebase {
+				rebases++
+			} else {
+				requeues++
+			}
 		case fact.KindWORetried:
-			requeues = 0
+			requeues, rebases = 0, 0
 		case fact.KindCheckObserved:
 			c, err := fact.Decode[fact.CheckObserved](f)
 			if err != nil {
@@ -1178,7 +1207,22 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 	if err != nil {
 		return err
 	}
-	switch fact.Derive(facts) {
+	derived := fact.Derive(facts)
+	wf := workflow.Fold(facts)
+	if wf.Phase == workflow.PhaseAwaitingHuman && wf.Gate != workflow.GatePR {
+		return nil
+	}
+	if derived != fact.StatusCIFailed && e.conflictsWithBase(ctx, p, prov, number) {
+		if rebases >= maxRebases {
+			_, err = e.Facts.Append(ctx, woID, workflow.KindEscalated, workflow.Escalated{Class: "merge", Reason: fmt.Sprintf("the pull request still conflicts with %s after %d rebases", p.DefaultBranch, rebases)})
+			return err
+		}
+		_, err = e.Facts.Append(ctx, woID, fact.KindWORequeued, fact.WORequeued{Reason: workflow.ReasonNeedsRebase, Details: "base branch moved and the pull request conflicts"})
+		return err
+	}
+	switch derived {
+	case fact.StatusCIGreen:
+		err = e.observeGreen(ctx, p, woID, prov, facts, number, head)
 	case fact.StatusCIFailed:
 		limit := p.MaxRequeues
 		if limit <= 0 {
