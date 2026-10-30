@@ -27,31 +27,35 @@ type BuilderConfig struct {
 }
 
 type Project struct {
-	ID            string
-	RepoURL       string
-	Repo          string
-	DefaultBranch string
-	SCMKind       string
-	SCMBaseURL    string
-	SCMUsername   string
-	SCMToken      string // loaded from env at startup; never serialized or put in facts
-	Setup         string
-	Verify        []string
-	Builder       BuilderConfig
+	ID             string
+	RepoURL        string
+	Repo           string
+	DefaultBranch  string
+	SCMKind        string
+	SCMBaseURL     string
+	SCMUsername    string
+	SCMToken       string // loaded from env at startup; never serialized or put in facts
+	Setup          string
+	Verify         []string
+	Builder        BuilderConfig
+	RequiredChecks []string
+	MaxRequeues    int // 0 means defaultMaxRequeues
 }
 
 type projectFile struct {
-	ID            string   `json:"id"`
-	RepoURL       string   `json:"repo_url"`
-	Repo          string   `json:"repo"`
-	DefaultBranch string   `json:"default_branch"`
-	SCMKind       string   `json:"scm_kind"`
-	SCMBaseURL    string   `json:"scm_base_url"`
-	SCMUsername   string   `json:"scm_username"`
-	SCMTokenEnv   string   `json:"scm_token_env"`
-	Setup         string   `json:"setup"`
-	Verify        []string `json:"verify"`
-	Builder       struct {
+	ID             string   `json:"id"`
+	RepoURL        string   `json:"repo_url"`
+	Repo           string   `json:"repo"`
+	DefaultBranch  string   `json:"default_branch"`
+	SCMKind        string   `json:"scm_kind"`
+	SCMBaseURL     string   `json:"scm_base_url"`
+	SCMUsername    string   `json:"scm_username"`
+	SCMTokenEnv    string   `json:"scm_token_env"`
+	Setup          string   `json:"setup"`
+	Verify         []string `json:"verify"`
+	RequiredChecks []string `json:"required_checks"`
+	MaxRequeues    int      `json:"max_requeues"`
+	Builder        struct {
 		Profile struct {
 			Agent       string `json:"agent"`
 			Provider    string `json:"provider"`
@@ -74,7 +78,8 @@ func LoadProject(path string) (Project, error) {
 		return Project{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	p := Project{ID: f.ID, RepoURL: f.RepoURL, Repo: f.Repo, DefaultBranch: f.DefaultBranch, SCMKind: f.SCMKind,
-		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername, Setup: f.Setup, Verify: f.Verify}
+		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername, Setup: f.Setup, Verify: f.Verify,
+		RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues}
 	if p.DefaultBranch == "" {
 		p.DefaultBranch = "main"
 	}
@@ -107,9 +112,15 @@ type Engine struct {
 	SCM     func(Project) (scm.Provider, error)
 	Now     func() time.Time
 	Log     *slog.Logger
+	// StableAfter is how long an all-success check set must stay unchanged before ci_green when no required checks are configured; 0 means 60s.
+	StableAfter time.Duration
 }
 
-const task = "main"
+const (
+	task               = "main"
+	defaultMaxRequeues = 3
+	defaultStableAfter = 60 * time.Second
+)
 
 func (e *Engine) log() *slog.Logger {
 	if e.Log != nil {
@@ -554,6 +565,8 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 	}
 	var number int
 	var head string
+	var lastChange time.Time
+	requeues := 0
 	known := map[string]string{} // check name -> last observed state for head
 	for _, f := range facts {
 		switch f.Kind {
@@ -562,13 +575,15 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 			if err != nil {
 				return err
 			}
-			number, head, known = o.Number, o.HeadSHA, map[string]string{}
+			number, head, known, lastChange = o.Number, o.HeadSHA, map[string]string{}, time.Time{}
 		case fact.KindPRPushed:
 			o, err := fact.Decode[fact.PRPushed](f)
 			if err != nil {
 				return err
 			}
-			head, known = o.HeadSHA, map[string]string{}
+			head, known, lastChange = o.HeadSHA, map[string]string{}, time.Time{}
+		case fact.KindWORequeued:
+			requeues++
 		case fact.KindCheckObserved:
 			c, err := fact.Decode[fact.CheckObserved](f)
 			if err != nil {
@@ -576,6 +591,7 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 			}
 			if c.HeadSHA == head {
 				known[c.Name] = c.State
+				lastChange = f.At
 			}
 		}
 	}
@@ -589,8 +605,13 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 	}
 	var failing []string
 	var details []string
+	changed, allSuccess := false, len(checks) > 0
+	observed := map[string]string{}
 	for _, c := range checks {
+		observed[c.Name] = c.State
+		allSuccess = allSuccess && c.State == "success"
 		if known[c.Name] != c.State {
+			changed = true
 			if _, err := e.Facts.Append(ctx, woID, fact.KindCheckObserved, fact.CheckObserved{Name: c.Name, State: c.State, HeadSHA: head}); err != nil {
 				return err
 			}
@@ -618,8 +639,38 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 	if err != nil {
 		return err
 	}
-	if fact.Derive(facts) == fact.StatusCIFailed {
+	switch fact.Derive(facts) {
+	case fact.StatusCIFailed:
+		limit := p.MaxRequeues
+		if limit <= 0 {
+			limit = defaultMaxRequeues
+		}
+		if requeues >= limit {
+			return e.fail(ctx, woID, fact.WOFailed{Class: "ci_retry_exhausted", Message: fmt.Sprintf("CI still failing (%s) after %d re-queues", strings.Join(failing, ", "), requeues)})
+		}
 		_, err = e.Facts.Append(ctx, woID, fact.KindWORequeued, fact.WORequeued{Reason: "ci_failed", Failing: failing, Details: strings.Join(details, "\n")})
+	case fact.StatusPROpen:
+		if e.checksFinal(p, observed, allSuccess, changed, lastChange) {
+			_, err = e.Facts.Append(ctx, woID, fact.KindChecksStable, fact.ChecksStable{HeadSHA: head})
+		}
 	}
 	return err
+}
+
+// checksFinal: with required checks, all of them present and passing; otherwise the same all-success set seen unchanged
+// on a previous pass at least StableAfter ago, since a second workflow may not have registered yet.
+func (e *Engine) checksFinal(p Project, observed map[string]string, allSuccess, changed bool, lastChange time.Time) bool {
+	if len(p.RequiredChecks) > 0 {
+		for _, name := range p.RequiredChecks {
+			if observed[name] != "success" {
+				return false
+			}
+		}
+		return true
+	}
+	after := e.StableAfter
+	if after <= 0 {
+		after = defaultStableAfter
+	}
+	return allSuccess && !changed && !lastChange.IsZero() && e.now().Sub(lastChange) >= after
 }

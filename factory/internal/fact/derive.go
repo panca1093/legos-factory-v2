@@ -32,6 +32,7 @@ func Derive(facts []Fact) Status {
 	status := StatusQueued
 	var head string
 	checks := map[string]string{}
+	stable := false
 
 	for _, f := range facts {
 		switch f.Kind {
@@ -52,13 +53,13 @@ func Derive(facts []Fact) Status {
 			if err != nil {
 				continue
 			}
-			head, checks, status = p.HeadSHA, map[string]string{}, StatusPROpen
+			head, checks, stable, status = p.HeadSHA, map[string]string{}, false, StatusPROpen
 		case KindPRPushed:
 			p, err := Decode[PRPushed](f)
 			if err != nil {
 				continue
 			}
-			head, checks, status = p.HeadSHA, map[string]string{}, StatusPROpen
+			head, checks, stable, status = p.HeadSHA, map[string]string{}, false, StatusPROpen
 		case KindCheckObserved:
 			if status != StatusPROpen && status != StatusCIFailed && status != StatusCIGreen {
 				continue
@@ -67,24 +68,31 @@ func Derive(facts []Fact) Status {
 			if err != nil || c.HeadSHA != head {
 				continue
 			}
-			checks[c.Name] = c.State
-			status = checkStatus(checks)
+			checks[c.Name], stable = c.State, false
+			status = checkStatus(checks, stable)
+		case KindChecksStable:
+			if status != StatusPROpen && status != StatusCIFailed && status != StatusCIGreen {
+				continue
+			}
+			c, err := Decode[ChecksStable](f)
+			if err != nil || c.HeadSHA != head {
+				continue
+			}
+			stable = true
+			status = checkStatus(checks, stable)
 		}
 	}
 	return status
 }
 
-func checkStatus(checks map[string]string) Status {
-	green := len(checks) > 0
+// checkStatus: green needs a checks.stable fact on top of all-success, because a late-registering workflow looks the same as a finished set.
+func checkStatus(checks map[string]string, stable bool) Status {
 	for _, st := range checks {
 		if st == "failure" {
 			return StatusCIFailed
 		}
-		if st != "success" {
-			green = false
-		}
 	}
-	if green {
+	if stable {
 		return StatusCIGreen
 	}
 	return StatusPROpen

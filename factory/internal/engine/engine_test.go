@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
@@ -385,6 +386,94 @@ func TestResumeFailureStartsFreshSession(t *testing.T) {
 	}
 	if !found {
 		t.Error("no resume_failed run.step")
+	}
+}
+
+func observeN(t *testing.T, ev *env, id string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if err := ev.e.Observe(context.Background(), ev.p, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestCIGreenRequiresRequiredChecks(t *testing.T) {
+	ev := newEnv(t)
+	ev.p.RequiredChecks = []string{"ci", "lint"}
+	id := ev.create(t)
+	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	ev.scm.checks = []scm.Check{{Name: "ci", State: "success"}}
+	observeN(t, ev, id, 2)
+	if st := status(t, ev.e, id); st != fact.StatusPROpen {
+		t.Fatalf("green before lint registered: %s", st)
+	}
+	ev.scm.checks = append(ev.scm.checks, scm.Check{Name: "lint", State: "success"})
+	observeN(t, ev, id, 1)
+	if st := status(t, ev.e, id); st != fact.StatusCIGreen {
+		t.Fatalf("status = %s", st)
+	}
+}
+
+func TestCIGreenNeedsStableSetWithoutRequiredChecks(t *testing.T) {
+	ev := newEnv(t)
+	now := time.Now()
+	ev.e.Now = func() time.Time { return now }
+	ev.e.StableAfter = time.Minute
+	id := ev.create(t)
+	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	ev.scm.checks = []scm.Check{{Name: "ci", State: "success"}}
+	observeN(t, ev, id, 2) // first sighting, then too soon
+	if st := status(t, ev.e, id); st != fact.StatusPROpen {
+		t.Fatalf("green on first sightings: %s", st)
+	}
+	now = now.Add(2 * time.Minute)
+	ev.scm.checks = []scm.Check{{Name: "ci", State: "success"}, {Name: "e2e", State: "pending"}} // late workflow appears
+	observeN(t, ev, id, 1)
+	if st := status(t, ev.e, id); st != fact.StatusPROpen {
+		t.Fatalf("green despite a late pending check: %s", st)
+	}
+	ev.scm.checks = []scm.Check{{Name: "ci", State: "success"}, {Name: "e2e", State: "success"}}
+	observeN(t, ev, id, 1) // change pass: not yet stable
+	if st := status(t, ev.e, id); st != fact.StatusPROpen {
+		t.Fatalf("green on the change pass: %s", st)
+	}
+	now = now.Add(2 * time.Minute)
+	observeN(t, ev, id, 2)
+	if st := status(t, ev.e, id); st != fact.StatusCIGreen {
+		t.Fatalf("status = %s", st)
+	}
+	if n := count(ev.kinds(t, ev.e, id), fact.KindChecksStable); n != 1 {
+		t.Fatalf("checks.stable recorded %d times", n)
+	}
+}
+
+func TestRequeueCapFailsWorkOrder(t *testing.T) {
+	ctx := context.Background()
+	ev := newEnv(t)
+	ev.p.MaxRequeues = 1
+	ev.h.edit = func(call int, dir string) error {
+		return writeFile("out"+string(rune('0'+call))+".txt", "x\n")(call, dir)
+	}
+	id := ev.create(t)
+	if err := ev.e.Run(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	ev.scm.checks = []scm.Check{{Name: "unit-tests", State: "failure"}}
+	observeN(t, ev, id, 1)
+	if err := ev.e.Run(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	observeN(t, ev, id, 1)
+	if st := status(t, ev.e, id); st != fact.StatusFailed || failedClass(t, ev.e, id) != "ci_retry_exhausted" {
+		t.Fatalf("status = %s class = %q", st, failedClass(t, ev.e, id))
+	}
+	if n := count(ev.kinds(t, ev.e, id), fact.KindWORequeued); n != 1 {
+		t.Fatalf("requeues = %d", n)
 	}
 }
 

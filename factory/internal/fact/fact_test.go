@@ -44,6 +44,7 @@ func TestDerive(t *testing.T) {
 	chk := func(name, state, sha string) step {
 		return step{KindCheckObserved, CheckObserved{Name: name, State: state, HeadSHA: sha}}
 	}
+	stable := func(sha string) step { return step{KindChecksStable, ChecksStable{HeadSHA: sha}} }
 	tests := []struct {
 		name  string
 		steps []step
@@ -56,15 +57,19 @@ func TestDerive(t *testing.T) {
 		{"verify failed goes back to building", []step{created, run, {KindVerifyPassed, nil}, {KindVerifyFailed, VerifyFailed{}}}, StatusBuilding},
 		{"pr open", []step{created, run, open}, StatusPROpen},
 		{"pending only", []step{created, open, chk("ci", "pending", "aaa")}, StatusPROpen},
-		{"green", []step{created, open, chk("ci", "success", "aaa"), chk("lint", "success", "aaa")}, StatusCIGreen},
-		{"one pending blocks green", []step{created, open, chk("ci", "success", "aaa"), chk("lint", "pending", "aaa")}, StatusPROpen},
+		{"all success without stable is not green", []step{created, open, chk("ci", "success", "aaa"), chk("lint", "success", "aaa")}, StatusPROpen},
+		{"green", []step{created, open, chk("ci", "success", "aaa"), chk("lint", "success", "aaa"), stable("aaa")}, StatusCIGreen},
+		{"late check voids stable", []step{created, open, chk("ci", "success", "aaa"), stable("aaa"), chk("e2e", "pending", "aaa")}, StatusPROpen},
+		{"stable for other head ignored", []step{created, open, chk("ci", "success", "aaa"), stable("zzz")}, StatusPROpen},
+		{"stable after push is voided", []step{created, open, chk("ci", "success", "aaa"), stable("aaa"), {KindPRPushed, PRPushed{HeadSHA: "bbb"}}}, StatusPROpen},
+		{"failure beats stable", []step{created, open, chk("ci", "failure", "aaa"), stable("aaa")}, StatusCIFailed},
 		{"failure wins", []step{created, open, chk("ci", "failure", "aaa"), chk("lint", "success", "aaa")}, StatusCIFailed},
-		{"check state is latest per name", []step{created, open, chk("ci", "failure", "aaa"), chk("ci", "success", "aaa")}, StatusCIGreen},
+		{"check state is latest per name", []step{created, open, chk("ci", "failure", "aaa"), chk("ci", "success", "aaa"), stable("aaa")}, StatusCIGreen},
 		{"other head ignored", []step{created, open, chk("ci", "failure", "zzz")}, StatusPROpen},
 		{"requeue after ci_failed", []step{created, open, chk("ci", "failure", "aaa"), requeue}, StatusBuilding},
 		{"stale check after requeue ignored", []step{created, open, chk("ci", "failure", "aaa"), requeue, chk("ci", "failure", "aaa")}, StatusBuilding},
 		{"push resets checks", []step{created, open, chk("ci", "failure", "aaa"), requeue, run, {KindPRPushed, PRPushed{HeadSHA: "bbb"}}}, StatusPROpen},
-		{"new head green", []step{created, open, chk("ci", "failure", "aaa"), {KindPRPushed, PRPushed{HeadSHA: "bbb"}}, chk("ci", "failure", "aaa"), chk("ci", "success", "bbb")}, StatusCIGreen},
+		{"new head green", []step{created, open, chk("ci", "failure", "aaa"), {KindPRPushed, PRPushed{HeadSHA: "bbb"}}, chk("ci", "failure", "aaa"), chk("ci", "success", "bbb"), stable("bbb")}, StatusCIGreen},
 		{"merged", []step{created, open, chk("ci", "success", "aaa"), {KindPRMerged, nil}}, StatusMerged},
 		{"closed", []step{created, open, {KindPRClosed, nil}}, StatusClosed},
 		{"failed", []step{created, run, {KindWOFailed, WOFailed{Class: "out_of_funds"}}}, StatusFailed},

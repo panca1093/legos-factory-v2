@@ -27,6 +27,7 @@ const (
 	KindPROpened       = "pr.opened"
 	KindPRPushed       = "pr.pushed"
 	KindCheckObserved  = "check.observed"
+	KindChecksStable   = "checks.stable"
 	KindPRMerged       = "pr.merged"
 	KindPRClosed       = "pr.closed"
 )
@@ -110,6 +111,11 @@ type PRPushed struct {
 type CheckObserved struct {
 	Name    string `json:"name"`
 	State   string `json:"state"` // pending | success | failure
+	HeadSHA string `json:"head_sha"`
+}
+
+// ChecksStable records that the engine judged the observed check set final for HeadSHA; later check changes void it.
+type ChecksStable struct {
 	HeadSHA string `json:"head_sha"`
 }
 
