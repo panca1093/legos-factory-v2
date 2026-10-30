@@ -272,7 +272,7 @@ func (s *dockerSandbox) Exec(ctx context.Context, dir string, env map[string]str
 }
 
 func (s *dockerSandbox) WriteFile(ctx context.Context, path string, data []byte, mode os.FileMode) error {
-	cmd := s.Command("", nil, "sh", "-c", `mkdir -p "$(dirname "$1")" && cat > "$1" && chmod "$2" "$1"`, "sh", path, fmt.Sprintf("%o", mode.Perm())).Exec(ctx)
+	cmd := s.Command("", nil, "sh", "-c", `umask 077 && mkdir -p "$(dirname "$1")" && cat > "$1" && chmod "$2" "$1"`, "sh", path, fmt.Sprintf("%o", mode.Perm())).Exec(ctx)
 	cmd.Stdin = bytes.NewReader(data)
 	_, stderr, code, err := run(cmd)
 	if err != nil {
