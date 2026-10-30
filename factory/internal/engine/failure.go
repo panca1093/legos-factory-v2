@@ -16,7 +16,8 @@ import (
 const (
 	defaultRetryBase      = 2 * time.Second
 	defaultTransientTries = 4
-	maxInfraRestarts      = 2
+	maxInfraRestarts      = 3
+	maxTransientRetries   = 12
 	retryBackoffCap       = 2 * time.Minute
 )
 
@@ -61,6 +62,37 @@ func Classify(err error, sandboxDown bool) Failure {
 func sandboxDown(ctx context.Context, sb sandbox.Sandbox) bool {
 	_, _, code, err := sb.Exec(ctx, "", nil, "true")
 	return err != nil || code != 0
+}
+
+// budgetUsed counts sandbox restarts and provider retries recorded since the work order was last retried.
+func (e *Engine) budgetUsed(ctx context.Context, woID string) (restarts, retries int, err error) {
+	facts, err := e.Facts.List(ctx, woID)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, f := range facts {
+		switch f.Kind {
+		case fact.KindWORetried:
+			restarts, retries = 0, 0
+		case fact.KindSandboxRestarted:
+			restarts++
+		case fact.KindRunStep:
+			if s, derr := fact.Decode[fact.RunStep](f); derr == nil && s.Step == "provider_retry" {
+				retries++
+			}
+		}
+	}
+	return restarts, retries, nil
+}
+
+// overBudget reports the failure to record once transient provider retries have used the work order's budget.
+func (e *Engine) overBudget(ctx context.Context, woID string) (fact.WOFailed, bool) {
+	_, retries, err := e.budgetUsed(ctx, woID)
+	if err != nil || retries < maxTransientRetries {
+		return fact.WOFailed{}, false
+	}
+	return fact.WOFailed{Class: fact.ClassProvider, Reason: "transient_exhausted",
+		Message: fmt.Sprintf("the provider failed transiently %d times in this work order", retries)}, true
 }
 
 func (e *Engine) retryBase() time.Duration {

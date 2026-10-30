@@ -361,7 +361,18 @@ func firstLine(s string, n int) string {
 }
 
 // Run is idempotent: it skips every step already recorded in the current cycle (creation to PR, or requeue to PR).
+// Transient provider failures and sandbox restarts are bounded across the whole work order, not per call.
 func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
+	err := e.run(ctx, p, woID)
+	if err != nil && IsTransient(err) && ctx.Err() == nil {
+		if wf, over := e.overBudget(ctx, woID); over {
+			return e.fail(ctx, woID, wf)
+		}
+	}
+	return err
+}
+
+func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 	facts, err := e.Facts.List(ctx, woID)
 	if err != nil {
 		return err
@@ -450,15 +461,18 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 		}
 	}
 
-	for restarts := 0; ; {
+	for {
 		next, err := e.verifyStep(ctx, p, woID, sb, dir, o, v)
 		if err != nil && e.infraFailure(ctx, sb, err) {
+			restarts, _, lerr := e.budgetUsed(ctx, woID)
+			if lerr != nil {
+				return lerr
+			}
 			if restarts >= maxInfraRestarts {
 				return e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassInfra, Reason: "sandbox_restarts_exhausted",
 					Message: fmt.Sprintf("sandbox failed %d times: %v", restarts+1, err)})
 			}
-			restarts++
-			nsb, rerr := e.restartSandbox(ctx, woID, sb, err, restarts)
+			nsb, rerr := e.restartSandbox(ctx, woID, sb, err, restarts+1)
 			if rerr != nil {
 				return rerr
 			}

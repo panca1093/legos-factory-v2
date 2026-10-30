@@ -830,7 +830,7 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 		prompt: func(bool) string { return note + prompt },
 	})
 	if err != nil {
-		return err
+		return o.transientTaskFailure(ctx, t.ID, err, cfg.Profile)
 	}
 	if agentErr != nil {
 		if ctx.Err() != nil {
@@ -838,7 +838,7 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 		}
 		switch f := Classify(agentErr, false); {
 		case f.Transient:
-			return agentErr
+			return o.transientTaskFailure(ctx, t.ID, agentErr, cfg.Profile)
 		case f.Class == fact.ClassProvider:
 			return o.fail(ctx, fact.WOFailed{Class: fact.ClassProvider, Message: agentErr.Error(), Model: cfg.Profile.Model, Provider: cfg.Profile.Provider})
 		}
@@ -874,6 +874,19 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 	}
 	_, err = e.Facts.Append(ctx, o.woID, workflow.KindTaskBuilt, workflow.TaskBuiltPayload{Task: t.ID, SHA: sha})
 	return err
+}
+
+// transientTaskFailure fails only this task when its retries ran out, leaving siblings running and the decision to the Foreman;
+// other errors, and a spent work-order budget, stop the line.
+func (o *orch) transientTaskFailure(ctx context.Context, id string, err error, prof harness.Profile) error {
+	if !IsTransient(err) || ctx.Err() != nil {
+		return err
+	}
+	if wf, over := o.e.overBudget(ctx, o.woID); over {
+		wf.Model, wf.Provider = prof.Model, prof.Provider
+		return o.fail(ctx, wf)
+	}
+	return o.taskFailed(ctx, id, fact.ClassProvider, "transient_exhausted", err.Error(), prof)
 }
 
 func (o *orch) taskFailed(ctx context.Context, id, class, reason, msg string, prof harness.Profile) error {
