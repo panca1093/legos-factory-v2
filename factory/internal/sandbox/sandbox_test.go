@@ -156,6 +156,21 @@ func TestLocalRelativeRootResolvesAbsolute(t *testing.T) {
 	}
 }
 
+func TestLocalHidesHostEnv(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("FACTORY_TEST_SECRET", "hunter2")
+	rt := Local{Root: t.TempDir()}
+	ws, _ := rt.CreateWorkspace(ctx, "wo4")
+	sb, _ := rt.Start(ctx, ws, map[string]string{"EXPLICIT": "yes"})
+	out, _, code, err := sb.Exec(ctx, ws.Root(), nil, "sh", "-c", `echo "[$FACTORY_TEST_SECRET][$EXPLICIT]"; command -v git`)
+	if err != nil || code != 0 {
+		t.Fatalf("exec: %v %d %q", err, code, out)
+	}
+	if !strings.HasPrefix(out, "[][yes]\n") {
+		t.Fatalf("env = %q", out)
+	}
+}
+
 func TestGitAuthRedaction(t *testing.T) {
 	a := &GitAuth{Username: "u", Token: "s3cr3t/tok"}
 	if got := a.apply("https://example.com/r.git"); !strings.Contains(got, "u:s3cr3t%2Ftok@example.com") {

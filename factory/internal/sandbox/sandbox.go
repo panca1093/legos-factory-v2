@@ -134,7 +134,20 @@ func (s *localSandbox) Command(dir string, env map[string]string, args ...string
 	for k, v := range env {
 		merged[k] = v
 	}
-	return Cmd{Argv: args, Dir: dir, Env: append(os.Environ(), envList(merged)...)}
+	return Cmd{Argv: args, Dir: dir, Env: append(hostEnv(), envList(merged)...)}
+}
+
+var hostEnvAllow = []string{"PATH", "LANG", "TMPDIR", "USER", "SHELL", "GOROOT", "GOPATH", "GOCACHE", "GOMODCACHE"}
+
+// hostEnv passes only toolchain basics so host secrets (SCM tokens, API keys) never reach agent or verify commands.
+func hostEnv() []string {
+	var out []string
+	for _, k := range hostEnvAllow {
+		if v, ok := os.LookupEnv(k); ok {
+			out = append(out, k+"="+v)
+		}
+	}
+	return out
 }
 
 func (s *localSandbox) Exec(ctx context.Context, dir string, env map[string]string, args ...string) (string, string, int, error) {
