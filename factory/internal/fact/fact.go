@@ -35,7 +35,25 @@ const (
 	KindChecksStable     = "checks.stable"
 	KindPRMerged         = "pr.merged"
 	KindPRClosed         = "pr.closed"
+	KindAutonomyLevel    = "autonomy.level"
+	KindMergeRequested   = "merge.requested"
 )
+
+// AutonomyLevel records how the effective level of the PR at HeadSHA was reached (SPEC §9).
+type AutonomyLevel struct {
+	HeadSHA        string   `json:"head_sha"`
+	DiffLevel      int      `json:"diff_level"`
+	InspectorLevel int      `json:"inspector_level"`
+	Cap            int      `json:"cap"`
+	Effective      int      `json:"effective"`
+	Reasons        []string `json:"reasons"`
+}
+
+type MergeRequested struct {
+	Number int    `json:"number"`
+	Method string `json:"method"`
+	Level  int    `json:"level"`
+}
 
 type Fact struct {
 	ID      int64           `json:"id"`

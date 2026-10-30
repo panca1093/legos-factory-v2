@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -33,7 +34,26 @@ type Provider interface {
 	Checks(ctx context.Context, repo, sha string) ([]Check, error)
 	// PRState returns open|merged|closed.
 	PRState(ctx context.Context, repo string, number int) (string, error)
+	// Merge merges the PR with method squash|merge|rebase (empty means squash) only if its head is still head; a refusal
+	// wraps ErrMergeRefused, and a moved head also wraps ErrHeadMoved.
+	Merge(ctx context.Context, repo string, number int, method, head string) error
+	// Mergeable returns clean|conflict|unknown for an open PR.
+	Mergeable(ctx context.Context, repo string, number int) (string, error)
 	GitAuth() GitAuth
+}
+
+// ErrMergeRefused means the SCM declined the merge (branch protection, conflicts, stale head); a human must act.
+var ErrMergeRefused = errors.New("merge refused")
+
+// ErrHeadMoved means the PR head is no longer the commit the factory evaluated; it also counts as a refusal.
+var ErrHeadMoved = fmt.Errorf("%w: pr head moved", ErrMergeRefused)
+
+func mergeErr(err error, refusals ...int) error {
+	var pe *ProviderError
+	if errors.As(err, &pe) && slices.Contains(refusals, pe.Status) {
+		return fmt.Errorf("%w: %w", ErrMergeRefused, err)
+	}
+	return err
 }
 
 // ProviderError is a non-2xx API response; Status 0 means the API was unreachable.
@@ -164,7 +184,10 @@ type ghPull struct {
 	HTMLURL string `json:"html_url"`
 	State   string `json:"state"`
 	Merged  bool   `json:"merged"`
-	Head    struct {
+	// Mergeable is null while GitHub is still computing it.
+	Mergeable      *bool  `json:"mergeable"`
+	MergeableState string `json:"mergeable_state"`
+	Head           struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
 	} `json:"head"`
@@ -223,6 +246,35 @@ func (g *github) PRState(ctx context.Context, repo string, number int) (string, 
 		return "", err
 	}
 	return p.state(), nil
+}
+
+func (g *github) Merge(ctx context.Context, repo string, number int, method, head string) error {
+	if method == "" {
+		method = "squash"
+	}
+	if head == "" {
+		return fmt.Errorf("%w: no head sha to merge", ErrMergeRefused)
+	}
+	err := g.api.do(ctx, http.MethodPut, fmt.Sprintf("/repos/%s/pulls/%d/merge", repo, number), map[string]string{"merge_method": method, "sha": head}, nil)
+	var pe *ProviderError
+	if errors.As(err, &pe) && pe.Status == http.StatusConflict && strings.Contains(strings.ToLower(pe.Message), "head branch was modified") {
+		return fmt.Errorf("%w: %w", ErrHeadMoved, err)
+	}
+	return mergeErr(err, http.StatusForbidden, http.StatusMethodNotAllowed, http.StatusConflict, http.StatusUnprocessableEntity)
+}
+
+func (g *github) Mergeable(ctx context.Context, repo string, number int) (string, error) {
+	var p ghPull
+	if err := g.api.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls/%d", repo, number), nil, &p); err != nil {
+		return "", err
+	}
+	switch {
+	case p.MergeableState == "dirty" || (p.Mergeable != nil && !*p.Mergeable):
+		return "conflict", nil
+	case p.Mergeable != nil && *p.Mergeable:
+		return "clean", nil
+	}
+	return "unknown", nil
 }
 
 func (g *github) Checks(ctx context.Context, repo, sha string) ([]Check, error) {
@@ -354,6 +406,67 @@ func (b *bitbucket) PRState(ctx context.Context, repo string, number int) (strin
 		return "", err
 	}
 	return bbPRState(p.State), nil
+}
+
+var bbStrategies = map[string]string{"squash": "squash", "merge": "merge_commit", "rebase": "fast_forward"}
+
+// TODO: uncertain — the merge endpoint takes no expected sha, so a push between this check and the POST is not caught; verify against a real workspace
+func (b *bitbucket) Merge(ctx context.Context, repo string, number int, method, head string) error {
+	if method == "" {
+		method = "squash"
+	}
+	strategy, ok := bbStrategies[method]
+	if !ok {
+		return fmt.Errorf("unsupported merge method %q", method)
+	}
+	if len(head) < 7 {
+		return fmt.Errorf("%w: no head sha to merge", ErrMergeRefused)
+	}
+	var cur bbPR
+	if err := b.api.do(ctx, http.MethodGet, fmt.Sprintf("/repositories/%s/pullrequests/%d", repo, number), nil, &cur); err != nil {
+		return err
+	}
+	// Bitbucket reports a 12-character commit hash for the PR source.
+	if h := cur.Source.Commit.Hash; len(h) < 7 || !(strings.HasPrefix(head, h) || strings.HasPrefix(h, head)) {
+		return fmt.Errorf("%w: PR source is at %q, expected %q", ErrHeadMoved, h, head)
+	}
+	err := b.api.do(ctx, http.MethodPost, fmt.Sprintf("/repositories/%s/pullrequests/%d/merge", repo, number), map[string]string{"merge_strategy": strategy}, nil)
+	return mergeErr(err, http.StatusBadRequest, http.StatusForbidden, http.StatusMethodNotAllowed, http.StatusConflict)
+}
+
+// TODO: uncertain — Bitbucket has no mergeability flag; this reads the "merge conflict" diffstat status, verify against a real workspace before prod
+func (b *bitbucket) Mergeable(ctx context.Context, repo string, number int) (string, error) {
+	next := fmt.Sprintf("/repositories/%s/pullrequests/%d/diffstat?pagelen=100", repo, number)
+	seen := 0
+	for page := 0; next != "" && page < 50; page++ {
+		var res struct {
+			Values []struct {
+				Status string `json:"status"`
+			} `json:"values"`
+			Next string `json:"next"`
+		}
+		if err := b.api.do(ctx, http.MethodGet, next, nil, &res); err != nil {
+			return "", err
+		}
+		for _, v := range res.Values {
+			if v.Status == "merge conflict" {
+				return "conflict", nil
+			}
+		}
+		seen += len(res.Values)
+		next = ""
+		if res.Next != "" {
+			rest, ok := strings.CutPrefix(res.Next, b.api.base)
+			if !ok {
+				return "unknown", nil
+			}
+			next = rest
+		}
+	}
+	if seen == 0 || next != "" {
+		return "unknown", nil
+	}
+	return "clean", nil
 }
 
 func (b *bitbucket) Checks(ctx context.Context, repo, sha string) ([]Check, error) {

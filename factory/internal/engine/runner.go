@@ -118,13 +118,16 @@ func (r *Runner) scan(ctx context.Context) ([]candidate, error) {
 		}
 		st := fact.Derive(facts)
 		phase := workflow.Fold(facts).Phase
-		if st.Terminal() || phase.Terminal() || phase == workflow.PhaseAwaitingHuman {
+		if st.Terminal() || phase.Terminal() {
 			continue
 		}
 		c := candidate{id: id, project: created.Project, created: facts[0].At, lastID: progressID(facts)}
 		switch st {
 		case fact.StatusPROpen, fact.StatusCIFailed, fact.StatusCIGreen:
 			c.observe = true
+		}
+		if phase == workflow.PhaseAwaitingHuman && !c.observe { // a parked PR is still watched so a human merge is seen
+			continue
 		}
 		out = append(out, c)
 	}
