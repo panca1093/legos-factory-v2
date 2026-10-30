@@ -56,7 +56,7 @@ No translation proxy or router: models without an Anthropic-compatible endpoint 
 
 **Why:** one adapter, one event parser and one test suite against captured real streams (lesson #5). The ACP client already works. Provider tool-use quality still differs, so the smoke test decides; a router adds a failure point and lossy translation.
 
-**To verify (PLAN M0):** permission deny via Claude Code settings (an ACP rejection cancels the turn, lesson #3); how the model is set at session creation; credential env (`ANTHROPIC_BASE_URL`, `CLAUDE_CODE_OAUTH_TOKEN`) reaches the SDK; `session/load` from the workspace volume in a new container.
+**Verified (spike 2026-10-30, SPEC §7):** model and tool denies are set at `session/new` via `_meta.claudeCode.options` (`model`, `settings.permissions.deny`); for this agent a `reject_once` permission reply fails only that tool call, so lesson #3 applies to OpenCode only. Each run uses its own `CLAUDE_CONFIG_DIR` on the volume so the owner's settings never leak in; `session/load` works from a new process with the same config dir and cwd. Container credential passthrough is still unverified live.
 
 ## ADR-F04: Credentials are API keys or subscription tokens; models derive from them
 
