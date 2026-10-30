@@ -64,6 +64,7 @@ type Usage struct {
 	OutputTokens      int
 	CacheReadTokens   int
 	CacheCreateTokens int
+	CostUSD           float64 // from usage_update: a cumulative snapshot, unlike the token counts
 }
 
 type Event struct {
