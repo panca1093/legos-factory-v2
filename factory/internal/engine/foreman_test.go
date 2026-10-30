@@ -29,6 +29,8 @@ type scripted struct {
 	started  int
 }
 
+const cleanInspection = `{"findings":[],"logic_changed":false,"summary":"ok"}`
+
 func newScripted() *scripted {
 	return &scripted{replies: map[harness.Role][]string{}, prompts: map[harness.Role][]string{}, builds: map[string]int{}, injected: map[harness.Role]int{}}
 }
@@ -75,6 +77,8 @@ func (s *scriptedSession) Prompt(_ context.Context, text string) (string, error)
 	var reply string
 	if q := h.replies[role]; len(q) > 0 {
 		reply, h.replies[role] = q[0], q[1:]
+	} else if role == harness.RoleInspector {
+		reply = cleanInspection
 	} else if role == harness.RoleForeman {
 		reply = `{"tool":"escalate_to_human","args":{"reason":"script exhausted"}}`
 	}
@@ -139,7 +143,8 @@ func lineEnv(t *testing.T, h *scripted, verify ...string) *env {
 	ev := newEnv(t, verify...)
 	ev.e.Harness = h
 	cfg := BuilderConfig{Profile: harness.Profile{Agent: "claude-agent-acp", Model: "opus"}, AgentCommand: []string{"claude-agent-acp"}}
-	ev.p.Roles = map[string]BuilderConfig{"foreman": cfg, "architect": cfg}
+	insp := BuilderConfig{Profile: harness.Profile{Agent: "claude-agent-acp", Model: "sonnet"}, AgentCommand: []string{"claude-agent-acp"}}
+	ev.p.Roles = map[string]BuilderConfig{"foreman": cfg, "architect": cfg, "inspector": insp}
 	return ev
 }
 

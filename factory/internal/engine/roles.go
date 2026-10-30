@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
@@ -177,6 +178,9 @@ func (o *orch) runRole(ctx context.Context, role harness.Role, task, prompt, fre
 	case harness.RoleArchitect:
 		policy = harness.ToolPolicy{Deny: readOnlyDeny}
 		dir, err = o.architectDir(ctx)
+	case harness.RoleInspector:
+		policy = harness.ToolPolicy{Deny: readOnlyDeny}
+		dir = o.sb.Workspace().WorktreeDir(task)
 	}
 	if err != nil {
 		return "", err
@@ -515,6 +519,15 @@ func (o *orch) foreman(ctx context.Context, st workflow.State, facts []fact.Fact
 // and judges the same call against the newer state. cerr is the tool error to hand back to the Foreman.
 func (o *orch) decide(ctx context.Context, reply string) (cerr, err error) {
 	call, perr := parseForemanReply(reply)
+	if perr == nil && call.Tool == workflow.ToolRequestInspection {
+		if facts, err := o.e.Facts.List(ctx, o.woID); err != nil {
+			return nil, err
+		} else if t, ok := workflow.Fold(facts).Task(call.TaskID); ok && t.Status == workflow.TaskBuilt {
+			if model, same := o.inspectorSameModel(ctx, t); same {
+				return nil, o.escalate(ctx, fact.ClassTask, fmt.Sprintf("inspector_same_model: Inspector and Builder both use %q; bind a different model to the inspector role", model))
+			}
+		}
+	}
 	for range 3 {
 		facts, err := o.e.Facts.List(ctx, o.woID)
 		if err != nil {
@@ -689,16 +702,237 @@ func hasInspecting(st workflow.State) bool {
 	return slices.ContainsFunc(st.Tasks, func(t workflow.Task) bool { return t.Status == workflow.TaskInspecting })
 }
 
-// inspect completes pending inspections; the Inspector arrives with M5 and until then finds nothing.
+// inspect runs the Inspector on every task awaiting inspection and records inspection.done; a task still rejected
+// after the last allowed round fails with inspector_rejected so the Foreman decides.
 func (o *orch) inspect(ctx context.Context, st workflow.State) error {
 	for _, t := range st.Tasks {
-		if t.Status == workflow.TaskInspecting {
-			if _, err := o.e.Facts.Append(ctx, o.woID, workflow.KindInspectionDone, workflow.InspectionDone{Task: t.ID}); err != nil {
+		if t.Status != workflow.TaskInspecting {
+			continue
+		}
+		done, err := o.inspectTask(ctx, t)
+		if err != nil {
+			return err
+		}
+		if _, err := o.e.Facts.Append(ctx, o.woID, workflow.KindInspectionDone, done); err != nil {
+			return err
+		}
+		if done.Blocking > 0 && t.InspectionRounds >= o.lim.MaxInspectionRounds {
+			msg := fmt.Sprintf("%d blocking findings remain after %d inspection rounds:\n%s", done.Blocking, t.InspectionRounds, findingLines(done.List, true))
+			if err := o.taskFailed(ctx, t.ID, fact.ClassTask, "inspector_rejected", msg, harness.Profile{}); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
+
+const inspectorFormat = "Reply with ONE JSON object in a final ```json block and nothing after it: " +
+	`{"findings":[{"severity":"blocker|major|minor","file":"path","line":0,"message":"..."}],"logic_changed":false,"summary":"..."}. ` +
+	"blocker = wrong or unsafe behavior; major = a defect or missing test that must be fixed before merge; minor = style or optional. " +
+	"logic_changed is true when the diff changes business logic or behavior rather than only structure, tests, docs or wiring."
+
+const (
+	maxInspectDiff     = 60000
+	inspectTestTimeout = 5 * time.Minute
+)
+
+// inspectTask returns the Inspector's verdict on the task's current commit; the task worktree is restored afterwards.
+func (o *orch) inspectTask(ctx context.Context, t workflow.Task) (workflow.InspectionDone, error) {
+	dir := o.sb.Workspace().WorktreeDir(t.ID)
+	head, err := o.git(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return workflow.InspectionDone{}, err
+	}
+	facts, err := o.e.Facts.List(ctx, o.woID)
+	if err != nil {
+		return workflow.InspectionDone{}, err
+	}
+	diff, err := o.git(ctx, dir, append([]string{"diff", o.p.DefaultBranch + "...HEAD"}, pathspec(t.Paths)...)...)
+	if err != nil {
+		return workflow.InspectionDone{}, err
+	}
+	if len(diff) > maxInspectDiff {
+		diff = diff[:maxInspectDiff] + "\n[diff truncated]"
+	}
+	prompt := "You are the Inspector. Review one task's changes; you cannot modify files.\n\nObjective: " + o.objective +
+		"\n\nSpecification:\n" + latestSpec(facts) + "\n\nTask (" + t.ID + "): " + t.Description +
+		"\nOwned paths: " + strings.Join(t.Paths, ", ") + "\n\nDiff against " + o.p.DefaultBranch + " (the checkout is at the task commit):\n```diff\n" + diff + "\n```\n"
+	if out := o.touchedTests(ctx, dir, t); out != "" {
+		prompt += "\nTest output:\n```\n" + out + "\n```\n"
+	}
+	prompt += "\n" + inspectorFormat
+
+	var verdict inspection
+	reply, err := o.runRole(ctx, harness.RoleInspector, t.ID, prompt, prompt)
+	if err == nil {
+		verdict, err = parseInspection(reply)
+		if err != nil {
+			again := "Your reply could not be used (" + err.Error() + "). " + inspectorFormat
+			if reply, err = o.runRole(ctx, harness.RoleInspector, t.ID, again, prompt+"\n\n"+again); err == nil {
+				if verdict, err = parseInspection(reply); err != nil {
+					verdict = inspection{}
+					_, err = o.e.Facts.Append(ctx, o.woID, fact.KindRunStep, fact.RunStep{Step: "inspector_unparseable", Summary: firstLine(reply, 200)})
+				}
+			}
+		}
+	}
+	if rerr := o.restoreWorktree(ctx, dir, head); rerr != nil && err == nil {
+		err = rerr
+	}
+	if err != nil {
+		return workflow.InspectionDone{}, err
+	}
+	return verdict.done(t.ID), nil
+}
+
+func pathspec(paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	return append([]string{"--"}, paths...)
+}
+
+// restoreWorktree discards anything the read-only Inspector left behind.
+func (o *orch) restoreWorktree(ctx context.Context, dir, head string) error {
+	status, err := o.git(ctx, dir, "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	cur, err := o.git(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	if status == "" && cur == head {
+		return nil
+	}
+	if _, err := o.e.Facts.Append(ctx, o.woID, fact.KindRunStep, fact.RunStep{Step: "inspector_modified_worktree", Summary: firstLine(status, 200)}); err != nil {
+		return err
+	}
+	if _, err := o.git(ctx, dir, "reset", "--hard", head); err != nil {
+		return err
+	}
+	_, err = o.git(ctx, dir, "clean", "-fdq")
+	return err
+}
+
+// touchedTests runs the Go packages the task changed; other stacks get no test output until the project configures a command.
+func (o *orch) touchedTests(ctx context.Context, dir string, t workflow.Task) string {
+	if _, err := o.git(ctx, dir, "ls-files", "--error-unmatch", "go.mod"); err != nil {
+		return ""
+	}
+	names, err := o.git(ctx, dir, append([]string{"diff", "--name-only", o.p.DefaultBranch + "...HEAD"}, pathspec(t.Paths)...)...)
+	if err != nil {
+		return ""
+	}
+	var pkgs []string
+	for _, f := range strings.Split(names, "\n") {
+		if strings.HasSuffix(f, ".go") {
+			if p := "./" + path.Dir(f); !slices.Contains(pkgs, p) {
+				pkgs = append(pkgs, p)
+			}
+		}
+	}
+	if len(pkgs) == 0 {
+		return ""
+	}
+	tctx, cancel := context.WithTimeout(ctx, inspectTestTimeout)
+	defer cancel()
+	stdout, stderr, code, err := o.sb.Exec(tctx, dir, nil, append([]string{"go", "test"}, pkgs...)...)
+	if err != nil {
+		return "go test could not run: " + firstLine(err.Error(), 200)
+	}
+	return tail("go test "+strings.Join(pkgs, " ")+"\nexit "+strconv.Itoa(code)+"\n"+stdout+stderr, 6000)
+}
+
+type inspection struct {
+	Findings     []workflow.Finding `json:"findings"`
+	LogicChanged bool               `json:"logic_changed"`
+	Summary      string             `json:"summary"`
+}
+
+func parseInspection(reply string) (inspection, error) {
+	raw, err := extractJSON(reply)
+	if err != nil {
+		return inspection{}, err
+	}
+	var in inspection
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return inspection{}, fmt.Errorf("inspection JSON: %w", err)
+	}
+	return in, nil
+}
+
+var severityRank = map[string]int{"minor": 1, "major": 2, "blocker": 3}
+
+// done normalizes severities; an unknown one counts as major so a mislabeled defect is not waved through.
+func (v inspection) done(task string) workflow.InspectionDone {
+	d := workflow.InspectionDone{Task: task, LogicChanged: v.LogicChanged, Summary: firstLine(v.Summary, 500)}
+	for _, f := range v.Findings {
+		f.Severity = strings.ToLower(strings.TrimSpace(f.Severity))
+		if severityRank[f.Severity] == 0 {
+			f.Severity = "major"
+		}
+		d.List = append(d.List, f)
+		if severityRank[f.Severity] > severityRank[d.SeverityMax] {
+			d.SeverityMax = f.Severity
+		}
+		if severityRank[f.Severity] >= severityRank["major"] {
+			d.Blocking++
+		}
+	}
+	d.Findings = len(d.List)
+	return d
+}
+
+func findingLines(list []workflow.Finding, blockingOnly bool) string {
+	var b strings.Builder
+	for _, f := range list {
+		if blockingOnly && severityRank[f.Severity] < severityRank["major"] {
+			continue
+		}
+		loc := f.File
+		if f.Line > 0 {
+			loc += ":" + strconv.Itoa(f.Line)
+		}
+		fmt.Fprintf(&b, "- [%s] %s %s\n", f.Severity, loc, f.Message)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// pendingFindings are the findings of the task's latest rejecting inspection that no later build has answered.
+func pendingFindings(facts []fact.Fact, id string) []workflow.Finding {
+	var out []workflow.Finding
+	for _, f := range facts {
+		switch f.Kind {
+		case workflow.KindInspectionDone:
+			if v, err := fact.Decode[workflow.InspectionDone](f); err == nil && v.Task == id {
+				out = nil
+				if v.Blocking > 0 {
+					out = v.List
+				}
+			}
+		case workflow.KindTaskBuilt:
+			if v, err := fact.Decode[workflow.TaskBuiltPayload](f); err == nil && v.Task == id {
+				out = nil
+			}
+		}
+	}
+	return out
+}
+
+// inspectorSameModel reports whether the task's builder and the Inspector resolve to one model string.
+func (o *orch) inspectorSameModel(ctx context.Context, t workflow.Task) (string, bool) {
+	b, err := o.e.agentConfigN(ctx, o.p, harness.RoleBuilder, t.ModelChanges)
+	if err != nil {
+		return "", false
+	}
+	b.release()
+	i, err := o.e.agentConfig(ctx, o.p, harness.RoleInspector)
+	if err != nil {
+		return "", false
+	}
+	i.release()
+	return b.Profile.Model, b.Profile.Model != "" && b.Profile.Model == i.Profile.Model
 }
 
 func splitPending(st workflow.State) *workflow.Task {
@@ -838,6 +1072,9 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 	defer cfg.release()
 	sid, open := roleSession(facts, harness.RoleBuilder, t.ID)
 	prompt := taskPrompt(o.objective, latestSpec(facts), t, facts, e.testCommand(ctx, o.p, o.sb, dir))
+	if fs := pendingFindings(facts, t.ID); len(fs) > 0 {
+		prompt += "\n\nAn Inspector reviewed your last commit and reported these findings. Fix every blocker and major one (minor ones are optional), then stop:\n" + findingLines(fs, false)
+	}
 	note := ""
 	if open != "" {
 		note = "Your previous run was interrupted and the worktree may hold partial work. "

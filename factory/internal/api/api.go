@@ -133,7 +133,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error, credID 
 	switch {
 	case errors.Is(err, profile.ErrNotFound), errors.Is(err, profile.ErrNoBinding):
 		writeErr(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, profile.ErrUnverified):
+	case errors.Is(err, profile.ErrUnverified), errors.Is(err, profile.ErrSameModel):
 		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, profile.ErrSingleOwnerOnly):
 		writeErr(w, http.StatusUnprocessableEntity, err.Error())
