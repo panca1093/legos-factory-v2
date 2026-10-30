@@ -332,6 +332,23 @@ func TestCIFailureRequeueResumesSession(t *testing.T) {
 	}
 }
 
+func TestSetupRunsInWorktree(t *testing.T) {
+	ev := newEnv(t)
+	ev.p.Setup = `pwd > "$HOME/setup.pwd"`
+	id := ev.create(t)
+	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(ev.root, id, "home", "setup.pwd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := filepath.EvalSymlinks(filepath.Join(ev.root, id, "wt", task))
+	if g, _ := filepath.EvalSymlinks(strings.TrimSpace(string(got))); g != want {
+		t.Fatalf("setup ran in %s, want %s", g, want)
+	}
+}
+
 func TestResumeFailureStartsFreshSession(t *testing.T) {
 	ctx := context.Background()
 	ev := newEnv(t)

@@ -338,12 +338,12 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 	if err := sandbox.Clone(ctx, sb, p.RepoURL, gitAuth, p.DefaultBranch); err != nil {
 		return err
 	}
-	if failed, err := e.setup(ctx, p, woID, sb); err != nil || failed {
-		return err
-	}
 	branch := "lf/" + woID
 	dir, err := sandbox.AddWorktree(ctx, sb, task, branch, p.DefaultBranch)
 	if err != nil {
+		return err
+	}
+	if failed, err := e.setup(ctx, p, woID, sb, dir); err != nil || failed {
 		return err
 	}
 
@@ -391,18 +391,18 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 	return e.publish(ctx, p, woID, sb, dir, branch, gitAuth, prov, v)
 }
 
-func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.Sandbox) (failed bool, err error) {
+func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string) (failed bool, err error) {
 	if p.Setup == "" {
 		return false, nil
 	}
 	ws := sb.Workspace()
-	marker := ws.Root() + "/.lf-setup-done"
+	marker := ws.Root() + "/.lf-setup-done-" + task
 	if _, _, code, err := sb.Exec(ctx, "", nil, "test", "-f", marker); err != nil {
 		return false, err
 	} else if code == 0 {
 		return false, nil
 	}
-	stdout, stderr, code, err := sb.Exec(ctx, ws.RepoDir(), nil, "sh", "-c", p.Setup)
+	stdout, stderr, code, err := sb.Exec(ctx, dir, nil, "sh", "-c", p.Setup)
 	if err != nil {
 		return false, err
 	}
