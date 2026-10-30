@@ -84,7 +84,8 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) auth(next http.Handler) http.Handler {
 	want := sha256.Sum256([]byte(s.Token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		scheme, tok, found := strings.Cut(r.Header.Get("Authorization"), " ")
+		ok := found && strings.EqualFold(scheme, "Bearer")
 		got := sha256.Sum256([]byte(tok))
 		if s.Token == "" || !ok || subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 			w.Header().Set("WWW-Authenticate", "Bearer")

@@ -101,6 +101,15 @@ func TestAuthRequired(t *testing.T) {
 	c.mustCall("GET", "/credentials", nil, http.StatusOK)
 }
 
+func TestBearerSchemeCaseInsensitive(t *testing.T) {
+	c, _ := newClient(t)
+	for _, scheme := range []string{"bearer", "BEARER", "BeArEr"} {
+		if code, _ := c.do("GET", "/credentials", scheme+" "+token, nil); code != http.StatusOK {
+			t.Errorf("scheme %q = %d, want 200", scheme, code)
+		}
+	}
+}
+
 func TestEmptyTokenRejectsEverything(t *testing.T) {
 	c, s := newClient(t)
 	s.Token = ""
