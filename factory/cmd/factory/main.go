@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"legos-factory/factory/internal/api"
+	"legos-factory/factory/internal/catalog"
 	"legos-factory/factory/internal/engine"
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
@@ -158,6 +159,12 @@ func serve(ctx context.Context, e *engine.Engine, db, addr, tokenEnv, keyEnv, pr
 	}
 	defer ps.Close()
 	e.Profiles = ps
+	cat, err := catalog.Open(db)
+	if err != nil {
+		return err
+	}
+	defer cat.Close()
+	e.Catalog = cat
 	h := &api.Server{Token: token, Profiles: ps, Engine: e, ProjectsDir: projectsDir, BaseCtx: ctx, Log: e.Log}
 	h.Runner = &engine.Runner{Engine: e, Slots: slots, Projects: h.LoadProject}
 	runnerDone := make(chan struct{})

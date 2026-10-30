@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"legos-factory/factory/internal/catalog"
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
 	"legos-factory/factory/internal/profile"
@@ -197,6 +198,9 @@ type Profiles interface {
 
 type Engine struct {
 	Profiles Profiles // optional; used when the project has no explicit builder
+	// Catalog caches context packs per (repo, commit); nil skips the cataloging phase.
+	Catalog  *catalog.Store
+	catLocks sync.Map // "repo@commit" -> chan struct{}
 	Facts    *fact.Store
 	Runtime  sandbox.Runtime
 	Harness  harness.Harness
@@ -410,8 +414,8 @@ func requeuePrompt(r fact.WORequeued) string {
 }
 
 // builderPrompt: a fresh session has no memory of the objective, so it is restated ahead of any re-queue reason.
-func builderPrompt(v *view, fresh bool, testCmd string) string {
-	prompt := v.objective + testPrompt(testCmd)
+func builderPrompt(v *view, fresh bool, testCmd string, pack *catalog.Pack) string {
+	prompt := v.objective + packBlock(pack) + testPrompt(testCmd)
 	if v.requeue != nil {
 		if fresh {
 			prompt += "\n\n"
@@ -435,7 +439,7 @@ func isTestCall(ev harness.Event, testCmd string) bool {
 	}
 	text := strings.ToLower(ev.Tool + " " + ev.Text)
 	prefix, _, _ := strings.Cut(strings.ToLower(testCmd), "{pkg}")
-	if prefix = strings.TrimSpace(prefix); prefix != "" && strings.Contains(text, prefix) {
+	if prefix = strings.TrimSpace(prefix); len(prefix) >= 6 && strings.Contains(text, prefix) {
 		return true
 	}
 	return slices.ContainsFunc([]string{"go test", "npm test", "make test"}, func(c string) bool { return strings.Contains(text, c) })
@@ -443,8 +447,8 @@ func isTestCall(ev harness.Event, testCmd string) bool {
 
 // testCommand is the tier-1 targeted test command shown to the builder; "" when neither configured nor derivable.
 func (e *Engine) testCommand(ctx context.Context, p Project, sb sandbox.Sandbox, dir string) string {
-	if p.Env.TestPkg != "" {
-		return p.Env.TestPkg
+	if c := ownerTestPkg(p); c != "" {
+		return c
 	}
 	if _, _, code, err := sb.Exec(ctx, dir, nil, "test", "-f", "go.mod"); err == nil && code == 0 {
 		return "go test ./{pkg}/..."
@@ -549,19 +553,29 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 		return err
 	}
 
+	co := &orch{e: e, p: p, woID: woID, sb: sb, dir: dir, objective: v.objective}
+	pack, err := e.catalogPack(ctx, co, v.facts)
+	if errors.Is(err, errWOFailed) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	co.pack = pack
+
 	line := v.requeue == nil && v.line
 	var o *orch
 	if line {
-		lim := workflow.DefaultLimits()
-		lim.BuilderFallbacks = len(p.Fallbacks[string(harness.RoleBuilder)])
-		o = &orch{e: e, p: p, woID: woID, sb: sb, dir: dir, objective: v.objective, lim: lim}
+		o = co
+		o.lim = workflow.DefaultLimits()
+		o.lim.BuilderFallbacks = len(p.Fallbacks[string(harness.RoleBuilder)])
 	} else if !v.cycleHas(fact.KindTaskCommitted) {
 		if rebasing(v) {
 			if done, err := e.rebaseStep(ctx, p, woID, sb, dir, gitAuth, v); err != nil || done {
 				return err
 			}
 		} else if !v.finished {
-			if done, err := e.build(ctx, p, woID, sb, dir, v); err != nil || done {
+			if done, err := e.build(ctx, p, woID, sb, dir, v, pack); err != nil || done {
 				return err
 			}
 		}
@@ -575,6 +589,9 @@ func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 		}
 		if len(files) == 0 || (!changed && sha == v.lastHead && !rebasing(v)) {
 			return e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "no_changes", Message: "builder produced no changes"})
+		}
+		if err := e.warnLockfileNoise(ctx, woID, "", files); err != nil {
+			return err
 		}
 		if _, err := e.Facts.Append(ctx, woID, fact.KindTaskCommitted, fact.TaskCommitted{Task: task, SHA: sha}); err != nil {
 			return err
@@ -950,7 +967,8 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 
 	var usage harness.Usage
 	var last string
-	var testSeen bool
+	var testSeen, edited bool
+	reads := 0
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
@@ -966,6 +984,14 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 				}
 				if ev.Kind == harness.EventToolCall && isTestCall(ev, c.testCmd) {
 					testSeen = true
+				}
+				if ev.Kind == harness.EventToolCall && !edited {
+					switch toolKind(ev) {
+					case "edit":
+						edited = true
+					case "read":
+						reads++
+					}
 				}
 				if _, err := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Run: run, Step: step, Summary: firstLine(ev.Text, 200)}); err != nil {
 					e.log().Warn("record run step", "wo", woID, "err", err)
@@ -1008,6 +1034,9 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 	}
 	raw, _ := json.Marshal(usage)
 	fin := fact.RunFinished{Run: run, StopReason: stop, Usage: raw}
+	if c.role == harness.RoleBuilder {
+		fin.ReadsBeforeEdit, fin.Edited = reads, edited
+	}
 	if b.price != nil {
 		fin.CostUSD = profile.Cost(*b.price, usage)
 	}
@@ -1016,7 +1045,7 @@ func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandb
 }
 
 // build runs one builder turn; done is true when the work order was failed.
-func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, v *view) (done bool, err error) {
+func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, v *view, pack *catalog.Pack) (done bool, err error) {
 	cfg, err := e.agentConfig(ctx, p, harness.RoleBuilder)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -1028,7 +1057,7 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 	testCmd := e.testCommand(ctx, p, sb, dir)
 	_, agentErr, err := e.converse(ctx, woID, sb, convo{
 		role: harness.RoleBuilder, task: task, dir: dir, cfg: cfg, sessionID: v.sessionID, openRun: v.openRun, testCmd: testCmd,
-		prompt: func(fresh bool) string { return builderPrompt(v, fresh, testCmd) },
+		prompt: func(fresh bool) string { return builderPrompt(v, fresh, testCmd, pack) },
 	})
 	if err != nil {
 		return false, err
@@ -1257,3 +1286,18 @@ func (e *Engine) checksFinal(p Project, observed map[string]string, allSuccess, 
 	}
 	return allSuccess && !changed && !lastChange.IsZero() && e.now().Sub(lastChange) >= after
 }
+
+// validTemplate accepts only single-line templates with a {pkg} placeholder and no shell control syntax.
+func validTemplate(t string) bool {
+	return len(t) <= 200 && strings.Contains(t, "{pkg}") && !strings.ContainsAny(t, "\n\r`;|") && !strings.Contains(t, "$(") && !strings.Contains(t, "&&")
+}
+
+// ownerTestPkg is the only configured source of an executable test command; an invalid template is ignored.
+func ownerTestPkg(p Project) string {
+	if validTemplate(p.Env.TestPkg) {
+		return p.Env.TestPkg
+	}
+	return ""
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }

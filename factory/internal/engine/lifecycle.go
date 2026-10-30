@@ -105,7 +105,7 @@ func (e *Engine) rebaseStep(ctx context.Context, p Project, woID string, sb sand
 		}
 		if marked {
 			rv.requeue = &fact.WORequeued{Reason: workflow.ReasonNeedsRebase, Failing: files}
-			if done, err := e.build(ctx, p, woID, sb, dir, &rv); err != nil || done {
+			if done, err := e.build(ctx, p, woID, sb, dir, &rv, nil); err != nil || done {
 				return done, err
 			}
 			rv.openRun = ""
