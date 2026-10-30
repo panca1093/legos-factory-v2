@@ -11,6 +11,7 @@ import (
 
 func TestMergeRefusalsAndSuccess(t *testing.T) {
 	const ghPath, bbPath = "PUT /repos/acme/greeter/pulls/7/merge", "POST /repositories/acme/greeter/pullrequests/7/merge"
+	const bbPR = "GET /repositories/acme/greeter/pullrequests/7"
 	cases := []struct {
 		kind, token, path, method string
 		status                    int
@@ -21,6 +22,7 @@ func TestMergeRefusalsAndSuccess(t *testing.T) {
 		{"github", "ghp_secret", ghPath, "", 405, true},
 		{"github", "ghp_secret", ghPath, "", 403, true},
 		{"github", "ghp_secret", ghPath, "", 409, true},
+		{"github", "ghp_secret", ghPath, "", 422, true},
 		{"github", "ghp_secret", ghPath, "", 500, false},
 		{"bitbucket", "app-secret", bbPath, "", 200, false},
 		{"bitbucket", "app-secret", bbPath, "merge", 200, false},
@@ -37,9 +39,10 @@ func TestMergeRefusalsAndSuccess(t *testing.T) {
 			c.path: func(*http.Request) (int, any) {
 				return c.status, map[string]string{"message": "Base branch policy prohibits the merge"}
 			},
+			bbPR: func(*http.Request) (int, any) { return 200, bbSource("abc1234def56") },
 		})
 		p, _ := New(c.kind, srv.URL, "bob", c.token, nil)
-		err := p.Merge(context.Background(), "acme/greeter", 7, c.method)
+		err := p.Merge(context.Background(), "acme/greeter", 7, c.method, testHead)
 		if errors.Is(err, ErrMergeRefused) != c.refused || (c.status == 200) != (err == nil) {
 			t.Errorf("%s %d %q: err=%v", c.kind, c.status, c.method, err)
 		}
@@ -72,9 +75,10 @@ func TestMergeSendsMethod(t *testing.T) {
 				json.NewDecoder(r.Body).Decode(&got)
 				return 200, map[string]bool{"merged": true}
 			},
+			"GET /repositories/acme/greeter/pullrequests/7": func(*http.Request) (int, any) { return 200, bbSource("abc1234def56") },
 		})
 		p, _ := New(c.kind, srv.URL, "bob", token, nil)
-		if err := p.Merge(context.Background(), "acme/greeter", 7, c.method); err != nil || got[c.field] != c.want {
+		if err := p.Merge(context.Background(), "acme/greeter", 7, c.method, testHead); err != nil || got[c.field] != c.want {
 			t.Errorf("%s %q: body=%v err=%v", c.kind, c.method, got, err)
 		}
 	}
@@ -115,5 +119,87 @@ func TestMergeable(t *testing.T) {
 		if got, err := p.Mergeable(context.Background(), "acme/greeter", 7); err != nil || got != c.want {
 			t.Errorf("bitbucket %v: got %q err=%v", c.statuses, got, err)
 		}
+	}
+}
+
+const testHead = "abc1234def5678901234567890123456789abcd"
+
+func bbSource(hash string) map[string]any {
+	return map[string]any{"id": 7, "state": "OPEN", "source": map[string]any{"commit": map[string]string{"hash": hash}}}
+}
+
+func TestGitHubMergeSendsHeadSHAAndMapsHeadMoved(t *testing.T) {
+	var got map[string]string
+	status, msg := 200, ""
+	f := &fake{}
+	srv := f.serve(t, ghAuth, map[string]func(*http.Request) (int, any){
+		"PUT /repos/acme/greeter/pulls/7/merge": func(r *http.Request) (int, any) {
+			json.NewDecoder(r.Body).Decode(&got)
+			return status, map[string]string{"message": msg}
+		},
+	})
+	p, _ := New("github", srv.URL, "", "ghp_secret", nil)
+	if err := p.Merge(context.Background(), "acme/greeter", 7, "", testHead); err != nil || got["sha"] != testHead {
+		t.Fatalf("body=%v err=%v", got, err)
+	}
+	status, msg = 409, "Head branch was modified. Review and try the merge again."
+	if err := p.Merge(context.Background(), "acme/greeter", 7, "", testHead); !errors.Is(err, ErrHeadMoved) || !errors.Is(err, ErrMergeRefused) {
+		t.Errorf("409 head modified = %v", err)
+	}
+	status, msg = 409, "Merge conflict"
+	if err := p.Merge(context.Background(), "acme/greeter", 7, "", testHead); errors.Is(err, ErrHeadMoved) || !errors.Is(err, ErrMergeRefused) {
+		t.Errorf("409 other = %v", err)
+	}
+	if err := p.Merge(context.Background(), "acme/greeter", 7, "", ""); !errors.Is(err, ErrMergeRefused) {
+		t.Errorf("empty head must refuse: %v", err)
+	}
+}
+
+func TestBitbucketMergeRefusesMovedHeadBeforePosting(t *testing.T) {
+	posted := 0
+	f := &fake{}
+	srv := f.serve(t, bbAuth, map[string]func(*http.Request) (int, any){
+		"GET /repositories/acme/greeter/pullrequests/7": func(*http.Request) (int, any) { return 200, bbSource("ffffffffffff") },
+		"POST /repositories/acme/greeter/pullrequests/7/merge": func(*http.Request) (int, any) {
+			posted++
+			return 202, map[string]string{}
+		},
+	})
+	p, _ := New("bitbucket", srv.URL, "bob", "app-secret", nil)
+	if err := p.Merge(context.Background(), "acme/greeter", 7, "", testHead); !errors.Is(err, ErrHeadMoved) || posted != 0 {
+		t.Fatalf("err=%v posted=%d", err, posted)
+	}
+	if err := p.Merge(context.Background(), "acme/greeter", 7, "", ""); !errors.Is(err, ErrMergeRefused) || posted != 0 {
+		t.Fatalf("empty head: err=%v posted=%d", err, posted)
+	}
+}
+
+func TestBitbucketMergeAcceptedAsync202(t *testing.T) {
+	f := &fake{}
+	srv := f.serve(t, bbAuth, map[string]func(*http.Request) (int, any){
+		"GET /repositories/acme/greeter/pullrequests/7":        func(*http.Request) (int, any) { return 200, bbSource("abc1234def56") },
+		"POST /repositories/acme/greeter/pullrequests/7/merge": func(*http.Request) (int, any) { return 202, map[string]string{} },
+	})
+	p, _ := New("bitbucket", srv.URL, "bob", "app-secret", nil)
+	if err := p.Merge(context.Background(), "acme/greeter", 7, "", testHead); err != nil {
+		t.Fatalf("202 is accepted, merged state is confirmed through PRState: %v", err)
+	}
+}
+
+func TestBitbucketMergeableFollowsDiffstatPages(t *testing.T) {
+	f := &fake{}
+	var base string
+	srv := f.serve(t, bbAuth, map[string]func(*http.Request) (int, any){
+		"GET /repositories/acme/greeter/pullrequests/7/diffstat": func(r *http.Request) (int, any) {
+			if r.URL.Query().Get("page") == "2" {
+				return 200, map[string]any{"values": []map[string]string{{"status": "merge conflict"}}}
+			}
+			return 200, map[string]any{"values": []map[string]string{{"status": "modified"}}, "next": base + "/repositories/acme/greeter/pullrequests/7/diffstat?pagelen=100&page=2"}
+		},
+	})
+	base = srv.URL
+	p, _ := New("bitbucket", srv.URL, "bob", "app-secret", nil)
+	if got, err := p.Mergeable(context.Background(), "acme/greeter", 7); err != nil || got != "conflict" {
+		t.Fatalf("got %q err=%v", got, err)
 	}
 }

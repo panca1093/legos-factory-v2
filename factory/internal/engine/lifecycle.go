@@ -8,7 +8,6 @@ import (
 
 	"legos-factory/factory/internal/autonomy"
 	"legos-factory/factory/internal/fact"
-	"legos-factory/factory/internal/harness"
 	"legos-factory/factory/internal/sandbox"
 	"legos-factory/factory/internal/scm"
 	"legos-factory/factory/internal/workflow"
@@ -185,23 +184,43 @@ func (e *Engine) observeGreen(ctx context.Context, p Project, woID string, prov 
 	if _, err := e.Facts.Append(ctx, woID, fact.KindMergeRequested, fact.MergeRequested{Number: number, Method: method, Level: l.Effective}); err != nil {
 		return err
 	}
-	err := prov.Merge(ctx, p.Repo, number, method)
-	if errors.Is(err, scm.ErrMergeRefused) {
+	err := prov.Merge(ctx, p.Repo, number, method, head)
+	if err != nil {
 		if st, serr := prov.PRState(ctx, p.Repo, number); serr == nil && st == "merged" {
 			_, err = e.Facts.Append(ctx, woID, fact.KindPRMerged, struct{}{})
 			return err
 		}
-		_, ferr := e.Facts.Append(ctx, woID, workflow.KindEscalated, workflow.Escalated{Class: "merge", Reason: firstLine(err.Error(), 300)})
-		return ferr
-	}
-	if err != nil {
-		return e.failProvider(ctx, woID, err, harness.Profile{})
+		if errors.Is(err, scm.ErrHeadMoved) {
+			return e.escalateOnce(ctx, woID, "merge", "pr head moved outside the factory: "+firstLine(err.Error(), 200))
+		}
+		if errors.Is(err, scm.ErrMergeRefused) {
+			return e.escalateOnce(ctx, woID, "merge", firstLine(err.Error(), 300))
+		}
+		if !IsTransient(err) {
+			return e.escalateOnce(ctx, woID, "merge", "merge failed: "+firstLine(err.Error(), 300))
+		}
+		return err // the runner backs off and the next poll retries
 	}
 	if st, err := prov.PRState(ctx, p.Repo, number); err == nil && st == "merged" {
 		_, err = e.Facts.Append(ctx, woID, fact.KindPRMerged, struct{}{})
 		return err
 	}
 	return nil
+}
+
+// escalateOnce records an escalation unless the latest fact already is the same one, so repeated polls do not pile up.
+func (e *Engine) escalateOnce(ctx context.Context, woID, class, reason string) error {
+	facts, err := e.Facts.List(ctx, woID)
+	if err != nil {
+		return err
+	}
+	if n := len(facts); n > 0 && facts[n-1].Kind == workflow.KindEscalated {
+		if prev, err := fact.Decode[workflow.Escalated](facts[n-1]); err == nil && prev.Class == class && prev.Reason == reason {
+			return nil
+		}
+	}
+	_, err = e.Facts.Append(ctx, woID, workflow.KindEscalated, workflow.Escalated{Class: class, Reason: reason})
+	return err
 }
 
 // conflictsWithBase asks the SCM whether the PR still merges; an unavailable answer counts as unknown.

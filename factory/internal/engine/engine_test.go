@@ -122,7 +122,12 @@ type fakeSCM struct {
 	body      string
 	mergeErr  error
 	merges    []string
-	mergeable string
+	// mergeHeads records the head each Merge was asked to match; prHead, when set, is the PR's real head.
+	mergeHeads []string
+	prHead     string
+	mergeable  string
+	// mergedOnErr makes a failing Merge still land on the SCM; acceptButStayOpen makes a successful one not flip the state.
+	mergedOnErr, acceptButStayOpen bool
 }
 
 func (f *fakeSCM) OpenPR(_ context.Context, r scm.PRRequest) (scm.PR, error) {
@@ -154,12 +159,22 @@ func (f *fakeSCM) PRState(context.Context, string, int) (string, error) {
 	return f.state, nil
 }
 func (f *fakeSCM) GitAuth() scm.GitAuth { return scm.GitAuth{} }
-func (f *fakeSCM) Merge(_ context.Context, _ string, _ int, method string) error {
+func (f *fakeSCM) Merge(_ context.Context, _ string, _ int, method, head string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.merges = append(f.merges, method)
+	f.mergeHeads = append(f.mergeHeads, head)
+	if f.prHead != "" && f.prHead != head {
+		return scm.ErrHeadMoved
+	}
 	if f.mergeErr != nil {
+		if f.mergedOnErr {
+			f.state = "merged"
+		}
 		return f.mergeErr
+	}
+	if f.acceptButStayOpen {
+		return nil
 	}
 	f.state = "merged"
 	return nil

@@ -458,6 +458,8 @@ func (s *State) apply(f fact.Fact) {
 		if s.Phase != PhaseAwaitingHuman {
 			s.EscalatedFrom, s.Phase, s.Gate = s.Phase, PhaseAwaitingHuman, GateEscalation
 			s.ConsecutiveRejections = 0
+		} else if s.Gate == GatePR {
+			s.Gate = GateEscalation // a parked PR whose merge was refused stops being polled for merging
 		}
 	case fact.KindVerifyPassed:
 		if s.in(PhaseBuilding, PhaseIntegrating) {
