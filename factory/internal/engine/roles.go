@@ -8,7 +8,9 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 
 	"legos-factory/factory/internal/fact"
 	"legos-factory/factory/internal/harness"
@@ -27,6 +29,12 @@ type orch struct {
 	lim       workflow.Limits
 
 	beforeAppend func() // test seam: runs between folding and appending a Foreman decision
+
+	mu      sync.Mutex    // guards failed and serializes git worktree creation
+	failed  bool          // wo.failed was recorded; builders racing to fail the order record it once
+	builder chan struct{} // MaxBuilders slots, created on first use
+
+	stopBuilders func() // cancels the running builders; set while building (guarded by mu)
 }
 
 // errWOFailed means the work order was already marked failed; callers stop without error.
@@ -36,6 +44,10 @@ const (
 	maxLineSteps      = 60
 	maxConflictRounds = 2
 )
+
+// decisionIgnorable are the facts parallel builders keep appending; a Foreman decision does not depend on them.
+var decisionIgnorable = []string{fact.KindRunStarted, fact.KindRunStep, fact.KindRunFinished,
+	fact.KindSandboxStarted, fact.KindSandboxStopped, fact.KindSandboxRestarted}
 
 // readOnlyDeny is the Architect's explicit tool policy, on top of what the harness denies for read-only roles.
 var readOnlyDeny = []string{"Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "edit", "write", "patch", "apply_patch", "bash"}
@@ -78,7 +90,7 @@ func (o *orch) run(ctx context.Context) (ready bool, err error) {
 		case workflow.PhasePlanning:
 			err = o.plan(ctx, facts)
 		case workflow.PhaseBuilding:
-			err = o.building(ctx, st, facts)
+			err = o.building(ctx)
 		case workflow.PhaseIntegrating:
 			ready, err = o.integrate(ctx, st, facts)
 		case workflow.PhaseVerifying:
@@ -93,18 +105,26 @@ func (o *orch) run(ctx context.Context) (ready bool, err error) {
 			return ready, err
 		}
 	}
-	return false, o.escalate(ctx, "orchestration step limit reached")
+	return false, o.escalate(ctx, fact.ClassForeman, "orchestration step limit reached")
 }
 
 func (o *orch) fail(ctx context.Context, f fact.WOFailed) error {
-	if err := o.e.fail(ctx, o.woID, f); err != nil {
-		return err
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.failed {
+		if o.stopBuilders != nil {
+			o.stopBuilders()
+		}
+		if err := o.e.fail(context.WithoutCancel(ctx), o.woID, f); err != nil {
+			return err
+		}
+		o.failed = true
 	}
 	return errWOFailed
 }
 
-func (o *orch) escalate(ctx context.Context, reason string) error {
-	_, err := o.e.Facts.Append(ctx, o.woID, workflow.KindEscalated, workflow.Escalated{Reason: reason})
+func (o *orch) escalate(ctx context.Context, class, reason string) error {
+	_, err := o.e.Facts.Append(ctx, o.woID, workflow.KindEscalated, workflow.Escalated{Reason: reason, Class: class})
 	return err
 }
 
@@ -137,7 +157,7 @@ func (o *orch) runRole(ctx context.Context, role harness.Role, task, prompt, fre
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
-		return "", o.fail(ctx, fact.WOFailed{Class: "agent_error", Message: err.Error()})
+		return "", o.fail(ctx, fact.WOFailed{Class: fact.ClassTask, Reason: "no_profile", Message: err.Error()})
 	}
 	defer cfg.release()
 	facts, err := e.Facts.List(ctx, o.woID)
@@ -450,7 +470,7 @@ func lastFailures(facts []fact.Fact) map[string]string {
 		switch f.Kind {
 		case fact.KindTaskFailed:
 			if v, err := fact.Decode[fact.TaskFailed](f); err == nil {
-				out[v.Task] = v.Class + ": " + firstLine(v.Message, 300)
+				out[v.Task] = v.Class + "/" + v.Reason + ": " + firstLine(v.Message, 300)
 			}
 		case workflow.KindTaskBuilt:
 			if v, err := fact.Decode[workflow.TaskBuiltPayload](f); err == nil {
@@ -510,7 +530,7 @@ func (o *orch) decide(ctx context.Context, reply string) (cerr, err error) {
 		if o.beforeAppend != nil {
 			o.beforeAppend()
 		}
-		_, err = o.e.Facts.AppendBatch(ctx, o.woID, facts[len(facts)-1].ID, nf)
+		_, err = o.e.Facts.AppendBatch(ctx, o.woID, facts[len(facts)-1].ID, nf, decisionIgnorable...)
 		if errors.Is(err, fact.ErrConflict) {
 			continue
 		}
@@ -565,26 +585,132 @@ func foremanDelta(st workflow.State, facts []fact.Fact) string {
 
 // --- building and integration ---
 
-func (o *orch) building(ctx context.Context, st workflow.State, facts []fact.Fact) error {
-	for _, t := range st.Tasks {
-		if t.Status == workflow.TaskBuilding {
-			return o.buildTask(ctx, t, facts)
-		}
-	}
-	for _, t := range st.Tasks {
-		if t.Status == workflow.TaskInspecting {
-			// the Inspector arrives with M5; until then an inspection finds nothing
-			_, err := o.e.Facts.Append(ctx, o.woID, workflow.KindInspectionDone, workflow.InspectionDone{Task: t.ID})
-			return err
-		}
-	}
-	if needsDecision(st) {
-		return o.foreman(ctx, st, facts)
-	}
-	return o.escalate(ctx, "no task can make progress")
+type buildResult struct {
+	id  string
+	err error
 }
 
-func needsDecision(st workflow.State) bool {
+// building runs every task the Foreman dispatched concurrently, one goroutine each, and asks the Foreman again as soon as
+// anything needs a decision, without waiting for the other builders. It returns when the phase leaves building.
+func (o *orch) building(ctx context.Context) error {
+	if o.builder == nil {
+		o.builder = make(chan struct{}, max(o.lim.MaxBuilders, 1))
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	o.mu.Lock()
+	o.stopBuilders = cancel
+	o.mu.Unlock()
+	defer func() {
+		o.mu.Lock()
+		o.stopBuilders = nil
+		o.mu.Unlock()
+	}()
+	results := make(chan buildResult)
+	active := map[string]bool{}
+	var firstErr error
+	finish := func(r buildResult) {
+		delete(active, r.id)
+		stopped := cctx.Err() != nil && !errors.Is(r.err, errWOFailed) // errors after our own cancel are fallout
+		if r.err != nil && firstErr == nil && !stopped && !errors.Is(r.err, context.Canceled) {
+			firstErr = r.err
+		}
+	}
+	drain := func() error {
+		cancel()
+		for len(active) > 0 {
+			finish(<-results)
+		}
+		if firstErr == nil {
+			firstErr = ctx.Err()
+		}
+		return firstErr
+	}
+	for range maxLineSteps {
+		facts, err := o.e.Facts.List(ctx, o.woID)
+		if err != nil {
+			drain()
+			return err
+		}
+		st := workflow.Fold(facts)
+		if st.Phase != workflow.PhaseBuilding {
+			return drain()
+		}
+		for _, t := range st.Tasks {
+			if t.Status == workflow.TaskBuilding && !active[t.ID] {
+				active[t.ID] = true
+				go func() { results <- buildResult{t.ID, o.runBuilder(cctx, t, facts)} }()
+			}
+		}
+		select {
+		case r := <-results:
+			finish(r)
+			if firstErr != nil {
+				return drain()
+			}
+			continue
+		default:
+		}
+		switch {
+		case hasInspecting(st):
+			if err := o.inspect(cctx, st); err != nil {
+				drain()
+				return err
+			}
+		case splitPending(st) != nil:
+			if err := o.split(cctx, st, *splitPending(st), facts); err != nil {
+				drain()
+				return err
+			}
+		case needsDecision(st, o.lim):
+			if err := o.foreman(cctx, st, facts); err != nil {
+				drain()
+				return err
+			}
+		case len(active) == 0:
+			return o.escalate(ctx, fact.ClassForeman, "no task can make progress")
+		default:
+			select {
+			case r := <-results:
+				finish(r)
+				if firstErr != nil {
+					return drain()
+				}
+			case <-cctx.Done():
+				return drain()
+			}
+		}
+	}
+	drain()
+	return o.escalate(ctx, fact.ClassForeman, "orchestration step limit reached")
+}
+
+func hasInspecting(st workflow.State) bool {
+	return slices.ContainsFunc(st.Tasks, func(t workflow.Task) bool { return t.Status == workflow.TaskInspecting })
+}
+
+// inspect completes pending inspections; the Inspector arrives with M5 and until then finds nothing.
+func (o *orch) inspect(ctx context.Context, st workflow.State) error {
+	for _, t := range st.Tasks {
+		if t.Status == workflow.TaskInspecting {
+			if _, err := o.e.Facts.Append(ctx, o.woID, workflow.KindInspectionDone, workflow.InspectionDone{Task: t.ID}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func splitPending(st workflow.State) *workflow.Task {
+	for i := range st.Tasks {
+		if st.Tasks[i].SplitPending {
+			return &st.Tasks[i]
+		}
+	}
+	return nil
+}
+
+func needsDecision(st workflow.State, lim workflow.Limits) bool {
 	for _, t := range st.Tasks {
 		switch t.Status {
 		case workflow.TaskFailed:
@@ -594,7 +720,7 @@ func needsDecision(st workflow.State) bool {
 				return true
 			}
 		case workflow.TaskPending:
-			if depsDone(st, t) {
+			if !t.SplitPending && depsDone(st, t) && st.CanDispatch(t.ID, lim) {
 				return true
 			}
 		}
@@ -626,22 +752,60 @@ func (o *orch) git(ctx context.Context, dir string, args ...string) (string, err
 	return strings.TrimSpace(stdout), nil
 }
 
-func taskPrompt(objective, spec string, t workflow.Task) string {
+// lastFailure is the latest task.failed of a task that has not built successfully since.
+func lastFailure(facts []fact.Fact, id string) (fact.TaskFailed, bool) {
+	var out fact.TaskFailed
+	found := false
+	for _, f := range facts {
+		switch f.Kind {
+		case fact.KindTaskFailed:
+			if v, err := fact.Decode[fact.TaskFailed](f); err == nil && v.Task == id {
+				out, found = v, true
+			}
+		case workflow.KindTaskBuilt:
+			if v, err := fact.Decode[workflow.TaskBuiltPayload](f); err == nil && v.Task == id {
+				found = false
+			}
+		}
+	}
+	return out, found
+}
+
+func taskPrompt(objective, spec string, t workflow.Task, facts []fact.Fact) string {
 	s := objective + "\n\nSpecification:\n" + spec + "\n\nYour task (" + t.ID + "): " + t.Description
 	if len(t.Paths) > 0 {
 		s += "\nYou own these paths; change files only there: " + strings.Join(t.Paths, ", ")
 	}
-	if t.LastFailureClass != "" {
-		s += "\nA previous attempt failed (" + t.LastFailureClass + "); try again."
+	if tf, ok := lastFailure(facts, t.ID); ok {
+		s += "\nA previous attempt failed (" + tf.Class + "): " + tail(tf.Message, 3000) + "\nFix the cause and try again."
 	}
 	return s
 }
 
+// runBuilder holds one of the MaxBuilders slots and a PORT for the duration of one task.
+func (o *orch) runBuilder(ctx context.Context, t workflow.Task, facts []fact.Fact) error {
+	select {
+	case o.builder <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-o.builder }()
+	key := o.woID + "/" + t.ID
+	port, err := o.e.ports().Acquire(key)
+	if err != nil {
+		return o.taskFailed(ctx, t.ID, fact.ClassInfra, "no_port", err.Error(), harness.Profile{})
+	}
+	defer o.e.ports().Release(key)
+	return o.buildTask(ctx, t, facts, port)
+}
+
 // buildTask runs one dispatched task in its own worktree on top of its dependencies and records task.built or task.failed.
-func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact) error {
+func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact, port int) error {
 	e := o.e
 	branch := taskBranch(o.woID, t.ID)
+	o.mu.Lock()
 	dir, err := sandbox.AddWorktree(ctx, o.sb, t.ID, branch, o.p.DefaultBranch)
+	o.mu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -650,7 +814,7 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 		if _, merr := o.git(ctx, dir, "merge", "--no-edit", db); merr != nil {
 			_, _ = o.git(ctx, dir, "merge", "--abort")
 			if !serializedOnto(facts, dep, t.ID) {
-				return o.taskFailed(ctx, t.ID, "dependency_conflict", "merging dependency "+dep+" into "+t.ID+": "+firstLine(merr.Error(), 300))
+				return o.taskFailed(ctx, t.ID, fact.ClassIntegration, "dependency_conflict", "merging dependency "+dep+" into "+t.ID+": "+firstLine(merr.Error(), 300), harness.Profile{})
 			}
 			// serialized re-run: start over on top of the dependency
 			if _, err := o.git(ctx, dir, "reset", "--hard", db); err != nil {
@@ -663,33 +827,39 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 	} else if failed {
 		return errWOFailed
 	}
-	cfg, err := e.agentConfig(ctx, o.p, harness.RoleBuilder)
+	cfg, err := e.agentConfigN(ctx, o.p, harness.RoleBuilder, t.ModelChanges)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return o.fail(ctx, fact.WOFailed{Class: "agent_error", Message: err.Error()})
+		return o.taskFailed(ctx, t.ID, fact.ClassTask, "no_profile", err.Error(), harness.Profile{})
 	}
 	defer cfg.release()
 	sid, open := roleSession(facts, harness.RoleBuilder, t.ID)
-	prompt := taskPrompt(o.objective, latestSpec(facts), t)
+	prompt := taskPrompt(o.objective, latestSpec(facts), t, facts)
 	note := ""
 	if open != "" {
 		note = "Your previous run was interrupted and the worktree may hold partial work. "
 	}
 	_, agentErr, err := e.converse(ctx, o.woID, o.sb, convo{
 		role: harness.RoleBuilder, task: t.ID, dir: dir, cfg: cfg, sessionID: sid, openRun: open,
+		env:    map[string]string{"PORT": strconv.Itoa(port)},
 		prompt: func(bool) string { return note + prompt },
 	})
 	if err != nil {
-		return err
+		return o.transientTaskFailure(ctx, t.ID, err, cfg.Profile)
 	}
 	if agentErr != nil {
-		if done, ferr := e.agentFailure(ctx, o.woID, agentErr, cfg.Profile); ferr != nil {
-			return ferr
-		} else if done {
-			return errWOFailed
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
+		switch f := Classify(agentErr, false); {
+		case f.Transient:
+			return o.transientTaskFailure(ctx, t.ID, agentErr, cfg.Profile)
+		case f.Class == fact.ClassProvider:
+			return o.fail(ctx, fact.WOFailed{Class: fact.ClassProvider, Message: agentErr.Error(), Model: cfg.Profile.Model, Provider: cfg.Profile.Provider})
+		}
+		return o.taskFailed(ctx, t.ID, fact.ClassTask, "agent_error", agentErr.Error(), cfg.Profile)
 	}
 	sha, _, err := sandbox.CommitAll(ctx, o.sb, dir, "lf: "+firstLine(t.Description, 60))
 	if err != nil {
@@ -704,7 +874,7 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 		return err
 	}
 	if n == "0" {
-		return o.taskFailed(ctx, t.ID, "task_no_changes", "builder produced no changes")
+		return o.taskFailed(ctx, t.ID, fact.ClassTask, "no_changes", "builder produced no changes", cfg.Profile)
 	}
 	changed, err := o.git(ctx, dir, append([]string{"log", "--no-merges", "--name-only", "--pretty=format:"}, own...)...)
 	if err != nil {
@@ -717,14 +887,74 @@ func (o *orch) buildTask(ctx context.Context, t workflow.Task, facts []fact.Fact
 		}
 	}
 	if len(stray) > 0 {
-		return o.taskFailed(ctx, t.ID, "path_violation", fmt.Sprintf("changed files outside the owned paths %v: %s", t.Paths, strings.Join(stray, ", ")))
+		return o.taskFailed(ctx, t.ID, fact.ClassTask, "path_violation", fmt.Sprintf("changed files outside the owned paths %v: %s", t.Paths, strings.Join(stray, ", ")), cfg.Profile)
 	}
 	_, err = e.Facts.Append(ctx, o.woID, workflow.KindTaskBuilt, workflow.TaskBuiltPayload{Task: t.ID, SHA: sha})
 	return err
 }
 
-func (o *orch) taskFailed(ctx context.Context, id, class, msg string) error {
-	_, err := o.e.Facts.Append(ctx, o.woID, fact.KindTaskFailed, fact.TaskFailed{Task: id, Class: class, Message: msg})
+// transientTaskFailure fails only this task when its retries ran out, leaving siblings running and the decision to the Foreman;
+// other errors, and a spent work-order budget, stop the line.
+func (o *orch) transientTaskFailure(ctx context.Context, id string, err error, prof harness.Profile) error {
+	if !IsTransient(err) || ctx.Err() != nil {
+		return err
+	}
+	if wf, over := o.e.overBudget(ctx, o.woID); over {
+		wf.Model, wf.Provider = prof.Model, prof.Provider
+		return o.fail(ctx, wf)
+	}
+	return o.taskFailed(ctx, id, fact.ClassProvider, "transient_exhausted", err.Error(), prof)
+}
+
+func (o *orch) taskFailed(ctx context.Context, id, class, reason, msg string, prof harness.Profile) error {
+	_, err := o.e.Facts.Append(ctx, o.woID, fact.KindTaskFailed, fact.TaskFailed{Task: id, Class: class, Reason: reason, Message: msg, Model: prof.Model, Provider: prof.Provider})
+	return err
+}
+
+const splitFormat = "Reply with the sub-plan as a JSON object in a final ```json block, in the same format as the plan: " +
+	`{"tasks":[{"id":"new-id","description":"...","owned_paths":["..."],"depends_on":[]}]}. `
+
+// split asks the Architect to replace a failed task with smaller ones that own paths within its own, and records plan.split.
+// An unusable sub-plan fails the task again so the Foreman can choose another change.
+func (o *orch) split(ctx context.Context, st workflow.State, t workflow.Task, facts []fact.Fact) error {
+	var others []string
+	for _, x := range st.Tasks {
+		others = append(others, x.ID)
+	}
+	rules := fmt.Sprintf("Task %q (%s, owning %v) failed and the Foreman wants it split. Replace it with at least 2 smaller tasks. "+
+		"Their owned paths must lie within %v. New ids must differ from the existing ones %v. Tasks that can run in parallel must own disjoint paths; "+
+		"otherwise make one depend on the other.\n", t.ID, t.Description, t.Paths, t.Paths, others)
+	if tf, ok := lastFailure(facts, t.ID); ok {
+		rules += "Why it failed: " + tail(tf.Message, 1500) + "\n"
+	}
+	fresh := "Specification:\n" + latestSpec(facts) + "\n\n" + rules + splitFormat
+	prompt := rules + splitFormat
+	var subs []workflow.PlanTask
+	var perr error
+	for attempt := 0; attempt < 2; attempt++ {
+		reply, err := o.runRole(ctx, harness.RoleArchitect, "architect", prompt, fresh)
+		if err != nil {
+			return err
+		}
+		var plan workflow.PlanReady
+		if plan, perr = parsePlan(reply); perr == nil {
+			subs = plan.Tasks
+			cur, err := o.e.Facts.List(ctx, o.woID)
+			if err != nil {
+				return err
+			}
+			perr = workflow.Fold(cur).ValidateSplit(t.ID, subs)
+		}
+		if perr == nil {
+			break
+		}
+		prompt = "Your sub-plan was rejected: " + perr.Error() + "\n" + splitFormat
+		fresh += "\n\n" + prompt
+	}
+	if perr != nil {
+		return o.taskFailed(ctx, t.ID, fact.ClassTask, "split_failed", "the Architect produced no valid split: "+perr.Error(), harness.Profile{})
+	}
+	_, err := o.e.Facts.Append(ctx, o.woID, workflow.KindPlanSplit, workflow.PlanSplit{Task: t.ID, Tasks: subs})
 	return err
 }
 
@@ -749,7 +979,7 @@ func (o *orch) integrate(ctx context.Context, st workflow.State, facts []fact.Fa
 	}
 	order, oerr := topoOrder(st.Tasks)
 	if oerr != nil {
-		return false, o.escalate(ctx, oerr.Error())
+		return false, o.escalate(ctx, fact.ClassIntegration, oerr.Error())
 	}
 	_, _ = o.git(ctx, o.dir, "merge", "--abort")
 	// start from the base every time so a rebuilt task is merged once, never on top of its stale earlier merge
@@ -787,7 +1017,7 @@ func (o *orch) integrate(ctx context.Context, st workflow.State, facts []fact.Fa
 			other = merged[len(merged)-1].ID
 		}
 		if other == "" {
-			return false, o.fail(ctx, fact.WOFailed{Class: "integration_failed", Message: "task " + t.ID + " conflicts with the base branch: " + files})
+			return false, o.fail(ctx, fact.WOFailed{Class: fact.ClassIntegration, Reason: "base_conflict", Message: "task " + t.ID + " conflicts with the base branch: " + files})
 		}
 		rounds := 0
 		for _, c := range st.Conflicts {
@@ -796,7 +1026,7 @@ func (o *orch) integrate(ctx context.Context, st workflow.State, facts []fact.Fa
 			}
 		}
 		if rounds >= maxConflictRounds {
-			return false, o.escalate(ctx, fmt.Sprintf("tasks %s and %s still conflict after %d serialize rounds (files %v)", other, t.ID, rounds, conflicted))
+			return false, o.escalate(ctx, fact.ClassIntegration, fmt.Sprintf("tasks %s and %s still conflict after %d serialize rounds (files %v)", other, t.ID, rounds, conflicted))
 		}
 		_, err := o.e.Facts.Append(ctx, o.woID, workflow.KindIntegrationConflict, workflow.IntegrationConflict{A: other, B: t.ID, Files: conflicted})
 		return false, err

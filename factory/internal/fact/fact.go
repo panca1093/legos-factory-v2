@@ -16,21 +16,24 @@ const (
 	KindWORequeued     = "wo.requeued"
 	KindWOCancelled    = "wo.cancelled"
 	KindWOFailed       = "wo.failed"
+	KindWORetried      = "wo.retried"
 	KindSandboxStarted = "sandbox.started"
 	KindSandboxStopped = "sandbox.stopped"
-	KindRunStarted     = "run.started"
-	KindRunStep        = "run.step"
-	KindRunFinished    = "run.finished"
-	KindTaskCommitted  = "task.committed"
-	KindTaskFailed     = "task.failed"
-	KindVerifyPassed   = "verify.passed"
-	KindVerifyFailed   = "verify.failed"
-	KindPROpened       = "pr.opened"
-	KindPRPushed       = "pr.pushed"
-	KindCheckObserved  = "check.observed"
-	KindChecksStable   = "checks.stable"
-	KindPRMerged       = "pr.merged"
-	KindPRClosed       = "pr.closed"
+	// KindSandboxRestarted records an infra failure answered by a new sandbox on the same volume.
+	KindSandboxRestarted = "sandbox.restarted"
+	KindRunStarted       = "run.started"
+	KindRunStep          = "run.step"
+	KindRunFinished      = "run.finished"
+	KindTaskCommitted    = "task.committed"
+	KindTaskFailed       = "task.failed"
+	KindVerifyPassed     = "verify.passed"
+	KindVerifyFailed     = "verify.failed"
+	KindPROpened         = "pr.opened"
+	KindPRPushed         = "pr.pushed"
+	KindCheckObserved    = "check.observed"
+	KindChecksStable     = "checks.stable"
+	KindPRMerged         = "pr.merged"
+	KindPRClosed         = "pr.closed"
 )
 
 type Fact struct {
@@ -48,13 +51,33 @@ type WOCreated struct {
 	LevelCap int `json:"level_cap"`
 	// Line is fixed at creation: true runs the Architect/Foreman line, false the single-builder path; absent in older facts means false.
 	Line bool `json:"line,omitempty"`
+	// ParentWO and BaseBranch mark a follow-up: its worktree starts from the parent's PR branch instead of the default branch (ADR-F11).
+	ParentWO   string `json:"parent_wo,omitempty"`
+	BaseBranch string `json:"base_branch,omitempty"`
 }
+
+// Failure classes (ADR-F10).
+const (
+	ClassProvider    = "provider"
+	ClassInfra       = "infra"
+	ClassTask        = "task"
+	ClassIntegration = "integration"
+	ClassVerify      = "verify"
+	ClassForeman     = "foreman"
+)
 
 type WOFailed struct {
 	Class    string `json:"class"`
+	Reason   string `json:"reason,omitempty"`
 	Message  string `json:"message"`
 	Model    string `json:"model,omitempty"`
 	Provider string `json:"provider,omitempty"`
+}
+
+// WORetried is a human un-failing a failed work order; it resumes from the facts already recorded.
+type WORetried struct {
+	By   string `json:"by"`
+	Note string `json:"note,omitempty"`
 }
 
 type RunStarted struct {
@@ -93,9 +116,18 @@ type TaskCommitted struct {
 }
 
 type TaskFailed struct {
-	Task    string `json:"task"`
-	Class   string `json:"class"`
-	Message string `json:"message"`
+	Task     string `json:"task"`
+	Class    string `json:"class"`
+	Reason   string `json:"reason,omitempty"`
+	Message  string `json:"message"`
+	Model    string `json:"model,omitempty"`
+	Provider string `json:"provider,omitempty"`
+}
+
+type SandboxRestarted struct {
+	Workspace string `json:"workspace"`
+	Attempt   int    `json:"attempt"`
+	Message   string `json:"message"`
 }
 
 type VerifyFailed struct {
@@ -201,16 +233,23 @@ func (s *Store) Append(ctx context.Context, subject, kind string, payload any) (
 var ErrConflict = errors.New("fact conflict: the subject has newer facts")
 
 // AppendBatch writes all facts in one transaction: either every fact is recorded, in order, or none.
-// A non-zero afterID is the id of the last fact the caller saw; the batch fails with ErrConflict when a newer one exists.
-func (s *Store) AppendBatch(ctx context.Context, subject string, afterID int64, in []NewFact) ([]Fact, error) {
+// A non-zero afterID is the id of the last fact the caller saw; the batch fails with ErrConflict when a newer one exists,
+// not counting facts of the ignorable kinds (activity the caller's decision does not depend on).
+func (s *Store) AppendBatch(ctx context.Context, subject string, afterID int64, in []NewFact, ignorable ...string) ([]Fact, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
 	if afterID != 0 {
+		q := `SELECT EXISTS(SELECT 1 FROM facts WHERE subject = ? AND id > ?`
+		args := []any{subject, afterID}
+		for _, k := range ignorable {
+			q += ` AND kind != ?`
+			args = append(args, k)
+		}
 		var newer int
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM facts WHERE subject = ? AND id > ?)`, subject, afterID).Scan(&newer); err != nil {
+		if err := tx.QueryRowContext(ctx, q+`)`, args...).Scan(&newer); err != nil {
 			return nil, err
 		}
 		if newer != 0 {

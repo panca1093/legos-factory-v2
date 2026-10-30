@@ -13,6 +13,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"legos-factory/factory/internal/fact"
@@ -45,6 +46,8 @@ type Project struct {
 	Roles          map[string]BuilderConfig
 	RequiredChecks []string
 	MaxRequeues    int // 0 means defaultMaxRequeues
+	// Fallbacks lists profile ids per role, in the order retry_task other_model moves through them.
+	Fallbacks map[string][]string
 }
 
 func (b BuilderConfig) set() bool { return b.Profile.Agent != "" || len(b.AgentCommand) > 0 }
@@ -62,6 +65,7 @@ type projectFile struct {
 	Verify         []string               `json:"verify"`
 	RequiredChecks []string               `json:"required_checks"`
 	MaxRequeues    int                    `json:"max_requeues"`
+	Fallbacks      map[string][]string    `json:"fallbacks"`
 	Builder        builderFile            `json:"builder"`
 	Roles          map[string]builderFile `json:"roles"`
 }
@@ -103,7 +107,7 @@ func LoadProject(path string) (Project, error) {
 	}
 	p := Project{ID: f.ID, RepoURL: f.RepoURL, Repo: f.Repo, DefaultBranch: f.DefaultBranch, SCMKind: f.SCMKind,
 		SCMBaseURL: f.SCMBaseURL, SCMUsername: f.SCMUsername, Setup: f.Setup, Verify: f.Verify,
-		RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues}
+		RequiredChecks: f.RequiredChecks, MaxRequeues: f.MaxRequeues, Fallbacks: f.Fallbacks}
 	if p.DefaultBranch == "" {
 		p.DefaultBranch = "main"
 	}
@@ -128,6 +132,7 @@ func LoadProject(path string) (Project, error) {
 // Profiles resolves a role to a profile and builds its env; *profile.Store implements it.
 type Profiles interface {
 	Resolve(ctx context.Context, projectID string, role harness.Role) (profile.Profile, error)
+	GetProfile(ctx context.Context, id string) (profile.Profile, error)
 	RunEnv(ctx context.Context, p profile.Profile) (profile.RunSpec, error)
 	Acquire(ctx context.Context, credID string) (release func(), err error)
 }
@@ -140,6 +145,12 @@ type Engine struct {
 	SCM      func(Project) (scm.Provider, error)
 	Now      func() time.Time
 	Log      *slog.Logger
+	// Ports allocates the PORT of each builder worktree; nil means a default range.
+	Ports *sandbox.Ports
+	// RetryBase is the first backoff after a transient provider failure (doubling, capped); TransientRetries bounds the retries.
+	RetryBase        time.Duration
+	TransientRetries int
+	portsMu          sync.Mutex
 	// StableAfter is how long an all-success check set must stay unchanged before ci_green when no required checks are configured; 0 means 60s.
 	StableAfter time.Duration
 }
@@ -155,6 +166,15 @@ func (e *Engine) log() *slog.Logger {
 		return e.Log
 	}
 	return slog.Default()
+}
+
+func (e *Engine) ports() *sandbox.Ports {
+	e.portsMu.Lock()
+	defer e.portsMu.Unlock()
+	if e.Ports == nil {
+		e.Ports = sandbox.NewPorts(30000, 30999)
+	}
+	return e.Ports
 }
 
 func (e *Engine) now() time.Time {
@@ -206,16 +226,17 @@ func (e *Engine) Status(ctx context.Context, woID string) (fact.Status, bool, er
 }
 
 type view struct {
-	facts     []fact.Fact
-	cycle     []fact.Fact // facts since the latest wo.requeued, inclusive
-	objective string
-	line      bool
-	requeue   *fact.WORequeued
-	sessionID string
-	prOpened  bool
-	lastHead  string
-	openRun   string // run.started in the cycle without a matching run.finished
-	finished  bool   // cycle has a finished run
+	facts      []fact.Fact
+	cycle      []fact.Fact // facts since the latest wo.requeued, inclusive
+	objective  string
+	line       bool
+	requeue    *fact.WORequeued
+	sessionID  string
+	prOpened   bool
+	lastHead   string
+	baseBranch string
+	openRun    string // run.started in the cycle without a matching run.finished
+	finished   bool   // cycle has a finished run
 }
 
 func (v *view) cycleHas(kind string) bool {
@@ -230,6 +251,8 @@ func (v *view) cycleHas(kind string) bool {
 func load(facts []fact.Fact) (*view, error) {
 	v := &view{facts: facts}
 	start := 0
+	var lastFailed *fact.WOFailed
+	var lastVerify *fact.VerifyFailed
 	for i, f := range facts {
 		switch f.Kind {
 		case fact.KindWOCreated:
@@ -237,7 +260,7 @@ func load(facts []fact.Fact) (*view, error) {
 			if err != nil {
 				return nil, err
 			}
-			v.objective, v.line = c.Objective, c.Line
+			v.objective, v.line, v.baseBranch = c.Objective, c.Line, c.BaseBranch
 		case fact.KindWORequeued:
 			start = i
 			r, err := fact.Decode[fact.WORequeued](f)
@@ -245,6 +268,21 @@ func load(facts []fact.Fact) (*view, error) {
 				return nil, err
 			}
 			v.requeue = &r
+		case fact.KindVerifyFailed:
+			if vf, err := fact.Decode[fact.VerifyFailed](f); err == nil {
+				lastVerify = &vf
+			}
+		case fact.KindWOFailed:
+			if wf, err := fact.Decode[fact.WOFailed](f); err == nil {
+				lastFailed = &wf
+			}
+		case fact.KindWORetried:
+			// a retry after a verify failure rebuilds from the verify output instead of re-verifying the same commit
+			if lastFailed != nil && lastFailed.Class == fact.ClassVerify && lastVerify != nil && !v.line {
+				start = i
+				v.requeue = &fact.WORequeued{Reason: "verify_failed", Failing: lastVerify.Commands, Details: lastVerify.Output}
+			}
+			lastFailed = nil
 		case fact.KindRunStarted:
 			r, err := fact.Decode[fact.RunStarted](f)
 			if err != nil {
@@ -270,6 +308,8 @@ func load(facts []fact.Fact) (*view, error) {
 	v.cycle = facts[start:]
 	for _, f := range v.cycle {
 		switch f.Kind {
+		case fact.KindWORetried:
+			v.openRun, v.finished = "", false
 		case fact.KindRunStarted:
 			r, _ := fact.Decode[fact.RunStarted](f)
 			v.openRun = r.Run
@@ -294,10 +334,13 @@ func (e *Engine) failProvider(ctx context.Context, woID string, err error, prof 
 	if IsTransient(err) {
 		return err
 	}
-	return e.fail(ctx, woID, fact.WOFailed{Class: "provider", Message: err.Error(), Model: prof.Model, Provider: prof.Provider})
+	return e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassProvider, Message: err.Error(), Model: prof.Model, Provider: prof.Provider})
 }
 
 func requeuePrompt(r fact.WORequeued) string {
+	if r.Reason == "verify_failed" {
+		return "Verification failed in the sandbox. Failing commands: " + strings.Join(r.Failing, ", ") + ".\n" + r.Details + "\nFix the cause in the repository, then stop."
+	}
 	s := "CI failed on your pull request. Failing checks: " + strings.Join(r.Failing, ", ") + "."
 	if r.Details != "" {
 		s += "\n" + r.Details
@@ -338,7 +381,18 @@ func firstLine(s string, n int) string {
 }
 
 // Run is idempotent: it skips every step already recorded in the current cycle (creation to PR, or requeue to PR).
+// Transient provider failures and sandbox restarts are bounded across the whole work order, not per call.
 func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
+	err := e.run(ctx, p, woID)
+	if err != nil && IsTransient(err) && ctx.Err() == nil {
+		if wf, over := e.overBudget(ctx, woID); over {
+			return e.fail(ctx, woID, wf)
+		}
+	}
+	return err
+}
+
+func (e *Engine) run(ctx context.Context, p Project, woID string) error {
 	facts, err := e.Facts.List(ctx, woID)
 	if err != nil {
 		return err
@@ -355,6 +409,9 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 	}
 	if v.cycleHas(fact.KindPROpened) || v.cycleHas(fact.KindPRPushed) {
 		return nil
+	}
+	if v.baseBranch != "" {
+		p.DefaultBranch = v.baseBranch
 	}
 
 	prov, err := e.SCM(p)
@@ -376,7 +433,7 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 		_ = sb.Stop(ctx)
 		return err
 	}
-	defer func() {
+	defer func() { // sb is the current sandbox: restartSandbox replaces it
 		stopCtx := context.WithoutCancel(ctx)
 		if err := sb.Stop(stopCtx); err != nil {
 			e.log().Warn("stop sandbox", "wo", woID, "err", err)
@@ -397,11 +454,11 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 	}
 
 	line := v.requeue == nil && v.line
+	var o *orch
 	if line {
-		o := &orch{e: e, p: p, woID: woID, sb: sb, dir: dir, objective: v.objective, lim: workflow.DefaultLimits()}
-		if ready, err := o.run(ctx); err != nil || !ready {
-			return err
-		}
+		lim := workflow.DefaultLimits()
+		lim.BuilderFallbacks = len(p.Fallbacks[string(harness.RoleBuilder)])
+		o = &orch{e: e, p: p, woID: woID, sb: sb, dir: dir, objective: v.objective, lim: lim}
 	} else if !v.cycleHas(fact.KindTaskCommitted) {
 		if !v.finished {
 			if done, err := e.build(ctx, p, woID, sb, dir, v); err != nil || done {
@@ -417,33 +474,107 @@ func (e *Engine) Run(ctx context.Context, p Project, woID string) error {
 			return err
 		}
 		if len(files) == 0 || (!changed && sha == v.lastHead) {
-			return e.fail(ctx, woID, fact.WOFailed{Class: "task_no_changes", Message: "builder produced no changes"})
+			return e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "no_changes", Message: "builder produced no changes"})
 		}
 		if _, err := e.Facts.Append(ctx, woID, fact.KindTaskCommitted, fact.TaskCommitted{Task: task, SHA: sha}); err != nil {
 			return err
 		}
 	}
 
-	if !v.cycleHas(fact.KindVerifyPassed) {
-		for _, cmd := range p.Verify {
-			stdout, stderr, code, err := sb.Exec(ctx, dir, nil, "sh", "-c", cmd)
-			if err != nil {
-				return err
+	for {
+		next, err := e.verifyStep(ctx, p, woID, sb, dir, o, v)
+		if err != nil && e.infraFailure(ctx, sb, err) {
+			restarts, _, lerr := e.budgetUsed(ctx, woID)
+			if lerr != nil {
+				return lerr
 			}
-			if code != 0 {
-				out := tail(stdout+stderr, 4000)
-				if _, err := e.Facts.Append(ctx, woID, fact.KindVerifyFailed, fact.VerifyFailed{Commands: []string{cmd}, Output: out}); err != nil {
-					return err
-				}
-				return e.fail(ctx, woID, fact.WOFailed{Class: "verify_failed", Message: fmt.Sprintf("%s: exit %d", cmd, code)})
+			if restarts >= maxInfraRestarts {
+				return e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassInfra, Reason: "sandbox_restarts_exhausted",
+					Message: fmt.Sprintf("sandbox failed %d times: %v", restarts+1, err)})
 			}
+			nsb, rerr := e.restartSandbox(ctx, woID, sb, err, restarts+1)
+			if rerr != nil {
+				return rerr
+			}
+			sb = nsb
+			if o != nil {
+				o.sb = sb
+			}
+			continue
 		}
-		if _, err := e.Facts.Append(ctx, woID, fact.KindVerifyPassed, struct{}{}); err != nil {
+		if err != nil || next == stepStop {
 			return err
+		}
+		if next == stepPublish {
+			break
 		}
 	}
 
 	return e.publish(ctx, p, woID, sb, dir, branch, gitAuth, prov, v)
+}
+
+type step int
+
+const (
+	stepPublish step = iota
+	stepAgain
+	stepStop
+)
+
+// verifyStep drives the line (when there is one) to a verifiable branch and runs the verify commands once. A verify
+// failure in the line goes back to the owning builders (stepAgain); on the single-builder path it fails the work order.
+func (e *Engine) verifyStep(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir string, o *orch, v *view) (step, error) {
+	if o != nil {
+		if ready, err := o.run(ctx); err != nil || !ready {
+			return stepStop, err
+		}
+	}
+	if v.cycleHas(fact.KindVerifyPassed) {
+		return stepPublish, nil
+	}
+	for _, cmd := range p.Verify {
+		stdout, stderr, code, err := sb.Exec(ctx, dir, nil, "sh", "-c", cmd)
+		if err != nil {
+			return stepStop, err
+		}
+		if code == 0 {
+			continue
+		}
+		out := tail(stdout+stderr, 4000)
+		if o != nil {
+			return stepAgain, o.verifyFailed(ctx, cmd, out)
+		}
+		if _, err := e.Facts.Append(ctx, woID, fact.KindVerifyFailed, fact.VerifyFailed{Commands: []string{cmd}, Output: out}); err != nil {
+			return stepStop, err
+		}
+		return stepStop, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassVerify, Reason: "verify_failed", Message: fmt.Sprintf("%s: exit %d", cmd, code)})
+	}
+	_, err := e.Facts.Append(ctx, woID, fact.KindVerifyPassed, struct{}{})
+	return stepPublish, err
+}
+
+// infraFailure reports whether err means the sandbox died, as opposed to a provider or task error.
+func (e *Engine) infraFailure(ctx context.Context, sb sandbox.Sandbox, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	switch f := Classify(err, false); f.Class {
+	case fact.ClassInfra:
+		return true
+	case fact.ClassTask:
+		return Classify(err, sandboxDown(ctx, sb)).Class == fact.ClassInfra
+	}
+	return false
+}
+
+// restartSandbox replaces a dead sandbox with a new one on the same volume; the facts say where to resume.
+func (e *Engine) restartSandbox(ctx context.Context, woID string, old sandbox.Sandbox, cause error, attempt int) (sandbox.Sandbox, error) {
+	ws := old.Workspace()
+	_ = old.Stop(context.WithoutCancel(ctx))
+	if _, err := e.Facts.Append(ctx, woID, fact.KindSandboxRestarted, fact.SandboxRestarted{Workspace: ws.ID, Attempt: attempt, Message: firstLine(cause.Error(), 300)}); err != nil {
+		return nil, err
+	}
+	return e.Runtime.Start(ctx, ws, nil)
 }
 
 func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir, task string) (failed bool, err error) {
@@ -462,7 +593,7 @@ func (e *Engine) setup(ctx context.Context, p Project, woID string, sb sandbox.S
 		return false, err
 	}
 	if code != 0 {
-		return true, e.fail(ctx, woID, fact.WOFailed{Class: "setup_failed", Message: fmt.Sprintf("exit %d: %s", code, tail(stdout+stderr, 2000))})
+		return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "setup_failed", Message: fmt.Sprintf("exit %d: %s", code, tail(stdout+stderr, 2000))})
 	}
 	_, _, _, err = sb.Exec(ctx, "", nil, "touch", marker)
 	return false, err
@@ -479,6 +610,22 @@ type agentCfg struct {
 // agentConfig picks the explicit JSON config when it names an agent, else the profile bound to role.
 // The builder keeps its M1 fallback to an empty config; other roles have none.
 func (e *Engine) agentConfig(ctx context.Context, p Project, role harness.Role) (agentCfg, error) {
+	return e.agentConfigN(ctx, p, role, 0)
+}
+
+// agentConfigN with fallback n > 0 uses the n-th profile of p.Fallbacks[role] instead of the primary one.
+func (e *Engine) agentConfigN(ctx context.Context, p Project, role harness.Role, n int) (agentCfg, error) {
+	if n > 0 {
+		ids := p.Fallbacks[string(role)]
+		if e.Profiles == nil || n > len(ids) {
+			return agentCfg{}, fmt.Errorf("no fallback %d configured for role %s", n, role)
+		}
+		prof, err := e.Profiles.GetProfile(ctx, ids[n-1])
+		if err != nil {
+			return agentCfg{}, fmt.Errorf("fallback profile %s: %w", ids[n-1], err)
+		}
+		return e.profileConfig(ctx, prof, role)
+	}
 	explicit := p.Builder
 	if role != harness.RoleBuilder {
 		explicit = p.Roles[string(role)]
@@ -497,6 +644,10 @@ func (e *Engine) agentConfig(ctx context.Context, p Project, role harness.Role) 
 	if err != nil {
 		return agentCfg{}, fmt.Errorf("resolve %s profile: %w", role, err)
 	}
+	return e.profileConfig(ctx, prof, role)
+}
+
+func (e *Engine) profileConfig(ctx context.Context, prof profile.Profile, role harness.Role) (agentCfg, error) {
 	rs, err := e.Profiles.RunEnv(ctx, prof)
 	if err != nil {
 		return agentCfg{}, fmt.Errorf("%s profile env: %w", role, err)
@@ -518,12 +669,38 @@ type convo struct {
 	policy    harness.ToolPolicy
 	sessionID string
 	openRun   string // an interrupted run to close before starting
+	env       map[string]string
 	prompt    func(fresh bool) string
 }
 
-// converse runs the turn and records run.started/step/finished. agentErr is the agent's failure for the caller to
-// classify; err is infrastructure (fact store, context, transient provider errors) and is returned as is.
+// converse runs the turn, retrying transient provider failures with exponential backoff (bounded, outside any task
+// retry budget). agentErr is the agent's failure for the caller to classify; err is infrastructure (fact store, context,
+// a dead sandbox, a transient failure that outlived the retries) and is returned as is.
 func (e *Engine) converse(ctx context.Context, woID string, sb sandbox.Sandbox, c convo) (reply string, agentErr, err error) {
+	for attempt := 1; ; attempt++ {
+		reply, agentErr, err = e.converseOnce(ctx, woID, sb, c)
+		failure := err
+		if failure == nil {
+			failure = agentErr
+		}
+		if failure == nil || !IsTransient(failure) || attempt > e.transientTries() {
+			return reply, agentErr, err
+		}
+		delay := backoff(e.retryBase(), attempt)
+		if _, ferr := e.Facts.Append(ctx, woID, fact.KindRunStep, fact.RunStep{Step: "provider_retry",
+			Summary: firstLine(fmt.Sprintf("attempt %d of %d in %s: %v", attempt, e.transientTries(), delay, failure), 200)}); ferr != nil {
+			return "", nil, ferr
+		}
+		select {
+		case <-ctx.Done():
+			return "", nil, ctx.Err()
+		case <-time.After(delay):
+		}
+		c.openRun = ""
+	}
+}
+
+func (e *Engine) converseOnce(ctx context.Context, woID string, sb sandbox.Sandbox, c convo) (reply string, agentErr, err error) {
 	if c.openRun != "" {
 		if _, err := e.Facts.Append(ctx, woID, fact.KindRunFinished, fact.RunFinished{Run: c.openRun, StopReason: "interrupted"}); err != nil {
 			return "", nil, err
@@ -531,6 +708,9 @@ func (e *Engine) converse(ctx context.Context, woID string, sb sandbox.Sandbox, 
 	}
 	b := c.cfg
 	env := map[string]string{"CLAUDE_CONFIG_DIR": path.Join(sb.Workspace().HomeDir(), string(c.role)+"-"+c.task)}
+	for k, val := range c.env {
+		env[k] = val
+	}
 	for k, val := range b.Env {
 		env[k] = val
 	}
@@ -596,10 +776,17 @@ func (e *Engine) converse(ctx context.Context, woID string, sb sandbox.Sandbox, 
 		if ctx.Err() != nil {
 			return "", nil, ctx.Err()
 		}
+		stop := "error"
+		if IsTransient(perr) {
+			stop = "transient_error"
+		}
+		_, _ = e.Facts.Append(ctx, woID, fact.KindRunFinished, fact.RunFinished{Run: run, StopReason: stop})
 		if IsTransient(perr) {
 			return "", nil, perr
 		}
-		_, _ = e.Facts.Append(ctx, woID, fact.KindRunFinished, fact.RunFinished{Run: run, StopReason: "error"})
+		if !isProviderErr(perr) && sandboxDown(context.WithoutCancel(ctx), sb) {
+			return "", nil, classed(fact.ClassInfra, "sandbox_down", perr)
+		}
 		return "", perr, nil
 	}
 	raw, _ := json.Marshal(usage)
@@ -618,7 +805,7 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
-		return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: err.Error()})
+		return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "agent_error", Message: err.Error()})
 	}
 	defer cfg.release()
 	_, agentErr, err := e.converse(ctx, woID, sb, convo{
@@ -659,7 +846,7 @@ func (e *Engine) agentFailure(ctx context.Context, woID string, err error, prof 
 		}
 		return true, e.failProvider(ctx, woID, err, prof)
 	}
-	return true, e.fail(ctx, woID, fact.WOFailed{Class: "agent_error", Message: err.Error(), Model: prof.Model, Provider: prof.Provider})
+	return true, e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassTask, Reason: "agent_error", Message: err.Error(), Model: prof.Model, Provider: prof.Provider})
 }
 
 func (e *Engine) publish(ctx context.Context, p Project, woID string, sb sandbox.Sandbox, dir, branch string, gitAuth *sandbox.GitAuth, prov scm.Provider, v *view) error {
@@ -729,6 +916,8 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 			head, known, lastChange = o.HeadSHA, map[string]string{}, time.Time{}
 		case fact.KindWORequeued:
 			requeues++
+		case fact.KindWORetried:
+			requeues = 0
 		case fact.KindCheckObserved:
 			c, err := fact.Decode[fact.CheckObserved](f)
 			if err != nil {
@@ -791,7 +980,7 @@ func (e *Engine) Observe(ctx context.Context, p Project, woID string) error {
 			limit = defaultMaxRequeues
 		}
 		if requeues >= limit {
-			return e.fail(ctx, woID, fact.WOFailed{Class: "ci_retry_exhausted", Message: fmt.Sprintf("CI still failing (%s) after %d re-queues", strings.Join(failing, ", "), requeues)})
+			return e.fail(ctx, woID, fact.WOFailed{Class: fact.ClassVerify, Reason: "ci_retry_exhausted", Message: fmt.Sprintf("CI still failing (%s) after %d re-queues", strings.Join(failing, ", "), requeues)})
 		}
 		_, err = e.Facts.Append(ctx, woID, fact.KindWORequeued, fact.WORequeued{Reason: "ci_failed", Failing: failing, Details: strings.Join(details, "\n")})
 	case fact.StatusPROpen:

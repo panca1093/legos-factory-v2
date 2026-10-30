@@ -301,11 +301,11 @@ func TestIllegalCallsRejectedAndStateUnchanged(t *testing.T) {
 			s.building(fan...)
 			s.emit(KindIntegrationConflict, IntegrationConflict{A: "a", B: "b"})
 		}, Serialize("a", "b"), "needs integrating"},
-		{"retry other_model not yet", func(s *sim) {
+		{"retry other_model without fallback", func(s *sim) {
 			s.building(fan...)
 			s.must(DispatchBuild([]string{"a"}))
 			s.emit(fact.KindTaskFailed, fact.TaskFailed{Task: "a", Class: "timeout"})
-		}, RetryTask("a", ChangeOtherModel), "M4"},
+		}, RetryTask("a", ChangeOtherModel), "no fallback model"},
 		{"serialize reversed order", func(s *sim) {
 			s.integrating(pt("a", nil, "a/"), pt("b", nil, "b/"))
 			s.emit(KindIntegrationConflict, IntegrationConflict{A: "a", B: "b"})
@@ -567,4 +567,25 @@ func TestEscalationWhileParkedKeepsGate(t *testing.T) {
 	if st := s.state(); st.Gate != GatePlan {
 		t.Fatalf("gate = %q", st.Gate)
 	}
+}
+
+func TestRetriedUnfailsFromWhereFactsLeftOff(t *testing.T) {
+	fan := []PlanTask{pt("a", nil, "a/"), pt("b", nil, "b/")}
+	s := newSim(t)
+	s.building(fan...)
+	s.must(DispatchBuild([]string{"a"}))
+	s.emit(fact.KindTaskFailed, fact.TaskFailed{Task: "a", Class: "timeout"})
+	s.emit(fact.KindWOFailed, fact.WOFailed{Class: "task_failed"})
+	s.phase(PhaseFailed)
+	s.emit(fact.KindWORetried, fact.WORetried{By: "human"})
+	s.phase(PhaseBuilding)
+	if st := s.state(); st.FailureClass != "" {
+		t.Fatalf("failure class = %q", st.FailureClass)
+	} else if a, _ := st.Task("a"); a.Status != TaskPending {
+		t.Fatalf("task a = %s, want pending", a.Status)
+	}
+
+	s.emit(fact.KindWOCancelled, nil)
+	s.emit(fact.KindWORetried, fact.WORetried{By: "human"})
+	s.phase(PhaseCancelled)
 }

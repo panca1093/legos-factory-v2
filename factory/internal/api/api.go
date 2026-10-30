@@ -35,6 +35,7 @@ type Server struct {
 	Token        string
 	Profiles     *profile.Store
 	Engine       *engine.Engine
+	Runner       *engine.Runner // when set, runs are scheduled by it and the run endpoint only nudges it
 	ProjectsDir  string
 	SmokeTimeout time.Duration   // default 10m
 	BaseCtx      context.Context // lifetime of background runs; default Background
@@ -81,6 +82,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /work-orders/{id}", s.getWorkOrder)
 	mux.HandleFunc("POST /work-orders/{id}/run", s.runWorkOrder)
 	mux.HandleFunc("POST /work-orders/{id}/approve", s.approveWorkOrder)
+	mux.HandleFunc("POST /work-orders/{id}/retry", s.retryWorkOrder)
+	mux.HandleFunc("POST /work-orders/{id}/follow-up", s.followUpWorkOrder)
 	return s.auth(mux)
 }
 
@@ -497,6 +500,12 @@ func (s *Server) loadProject(id string) (engine.Project, int, error) {
 	return p, 0, nil
 }
 
+// LoadProject is the Runner.Projects adapter.
+func (s *Server) LoadProject(id string) (engine.Project, error) {
+	p, _, err := s.loadProject(id)
+	return p, err
+}
+
 // --- work orders ---
 
 func (s *Server) createWorkOrder(w http.ResponseWriter, r *http.Request) {
@@ -529,6 +538,7 @@ func (s *Server) createWorkOrder(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err, "")
 		return
 	}
+	s.nudge(id)
 	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "project": p.ID, "status": string(fact.StatusQueued)})
 }
 
@@ -622,10 +632,20 @@ func (s *Server) approveWorkOrder(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err, "")
 		return
 	}
+	s.nudge(id)
 	writeJSON(w, http.StatusOK, map[string]string{"id": id, "gate": in.Gate, "state": "approved"})
 }
 
+func (s *Server) nudge(id string) {
+	if s.Runner != nil {
+		s.Runner.Nudge(id)
+	}
+}
+
 func (s *Server) isRunning(id string) bool {
+	if s.Runner != nil {
+		return s.Runner.Running(id)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.running[id]
@@ -650,6 +670,11 @@ func (s *Server) runWorkOrder(w http.ResponseWriter, r *http.Request) {
 	p, code, err := s.loadProject(created.Project)
 	if err != nil {
 		writeErr(w, code, err.Error())
+		return
+	}
+	if s.Runner != nil {
+		s.Runner.Nudge(id)
+		writeJSON(w, http.StatusAccepted, map[string]string{"id": id, "state": "queued"})
 		return
 	}
 	s.mu.Lock()
@@ -679,4 +704,77 @@ func (s *Server) runWorkOrder(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": id, "state": "running"})
+}
+
+func (s *Server) retryWorkOrder(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var in struct {
+		Note string `json:"note"`
+	}
+	if r.ContentLength != 0 && !decode(w, r, &in) {
+		return
+	}
+	facts, err := s.Engine.Facts.List(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err, "")
+		return
+	}
+	if len(facts) == 0 {
+		writeErr(w, http.StatusNotFound, "work order not found")
+		return
+	}
+	if err := s.Engine.Retry(r.Context(), id, in.Note); err != nil {
+		if errors.Is(err, engine.ErrNotAllowed) || errors.Is(err, fact.ErrConflict) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		s.fail(w, r, err, "")
+		return
+	}
+	s.nudge(id)
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": id, "state": "retried"})
+}
+
+func (s *Server) followUpWorkOrder(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var in struct {
+		Objective string `json:"objective"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if strings.TrimSpace(in.Objective) == "" {
+		writeErr(w, http.StatusBadRequest, "objective is required")
+		return
+	}
+	facts, err := s.Engine.Facts.List(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err, "")
+		return
+	}
+	if len(facts) == 0 {
+		writeErr(w, http.StatusNotFound, "work order not found")
+		return
+	}
+	created, err := fact.Decode[fact.WOCreated](facts[0])
+	if err != nil || created.Project == "" {
+		writeErr(w, http.StatusUnprocessableEntity, "not a work order")
+		return
+	}
+	p, code, err := s.loadProject(created.Project)
+	if err != nil {
+		writeErr(w, code, err.Error())
+		return
+	}
+	child, err := s.Engine.FollowUp(r.Context(), p, id, in.Objective)
+	if err != nil {
+		if errors.Is(err, engine.ErrNotAllowed) {
+			writeErr(w, http.StatusConflict, err.Error())
+			return
+		}
+		s.fail(w, r, err, "")
+		return
+	}
+	s.nudge(child)
+	writeJSON(w, http.StatusCreated, map[string]string{"id": child, "project": p.ID, "parent": id, "status": string(fact.StatusQueued)})
 }

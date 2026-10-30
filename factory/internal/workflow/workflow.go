@@ -16,6 +16,7 @@ const (
 	KindInspectionRequested = "inspection.requested"
 	KindInspectionDone      = "inspection.done"
 	KindTaskRetry           = "task.retry"
+	KindPlanSplit           = "plan.split"
 	KindTasksSerialized     = "tasks.serialized"
 	KindIntegrationConflict = "integration.conflict"
 	KindEscalated           = "escalated"
@@ -132,6 +133,12 @@ type TaskRetry struct {
 	Change string `json:"change"`
 }
 
+// PlanSplit replaces Task in the plan with Tasks, whose owned paths lie within the replaced task's.
+type PlanSplit struct {
+	Task  string     `json:"task"`
+	Tasks []PlanTask `json:"tasks"`
+}
+
 type TasksSerialized struct {
 	A string `json:"task_a"`
 	B string `json:"task_b"`
@@ -145,6 +152,7 @@ type IntegrationConflict struct {
 
 type Escalated struct {
 	Reason string `json:"reason"`
+	Class  string `json:"class,omitempty"`
 }
 
 type Task struct {
@@ -156,6 +164,9 @@ type Task struct {
 	Retries          int
 	LastFailureClass string
 	LastChange       string
+	ModelChanges     int    // other_model retries so far; selects the fallback profile
+	SplitPending     bool   // retried with split and not yet replaced by sub-tasks
+	SplitFrom        string // the task this one replaced; a split task cannot be split again
 }
 
 type Conflict struct {
@@ -187,6 +198,8 @@ type State struct {
 	// Epoch counts the facts the Foreman reacts to; a decision is replayable only within its epoch.
 	Epoch   int
 	prFacts []fact.Fact
+
+	beforeFail Phase
 }
 
 func (s State) Task(id string) (Task, bool) {
@@ -254,7 +267,19 @@ func decode[T any](f fact.Fact) (T, bool) {
 }
 
 func (s *State) apply(f fact.Fact) {
-	if s.Phase.Terminal() {
+	if f.Kind == fact.KindWORetried && s.Phase == PhaseFailed {
+		s.Epoch++
+		s.Phase, s.FailureClass = s.beforeFail, ""
+		for i := range s.Tasks {
+			if s.Tasks[i].Status == TaskFailed {
+				s.Tasks[i].Status = TaskPending
+			}
+		}
+		return
+	}
+	// builders still finishing when the order failed keep reporting; dropping those would rebuild their tasks after a retry
+	lateTaskFact := s.Phase == PhaseFailed && (f.Kind == KindTaskBuilt || f.Kind == fact.KindTaskFailed)
+	if s.Phase.Terminal() && !lateTaskFact {
 		return
 	}
 	switch f.Kind {
@@ -327,7 +352,11 @@ func (s *State) apply(f fact.Fact) {
 			if t := s.task(v.Task); t != nil {
 				t.Status = TaskFailed
 				t.LastFailureClass = v.Class
+				t.SplitPending = false
 				s.Epoch++
+				if s.in(PhaseIntegrating, PhaseVerifying) {
+					s.setPhase(PhaseBuilding)
+				}
 			}
 		}
 	case KindInspectionRequested:
@@ -357,7 +386,17 @@ func (s *State) apply(f fact.Fact) {
 				t.Status = TaskPending
 				t.Retries++
 				t.LastChange = v.Change
+				switch v.Change {
+				case ChangeOtherModel:
+					t.ModelChanges++
+				case ChangeSplit:
+					t.SplitPending = true
+				}
 			}
+		}
+	case KindPlanSplit:
+		if v, ok := decode[PlanSplit](f); ok {
+			s.applySplit(v)
 		}
 	case KindTasksSerialized:
 		if v, ok := decode[TasksSerialized](f); ok {
@@ -394,7 +433,6 @@ func (s *State) apply(f fact.Fact) {
 		}
 	case fact.KindVerifyFailed:
 		s.Epoch++
-		s.setPhase(PhaseBuilding)
 	case fact.KindWORequeued:
 		s.Epoch++
 		if r, ok := decode[fact.WORequeued](f); ok && r.Reason == ReasonNeedsRebase {
@@ -421,7 +459,7 @@ func (s *State) apply(f fact.Fact) {
 		if v, ok := decode[fact.WOFailed](f); ok {
 			s.FailureClass = v.Class
 		}
-		s.Phase = PhaseFailed
+		s.beforeFail, s.Phase = s.Phase, PhaseFailed
 	}
 }
 
@@ -456,6 +494,32 @@ func (s *State) applyDecision(f fact.Fact) {
 		s.PlanRejections++
 		s.setPhase(PhasePlanning)
 	}
+}
+
+func (s *State) applySplit(v PlanSplit) {
+	i := slices.IndexFunc(s.Tasks, func(t Task) bool { return t.ID == v.Task })
+	if i < 0 || len(v.Tasks) == 0 {
+		return
+	}
+	parent := s.Tasks[i]
+	subs := make([]Task, len(v.Tasks))
+	ids := make([]string, len(v.Tasks))
+	for j, pt := range v.Tasks {
+		pt.DependsOn = append(slices.Clone(pt.DependsOn), parent.DependsOn...)
+		subs[j] = Task{PlanTask: pt, Status: TaskPending, Retries: parent.Retries, SplitFrom: v.Task}
+		ids[j] = pt.ID
+	}
+	tasks := append(slices.Clone(s.Tasks[:i]), subs...)
+	tasks = append(tasks, s.Tasks[i+1:]...)
+	for k := range tasks {
+		if d := slices.Index(tasks[k].DependsOn, v.Task); d >= 0 {
+			deps := slices.Delete(slices.Clone(tasks[k].DependsOn), d, d+1)
+			tasks[k].DependsOn = append(deps, ids...)
+		}
+	}
+	s.Tasks = tasks
+	s.Conflicts = slices.DeleteFunc(slices.Clone(s.Conflicts), func(c Conflict) bool { return c.A == v.Task || c.B == v.Task })
+	s.Epoch++
 }
 
 func pairMatches(a, b, x, y string) bool { return (a == x && b == y) || (a == y && b == x) }

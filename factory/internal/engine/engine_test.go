@@ -266,7 +266,7 @@ func TestNoChanges(t *testing.T) {
 	if st := status(t, ev.e, id); st != fact.StatusFailed {
 		t.Fatalf("status = %s", st)
 	}
-	if c := failedClass(t, ev.e, id); c != "task_no_changes" {
+	if c := failedClass(t, ev.e, id); c != "task" {
 		t.Fatalf("class = %s", c)
 	}
 }
@@ -277,7 +277,7 @@ func TestVerifyFailed(t *testing.T) {
 	if err := ev.e.Run(context.Background(), ev.p, id); err != nil {
 		t.Fatal(err)
 	}
-	if c := failedClass(t, ev.e, id); c != "verify_failed" {
+	if c := failedClass(t, ev.e, id); c != "verify" {
 		t.Fatalf("class = %q", c)
 	}
 	facts, _ := ev.e.Facts.List(context.Background(), id)
@@ -490,7 +490,7 @@ func TestRequeueCapFailsWorkOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	observeN(t, ev, id, 1)
-	if st := status(t, ev.e, id); st != fact.StatusFailed || failedClass(t, ev.e, id) != "ci_retry_exhausted" {
+	if st := status(t, ev.e, id); st != fact.StatusFailed || failedClass(t, ev.e, id) != "verify" {
 		t.Fatalf("status = %s class = %q", st, failedClass(t, ev.e, id))
 	}
 	if n := count(ev.kinds(t, ev.e, id), fact.KindWORequeued); n != 1 {
@@ -580,8 +580,17 @@ func TestResumeAfterCrashMidRun(t *testing.T) {
 }
 
 type fakeProfiles struct {
+	mu                 sync.Mutex
 	released, acquired int
 	err                error
+	byID               map[string]profile.Profile // GetProfile lookups, for fallbacks
+}
+
+func (f *fakeProfiles) GetProfile(_ context.Context, id string) (profile.Profile, error) {
+	if p, ok := f.byID[id]; ok {
+		return p, nil
+	}
+	return profile.Profile{}, profile.ErrNotFound
 }
 
 func (f *fakeProfiles) Resolve(_ context.Context, _ string, role harness.Role) (profile.Profile, error) {
@@ -592,14 +601,20 @@ func (f *fakeProfiles) Resolve(_ context.Context, _ string, role harness.Role) (
 		Price: profile.Price{InputPerMTok: 3, OutputPerMTok: 15}}, f.err
 }
 
-func (f *fakeProfiles) RunEnv(context.Context, profile.Profile) (profile.RunSpec, error) {
-	return profile.RunSpec{Profile: harness.Profile{Agent: "claude-agent-acp", Provider: "anthropic", Model: "m", BillingKind: "api_key"},
+func (f *fakeProfiles) RunEnv(_ context.Context, p profile.Profile) (profile.RunSpec, error) {
+	model := "m"
+	if p.Model != "" {
+		model = p.Model
+	}
+	return profile.RunSpec{Profile: harness.Profile{Agent: "claude-agent-acp", Provider: "anthropic", Model: model, BillingKind: "api_key"},
 		Env: map[string]string{"ANTHROPIC_API_KEY": "k"}}, nil
 }
 
 func (f *fakeProfiles) Acquire(context.Context, string) (func(), error) {
+	f.mu.Lock()
 	f.acquired++
-	return func() { f.released++ }, nil
+	f.mu.Unlock()
+	return func() { f.mu.Lock(); f.released++; f.mu.Unlock() }, nil
 }
 
 func TestBuilderFromProfile(t *testing.T) {
