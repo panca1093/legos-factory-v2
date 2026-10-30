@@ -454,10 +454,7 @@ func (e *Engine) build(ctx context.Context, p Project, woID string, sb sandbox.S
 
 	stop, perr := sess.Prompt(ctx, prompt)
 	_ = sess.Close()
-	select {
-	case <-drained:
-	case <-time.After(2 * time.Second):
-	}
+	<-drained
 
 	if perr != nil {
 		if ctx.Err() != nil {
