@@ -48,6 +48,10 @@ func fakeAgent(scenario string) {
 		case "initialize":
 			reply(m.ID, map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": os.Getenv("ACP_FAKE_NOLOAD") == ""}})
 		case "session/new":
+			if f := os.Getenv("ACP_FAKE_NEWFIXTURE"); f != "" {
+				send(fixtureReply(f, "session/new", m.ID))
+				continue
+			}
 			res := map[string]any{"sessionId": "ses_1"}
 			if os.Getenv("ACP_FAKE_MODELS") != "" {
 				res["models"] = map[string]any{"availableModels": []any{map[string]any{"modelId": "sonnet"}, map[string]any{"modelId": "haiku"}}}
@@ -71,10 +75,14 @@ func fakeAgent(scenario string) {
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32602, "message": "session not found"}})
 				continue
 			}
+			if f := os.Getenv("ACP_FAKE_NEWFIXTURE"); f != "" {
+				send(fixtureReply(f, "session/load", m.ID))
+				continue
+			}
 			reply(m.ID, map[string]any{"configOptions": []any{
 				map[string]any{"id": "model", "category": "model", "options": []any{map[string]any{"value": "opencode-go/kimi"}}},
 			}})
-		case "session/set_config_option", "session/set_model":
+		case "session/set_config_option", "session/set_model", "authenticate":
 			reply(m.ID, map[string]any{})
 		case "session/cancel":
 			if promptID != nil {
@@ -168,4 +176,39 @@ func fakeAgent(scenario string) {
 			}
 		}
 	}
+}
+
+// fixtureReply returns the agent's response to the first client request for method in a capture, addressed to id.
+func fixtureReply(path, method string, id any) map[string]any {
+	f, err := os.Open(path)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	var reqID string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		var line struct {
+			Dir string          `json:"dir"`
+			Msg json.RawMessage `json:"msg"`
+		}
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		if json.Unmarshal(sc.Bytes(), &line) != nil || json.Unmarshal(line.Msg, &msg) != nil {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line.Dir, "client") && msg.Method == method && reqID == "":
+			reqID = string(msg.ID)
+		case strings.HasPrefix(line.Dir, "agent") && msg.Method == "" && reqID != "" && string(msg.ID) == reqID:
+			var out map[string]any
+			_ = json.Unmarshal(line.Msg, &out)
+			out["id"] = id
+			return out
+		}
+	}
+	panic("no " + method + " exchange in " + path)
 }

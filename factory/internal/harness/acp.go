@@ -45,19 +45,22 @@ func (e *ProviderError) Error() string {
 
 var (
 	statusRe        = regexp.MustCompile(`\b([45]\d\d)\b`)
-	permanentErrors = []string{"usage limit", "quota", "429", "invalid request", "trains on request data", "insufficient", "funds", "authentication", "budget", "context"}
-	kindNormalizer  = strings.NewReplacer("_", " ", "-", " ")
+	permanentErrors = []string{"usage limit", "quota", "429", "invalid request", "trains on request data", "insufficient", "funds", "authentication", "budget", "context",
+		"unauthorized", "bad request", "policy", "model not found", "invalid params"}
+	kindNormalizer = strings.NewReplacer("_", " ", "-", " ")
+	camelBoundary  = regexp.MustCompile(`([a-z])([A-Z])`)
 )
 
 // classifyError keeps quota, funds, auth and invalid-request failures permanent so they are not retried (lesson #2).
-// errorKind is claude-agent-acp's error.data.errorKind (usage-limit, budget, context, ...).
-// TODO: uncertain — errorKind values are matched by substring, not verified against the agent's full enum
+// errorKind is the agent's structured error tag: claude-agent-acp errorKind (usage-limit, budget, context, ...),
+// codex-acp codexErrorInfo (usageLimitExceeded, ...) or opencode errorName (provider.free-limit).
+// TODO: uncertain — kinds are matched by substring, not verified against each agent's full enum
 func classifyError(msg, errorKind string) *ProviderError {
 	pe := &ProviderError{IsTransient: true, Message: msg}
 	if m := statusRe.FindStringSubmatch(msg); m != nil {
 		fmt.Sscan(m[1], &pe.Status)
 	}
-	low := kindNormalizer.Replace(strings.ToLower(msg + " " + errorKind))
+	low := kindNormalizer.Replace(strings.ToLower(msg + " " + camelBoundary.ReplaceAllString(errorKind, "$1 $2")))
 	for _, s := range permanentErrors {
 		if strings.Contains(low, s) {
 			pe.IsTransient = false
@@ -68,11 +71,12 @@ func classifyError(msg, errorKind string) *ProviderError {
 
 func NewACP() *ACP { return &ACP{} }
 
-var readOnlyDeny = []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute"}
+var readOnlyDeny = []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute", "task"}
 
 // opencodeConfig denies by default: a rejected permission request cancels the whole turn (lesson #3).
+// question is denied everywhere: no human answers it in a headless run.
 func opencodeConfig(role Role, policy ToolPolicy) string {
-	perm := map[string]string{"external_directory": "deny"}
+	perm := map[string]string{"external_directory": "deny", "question": "deny"}
 	if policy.AllowNone {
 		perm["*"] = "deny"
 	}
@@ -110,12 +114,21 @@ func deepMerge(a, b map[string]any) map[string]any {
 	return a
 }
 
-func isAgent(s SessionSpec, name string) bool {
-	return s.Profile.Agent == name || (len(s.AgentCommand) > 0 && filepath.Base(s.AgentCommand[0]) == name)
-}
+const (
+	agentClaude   = "claude-agent-acp"
+	agentOpencode = "opencode"
+	agentCodex    = "codex-acp"
+)
 
-func isOpencode(s SessionSpec) bool { return isAgent(s, "opencode") }
-func isClaude(s SessionSpec) bool   { return isAgent(s, "claude-agent-acp") }
+// agentOf names the agent kind that selects the model, tool-deny, permission and usage behaviour; "" is a generic ACP agent.
+func agentOf(s SessionSpec) string {
+	for _, name := range []string{agentClaude, agentOpencode, agentCodex} {
+		if s.Profile.Agent == name || (len(s.AgentCommand) > 0 && filepath.Base(s.AgentCommand[0]) == name) {
+			return name
+		}
+	}
+	return ""
+}
 
 var claudeReadOnlyDeny = []string{"Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"}
 
@@ -147,11 +160,14 @@ func (ACP) Start(ctx context.Context, spec SessionSpec) (Session, error) {
 		return nil, errors.New("acp: no sandbox")
 	}
 	env := map[string]string{}
-	if isOpencode(spec) {
+	kind := agentOf(spec)
+	switch kind {
+	case agentOpencode:
 		env["OPENCODE_DISABLE_AUTOUPDATE"] = "1"
 		env["OPENCODE_CONFIG_CONTENT"] = opencodeConfig(spec.Role, spec.ToolPolicy)
-	}
-	if isClaude(spec) {
+	case agentCodex:
+		env["NO_BROWSER"] = "1"
+	case agentClaude:
 		// fallback only: callers (the engine) own the per-session dir; a private one keeps the owner's settings and CLAUDE.md out of the prompt
 		env["CLAUDE_CONFIG_DIR"] = filepath.Join(spec.Sandbox.Workspace().HomeDir(), string(spec.Role)+"-session")
 		env["IS_SANDBOX"] = "1"
@@ -170,10 +186,10 @@ func (ACP) Start(ctx context.Context, spec SessionSpec) (Session, error) {
 		sessDir = filepath.Join(spec.Sandbox.Workspace().HomeDir(), string(spec.Role)+"-session")
 	}
 	// login files live in the per-session dir, not the shared home, so read-only roles never see them
-	if _, ok := env["XDG_DATA_HOME"]; !ok && isOpencode(spec) {
+	if _, ok := env["XDG_DATA_HOME"]; !ok && kind == agentOpencode {
 		env["XDG_DATA_HOME"] = filepath.Join(sessDir, ".local", "share")
 	}
-	if _, ok := env["CODEX_HOME"]; !ok && isAgent(spec, "codex-acp") {
+	if _, ok := env["CODEX_HOME"]; !ok && kind == agentCodex {
 		env["CODEX_HOME"] = filepath.Join(sessDir, ".codex")
 	}
 	var written []string
@@ -197,7 +213,7 @@ func (ACP) Start(ctx context.Context, spec SessionSpec) (Session, error) {
 		return nil, err
 	}
 	s := &acpSession{
-		cmd: cmd, w: stdin, spec: spec, stderr: &tailBuffer{max: 2048},
+		cmd: cmd, w: stdin, spec: spec, kind: kind, apiKeyAuth: env["CODEX_API_KEY"] != "" || env["OPENAI_API_KEY"] != "", stderr: &tailBuffer{max: 2048},
 		events: make(chan Event, 1024), quit: make(chan struct{}), exited: make(chan struct{}),
 		tools: map[string]string{}, files: written,
 	}
@@ -219,6 +235,7 @@ type acpSession struct {
 	w       io.WriteCloser
 	wmu     sync.Mutex
 	spec    SessionSpec
+	kind    string // agentOf(spec)
 	id      string
 	next    atomic.Int64
 	pending sync.Map // request id → chan acpMsg
@@ -237,6 +254,8 @@ type acpSession struct {
 	text     strings.Builder
 	tools    map[string]string // tool call id → title
 	files    []string          // login files to delete on Close
+
+	apiKeyAuth bool // codex-acp rejects session/new until authenticate selects the API-key method
 }
 
 func removeFiles(sb sandbox.Sandbox, paths []string) {
@@ -295,8 +314,13 @@ func (s *acpSession) handshake(ctx context.Context) error {
 	}
 	_ = json.Unmarshal(raw, &init)
 
+	if s.kind == agentCodex && s.apiKeyAuth {
+		if _, err := s.call(ctx, "authenticate", map[string]any{"methodId": "api-key"}); err != nil {
+			return err
+		}
+	}
 	params := map[string]any{"cwd": s.spec.Dir, "mcpServers": []any{}}
-	if isClaude(s.spec) {
+	if s.kind == agentClaude {
 		params["_meta"] = claudeMeta(s.spec)
 	}
 	var res sessionResult
@@ -331,7 +355,8 @@ func (s *acpSession) handshake(ctx context.Context) error {
 // its builder also leaves permission prompts behind via bypassPermissions mode.
 func (s *acpSession) setModel(ctx context.Context, res sessionResult) error {
 	p := s.spec.Profile
-	if isClaude(s.spec) {
+	switch s.kind {
+	case agentClaude:
 		if !s.spec.Role.ReadOnly() {
 			if _, err := s.call(ctx, "session/set_config_option", map[string]any{"sessionId": s.id, "configId": "mode", "value": "bypassPermissions"}); err != nil {
 				return err
@@ -346,28 +371,33 @@ func (s *acpSession) setModel(ctx context.Context, res sessionResult) error {
 			}
 		}
 		return nil
+	case agentCodex:
+		if err := s.setCodexMode(ctx, res); err != nil {
+			return err
+		}
 	}
 	if p.Model == "" {
 		return nil
 	}
-	if isOpencode(s.spec) {
+	switch s.kind {
+	case agentOpencode:
 		ref := p.Model
 		if p.Provider != "" {
 			ref = p.Provider + "/" + p.Model
 		}
-		for _, o := range res.ConfigOptions {
-			if o.Category != "model" {
-				continue
+		return s.setOption(ctx, res, "model", ref, ref, "log in to its provider or pick another model")
+	case agentCodex:
+		// codex-acp advertises "<model>[<effort>]" in models, and the model and thought_level options separately
+		base, effort, _ := strings.Cut(strings.TrimSuffix(p.Model, "]"), "[")
+		if hasOption(res, "model") {
+			if err := s.setOption(ctx, res, "model", base, base, "pick another model"); err != nil {
+				return err
 			}
-			for _, v := range o.Options {
-				if v.Value == ref {
-					_, err := s.call(ctx, "session/set_config_option", map[string]any{"sessionId": s.id, "configId": o.ID, "value": ref})
-					return err
-				}
+			if effort != "" {
+				return s.setOption(ctx, res, "thought_level", effort, base+" with effort "+effort, "pick another reasoning effort")
 			}
-			return &ProviderError{Message: fmt.Sprintf("model %s is not available to the agent; log in to its provider or pick another model", ref)}
+			return nil
 		}
-		return &ProviderError{Message: "agent offers no model selection"}
 	}
 	if res.Models == nil {
 		return nil
@@ -379,6 +409,48 @@ func (s *acpSession) setModel(ctx context.Context, res sessionResult) error {
 		}
 	}
 	return &ProviderError{Message: fmt.Sprintf("model %s is not offered by the agent", p.Model)}
+}
+
+func hasOption(res sessionResult, category string) bool {
+	for _, o := range res.ConfigOptions {
+		if o.Category == category {
+			return true
+		}
+	}
+	return false
+}
+
+// setOption sets the first config option of a category to value; a value the agent does not offer is permanent.
+func (s *acpSession) setOption(ctx context.Context, res sessionResult, category, value, label, hint string) error {
+	for _, o := range res.ConfigOptions {
+		if o.Category != category {
+			continue
+		}
+		for _, v := range o.Options {
+			if v.Value == value {
+				_, err := s.call(ctx, "session/set_config_option", map[string]any{"sessionId": s.id, "configId": o.ID, "value": value})
+				return err
+			}
+		}
+		return &ProviderError{Message: fmt.Sprintf("model %s is not available to the agent; %s", label, hint)}
+	}
+	return &ProviderError{Message: "agent offers no " + category + " selection"}
+}
+
+// setCodexMode picks the approval and sandbox preset: read-only for every role but the builder, which runs
+// with full access because the container is the boundary and codex's own sandbox needs kernel features containers may lack.
+func (s *acpSession) setCodexMode(ctx context.Context, res sessionResult) error {
+	mode := "agent-full-access"
+	if s.spec.Role.ReadOnly() || s.spec.ToolPolicy.AllowNone {
+		mode = "read-only"
+	}
+	for _, o := range res.ConfigOptions {
+		if o.Category == "mode" {
+			_, err := s.call(ctx, "session/set_config_option", map[string]any{"sessionId": s.id, "configId": o.ID, "value": mode})
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *acpSession) Prompt(ctx context.Context, text string) (string, error) {
@@ -425,6 +497,7 @@ func (s *acpSession) Prompt(ctx context.Context, text string) (string, error) {
 			OutputTokens      int `json:"outputTokens"`
 			CachedReadTokens  int `json:"cachedReadTokens"`
 			CachedWriteTokens int `json:"cachedWriteTokens"`
+			ThoughtTokens     int `json:"thoughtTokens"`
 		} `json:"usage"`
 		Meta struct {
 			Quota struct {
@@ -452,6 +525,9 @@ func (s *acpSession) Prompt(ctx context.Context, text string) (string, error) {
 		var ev Usage
 		if u != nil {
 			ev = Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CacheReadTokens: u.CachedReadTokens, CacheCreateTokens: u.CachedWriteTokens}
+			if s.kind == agentOpencode {
+				ev.OutputTokens += u.ThoughtTokens // opencode reports reasoning outside outputTokens (totalTokens is the sum of all parts)
+			}
 		}
 		ev.Models = models
 		s.emit(Event{Kind: EventUsage, Usage: ev})
@@ -532,10 +608,17 @@ func (s *acpSession) begin(method string, params any) (func(context.Context) (js
 		case m := <-ch:
 			if m.Error != nil {
 				var data struct {
-					ErrorKind string `json:"errorKind"`
+					ErrorKind      string          `json:"errorKind"`
+					ErrorName      string          `json:"errorName"`
+					Message        string          `json:"message"`
+					CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
 				}
 				_ = json.Unmarshal(m.Error.Data, &data)
-				return nil, fmt.Errorf("acp %s: %w", method, classifyError(m.Error.Message, data.ErrorKind))
+				msg, kind := m.Error.Message, data.ErrorKind+" "+data.ErrorName+" "+strings.Trim(string(data.CodexErrorInfo), `"`)
+				if data.Message != "" {
+					msg += ": " + data.Message // codex-acp puts the cause here under a generic "Internal error"
+				}
+				return nil, fmt.Errorf("acp %s: %w", method, classifyError(msg, kind))
 			}
 			return m.Result, nil
 		case <-s.exited:
@@ -709,8 +792,9 @@ func (s *acpSession) answerPermission(m acpMsg) {
 		}
 	}
 	prefer := []string{"allow_once", "allow_always"}
-	if isClaude(s.spec) && s.spec.Role.ReadOnly() && k != "read" && k != "search" && k != "think" {
-		prefer = []string{"reject_once", "allow_once", "allow_always"}
+	rejects := s.kind == agentClaude || s.kind == agentCodex // a reject fails only that call there; on opencode it cancels the turn
+	if rejects && (s.spec.Role.ReadOnly() && k != "read" && k != "search" && k != "think" || s.spec.ToolPolicy.AllowNone) {
+		prefer = []string{"reject_once", "reject_always"}
 	}
 	outcome := map[string]any{"outcome": "cancelled"}
 	for _, want := range prefer {
