@@ -30,19 +30,27 @@ func (s Status) Terminal() bool {
 
 const StallAfter = 3 * time.Minute
 
-// Derive folds facts in append order; later facts override earlier ones and a terminal status is final.
+// Derive folds facts in append order; later facts override earlier ones and cancelled, merged and closed are final, and failed is final until a wo.retried.
 func Derive(facts []Fact) Status {
 	status := StatusQueued
 	var head string
 	checks := map[string]string{}
 	stable := false
+	failed := false
+	var beforeFail Status
 
 	for _, f := range facts {
+		if failed {
+			if f.Kind == KindWORetried {
+				failed, status = false, beforeFail
+			}
+			continue
+		}
 		switch f.Kind {
 		case KindWOCancelled:
 			return StatusCancelled
 		case KindWOFailed:
-			return StatusFailed
+			failed, beforeFail, status = true, status, StatusFailed
 		case KindPRMerged:
 			return StatusMerged
 		case KindPRClosed:

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -150,4 +151,104 @@ func TestRunnerBacksOffAfterError(t *testing.T) {
 	waitFor(t, "retry after nudge", func() bool { return calls.Load() == 2 })
 	cancel()
 	<-done
+}
+
+func TestRetryResumesFailedWorkOrder(t *testing.T) {
+	ctx := context.Background()
+	ev := newEnv(t)
+	ev.h.edit = nil
+	id := ev.create(t)
+	if err := ev.e.Retry(ctx, id, ""); !errors.Is(err, ErrNotAllowed) {
+		t.Fatalf("retry on queued = %v, want ErrNotAllowed", err)
+	}
+	if err := ev.e.Run(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, ev.e, id); st != fact.StatusFailed {
+		t.Fatalf("status = %s", st)
+	}
+	ev.h.edit = writeFile("out.txt", "built\n")
+	if err := ev.e.Retry(ctx, id, "try again"); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, ev.e, id); st != fact.StatusBuilding {
+		t.Fatalf("status after retry = %s", st)
+	}
+	if err := ev.e.Run(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, ev.e, id); st != fact.StatusPROpen {
+		t.Fatalf("status after rerun = %s", st)
+	}
+	if err := ev.e.Retry(ctx, id, ""); !errors.Is(err, ErrNotAllowed) {
+		t.Fatalf("retry on pr_open = %v, want ErrNotAllowed", err)
+	}
+}
+
+func TestRetryResetsRequeueBudget(t *testing.T) {
+	ctx := context.Background()
+	ev := newEnv(t)
+	ev.p.MaxRequeues = 1
+	ev.scm.checks = []scm.Check{{Name: "ci", State: "failure"}}
+	id := ev.create(t)
+	for i := 0; i < 2; i++ {
+		if err := ev.e.Run(ctx, ev.p, id); err != nil {
+			t.Fatal(err)
+		}
+		if err := ev.e.Observe(ctx, ev.p, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st := status(t, ev.e, id); st != fact.StatusFailed {
+		t.Fatalf("status = %s, want failed (ci_retry_exhausted)", st)
+	}
+	if err := ev.e.Retry(ctx, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := ev.e.Observe(ctx, ev.p, id); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, ev.e, id); st != fact.StatusBuilding {
+		t.Fatalf("status = %s, want requeued after retry", st)
+	}
+}
+
+func TestFollowUpStartsFromParentBranch(t *testing.T) {
+	ctx := context.Background()
+	ev := newEnv(t)
+	parent := ev.create(t)
+	if err := ev.e.Run(ctx, ev.p, parent); err != nil {
+		t.Fatal(err)
+	}
+	ev.h.edit = writeFile("followup.txt", "more\n")
+	ev.scm.pr = nil
+	child, err := ev.e.FollowUp(ctx, ev.p, parent, "add followup.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, _ := ev.e.Facts.List(ctx, child)
+	c, _ := fact.Decode[fact.WOCreated](facts[0])
+	if c.ParentWO != parent || c.BaseBranch != "lf/"+parent {
+		t.Fatalf("created = %+v", c)
+	}
+	if err := ev.e.Run(ctx, ev.p, child); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, ev.e, child); st != fact.StatusPROpen {
+		t.Fatalf("child status = %s", st)
+	}
+	if ev.scm.pr == nil || ev.scm.pr.Head != "lf/"+child {
+		t.Fatalf("pr = %+v", ev.scm.pr)
+	}
+	out := sh(t, ev.p.RepoURL, "git", "ls-tree", "-r", "--name-only", "lf/"+child)
+	if !strings.Contains(out, "out.txt") || !strings.Contains(out, "followup.txt") {
+		t.Fatalf("child branch should carry the parent's out.txt and its own followup.txt, tree = %q", out)
+	}
+	if _, err := ev.e.FollowUp(ctx, ev.p, "wo-missing", "x"); err == nil {
+		t.Fatal("follow-up of unknown work order should fail")
+	}
+	queued := ev.create(t)
+	if _, err := ev.e.FollowUp(ctx, ev.p, queued, "x"); !errors.Is(err, ErrNotAllowed) {
+		t.Fatalf("follow-up of queued = %v, want ErrNotAllowed", err)
+	}
 }

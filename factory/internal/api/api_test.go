@@ -349,3 +349,62 @@ func TestRunGuardOnePerWorkOrder(t *testing.T) {
 	s.mu.Unlock()
 	c.mustCall("POST", "/work-orders/"+wo.ID+"/run", nil, http.StatusConflict)
 }
+
+func newWO(t *testing.T, c *client, s *Server) string {
+	t.Helper()
+	c.mustCall("POST", "/projects", map[string]any{"id": "p1", "repo_url": "file:///x", "repo": "o/r"}, http.StatusCreated)
+	var wo struct{ ID string }
+	json.Unmarshal(c.mustCall("POST", "/work-orders", map[string]string{"project": "p1", "objective": "x"}, http.StatusCreated), &wo)
+	return wo.ID
+}
+
+func TestRunNudgesRunnerWhenPresent(t *testing.T) {
+	c, s := newClient(t)
+	id := newWO(t, c, s)
+	s.Runner = &engine.Runner{Engine: s.Engine, Projects: s.LoadProject}
+	c.mustCall("POST", "/work-orders/"+id+"/run", nil, http.StatusAccepted)
+	c.mustCall("POST", "/work-orders/"+id+"/run", nil, http.StatusAccepted)
+	c.mustCall("POST", "/work-orders/wo-missing/run", nil, http.StatusNotFound)
+}
+
+func TestRetryOnlyWhenFailed(t *testing.T) {
+	ctx := context.Background()
+	c, s := newClient(t)
+	id := newWO(t, c, s)
+	c.mustCall("POST", "/work-orders/"+id+"/retry", nil, http.StatusConflict)
+	c.mustCall("POST", "/work-orders/wo-missing/retry", nil, http.StatusNotFound)
+	s.Engine.Facts.Append(ctx, id, fact.KindWOFailed, fact.WOFailed{Class: "provider", Message: "boom"})
+	c.mustCall("POST", "/work-orders/"+id+"/retry", map[string]string{"note": "credit topped up"}, http.StatusAccepted)
+
+	facts, _ := s.Engine.Facts.List(ctx, id)
+	last := facts[len(facts)-1]
+	r, _ := fact.Decode[fact.WORetried](last)
+	if last.Kind != fact.KindWORetried || r.By != "human" || r.Note != "credit topped up" {
+		t.Fatalf("last fact = %s %+v", last.Kind, r)
+	}
+	if st, _, _ := s.Engine.Status(ctx, id); st == fact.StatusFailed {
+		t.Fatalf("status still %s", st)
+	}
+	c.mustCall("POST", "/work-orders/"+id+"/retry", nil, http.StatusConflict)
+}
+
+func TestFollowUpCreatesChildOnPRBranch(t *testing.T) {
+	ctx := context.Background()
+	c, s := newClient(t)
+	id := newWO(t, c, s)
+	c.mustCall("POST", "/work-orders/"+id+"/follow-up", map[string]string{"objective": "more"}, http.StatusConflict)
+	s.Engine.Facts.Append(ctx, id, fact.KindPROpened, fact.PROpened{Number: 3, Branch: "lf/" + id, HeadSHA: "aaa"})
+	c.mustCall("POST", "/work-orders/"+id+"/follow-up", map[string]string{"objective": " "}, http.StatusBadRequest)
+	c.mustCall("POST", "/work-orders/wo-missing/follow-up", map[string]string{"objective": "more"}, http.StatusNotFound)
+
+	var child struct{ ID, Parent, Project, Status string }
+	json.Unmarshal(c.mustCall("POST", "/work-orders/"+id+"/follow-up", map[string]string{"objective": "address review"}, http.StatusCreated), &child)
+	if child.Parent != id || child.Project != "p1" || child.Status != string(fact.StatusQueued) {
+		t.Fatalf("child = %+v", child)
+	}
+	facts, _ := s.Engine.Facts.List(ctx, child.ID)
+	created, _ := fact.Decode[fact.WOCreated](facts[0])
+	if created.ParentWO != id || created.BaseBranch != "lf/"+id || created.Objective != "address review" {
+		t.Fatalf("created = %+v", created)
+	}
+}

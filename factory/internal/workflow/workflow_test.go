@@ -568,3 +568,24 @@ func TestEscalationWhileParkedKeepsGate(t *testing.T) {
 		t.Fatalf("gate = %q", st.Gate)
 	}
 }
+
+func TestRetriedUnfailsFromWhereFactsLeftOff(t *testing.T) {
+	fan := []PlanTask{pt("a", nil, "a/"), pt("b", nil, "b/")}
+	s := newSim(t)
+	s.building(fan...)
+	s.must(DispatchBuild([]string{"a"}))
+	s.emit(fact.KindTaskFailed, fact.TaskFailed{Task: "a", Class: "timeout"})
+	s.emit(fact.KindWOFailed, fact.WOFailed{Class: "task_failed"})
+	s.phase(PhaseFailed)
+	s.emit(fact.KindWORetried, fact.WORetried{By: "human"})
+	s.phase(PhaseBuilding)
+	if st := s.state(); st.FailureClass != "" {
+		t.Fatalf("failure class = %q", st.FailureClass)
+	} else if a, _ := st.Task("a"); a.Status != TaskPending {
+		t.Fatalf("task a = %s, want pending", a.Status)
+	}
+
+	s.emit(fact.KindWOCancelled, nil)
+	s.emit(fact.KindWORetried, fact.WORetried{By: "human"})
+	s.phase(PhaseCancelled)
+}

@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -202,4 +204,58 @@ func (r *Runner) exec(ctx context.Context, c candidate) error {
 		return r.Engine.Observe(ctx, p, c.id)
 	}
 	return r.Engine.Run(ctx, p, c.id)
+}
+
+// ErrNotAllowed is returned when a human action does not fit the work order's current status.
+var ErrNotAllowed = errors.New("action not allowed in the current status")
+
+// Retry un-fails a failed work order; it resumes from its recorded facts (lesson #8).
+func (e *Engine) Retry(ctx context.Context, woID, note string) error {
+	facts, err := e.Facts.List(ctx, woID)
+	if err != nil {
+		return err
+	}
+	if len(facts) == 0 {
+		return fmt.Errorf("unknown work order %s", woID)
+	}
+	if st := fact.Derive(facts); st != fact.StatusFailed {
+		return fmt.Errorf("%w: retry needs a failed work order, got %s", ErrNotAllowed, st)
+	}
+	_, err = e.Facts.AppendBatch(ctx, woID, facts[len(facts)-1].ID, []fact.NewFact{{Kind: fact.KindWORetried, Payload: fact.WORetried{By: "human", Note: note}}})
+	return err
+}
+
+// FollowUp creates a work order that continues from the parent's PR branch; a merged parent already lives on the default branch.
+func (e *Engine) FollowUp(ctx context.Context, p Project, parentWO, objective string) (string, error) {
+	facts, err := e.Facts.List(ctx, parentWO)
+	if err != nil {
+		return "", err
+	}
+	if len(facts) == 0 {
+		return "", fmt.Errorf("unknown work order %s", parentWO)
+	}
+	st := fact.Derive(facts)
+	switch st {
+	case fact.StatusFailed, fact.StatusMerged, fact.StatusCIGreen, fact.StatusPROpen:
+	default:
+		return "", fmt.Errorf("%w: follow-up needs a failed, merged, pr_open or ci_green work order, got %s", ErrNotAllowed, st)
+	}
+	parent, err := fact.Decode[fact.WOCreated](facts[0])
+	if err != nil {
+		return "", err
+	}
+	base := ""
+	if st != fact.StatusMerged {
+		for _, f := range facts {
+			if f.Kind == fact.KindPROpened {
+				if o, err := fact.Decode[fact.PROpened](f); err == nil {
+					base = o.Branch
+				}
+			}
+		}
+	}
+	id := newID("wo-")
+	_, err = e.Facts.Append(ctx, id, fact.KindWOCreated, fact.WOCreated{Project: p.ID, Objective: objective, LevelCap: parent.LevelCap,
+		Line: e.lineConfigured(ctx, p), ParentWO: parentWO, BaseBranch: base})
+	return id, err
 }
