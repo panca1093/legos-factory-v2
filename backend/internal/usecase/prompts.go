@@ -10,11 +10,15 @@ import (
 // Prompts request schema-validated JSON. Structured outputs are parsed and
 // validated before any state transition; free text never drives control flow.
 
-func planPrompt(wo *model.WorkOrder, notes string) string {
-	extra := ""
-	if wo.ClarifAnswer != "" {
-		extra += fmt.Sprintf("\nA human answered a clarification:\nQ: %s\nA: %s\n", wo.ClarifQuestion, wo.ClarifAnswer)
+func clarification(wo *model.WorkOrder) string {
+	if wo.ClarifAnswer == "" {
+		return ""
 	}
+	return fmt.Sprintf("\nA human answered a clarification:\nQ: %s\nA: %s\n", wo.ClarifQuestion, wo.ClarifAnswer)
+}
+
+func planPrompt(wo *model.WorkOrder, notes string) string {
+	extra := clarification(wo)
 	if notes != "" {
 		extra += fmt.Sprintf("\nRevise the previous draft according to: %s\n", notes)
 	}
@@ -51,7 +55,7 @@ Objective:
 %s
 Acceptance criteria:
 %s
-
+%s
 Plan:
 %s
 Check requirement completeness, task dependencies, scope and assumptions, edge cases,
@@ -62,7 +66,7 @@ Respond with ONLY a JSON object:
  "question_text":"<required for CLARIFY: the single question a human must answer>"}
 
 Use CLARIFY when the plan depends on a product decision nobody has made — never guess it.`,
-		wo.Title, wo.Objective, wo.Acceptance, taskList(tasks))
+		wo.Title, wo.Objective, wo.Acceptance, clarification(wo), taskList(tasks))
 }
 
 func implementPrompt(wo *model.WorkOrder, job model.Job) string {
@@ -75,10 +79,10 @@ Objective: %s
 
 Acceptance criteria:
 %s
-
+%s
 Implement the change and any behavioral tests needed to satisfy the criteria.
 Work only within the assigned workspace. When done, reply with one line describing what changed.`,
-			wo.Title, reason, wo.Objective, wo.Acceptance)
+			wo.Title, reason, wo.Objective, wo.Acceptance, clarification(wo))
 	}
 	return fmt.Sprintf(`You are the Builder. Implement task %q of work order %q.
 
@@ -86,8 +90,8 @@ Objective: %s
 
 Acceptance criteria:
 %s
-
-Work only within the assigned workspace. When done, reply with one line describing what changed.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance)
+%s
+Work only within the assigned workspace. When done, reply with one line describing what changed.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo))
 }
 
 func inspectPrompt(wo *model.WorkOrder, pick SpecialistPick, files []string) string {
@@ -108,7 +112,7 @@ Objective:
 
 Acceptance criteria:
 %s
-
+%s
 Changed files:
 %s
 
@@ -116,5 +120,5 @@ Respond with ONLY:
 {"findings":[{"severity":"blocker"|"major"|"minor"|"info","title":"...","detail":"...","location":"file:line"}]}
 
 Report only findings within your focus that are supported by evidence in the workspace. If there are none, report an empty findings list.`,
-		pick.Specialty, wo.Title, pick.Reason, specialtyFocus[pick.Specialty], wo.Objective, wo.Acceptance, changed)
+		pick.Specialty, wo.Title, pick.Reason, specialtyFocus[pick.Specialty], wo.Objective, wo.Acceptance, clarification(wo), changed)
 }
