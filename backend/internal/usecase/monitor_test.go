@@ -89,7 +89,7 @@ func TestRunAgentReportsStepsAndStall(t *testing.T) {
 		idle: 200 * time.Millisecond,
 	}
 	f, wo, wos := monitorForeman(t, h)
-	_, runID, err := f.runAgent(context.Background(), wo, model.AgentArchitect, "p", "m", "prompt", nil, "")
+	_, runID, err := f.runAgent(context.Background(), wo, model.AgentArchitect, "p", "m", "prompt", nil, "", runOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestRunAgentReportsStepsAndStall(t *testing.T) {
 func TestRunAgentFailureEndsTheRun(t *testing.T) {
 	h := &steppingHarness{err: errors.New("opencode execution timed out")}
 	f, wo, wos := monitorForeman(t, h)
-	if _, _, err := f.runAgent(context.Background(), wo, model.AgentForeman, "p", "m", "prompt", nil, ""); err == nil {
+	if _, _, err := f.runAgent(context.Background(), wo, model.AgentForeman, "p", "m", "prompt", nil, "", runOpts{}); err == nil {
 		t.Fatal("expected the harness error")
 	}
 	evs := agentEvents(t, wos)

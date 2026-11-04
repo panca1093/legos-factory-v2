@@ -38,6 +38,15 @@ func (dirSandbox) ChangedFiles(_ context.Context, dir string) ([]string, error) 
 	return files, nil
 }
 
+func (dirSandbox) TaskWorktree(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+func (dirSandbox) MergeTask(context.Context, string, string, string) (bool, error) { return false, nil }
+func (dirSandbox) SyncTask(context.Context, string, string) ([]string, error)      { return nil, nil }
+func (dirSandbox) RemoveTaskWorktree(context.Context, string, string, string) error {
+	return nil
+}
+
 // writingHarness writes content to file in the workspace, or nothing when file is empty.
 type writingHarness struct{ file, content string }
 

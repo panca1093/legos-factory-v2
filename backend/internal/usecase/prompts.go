@@ -94,6 +94,20 @@ Acceptance criteria:
 Work only within the assigned workspace. When done, reply with one line describing what changed.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo))
 }
 
+func resolvePrompt(wo *model.WorkOrder, job model.Job, files []string) string {
+	return fmt.Sprintf(`You are the Builder. Your task %q of work order %q was implemented, but other tasks were merged
+into the work order first. Their changes are now merged into your working copy and conflict in:
+%s
+
+Resolve every conflict so both your task and the merged work are kept, remove all conflict markers,
+and make sure the project still builds and its tests pass.
+
+Objective: %s
+%s
+Work only within the assigned workspace. When done, reply with one line describing the resolution.`,
+		job.TaskID, wo.Title, strings.Join(files, "\n"), wo.Objective, clarification(wo))
+}
+
 func inspectPrompt(wo *model.WorkOrder, pick SpecialistPick, files []string) string {
 	changed := "(no file list available)"
 	if len(files) > 0 {

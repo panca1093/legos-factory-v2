@@ -24,8 +24,11 @@ type Check struct {
 // Profile defines the deterministic verification commands for a project.
 type Profile struct {
 	Language string  `json:"language"`
+	Setup    string  `json:"setup,omitempty"` // installs dependencies in a fresh checkout before checks or a builder run
 	Checks   []Check `json:"checks"`
 }
+
+const npmSetup = "npm ci --no-audit --no-fund"
 
 // Preset returns the built-in profile for a language. Repositories refine
 // these during onboarding; the preset is a safe default, not a framework.
@@ -37,7 +40,7 @@ func Preset(language string) Profile {
 			{Name: "go-vet", Command: "go vet ./..."},
 		}}
 	case "typescript":
-		return Profile{Language: language, Checks: []Check{
+		return Profile{Language: language, Setup: npmSetup, Checks: []Check{
 			{Name: "typecheck", Command: "npm run -s typecheck"},
 			{Name: "test", Command: "npm test -- --run"},
 		}}
@@ -47,7 +50,7 @@ func Preset(language string) Profile {
 			{Name: "cargo-test", Command: "cargo test"},
 		}}
 	case "node":
-		return Profile{Language: language, Checks: []Check{
+		return Profile{Language: language, Setup: npmSetup, Checks: []Check{
 			{Name: "test", Command: "npm test -- --run"},
 		}}
 	default:

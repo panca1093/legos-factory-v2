@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -46,6 +47,7 @@ type Foreman struct {
 	Integrations *Integrations
 	Sandbox      Sandbox
 	DataDir      string
+	wsMu         sync.Mutex // serializes writes to work order workspaces: task merges, dependency setup
 	QualTimeout  time.Duration
 	StallAfter   time.Duration // no new agent step for this long reports a stall; 0 = defaultStallAfter
 	Log          *slog.Logger
@@ -99,7 +101,14 @@ func (f *Foreman) ResumeOnStart(ctx context.Context) error {
 // runAgent creates a run row, invokes the harness and records usage. A
 // conservative budget reservation is taken before execution so parallel
 // runs cannot over-commit the remaining budget.
-func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID, prompt string, extra map[string]string, taskID string) (model.AgentResult, string, error) {
+// runOpts.Dir overrides the work order workspace; with Hold the run stays
+// running on success so the caller completes it once its work is integrated.
+type runOpts struct {
+	Dir  string
+	Hold bool
+}
+
+func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID, prompt string, extra map[string]string, taskID string, opts runOpts) (model.AgentResult, string, error) {
 	if f.Usage != nil {
 		release, ok := f.Usage.Reserve(50_000) // conservative estimate per agent run
 		if !ok {
@@ -117,9 +126,13 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	for k, v := range extra {
 		cctx[k] = v
 	}
+	dir := opts.Dir
+	if dir == "" {
+		dir = f.workspaceDir(wo.ID)
+	}
 	req := model.AgentRequest{
 		Role: role, Prompt: prompt, ProviderID: provider, ModelID: modelID,
-		WorkspaceDir: f.workspaceDir(wo.ID), Context: cctx,
+		WorkspaceDir: dir, Context: cctx,
 	}
 	h := f.Resolve(role, wo)
 	runID := fmt.Sprintf("run_%d", time.Now().UnixNano())
@@ -150,8 +163,10 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 		f.failRun(ctx, wo.ID, role, runID, err)
 		return model.AgentResult{}, runID, err
 	}
-	if err := f.Runs.Complete(ctx, runID, res); err != nil {
-		return model.AgentResult{}, runID, err
+	if !opts.Hold {
+		if err := f.Runs.Complete(ctx, runID, res); err != nil {
+			return model.AgentResult{}, runID, err
+		}
 	}
 	if f.Usage != nil {
 		_ = f.Usage.Record(ctx, model.UsageRecord{
@@ -279,7 +294,7 @@ func (f *Foreman) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Ch
 // malformed answer never drives a transition.
 func (f *Foreman) runStructured(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, prompt string, extra map[string]string, taskID string, v reply) (model.AgentResult, string, error) {
 	provider, modelID := f.Model(role, wo)
-	res, runID, err := f.runAgent(ctx, wo, role, provider, modelID, prompt, extra, taskID)
+	res, runID, err := f.runAgent(ctx, wo, role, provider, modelID, prompt, extra, taskID, runOpts{})
 	if err != nil {
 		return res, runID, err
 	}
@@ -289,7 +304,7 @@ func (f *Foreman) runStructured(ctx context.Context, wo *model.WorkOrder, role m
 	}
 	f.event(wo.ID, string(role), "agent_reply_invalid", fmt.Sprintf("%s reply rejected: %v; asking once more", role, derr), nil)
 	retry := prompt + "\n\nYour previous reply was rejected: " + derr.Error() + "\nReply again with ONLY the JSON object."
-	res, runID, err = f.runAgent(ctx, wo, role, provider, modelID, retry, extra, taskID)
+	res, runID, err = f.runAgent(ctx, wo, role, provider, modelID, retry, extra, taskID, runOpts{})
 	if err != nil {
 		return res, runID, err
 	}

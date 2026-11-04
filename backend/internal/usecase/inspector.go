@@ -26,6 +26,9 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 	}
 	f.event(wo.ID, "inspector", "verification_started",
 		fmt.Sprintf("Running %d deterministic checks (revision %d)", len(profile.Checks), wo.Revision), nil)
+	f.wsMu.Lock()
+	f.runSetup(ctx, wo, profile, f.workspaceDir(wo.ID), "inspector")
+	f.wsMu.Unlock()
 	failed := ""
 	var results strings.Builder
 	for _, c := range profile.Checks {

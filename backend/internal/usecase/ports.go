@@ -75,6 +75,10 @@ type Sandbox interface {
 	Commit(ctx context.Context, dir, message string) (string, error)
 	PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (base string, err error)
 	ChangedFiles(ctx context.Context, dir string) ([]string, error)
+	TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (ok bool, err error)
+	MergeTask(ctx context.Context, woDir, branch, message string) (conflict bool, err error)
+	SyncTask(ctx context.Context, woDir, taskDir string) (conflicted []string, err error)
+	RemoveTaskWorktree(ctx context.Context, woDir, taskDir, branch string) error
 }
 
 type ConnectionStore interface {
