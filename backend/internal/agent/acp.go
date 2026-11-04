@@ -1,7 +1,8 @@
 package agent
 
-// ACPHarness drives an Agent Client Protocol agent (e.g. `opencode acp`) over
-// stdio JSON-RPC, one subprocess per run. Verified against OpenCode 2.1.3:
+// ACPHarness drives an Agent Client Protocol agent (e.g. `opencode acp`,
+// `claude-agent-acp`) over stdio JSON-RPC, one subprocess per run. Verified
+// against OpenCode 2.1.3 and claude-agent-acp 0.100.0:
 //
 //	initialize → session/new {cwd} → session/set_config_option (category model)
 //	→ session/prompt; session/update streams tool calls, text and usage;
@@ -26,18 +27,35 @@ import (
 )
 
 type ACPHarness struct {
-	Command []string // agent command, e.g. ["opencode", "acp"]
-	Env     []string // extra environment for the agent process
-	probe   string   // directory for model discovery sessions
-	mu      sync.Mutex
-	runs    map[string]*acpRun
+	Command  []string // agent command, e.g. ["opencode", "acp"]
+	Env      []string // extra environment for the agent process
+	Provider string   // provider for model values the agent lists without one, e.g. claude's "opus"
+	probe    string   // directory for model discovery sessions
+	mu       sync.Mutex
+	runs     map[string]*acpRun
 }
 
 func NewACPHarness(command []string, probeDir string) *ACPHarness {
-	return &ACPHarness{Command: command, probe: probeDir, runs: map[string]*acpRun{}}
+	return &ACPHarness{Command: command, Provider: agentProvider(command), probe: probeDir, runs: map[string]*acpRun{}}
 }
 
-func (h *ACPHarness) Name() string { return "opencode-acp" }
+func agentProvider(command []string) string {
+	if len(command) == 0 {
+		return "acp"
+	}
+	base := filepath.Base(command[0])
+	if strings.HasPrefix(base, "claude") {
+		return "claude"
+	}
+	return base
+}
+
+func (h *ACPHarness) Name() string {
+	if h.Provider == "claude" {
+		return "claude-acp"
+	}
+	return "opencode-acp"
+}
 
 // readOnly roles review and plan; they never change the workspace.
 var acpReadOnlyDeny = []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute"}
@@ -76,7 +94,7 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 		return nil, err
 	}
 	if req.ProviderID != "" || req.ModelID != "" {
-		if err := conn.setModel(ctx, ns, req.ProviderID+"/"+req.ModelID); err != nil {
+		if err := conn.setModel(ctx, ns, req.ProviderID+"/"+req.ModelID, h.Provider); err != nil {
 			conn.close()
 			return nil, err
 		}
@@ -144,7 +162,7 @@ func (h *ACPHarness) Models(ctx context.Context) ([]Model, error) {
 	out := []Model{}
 	if opt := ns.modelOption(); opt != nil {
 		for _, o := range opt.Options {
-			provider, id, _ := strings.Cut(o.Value, "/")
+			provider, id, _ := strings.Cut(qualify(o.Value, h.Provider), "/")
 			out = append(out, Model{ProviderID: provider, ModelID: id, Name: o.Name})
 		}
 	}
@@ -317,18 +335,26 @@ func (c *acpConn) newSession(ctx context.Context, cwd string) (acpNewSession, er
 
 // setModel selects ref through the agent's model option. An unknown model is
 // permanent: retrying cannot help until a provider is logged in or settings change.
-func (c *acpConn) setModel(ctx context.Context, ns acpNewSession, ref string) error {
+func (c *acpConn) setModel(ctx context.Context, ns acpNewSession, ref, provider string) error {
 	opt := ns.modelOption()
 	if opt == nil {
 		return fmt.Errorf("%w: agent offers no model selection", model.ErrPermanent)
 	}
 	for _, o := range opt.Options {
-		if o.Value == ref {
-			_, err := c.call(ctx, "session/set_config_option", map[string]any{"sessionId": ns.SessionID, "configId": opt.ID, "value": ref})
+		if qualify(o.Value, provider) == ref {
+			_, err := c.call(ctx, "session/set_config_option", map[string]any{"sessionId": ns.SessionID, "configId": opt.ID, "value": o.Value})
 			return err
 		}
 	}
-	return fmt.Errorf("%w: model %s is not available to the agent; log in to its provider (opencode auth login) or pick another model in settings", model.ErrPermanent, ref)
+	return fmt.Errorf("%w: model %s is not available to the agent; log in to its provider (e.g. opencode auth login, claude login) or pick another model in settings", model.ErrPermanent, ref)
+}
+
+// qualify gives a model value the agent lists without a provider its harness provider.
+func qualify(value, provider string) string {
+	if strings.Contains(value, "/") {
+		return value
+	}
+	return provider + "/" + value
 }
 
 func (c *acpConn) call(ctx context.Context, method string, params any) (json.RawMessage, error) {

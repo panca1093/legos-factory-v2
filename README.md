@@ -45,6 +45,18 @@ Environment (all optional):
 
 Settings → Integrations stores tokens encrypted at rest; they are never returned by the API. A connection is *unverified* until **Test** succeeds against the provider. Shared connections (admins) can be bound to a project together with its `owner/repo` slug; the project's repository URL must then be the clone URL. When a human approves a work order in a bound project, its verified commit is pushed to `legos-factory/<work-order>` and a pull request is found-or-created — nothing is merged. Jira connections are read-only and prefill new work orders. The clients are covered by contract tests against fake provider APIs; they have not been exercised against real accounts in this repository.
 
+### Using Claude Code on the host
+
+Run the factory directly on your machine (not in Docker) and agents use your own Claude Code login, no credentials stored in the factory:
+
+```sh
+npm install -g @agentclientprotocol/claude-agent-acp
+cd backend
+FACTORY_HARNESS=acp FACTORY_ACP_COMMAND=claude-agent-acp go run ./cmd/factory
+```
+
+Models appear as `claude/opus`, `claude/sonnet`, … Set `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) to use a token instead of the local login. Agents run with no isolation beyond the per-role permission answers, and they load your global Claude Code settings, plugins and `CLAUDE.md`.
+
 ### Using the real OpenCode harness
 
 ```sh

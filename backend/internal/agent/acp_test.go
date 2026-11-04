@@ -54,6 +54,7 @@ func fakeAgent(scenario string) {
 				map[string]any{"id": "model", "category": "model", "currentValue": "opencode/free-a", "options": []any{
 					map[string]any{"value": "opencode/free-a", "name": "opencode/Free A"},
 					map[string]any{"value": "opencode-go/kimi", "name": "opencode-go/Kimi"},
+					map[string]any{"value": "sonnet", "name": "Sonnet"},
 				}},
 			}})
 		case "session/set_config_option":
@@ -184,7 +185,7 @@ func TestACPRoleConfig(t *testing.T) {
 
 func TestACPUnknownModelFailsBeforePrompt(t *testing.T) {
 	_, err := runFake(t, fakeHarness(t, "ok"), model.AgentRequest{Role: model.AgentBuilder, ProviderID: "anthropic", ModelID: "claude", Prompt: "go"})
-	if err == nil || !errors.Is(err, model.ErrPermanent) || !strings.Contains(err.Error(), "anthropic/claude") || !strings.Contains(err.Error(), "opencode auth login") {
+	if err == nil || !errors.Is(err, model.ErrPermanent) || !strings.Contains(err.Error(), "anthropic/claude") || !strings.Contains(err.Error(), "log in to its provider") {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -257,7 +258,35 @@ func TestACPModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(models) != 2 || models[1].ProviderID != "opencode-go" || models[1].ModelID != "kimi" || models[1].Name != "opencode-go/Kimi" {
+	if len(models) != 3 || models[1].ProviderID != "opencode-go" || models[1].ModelID != "kimi" || models[1].Name != "opencode-go/Kimi" {
 		t.Fatalf("models = %+v", models)
+	}
+}
+
+func TestACPUnqualifiedModelsUseHarnessProvider(t *testing.T) {
+	h := fakeHarness(t, "ok")
+	h.Provider = "claude"
+	models, err := h.Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := models[2]; m.ProviderID != "claude" || m.ModelID != "sonnet" {
+		t.Fatalf("models = %+v", models)
+	}
+	res, err := runFake(t, h, model.AgentRequest{Role: model.AgentBuilder, ProviderID: "claude", ModelID: "sonnet", Prompt: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Text, `"model":"model=sonnet"`) {
+		t.Fatalf("text = %s", res.Text)
+	}
+}
+
+func TestACPHarnessName(t *testing.T) {
+	if n := NewACPHarness([]string{"/opt/homebrew/bin/claude-agent-acp"}, "").Name(); n != "claude-acp" {
+		t.Fatalf("name = %s", n)
+	}
+	if n := NewACPHarness([]string{"opencode", "acp"}, "").Name(); n != "opencode-acp" {
+		t.Fatalf("name = %s", n)
 	}
 }
