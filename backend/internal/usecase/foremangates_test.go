@@ -289,3 +289,52 @@ func TestInterruptedPlanRevisionIsFinishedOnRetry(t *testing.T) {
 		t.Fatalf("enqueued %v review %q", r.q.enqueued, r.reload(t).PlanReview)
 	}
 }
+
+func TestFailedPlanRevisionStepDoesNotCountTwice(t *testing.T) {
+	r := reviewRig(t, &fakeJudge{over: map[string]float64{"scope_creep": 0.9}})
+	r.f.WO = &failStateStore{WorkOrderStore: r.f.WO, fail: true}
+	if err := r.f.handleReview(context.Background(), model.Job{WOID: r.wo.ID}); err == nil {
+		t.Fatal("the failed write must fail the job")
+	}
+	if wo := r.reload(t); wo.State != model.StateArchitectReview || wo.PlanRevisions != 0 {
+		t.Fatalf("nothing half-applied: %s revisions %d", wo.State, wo.PlanRevisions)
+	}
+	if wo := r.review(t); wo.State != model.StatePlanning || wo.PlanRevisions != 1 {
+		t.Fatalf("state %s revisions %d", wo.State, wo.PlanRevisions)
+	}
+}
+
+type failOnceQueue struct {
+	*fakeQueue
+	fail bool
+}
+
+func (q *failOnceQueue) Enqueue(ctx context.Context, kind, woID, taskID string, payload map[string]any) (string, error) {
+	if q.fail {
+		q.fail = false
+		return "", errors.New("queue down")
+	}
+	return q.fakeQueue.Enqueue(ctx, kind, woID, taskID, payload)
+}
+
+func TestLostPlanEnqueueAfterARevisionIsRecoveredOnRetry(t *testing.T) {
+	r := reviewRig(t, &fakeJudge{over: map[string]float64{"scope_creep": 0.9}})
+	r.f.Sched = &failOnceQueue{fakeQueue: r.q, fail: true}
+	before := len(r.q.enqueued)
+	if err := r.f.handleReview(context.Background(), model.Job{WOID: r.wo.ID}); err == nil {
+		t.Fatal("the lost enqueue must fail the job")
+	}
+	if wo := r.reload(t); wo.State != model.StatePlanning || wo.PlanReview != "" || wo.PlanRevisions != 1 {
+		t.Fatalf("state %s review %q revisions %d", wo.State, wo.PlanReview, wo.PlanRevisions)
+	}
+	if err := r.f.handleReview(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.q.enqueued) != before+1 || r.q.enqueued[before] != "plan:" {
+		t.Fatalf("the retry must re-queue the Architect: %v", r.q.enqueued)
+	}
+	r.q.active = true
+	if err := r.f.handleReview(context.Background(), model.Job{WOID: r.wo.ID}); err != nil || len(r.q.enqueued) != before+1 {
+		t.Fatalf("no duplicate while a plan job is active: %v %v", err, r.q.enqueued)
+	}
+}
