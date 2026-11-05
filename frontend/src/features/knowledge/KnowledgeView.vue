@@ -1,72 +1,73 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { BookOpen, GitBranch, Search } from "lucide-vue-next";
-import AppDialog from "../../components/ui/AppDialog.vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
+import { useRouter } from "vue-router";
+import { BookOpen, Layers } from "lucide-vue-next";
+import SearchField from "../../components/ui/SearchField.vue";
+import { useToast } from "../../composables/useToast";
 import { api } from "../../services/api/client";
 import { useFactory } from "../../stores/factory";
-import { useSession } from "../../stores/session";
 import type { KBDoc, KBDocDetail } from "../../types/api";
+import DiscussPanel from "./DiscussPanel.vue";
+import NoteReader from "./NoteReader.vue";
+import {
+  highlight,
+  inNotebook,
+  NB_ALL,
+  NB_DRAFTS,
+  notebooksOf,
+  snippet,
+  when,
+} from "./notes";
+import "./knowledge.css";
 
 const factory = useFactory();
-const session = useSession();
+const router = useRouter();
+const { toast } = useToast();
 
-const projectId = ref(""),
-  source = ref(""),
-  type = ref(""),
-  status = ref("stable"),
-  text = ref("");
 const docs = ref<KBDoc[]>([]),
-  draftCount = ref(0),
   loading = ref(true),
   error = ref("");
-
-const detail = ref<KBDocDetail | null>(null),
-  detailError = ref(""),
-  busy = ref(false),
-  editing = ref(false),
-  bodyDraft = ref(""),
-  fmDraft = ref(""),
-  note = ref(""),
-  confirming = ref<"" | "discard" | "reset">("");
+const q = ref(""),
+  nb = ref(NB_ALL),
+  openId = ref(""),
+  discuss = ref(false),
+  quote = ref(""),
+  mobile = ref<"list" | "read" | "talk">("list"),
+  pending = ref(new Set<string>());
 
 const idQuery = (id: string) => `id=${encodeURIComponent(id)}`;
 const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const projectName = (id?: string) =>
+  !id
+    ? "Factory-wide"
+    : (factory.projects.find((p) => p.id === id)?.name ?? id);
+const ts = (d: KBDoc) =>
+  typeof d.indexed_at === "number" ? d.indexed_at : Date.parse(d.indexed_at);
 
-const types = computed(() =>
-  [...new Set([...docs.value.map((d) => d.type), type.value])].filter(Boolean),
+const visible = computed(() =>
+  docs.value.filter((d) => !pending.value.has(d.id)),
 );
-const canEdit = computed(() => !!detail.value?.editable && session.canWrite);
-const isDraft = computed(() => detail.value?.doc.status === "draft");
-const isRepo = computed(() => detail.value?.doc.source === "repo");
+const notebooks = computed(() => notebooksOf(visible.value, projectName));
+const list = computed(() =>
+  visible.value
+    .filter((d) => inNotebook(d, nb.value))
+    .sort((a, b) => ts(b) - ts(a)),
+);
+const openDoc = computed(() => list.value.find((d) => d.id === openId.value));
 
-function listQuery(extra: Record<string, string>) {
-  const q = new URLSearchParams();
-  if (projectId.value) q.set("project_id", projectId.value);
-  for (const [k, v] of Object.entries(extra)) q.set(k, v);
-  return `/api/v1/kb/docs?${q}`;
-}
-
-async function refreshDraftCount() {
-  try {
-    const res = await api.get<{ docs: KBDoc[] }>(
-      listQuery({ source: "factory", status: "draft" }),
-    );
-    draftCount.value = (res.docs ?? []).length;
-  } catch {
-    draftCount.value = 0;
-  }
-}
-
-async function search() {
-  loading.value = true;
+async function load() {
   error.value = "";
-  const extra: Record<string, string> = {};
-  if (source.value) extra.source = source.value;
-  if (type.value.trim()) extra.type = type.value.trim();
-  if (status.value) extra.status = status.value;
-  if (text.value.trim()) extra.q = text.value.trim();
+  const p = new URLSearchParams({ status: "all" });
+  if (q.value.trim()) p.set("q", q.value.trim());
   try {
-    const res = await api.get<{ docs: KBDoc[] }>(listQuery(extra));
+    const res = await api.get<{ docs: KBDoc[] }>(`/api/v1/kb/docs?${p}`);
     docs.value = res.docs ?? [];
   } catch (e) {
     docs.value = [];
@@ -76,455 +77,201 @@ async function search() {
   }
 }
 
-function showDrafts() {
-  status.value = "draft";
-  source.value = "factory";
-  return search();
-}
-
-async function refreshAll() {
-  await Promise.all([search(), refreshDraftCount()]);
-}
+let debounce: ReturnType<typeof setTimeout> | undefined;
+watch(q, () => {
+  clearTimeout(debounce);
+  debounce = setTimeout(load, 250);
+});
+watch(
+  [list, nb],
+  () => {
+    if (!list.value.some((d) => d.id === openId.value))
+      openId.value = list.value[0]?.id ?? "";
+  },
+  { flush: "sync" },
+);
+watch(openId, () => (quote.value = ""));
 
 onMounted(async () => {
+  document.addEventListener("keydown", onKey);
   await Promise.allSettled([factory.refreshProjects()]);
-  await refreshAll();
+  await load();
+});
+onBeforeUnmount(() => {
+  clearTimeout(debounce);
+  document.removeEventListener("keydown", onKey);
 });
 
-function projectName(id?: string) {
-  if (!id) return "Factory-wide";
-  return factory.projects.find((p) => p.id === id)?.name ?? id;
+function select(id: string) {
+  openId.value = id;
+  mobile.value = "read";
 }
-
-function resetEdit() {
-  editing.value = false;
-  confirming.value = "";
-  note.value = "";
-  detailError.value = "";
+function move(dir: 1 | -1) {
+  const i = list.value.findIndex((d) => d.id === openId.value);
+  const next =
+    list.value[Math.max(0, Math.min(list.value.length - 1, i + dir))];
+  if (!next) return;
+  openId.value = next.id;
+  nextTick(() =>
+    document
+      .querySelector(".nb-item.on")
+      ?.scrollIntoView?.({ block: "nearest" }),
+  );
 }
-
-async function open(id: string) {
-  resetEdit();
-  busy.value = true;
-  try {
-    detail.value = await api.get<KBDocDetail>(`/api/v1/kb/doc?${idQuery(id)}`);
-  } catch (e) {
-    detail.value = null;
-    error.value = errMsg(e);
-  } finally {
-    busy.value = false;
-  }
-}
-
-function close() {
-  detail.value = null;
-  resetEdit();
-}
-
-function startEdit() {
-  if (!detail.value) return;
-  bodyDraft.value = detail.value.body;
-  fmDraft.value = JSON.stringify(detail.value.frontmatter ?? {}, null, 2);
-  detailError.value = "";
-  editing.value = true;
-}
-
-async function act(fn: () => Promise<void>) {
-  busy.value = true;
-  detailError.value = "";
-  try {
-    await fn();
-  } catch (e) {
-    detailError.value = errMsg(e);
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function save() {
-  if (!detail.value) return;
-  let frontmatter: unknown;
-  try {
-    frontmatter = JSON.parse(fmDraft.value);
-  } catch (e) {
-    detailError.value = `Frontmatter is not valid JSON: ${errMsg(e)}`;
-    return;
-  }
+function onKey(e: KeyboardEvent) {
+  const t = e.target as HTMLElement | null;
   if (
-    typeof frontmatter !== "object" ||
-    frontmatter === null ||
-    Array.isArray(frontmatter)
-  ) {
-    detailError.value = "Frontmatter must be a JSON object.";
+    e.metaKey ||
+    e.ctrlKey ||
+    e.altKey ||
+    t?.closest("input, textarea, select, [contenteditable], dialog")
+  )
     return;
-  }
-  const id = detail.value.doc.id;
-  await act(async () => {
-    await api.put(`/api/v1/kb/doc?${idQuery(id)}`, {
-      frontmatter,
-      body: bodyDraft.value,
-    });
-    editing.value = false;
-    detail.value = await api.get<KBDocDetail>(`/api/v1/kb/doc?${idQuery(id)}`);
-    await refreshAll();
-  });
+  if (e.key === "j") move(1);
+  else if (e.key === "k") move(-1);
 }
 
-async function approve() {
-  if (!detail.value) return;
-  const id = detail.value.doc.id;
-  const n = note.value.trim();
-  await act(async () => {
-    await api.post(
-      `/api/v1/kb/doc/approve?${idQuery(id)}`,
-      n ? { note: n } : {},
-    );
-    close();
-    await refreshAll();
-  });
+function toggleDiscuss(text?: string) {
+  if (text) {
+    quote.value = text;
+    discuss.value = true;
+  } else discuss.value = !discuss.value;
+  mobile.value = discuss.value ? "talk" : "read";
+}
+function closeDiscuss() {
+  discuss.value = false;
+  mobile.value = "read";
 }
 
-async function discard() {
-  if (!detail.value) return;
-  const id = detail.value.doc.id;
-  await act(async () => {
-    await api.post(`/api/v1/kb/doc/discard?${idQuery(id)}`);
-    close();
-    await refreshAll();
-  });
+function afterReview() {
+  mobile.value = "list";
+  return load();
 }
 
-async function reset() {
-  if (!detail.value) return;
-  const id = detail.value.doc.id;
-  await act(async () => {
-    await api.post(`/api/v1/kb/doc/reset?${idQuery(id)}`);
-    confirming.value = "";
-    detail.value = await api.get<KBDocDetail>(`/api/v1/kb/doc?${idQuery(id)}`);
-    await refreshAll();
-  });
-}
-
-type Block = { kind: "h" | "p" | "code"; text: string };
-function renderBlocks(body: string): Block[] {
-  const out: Block[] = [];
-  let para: string[] = [];
-  let code: string[] | null = null;
-  const flush = () => {
-    if (para.length) out.push({ kind: "p", text: para.join("\n") });
-    para = [];
+function remove(detail: KBDocDetail) {
+  const { id, title } = detail.doc;
+  const i = list.value.findIndex((d) => d.id === id);
+  openId.value = (list.value[i + 1] ?? list.value[i - 1])?.id ?? "";
+  pending.value = new Set(pending.value).add(id);
+  mobile.value = "list";
+  const restore = () => {
+    const s = new Set(pending.value);
+    s.delete(id);
+    pending.value = s;
   };
-  for (const line of body.split("\n")) {
-    if (line.trimStart().startsWith("```")) {
-      if (code) {
-        out.push({ kind: "code", text: code.join("\n") });
-        code = null;
-      } else {
-        flush();
-        code = [];
+  toast(
+    `Deleted “${title}”`,
+    () => {
+      restore();
+      openId.value = id;
+    },
+    async () => {
+      try {
+        await api.del(`/api/v1/kb/doc?${idQuery(id)}`);
+        await load();
+        restore();
+      } catch (e) {
+        restore();
+        toast(`Could not delete “${title}”: ${errMsg(e)}`);
+        await load();
       }
-      continue;
-    }
-    if (code) {
-      code.push(line);
-      continue;
-    }
-    const h = /^#{1,6}\s+(.*)$/.exec(line);
-    if (h) {
-      flush();
-      out.push({ kind: "h", text: h[1] });
-    } else if (!line.trim()) flush();
-    else para.push(line);
-  }
-  if (code) out.push({ kind: "code", text: code.join("\n") });
-  flush();
-  return out;
+    },
+  );
 }
-const blocks = computed(() =>
-  detail.value ? renderBlocks(detail.value.body) : [],
-);
 
-const fmt = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
-const trustPill = { human: "purple", machine: "orange", unverified: "" };
-const statusPill = { stable: "green", draft: "orange", deprecated: "" };
-const shortSha = (sha?: string) => (sha ? sha.slice(0, 10) : "unversioned");
+const toChats = (id: string) => router.push(`/chats/${id}`);
 </script>
 <template>
-  <div>
-    <section class="section-head">
-      <div>
-        <span class="pill purple">Knowledge</span>
-        <h1>Documents the factory reads.</h1>
-        <p class="help">
-          Repository documents and factory playbooks, journals and drafts,
-          indexed for the agents that plan, build and review.
-        </p>
-      </div>
-      <button
-        class="btn"
-        type="button"
-        data-test="drafts-shortcut"
-        @click="showDrafts"
-      >
-        Drafts to review ({{ draftCount }})
-      </button>
-    </section>
-
-    <form class="form-grid section-gap" role="search" @submit.prevent="search">
-      <div class="form-group">
-        <label for="kb-project">Project</label
-        ><select id="kb-project" v-model="projectId" @change="refreshAll">
-          <option value="">All projects you can access</option>
-          <option v-for="p in factory.projects" :key="p.id" :value="p.id">
-            {{ p.name }}
-          </option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label for="kb-source">Source</label
-        ><select id="kb-source" v-model="source" @change="search">
-          <option value="">All</option>
-          <option value="repo">Repository</option>
-          <option value="factory">Factory</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label for="kb-type">Type</label
-        ><input
-          id="kb-type"
-          v-model="type"
-          list="kb-types"
-          placeholder="e.g. Playbook"
-          @change="search"
-        /><datalist id="kb-types">
-          <option v-for="t in types" :key="t" :value="t" />
-        </datalist>
-      </div>
-      <div class="form-group">
-        <label for="kb-status">Status</label
-        ><select id="kb-status" v-model="status" @change="search">
-          <option value="stable">Stable</option>
-          <option value="draft">Draft</option>
-          <option value="deprecated">Deprecated</option>
-          <option value="all">All</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label for="kb-search">Search</label
-        ><input
-          id="kb-search"
-          v-model="text"
-          type="search"
-          placeholder="e.g. rounding, retries"
-        />
-      </div>
-      <div class="form-group" style="align-self: end">
-        <button class="btn primary" type="submit" data-test="kb-search">
-          <Search class="icon" />Search
-        </button>
-      </div>
-    </form>
-
-    <p v-if="error" class="notice" role="alert">{{ error }}</p>
-    <p v-else-if="loading" class="help" role="status">Loading documents…</p>
-    <div v-else-if="!docs.length" class="empty large section-gap">
-      <h3>No documents match.</h3>
-      <p style="margin-top: 8px">
-        Try another status or source, or index a repository with docs.
-      </p>
-    </div>
-    <div v-else class="catalog-grid section-gap">
-      <button
-        v-for="d in docs"
-        :key="d.id"
-        class="memory-card"
-        data-test="kb-doc"
-        @click="open(d.id)"
-      >
-        <span class="pill" :class="d.source === 'repo' ? '' : 'purple'">{{
-          d.source
-        }}</span>
-        <span class="pill" :class="statusPill[d.status]">{{ d.status }}</span>
-        <span class="pill" :class="trustPill[d.trust]">{{ d.trust }}</span>
-        <h3 style="margin: 16px 0 8px">{{ d.title }}</h3>
-        <p class="small muted" style="line-height: 1.6">{{ d.description }}</p>
-        <p class="help" style="margin-top: 16px">
-          <code>{{ d.path }}</code> · {{ d.type || "untyped" }} ·
-          {{ projectName(d.project_id) }}
-        </p>
-      </button>
-    </div>
-
-    <div class="resource-strip">
-      <BookOpen class="icon" /><strong>Sources before certainty.</strong
-      ><span
-        >Unverified and machine-written documents are labelled; drafts never
-        reach an agent until a person approves them.</span
-      >
-    </div>
-
-    <AppDialog
-      :open="!!detail"
-      :title="detail?.doc.title ?? 'Document'"
-      :subtitle="detail?.doc.path"
-      @close="close"
+  <div class="nb-wrap">
+    <div
+      class="nb"
+      :class="{ talk: discuss }"
+      :data-m="mobile"
+      data-test="notebook"
     >
-      <template v-if="detail">
-        <p>
-          <span
-            class="pill"
-            :class="detail.doc.source === 'repo' ? '' : 'purple'"
-            >{{ detail.doc.source }}</span
+      <aside class="nb-side" aria-label="Notebooks">
+        <SearchField
+          v-model="q"
+          label="Search notes"
+          placeholder="Search notes"
+        />
+        <div class="nb-books">
+          <button
+            v-for="b in notebooks"
+            :key="b.key"
+            type="button"
+            class="nb-book"
+            :class="{ on: nb === b.key, drafts: b.key === NB_DRAFTS }"
+            :aria-pressed="nb === b.key"
+            :data-test="b.key === NB_DRAFTS ? 'drafts-shortcut' : undefined"
+            @click="nb = b.key"
           >
-          <span class="pill" :class="statusPill[detail.doc.status]">{{
-            detail.doc.status
-          }}</span>
-          <span class="pill" :class="trustPill[detail.doc.trust]">{{
-            detail.doc.trust
-          }}</span>
-          <span class="help">
-            <GitBranch class="icon" /><code data-test="kb-sha">{{
-              shortSha(detail.doc.commit_sha)
-            }}</code></span
+            <Layers v-if="b.key === NB_ALL" class="icon" />
+            <BookOpen v-else class="icon" />
+            <span>{{ b.label }}</span
+            ><span class="n">{{ b.count }}</span>
+          </button>
+        </div>
+        <p v-if="error" class="notice" role="alert">{{ error }}</p>
+        <p v-else-if="loading" class="small muted" role="status">
+          Loading notes…
+        </p>
+        <div v-else class="nb-list" role="listbox" aria-label="Notes">
+          <button
+            v-for="d in list"
+            :key="d.id"
+            type="button"
+            class="nb-item"
+            :class="{ on: d.id === openId }"
+            role="option"
+            :aria-selected="d.id === openId"
+            data-test="kb-doc"
+            @click="select(d.id)"
           >
-        </p>
-        <p v-if="isRepo" class="notice" data-test="repo-readonly">
-          Changes to repository documents go through the repository.
-        </p>
-        <p v-if="detailError" class="notice" role="alert">{{ detailError }}</p>
-
-        <template v-if="editing">
-          <div class="form-group">
-            <label for="kb-fm">Frontmatter (JSON)</label
-            ><textarea
-              id="kb-fm"
-              v-model="fmDraft"
-              rows="8"
-              spellcheck="false"
-              style="font-family: monospace"
-            />
-          </div>
-          <div class="form-group">
-            <label for="kb-body">Body (markdown)</label
-            ><textarea
-              id="kb-body"
-              v-model="bodyDraft"
-              rows="16"
-              spellcheck="false"
-              style="font-family: monospace"
-            />
-          </div>
-          <div class="row">
-            <button
-              class="btn primary"
-              :disabled="busy"
-              data-test="kb-save"
-              @click="save"
+            <!-- eslint-disable vue/no-v-html -- highlight() escapes first -->
+            <span class="t" v-html="highlight(d.title, q)" />
+            <span class="s" v-html="highlight(snippet(d.description, q), q)" />
+            <!-- eslint-enable vue/no-v-html -->
+            <span class="m"
+              ><span class="tag">{{ d.type || "untyped" }}</span
+              >{{ d.source === "repo" ? "repo" : projectName(d.project_id) }} ·
+              {{ when(d.indexed_at) }}</span
             >
-              Save
-            </button>
-            <button class="btn" :disabled="busy" @click="resetEdit">
-              Cancel
-            </button>
-          </div>
-        </template>
-        <template v-else>
-          <div class="kb-body" data-test="kb-rendered">
-            <template v-for="(b, i) in blocks" :key="i">
-              <h3 v-if="b.kind === 'h'">{{ b.text }}</h3>
-              <pre v-else-if="b.kind === 'code'">{{ b.text }}</pre>
-              <p v-else style="white-space: pre-wrap">{{ b.text }}</p>
-            </template>
-          </div>
-          <dl class="small" data-test="kb-frontmatter">
-            <template v-for="(v, k) in detail.frontmatter" :key="k">
-              <dt>{{ k }}</dt>
-              <dd>
-                <code>{{ fmt(v) }}</code>
-              </dd>
-            </template>
-          </dl>
-          <template v-if="detail.links?.length">
-            <h4>Links</h4>
-            <ul data-test="kb-links">
-              <li v-for="l in detail.links" :key="l.id">
-                <button class="btn link" type="button" @click="open(l.id)">
-                  {{ l.title }}
-                </button>
-              </li>
-            </ul>
-          </template>
-          <template v-if="detail.backlinks?.length">
-            <h4>Backlinks</h4>
-            <ul data-test="kb-backlinks">
-              <li v-for="l in detail.backlinks" :key="l.id">
-                <button class="btn link" type="button" @click="open(l.id)">
-                  {{ l.title }}
-                </button>
-              </li>
-            </ul>
-          </template>
-
-          <div v-if="isDraft && canEdit" class="form-group">
-            <label for="kb-note">Approval note (optional)</label
-            ><input id="kb-note" v-model="note" />
-          </div>
-          <p v-if="confirming" class="notice" data-test="kb-confirm">
+          </button>
+          <div v-if="!list.length" class="small muted nb-none">
             {{
-              confirming === "discard"
-                ? "Discard this draft? The file is deleted."
-                : "Reset to the default playbook? Your edits are replaced."
+              q
+                ? `No notes match “${q}”.`
+                : "No notes here yet. Index a repository with docs, or let the Cataloger draft some."
             }}
-            <button
-              class="btn danger"
-              :disabled="busy"
-              data-test="kb-confirm-yes"
-              @click="confirming === 'discard' ? discard() : reset()"
-            >
-              Confirm</button
-            ><button class="btn" :disabled="busy" @click="confirming = ''">
-              Cancel
-            </button>
-          </p>
-          <div v-if="canEdit && !confirming" class="row">
-            <button
-              class="btn"
-              :disabled="busy"
-              data-test="kb-edit"
-              @click="startEdit"
-            >
-              Edit
-            </button>
-            <button
-              v-if="isDraft"
-              class="btn primary"
-              :disabled="busy"
-              data-test="kb-approve"
-              @click="approve"
-            >
-              Approve
-            </button>
-            <button
-              v-if="isDraft"
-              class="btn danger"
-              :disabled="busy"
-              data-test="kb-discard"
-              @click="confirming = 'discard'"
-            >
-              Discard
-            </button>
-            <button
-              v-if="detail.default_available"
-              class="btn"
-              :disabled="busy"
-              data-test="kb-reset"
-              @click="confirming = 'reset'"
-            >
-              Reset to default
-            </button>
           </div>
-        </template>
-      </template>
-    </AppDialog>
+        </div>
+      </aside>
+      <NoteReader
+        v-if="openDoc"
+        :doc-id="openDoc.id"
+        :discuss-open="discuss"
+        @open="select"
+        @back="mobile = 'list'"
+        @changed="load"
+        @closed="afterReview"
+        @remove="remove"
+        @ask="toggleDiscuss"
+      />
+      <article v-else class="nb-read">
+        <div class="nb-empty">
+          <BookOpen class="icon" />
+          <p>{{ loading ? "Loading…" : "Pick a note to read it." }}</p>
+        </div>
+      </article>
+      <DiscussPanel
+        v-if="discuss && openDoc"
+        v-model:quote="quote"
+        :doc-id="openDoc.id"
+        :title="openDoc.title"
+        @close="closeDiscuss"
+        @chat="toChats"
+      />
+    </div>
   </div>
 </template>
