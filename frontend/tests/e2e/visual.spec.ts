@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
   projects,
@@ -13,8 +13,9 @@ import {
   checks,
   findings,
   events,
+  usage,
 } from "../fixtures/workspace";
-const output = path.resolve("../docs/screenshots/frontend-rebuild");
+const output = path.resolve("../docs/screenshots/app");
 async function fixture(page: Page, role: string = user.role) {
   await page.route("**/api/v1/**", async (route) => {
     const p = new URL(route.request().url()).pathname;
@@ -24,6 +25,7 @@ async function fixture(page: Page, role: string = user.role) {
     else if (p.endsWith("/projects")) body = { projects };
     else if (p.endsWith("/work-orders")) body = { work_orders: orders };
     else if (p.endsWith("/overview")) body = overview;
+    else if (p.endsWith("/usage/summary")) body = usage;
     else if (p.endsWith("/models")) body = { models };
     else if (p.endsWith("/settings")) body = settings;
     else if (p.endsWith("/connections"))
@@ -76,87 +78,43 @@ const viewports = [
   { name: "mobile", width: 390, height: 844 },
 ];
 for (const viewport of viewports)
-  test(`visual comparison ${viewport.name}`, async ({ browser }) => {
+  test(`app layout ${viewport.name}`, async ({ browser }) => {
     test.setTimeout(180_000);
     const context = await browser.newContext({
       viewport: { width: viewport.width, height: viewport.height },
       reducedMotion: "reduce",
     });
-    const app = await context.newPage(),
-      reference = await context.newPage();
+    const app = await context.newPage();
     await app.clock.setFixedTime(new Date("2026-10-24T01:00:00Z"));
     await fixture(app);
     const errors: string[] = [];
     app.on("pageerror", (e) => errors.push(e.message));
-    const metadata: unknown[] = [];
     async function capture(name: string) {
       await ready(app);
-      await reference.locator("#main").waitFor();
       await app.evaluate(() => window.scrollTo(0, 0));
-      await reference.evaluate(() => window.scrollTo(0, 0));
-      for (const [kind, page] of [
-        ["app", app],
-        ["reference", reference],
-      ] as const) {
-        const folder = path.join(output, viewport.name, kind);
-        mkdirSync(folder, { recursive: true });
-        await page.screenshot({
-          path: path.join(folder, name + ".png"),
-          animations: "disabled",
-        });
-      }
+      const folder = path.join(output, viewport.name);
+      mkdirSync(folder, { recursive: true });
+      await app.screenshot({
+        path: path.join(folder, name + ".png"),
+        animations: "disabled",
+        fullPage: true,
+      });
       const overflow = await app.evaluate(
         () => document.documentElement.scrollWidth > window.innerWidth + 1,
       );
       expect(overflow, `${name} must not overflow page horizontally`).toBe(
         false,
       );
-      metadata.push({
-        state: name,
-        viewport: { width: viewport.width, height: viewport.height },
-        reference: `${viewport.name}/reference/${name}.png`,
-        rebuilt: `${viewport.name}/app/${name}.png`,
-      });
     }
-    async function freshReference() {
-      await reference.goto("http://127.0.0.1:15174");
-      await reference.evaluate(() =>
-        localStorage.removeItem("legos-factory-v2"),
-      );
-      await reference.reload();
-    }
-    async function referenceOrder(id: string, tab: string) {
-      await freshReference();
-      await reference.evaluate(
-        ({ id, tab }) => {
-          document
-            .querySelector<HTMLElement>(
-              '[data-action="nav"][data-page="factory"]',
-            )!
-            .click();
-          document
-            .querySelector<HTMLElement>(
-              `[data-action="open"][data-id="${id}"]`,
-            )!
-            .click();
-          document
-            .querySelector<HTMLElement>(
-              `[data-action="tab"][data-tab="${tab}"]`,
-            )!
-            .click();
-        },
-        { id, tab },
-      );
-    }
-    await freshReference();
     await app.goto("/");
     await ready(app);
+    await expect(
+      app.locator("[aria-labelledby=user-activity] .heat i"),
+    ).toHaveCount(usage.activity.length);
+    await expect(app.locator(".agent-row").first()).toContainText("Builder");
     await capture("01-overview");
-    await reference.evaluate(() =>
-      document
-        .querySelector<HTMLElement>('[data-action="nav"][data-page="factory"]')!
-        .click(),
-    );
+    await app.getByRole("button", { name: "Cumulative" }).click();
+    await capture("01-overview-cumulative");
     await app.goto("/factory");
     await capture("02-factory-board");
     if (viewport.width > 720) {
@@ -169,58 +127,25 @@ for (const viewport of viewports)
     await expect(
       app.locator(".topnav a.active, .tabbar a.active").first(),
     ).toHaveText("Factory");
-    await reference.evaluate(() =>
-      document
-        .querySelector<HTMLElement>('[data-action="view"][data-view="list"]')
-        ?.click(),
-    );
     await app.getByRole("button", { name: "List view" }).click();
     await capture("03-factory-list");
-    await referenceOrder("LF-128", "plan");
     await app.goto("/factory/LF-128");
     await capture("04-blueprint");
-    await referenceOrder("LF-127", "graph");
     await app.goto("/factory/LF-127?tab=graph");
     await capture("05-task-graph");
-    await reference
-      .locator('[data-action="node"][data-node="implementation"]')
-      .click();
     await app.locator('[data-node="implementation"]').click();
     await capture("06-task-details");
-    await referenceOrder("LF-127", "activity");
     await app.goto("/factory/LF-127?tab=activity");
     await capture("07-activity");
-    await referenceOrder("LF-125", "qa");
     await app.goto("/factory/LF-125?tab=quality");
     await capture("08-quality");
-    await reference.evaluate(() =>
-      document.querySelector<HTMLElement>('[data-action="evidence"]')?.click(),
-    );
-    if (!(await reference.getByRole("dialog").count()))
-      await reference.evaluate(() =>
-        document
-          .querySelector<HTMLElement>('[data-action="quality-contract"]')
-          ?.click(),
-      );
     await app.locator("[data-check]").first().click();
     await capture("09-evidence");
-    await referenceOrder("LF-125", "changes");
     await app.goto("/factory/LF-125?tab=changes");
     await capture("10-changes-pr");
-    await freshReference();
-    await reference.evaluate(() =>
-      document
-        .querySelector<HTMLElement>('[data-action="nav"][data-page="factory"]')!
-        .click(),
-    );
-    await reference.locator('[data-action="new"]').first().click();
     await app.goto("/factory?new=1");
     await expect(app.getByRole("dialog")).toBeVisible();
     await capture("11-new-order-intent");
-    await reference.fill("#new-title", "Make payment retries idempotent");
-    await reference.fill("#new-brief", orders[0].objective);
-    await reference.fill("#new-criteria", orders[0].acceptance);
-    await reference.locator('[data-action="new-next"]').click();
     await app.fill("#wo-title", "Make payment retries idempotent");
     await app.fill("#wo-objective", orders[0].objective);
     await app.fill("#wo-acceptance", orders[0].acceptance);
@@ -229,7 +154,6 @@ for (const viewport of viewports)
       app.getByRole("heading", { name: "Choose the hands. Choose the eyes." }),
     ).toBeVisible();
     await capture("12-new-order-crew");
-    await reference.locator('[data-action="new-next"]').click();
     await app.getByRole("button", { name: "Continue", exact: true }).click();
     await expect(
       app
@@ -237,47 +161,18 @@ for (const viewport of viewports)
         .getByRole("heading", { name: "Make payment retries idempotent" }),
     ).toBeVisible();
     await capture("13-new-order-review");
-    await freshReference();
-    await reference.evaluate(() =>
-      document
-        .querySelector<HTMLElement>(
-          '[data-action="nav"][data-page="settings"]',
-        )!
-        .click(),
-    );
     await app.goto("/settings");
     await capture("14-settings");
-    await freshReference();
-    await reference.evaluate(() =>
-      document
-        .querySelector<HTMLElement>('[data-action="nav"][data-page="catalog"]')!
-        .click(),
-    );
     await app.goto("/knowledge");
     await capture("15-knowledge");
-    await freshReference();
-    await reference.locator('[data-action="theme"]').click();
     await app.goto("/");
     await app.getByRole("button", { name: "Switch theme" }).click();
     await capture("16-overview-dark");
     if (viewport.name === "mobile") {
-      await reference.locator('button[data-action="menu"]').click();
       await app.getByRole("button", { name: "Show sidebar" }).click();
       await capture("17-mobile-navigation");
     }
     expect(errors).toEqual([]);
-    writeFileSync(
-      path.join(output, viewport.name, "comparison-manifest.json"),
-      JSON.stringify(
-        {
-          fixtures:
-            "Test-only API responses; production store contains no sample data.",
-          pairs: metadata,
-        },
-        null,
-        2,
-      ),
-    );
     await context.close();
   });
 test("browser permissions, unavailable settings, dialog keyboard handling and error states", async ({

@@ -62,6 +62,9 @@ export interface WorkOrder {
   source_ref?: string;
   pr_url?: string;
   pr_ref?: string;
+  pr_merged_at?: string | null;
+  pr_closed_at?: string | null;
+  pr_track_failed_at?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -124,6 +127,25 @@ export interface ModelInfo {
   model_id: string;
   name: string;
   harness: string;
+}
+
+export interface UsageDay {
+  date: string;
+  count: number;
+}
+export interface UsageTotals {
+  tokens_in: number;
+  tokens_out: number;
+  cost_micros: number;
+  runs: number;
+}
+export interface UsageSummary {
+  days: number;
+  from: string;
+  to: string;
+  activity: UsageDay[];
+  roles: (UsageTotals & { role: string })[];
+  month_to_date: UsageTotals & { month: string };
 }
 
 export interface Overview {

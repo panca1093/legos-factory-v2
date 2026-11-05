@@ -1,13 +1,27 @@
 import { ApiError } from "../../types/api";
+import type { ChatMessage } from "../../stores/chats";
 
 export interface ChatStreamBody {
   content: string;
   files?: { name: string; content: string }[];
   kb?: { id: string; quote?: string };
 }
+export type ChatBody = ChatStreamBody;
 export interface ChatStreamEvent {
   event: string;
   data: unknown;
+}
+export type ChatEvent =
+  | { event: "user_message"; data: { message: ChatMessage } }
+  | { event: "delta"; data: { text: string } }
+  | { event: "done"; data: { message: ChatMessage } }
+  | { event: "error"; data: { message?: ChatMessage; error: string } };
+
+export function parseFrames(buf: string) {
+  const events: ChatStreamEvent[] = [];
+  const p = createFrameParser((e) => events.push(e));
+  p.push(buf);
+  return { events: events as ChatEvent[], rest: p.rest() };
 }
 
 export function createFrameParser(onEvent: (e: ChatStreamEvent) => void) {
@@ -42,6 +56,7 @@ export function createFrameParser(onEvent: (e: ChatStreamEvent) => void) {
         buf = buf.slice(i + 2);
       }
     },
+    rest: () => buf,
     flush() {
       buf = buf.replace(/\r\n?/g, "\n");
       if (buf.trim()) frame(buf);
@@ -53,7 +68,7 @@ export function createFrameParser(onEvent: (e: ChatStreamEvent) => void) {
 export async function streamChat(
   chatId: string,
   body: ChatStreamBody,
-  onEvent: (e: ChatStreamEvent) => void,
+  onEvent: (e: ChatEvent) => void,
 ): Promise<void> {
   const resp = await fetch(
     `/api/v1/chats/${encodeURIComponent(chatId)}/messages`,
@@ -86,7 +101,11 @@ export async function streamChat(
   if (!resp.body) throw new Error("Streaming is not supported by this browser");
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
-  const parser = createFrameParser(onEvent);
+  let terminal = false;
+  const parser = createFrameParser((e) => {
+    if (e.event === "done" || e.event === "error") terminal = true;
+    onEvent(e as ChatEvent);
+  });
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -95,6 +114,7 @@ export async function streamChat(
     }
     parser.push(decoder.decode());
     parser.flush();
+    if (!terminal) throw new Error("The reply stream ended unexpectedly");
   } finally {
     reader.cancel().catch(() => undefined);
   }

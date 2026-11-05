@@ -333,14 +333,14 @@ describe("chats store races and interrupted turns", () => {
       }),
     );
     const s = useChats();
-    await s.send("c", { content: "q1" });
+    await expect(s.send("c", { content: "q1" })).rejects.toThrow();
     expect(s.busy.c).toBe(false);
     let last = s.messages.c.at(-1)!;
     expect(last.role).toBe("assistant");
     expect(last.content).toBe("half");
-    expect(last.error).toContain("closed");
+    expect(last.error).toContain("ended unexpectedly");
     expect(last.pending).toBe(false);
-    await s.send("c", { content: "q2" });
+    await s.send("c", { content: "q2" }).catch(() => undefined);
     const ids = s.messages.c.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);
     last = s.messages.c.at(-1)!;

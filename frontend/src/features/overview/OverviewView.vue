@@ -1,356 +1,287 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { RouterLink } from "vue-router";
 import {
   Plus,
-  MessageSquare,
+  ShieldCheck,
   Zap,
-  CircleCheck,
-  LayoutGrid,
-  ArrowRight,
-  Code,
-  ChevronRight,
-  TriangleAlert,
+  Rocket,
+  Gauge,
+  Factory,
 } from "lucide-vue-next";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
 import BrickBot from "../../components/agents/BrickBot.vue";
 import StatusBadge from "../../components/ui/StatusBadge.vue";
-import AppDialog from "../../components/ui/AppDialog.vue";
 import {
-  attentionStates,
-  crew,
-  isActive,
   money,
-  projectColor,
-  runningStates,
-  type Persona,
+  isRunning,
+  needsYou,
+  persona,
 } from "../../composables/presentation";
+import { heatCells, type HeatMode } from "./heatmap";
+import "./overview.css";
 const factory = useFactory(),
   session = useSession();
-const error = ref(""),
-  loading = ref(false),
-  selected = ref<Persona | null>(null);
-const attention = computed(() =>
-  factory.workOrders.filter((w) => attentionStates.includes(w.state)),
+const mode = ref<HeatMode>("Daily"),
+  heatScroll = ref<HTMLElement>();
+const heatLabel: Record<HeatMode, string> = {
+  Daily: "Agent runs per day",
+  Weekly: "Agent runs per week, each week summed",
+  Cumulative: "Cumulative agent runs per day",
+};
+const modes: HeatMode[] = ["Daily", "Weekly", "Cumulative"];
+const approvals = computed(() => needsYou(factory.workOrders));
+const running = computed(() => factory.workOrders.filter(isRunning));
+const shipped = computed(
+  () => factory.workOrders.filter((w) => w.pr_merged_at).length,
 );
-const running = computed(() =>
-  factory.workOrders.filter((w) => runningStates.includes(w.state)),
+const mtd = computed(() => factory.usage?.month_to_date);
+const activity = computed(() => factory.usage?.activity ?? []);
+const heat = computed(() => heatCells(activity.value, mode.value));
+const totalRuns = computed(() =>
+  activity.value.reduce((sum, d) => sum + d.count, 0),
 );
-const assembled = computed(() =>
-  factory.workOrders.filter((w) => w.state === "READY"),
+const activeDays = computed(
+  () => activity.value.filter((d) => d.count > 0).length,
 );
+const roles = computed(() =>
+  [...(factory.usage?.roles ?? [])].sort((a, b) => b.runs - a.runs),
+);
+const compact = new Intl.NumberFormat("en-US", { notation: "compact" });
+const tokens = (t: { tokens_in: number; tokens_out: number }) =>
+  compact.format(t.tokens_in + t.tokens_out);
 const now = new Date();
-const hour = Number(
-  new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    hourCycle: "h23",
-    timeZone: "Asia/Jakarta",
-  }).format(now),
-);
+const hour = now.getHours();
 const greeting =
   hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 const date = new Intl.DateTimeFormat("en-US", {
   weekday: "long",
   month: "long",
   day: "numeric",
-  timeZone: "Asia/Jakarta",
 }).format(now);
 const name = computed(() => session.user?.name.split(" ").at(-1) ?? "there");
-async function load() {
-  loading.value = true;
-  error.value = "";
-  try {
-    await Promise.all([
-      factory.refreshOverview(),
-      factory.refreshProjects(),
-      factory.refreshWorkOrders(),
-    ]);
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    loading.value = false;
-  }
-}
-onMounted(load);
-function observed(role: string) {
-  const actors = role === "foreman" ? ["foreman", "factory"] : [role];
-  const e = factory.liveEvents.find((e) =>
-    actors.includes(e.actor.toLowerCase()),
-  );
-  return e
-    ? e.kind.replaceAll("_", " ")
-    : role === "cataloger"
-      ? "A future chapter"
-      : "availability not reported";
-}
+const projectName = (id: string) =>
+  factory.projects.find((p) => p.id === id)?.name ?? "";
+const action = (state: string) =>
+  state === "WAITING_FOR_HUMAN"
+    ? "Answer clarification"
+    : state === "ARCHITECT_REVIEW"
+      ? "Review blueprint"
+      : state === "BLOCKED"
+        ? "Review evidence"
+        : "Review PR decision";
+const scrollToLatest = () =>
+  nextTick(() => {
+    if (heatScroll.value)
+      heatScroll.value.scrollLeft = heatScroll.value.scrollWidth;
+  });
+watch(() => heat.value.weeks, scrollToLatest);
+onMounted(() => {
+  if (factory.usage) void factory.refreshUsage();
+});
 </script>
 <template>
-  <div v-if="error" class="error-state" role="alert">
-    {{ error }}
-    <div><button class="btn small" @click="load">Try again</button></div>
-  </div>
-  <div class="welcome">
+  <div class="hero">
     <div>
-      <div class="eyebrow">{{ date }} · Your workspace, at a glance</div>
-      <h1 class="intro">
-        {{ greeting }}, {{ name
-        }}<span class="greeting-icon" aria-hidden="true">✳</span>
-      </h1>
-      <p class="subtitle">
+      <div class="small muted">{{ date }}</div>
+      <h1 class="greet">{{ greeting }}, {{ name }}</h1>
+      <p class="muted">
+        <b>{{
+          approvals.length
+            ? `${approvals.length} ${approvals.length > 1 ? "things need" : "thing needs"}`
+            : "Nothing needs"
+        }}</b>
+        your OK.
         {{
-          attention.length
-            ? `${attention.length} decisions need you.`
-            : "You’re all caught up."
+          running.length
+            ? `${running.length} work ${running.length > 1 ? "orders are" : "order is"} running.`
+            : "No work orders are running."
         }}
-        Your crew is keeping things moving.
       </p>
     </div>
-    <RouterLink v-if="session.canWrite" class="btn primary" to="/factory?new=1"
+    <RouterLink
+      v-if="session.canWrite"
+      class="lg-btn primary pill hero-cta"
+      to="/factory?new=1"
       ><Plus class="icon" />New work order</RouterLink
     >
   </div>
-  <section class="floor" aria-label="Your factory crew" :aria-busy="loading">
-    <div class="floor-header row between">
-      <div>
-        <h2>A little crew. Big possibilities.</h2>
-        <p class="muted small" style="margin-top: 4px">
-          Five perspectives, one well-built outcome.
+  <section class="kpis" aria-label="Workspace summary">
+    <RouterLink class="lg-card lg-stat" to="/factory?status=attention"
+      ><div class="label"><ShieldCheck class="icon" />Needs you</div>
+      <div class="value">{{ approvals.length }}</div>
+      <div class="note">decisions waiting</div></RouterLink
+    >
+    <RouterLink class="lg-card lg-stat" to="/factory?status=running"
+      ><div class="label"><Zap class="icon" />In the making</div>
+      <div class="value">{{ running.length }}</div>
+      <div class="note">active work orders</div></RouterLink
+    >
+    <RouterLink class="lg-card lg-stat" to="/factory?status=complete"
+      ><div class="label"><Rocket class="icon" />Shipped</div>
+      <div class="value">{{ shipped }}</div>
+      <div class="note">merged pull requests</div></RouterLink
+    >
+    <RouterLink class="lg-card lg-stat" to="/settings?tab=usage"
+      ><div class="label"><Gauge class="icon" />This month</div>
+      <div class="value">
+        {{ mtd ? money(mtd.cost_micros) : "—" }}
+      </div>
+      <div class="note">
+        {{
+          mtd ? `${tokens(mtd)} tokens · ${mtd.runs} runs` : "Usage unavailable"
+        }}
+      </div></RouterLink
+    >
+  </section>
+  <div class="grid2">
+    <section class="lg-card" aria-labelledby="needs-you">
+      <div class="lg-card-head">
+        <h2 id="needs-you">Needs your approval</h2>
+        <span class="lg-count">{{ approvals.length }}</span>
+      </div>
+      <div class="box">
+        <div v-for="w in approvals" :key="w.id" class="lg-row">
+          <div class="grow">
+            <div class="title">{{ w.title }}</div>
+            <div class="meta">{{ w.id }} · {{ projectName(w.project_id) }}</div>
+          </div>
+          <StatusBadge :state="w.state" />
+          <RouterLink
+            class="lg-btn small"
+            :class="{ primary: w.state === 'WAITING_FOR_HUMAN' }"
+            :to="`/factory/${w.id}`"
+            >{{ action(w.state) }}</RouterLink
+          >
+        </div>
+        <p v-if="!approvals.length" class="empty-note">
+          All clear. Nothing waits on you.
         </p>
       </div>
-      <span class="pill green"
-        ><i class="dot" :class="{ pulse: running.length }"></i
-        >{{ running.length }} active</span
-      >
-    </div>
-    <div class="crew-track">
-      <div
-        v-if="running.length"
-        class="conveyor-brick"
-        aria-hidden="true"
-      ></div>
-      <div
-        v-for="c in crew"
-        :key="c.id"
-        class="crew-station"
-        :class="{ future: c.id === 'cataloger' }"
-      >
-        <button :aria-label="`Inspect ${c.name}`" @click="selected = c.id">
-          <BrickBot :persona="c.id" /><span class="station-name">{{
-            c.name
-          }}</span
-          ><span class="station-status">{{ observed(c.id) }}</span>
-        </button>
-      </div>
-    </div>
-  </section>
-  <section class="metrics" aria-label="Workspace monitoring">
-    <div class="metric">
-      <RouterLink to="/factory?status=attention"
-        ><span class="metric-label"
-          ><MessageSquare class="icon" />Needs you</span
-        >
-        <div class="metric-value">
-          <b>{{ attention.length }}</b
-          ><span>decisions waiting</span>
-        </div></RouterLink
-      >
-    </div>
-    <div class="metric">
-      <RouterLink to="/factory?status=running"
-        ><span class="metric-label"><Zap class="icon" />In the making</span>
-        <div class="metric-value">
-          <b>{{ running.length }}</b
-          ><span>active work orders</span>
-        </div></RouterLink
-      >
-    </div>
-    <div class="metric">
-      <RouterLink to="/factory?status=complete"
-        ><span class="metric-label"><CircleCheck class="icon" />Assembled</span>
-        <div class="metric-value">
-          <b>{{ assembled.length }}</b
-          ><span>completed orders</span>
-        </div></RouterLink
-      >
-    </div>
-    <div class="metric">
-      <RouterLink to="/settings?tab=usage"
-        ><span class="metric-label"><LayoutGrid class="icon" />My usage</span>
-        <div class="metric-value">
-          <b>{{ money(factory.overview?.usage.cost_micros) }}</b
-          ><span>{{
-            factory.overview?.budget.limit_micros
-              ? "/ " + money(factory.overview.budget.limit_micros)
-              : "No budget cap"
-          }}</span>
-        </div></RouterLink
-      >
-    </div>
-  </section>
-  <div class="overview-grid">
-    <section>
-      <div class="section-head">
-        <h2>
-          A human touch, please
-          <span class="pill orange" style="margin-left: 5px">{{
-            attention.length
-          }}</span>
-        </h2>
-        <RouterLink class="link" to="/factory?status=attention"
-          >See in Factory</RouterLink
-        >
-      </div>
-      <article
-        v-for="w in attention.slice(0, 2)"
-        :key="w.id"
-        class="attention-card"
-      >
-        <BrickBot
-          :persona="
-            w.state === 'WAITING_FOR_HUMAN' || w.state === 'ARCHITECT_REVIEW'
-              ? 'architect'
-              : 'inspector'
-          "
-          class="medium"
-        />
-        <div class="grow">
-          <div class="row between">
-            <span class="tiny muted"
-              >{{ factory.projects.find((p) => p.id === w.project_id)?.name }} /
-              {{ w.id }}</span
-            ><StatusBadge :state="w.state" />
-          </div>
-          <h3>{{ w.title }}</h3>
-          <p>
-            {{
-              w.state === "WAITING_FOR_HUMAN"
-                ? "Architect needs a contract decision before the crew can build."
-                : w.state === "ARCHITECT_REVIEW"
-                  ? "Your blueprint is ready for review."
-                  : w.state === "BLOCKED"
-                    ? "Work is blocked. Inspect the recorded evidence."
-                    : "The checks are in. Your crew is ready for a PR decision."
-            }}
-          </p>
-          <RouterLink class="btn small" :to="`/factory/${w.id}`"
-            ><ArrowRight class="icon" />{{
-              w.state === "WAITING_FOR_HUMAN"
-                ? "Answer clarification"
-                : w.state === "ARCHITECT_REVIEW"
-                  ? "Review blueprint"
-                  : "Review evidence"
-            }}</RouterLink
-          >
-        </div>
-      </article>
-      <div v-if="!attention.length" class="panel empty">
-        No decisions waiting. The crew has what it needs.
-      </div>
     </section>
-    <section>
-      <div class="section-head">
-        <h2>Across your projects</h2>
-        <RouterLink class="link" to="/factory">Open Factory</RouterLink>
+    <section class="lg-card" aria-labelledby="running-now">
+      <div class="lg-card-head">
+        <h2 id="running-now">Running now</h2>
+        <RouterLink class="lg-btn ghost small" to="/factory"
+          ><Factory class="icon" />Open Factory</RouterLink
+        >
       </div>
-      <div class="panel" style="padding: 0 20px">
+      <div class="box">
         <RouterLink
-          v-for="(p, i) in factory.projects"
-          :key="p.id"
-          class="project-line"
-          :to="{ path: '/factory', query: { project: p.id } }"
-          style="color: var(--ink)"
-          ><span class="project-box" :style="{ '--c': projectColor(i) }"
-            ><Code class="icon" /></span
-          ><span class="grow"
-            ><strong class="small">{{ p.name }}</strong>
-            <p>
-              {{ p.language || "not detected yet" }} ·
-              {{
-                factory.workOrders.filter(
-                  (w) => w.project_id === p.id && isActive(w),
-                ).length
-              }}
-              active work orders
-            </p></span
-          ><span class="project-card-count" aria-label="Work order count">{{
-            factory.workOrders.filter((w) => w.project_id === p.id).length
-          }}</span
-          ><ChevronRight class="icon"
-        /></RouterLink>
-        <div v-if="!factory.projects.length" class="empty">
-          No projects yet.
-          <RouterLink to="/factory">Add a project in Factory.</RouterLink>
-        </div>
+          v-for="w in running"
+          :key="w.id"
+          class="lg-row runrow"
+          :to="`/factory/${w.id}`"
+        >
+          <div class="grow">
+            <div class="title">{{ w.title }}</div>
+            <div class="meta">{{ w.id }} · {{ projectName(w.project_id) }}</div>
+          </div>
+          <StatusBadge :state="w.state" />
+        </RouterLink>
+        <p v-if="!running.length" class="empty-note">
+          Nothing running. Start a work order from the Factory.
+        </p>
       </div>
     </section>
   </div>
-  <div class="resource-strip">
-    <span class="status-line"
-      ><i
-        class="dot"
-        :style="{ color: factory.connected ? 'var(--green)' : 'var(--muted)' }"
-      ></i
-      ><strong>{{
-        factory.connected ? "Live workspace updates" : "Workspace monitoring"
-      }}</strong></span
-    ><span
-      >Pending / running jobs:
-      {{ factory.overview?.metrics.pending_jobs ?? "—" }}</span
-    ><span class="status-line"
-      ><TriangleAlert
-        v-if="factory.overview?.metrics.failed_jobs"
-        class="icon"
-      />Failed jobs: {{ factory.overview?.metrics.failed_jobs ?? "—" }}</span
-    ><RouterLink class="grow" style="text-align: right" to="/settings?tab=usage"
-      >Usage & resources</RouterLink
-    >
-  </div>
-  <section class="section-gap">
-    <div class="section-head">
-      <h2>Recent activity</h2>
-      <span class="tiny muted">Observed since this session started</span>
-    </div>
-    <div v-if="!factory.liveEvents.length" class="notice">
-      No activity received yet. Open a work order to inspect its recorded
-      history.
-    </div>
-    <div v-else class="panel panel-pad">
-      <div
-        v-for="(e, i) in factory.liveEvents.slice(0, 5)"
-        :key="`${e.id}-${i}`"
-        class="activity-item"
-      >
-        <span class="pill purple">{{ e.actor }}</span>
-        <div class="grow">
-          <p>{{ e.message }}</p>
-          <RouterLink
-            v-if="e.work_order_id"
-            class="tiny"
-            :to="`/factory/${e.work_order_id}`"
-            >Open work order</RouterLink
+  <div class="grid31">
+    <section class="lg-card act-card" aria-labelledby="user-activity">
+      <div class="lg-card-head">
+        <div>
+          <h2 id="user-activity">User activity</h2>
+          <div class="small muted">
+            <template v-if="totalRuns"
+              ><b>{{ totalRuns.toLocaleString() }}</b> agent runs in the last
+              year · active on {{ activeDays }} days</template
+            ><template v-else>Agent runs from your work orders</template>
+          </div>
+        </div>
+        <div class="mode-seg" role="group" aria-label="Activity view">
+          <button
+            v-for="m in modes"
+            :key="m"
+            type="button"
+            :class="{ active: mode === m }"
+            :aria-pressed="mode === m"
+            @click="mode = m"
           >
+            {{ m }}
+          </button>
         </div>
       </div>
-    </div>
-  </section>
-  <AppDialog
-    :open="selected !== null"
-    :title="crew.find((c) => c.id === selected)?.name ?? 'Agent'"
-    @close="selected = null"
-    ><div class="row">
-      <BrickBot v-if="selected" :persona="selected" />
-      <div>
-        <h3>{{ crew.find((c) => c.id === selected)?.job }}</h3>
-        <p class="help">{{ selected ? observed(selected) : "" }}</p>
+      <p v-if="!factory.usage" class="empty-note">
+        Usage unavailable.
+        <button class="lg-btn ghost small" @click="factory.refreshUsage()">
+          Try again
+        </button>
+      </p>
+      <p v-else-if="!totalRuns" class="empty-note">
+        No agent runs yet. Activity appears once your crew starts working.
+      </p>
+      <template v-else>
+        <p class="sr-only">
+          {{ totalRuns }} agent runs in the last year, active on
+          {{ activeDays }} days.
+        </p>
+        <div ref="heatScroll" class="heat-scroll">
+          <div
+            class="heat"
+            :style="{
+              gridTemplateColumns: `repeat(${heat.weeks}, minmax(10px, 1fr))`,
+            }"
+            role="img"
+            :aria-label="heatLabel[mode]"
+          >
+            <i
+              v-for="c in heat.cells"
+              :key="c.date"
+              :class="`h${c.level}`"
+              :style="{ gridRow: c.row + 1, gridColumn: c.col + 1 }"
+              :title="c.label"
+            ></i>
+          </div>
+          <div
+            class="heat-months"
+            :style="{
+              gridTemplateColumns: `repeat(${heat.weeks}, minmax(10px, 1fr))`,
+            }"
+            aria-hidden="true"
+          >
+            <span
+              v-for="m in heat.months"
+              :key="m.col"
+              :style="{ gridColumn: m.col + 1 }"
+              >{{ m.label }}</span
+            >
+          </div>
+        </div>
+        <div class="heat-legend" aria-hidden="true">
+          <span>Less</span><i v-for="l in 5" :key="l" :class="`h${l - 1}`"></i
+          ><span>More</span>
+        </div>
+      </template>
+    </section>
+    <section class="lg-card agents-card" aria-labelledby="your-agents">
+      <div class="lg-card-head">
+        <h2 id="your-agents">Your agents</h2>
+        <span class="lg-count">{{ roles.length }}</span>
       </div>
-    </div>
-    <div class="notice section-gap">
-      {{
-        selected === "cataloger"
-          ? "Cataloger is an exploratory preview. No information is ingested."
-          : "Availability and capacity are not reported by the backend. Activity shown here comes from observed workspace events."
-      }}
-    </div></AppDialog
-  >
+      <div class="agents">
+        <div v-for="r in roles" :key="r.role" class="agent-row">
+          <BrickBot :persona="persona(r.role)" :size="30" />
+          <div class="an">
+            <b>{{ r.role.charAt(0).toUpperCase() + r.role.slice(1) }}</b>
+            <span class="aj">{{ r.runs }} runs · {{ tokens(r) }} tokens</span>
+          </div>
+          <span class="cost">{{ money(r.cost_micros) }}</span>
+        </div>
+        <p v-if="!roles.length" class="empty-note">
+          {{ factory.usage ? "No agent usage yet." : "Usage unavailable." }}
+        </p>
+      </div>
+      <div class="small muted foot">Last 12 months</div>
+    </section>
+  </div>
 </template>

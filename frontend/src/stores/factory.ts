@@ -11,6 +11,7 @@ import {
   type QualityCheck,
   type Run,
   type Settings,
+  type UsageSummary,
   type Task,
   type WorkOrder,
   type WOEvent,
@@ -27,6 +28,7 @@ export const useFactory = defineStore("factory", {
     projects: [] as Project[],
     workOrders: [] as WorkOrder[],
     overview: null as Overview | null,
+    usage: null as UsageSummary | null,
     models: [] as ModelInfo[],
     connections: [] as Connection[],
     credentialsConfigured: true,
@@ -99,6 +101,21 @@ export const useFactory = defineStore("factory", {
       const epoch = this.workspaceEpoch;
       const overview = await api.get<Overview>("/api/v1/overview");
       if (epoch === this.workspaceEpoch) this.overview = overview;
+    },
+    async refreshUsage() {
+      const epoch = this.workspaceEpoch;
+      const tz = encodeURIComponent(
+        Intl.DateTimeFormat().resolvedOptions().timeZone,
+      );
+      let usage: UsageSummary | null = null;
+      try {
+        usage = await api.get<UsageSummary>(
+          `/api/v1/usage/summary?days=365&tz=${tz}`,
+        );
+      } catch {
+        /* Usage is secondary; cards render "Usage unavailable". */
+      }
+      if (epoch === this.workspaceEpoch) this.usage = usage;
     },
     async refreshModels() {
       const epoch = this.workspaceEpoch;

@@ -140,7 +140,6 @@ export const useChats = defineStore("chats", {
           x.id === tmp ? (error ? { ...m, error } : m) : x,
         );
       };
-      let finished = false;
       const interrupted = async (text: string) => {
         markFailed(tmpReply, text);
         const partial = find(tmpReply);
@@ -155,7 +154,7 @@ export const useChats = defineStore("chats", {
       };
       try {
         await streamChat(id, body, ({ event, data }) => {
-          const d = data as {
+          const d = data as unknown as {
             message?: ChatMessage | string;
             text?: string;
             error?: unknown;
@@ -165,11 +164,9 @@ export const useChats = defineStore("chats", {
             swap(tmpUser, d.message);
           else if (event === "delta" && reply) reply.content += d.text ?? "";
           else if (event === "done") {
-            finished = true;
             if (typeof d.message === "object") swap(tmpReply, d.message);
             else markFailed(tmpReply, "The server sent an invalid message.");
           } else if (event === "error") {
-            finished = true;
             const persisted = typeof d.message === "object" ? d.message : null;
             const text =
               typeof d.error === "string"
@@ -183,8 +180,6 @@ export const useChats = defineStore("chats", {
             else markFailed(tmpReply, text);
           }
         });
-        if (!finished)
-          await interrupted("The connection closed before the reply finished.");
       } catch (e) {
         if (e instanceof ApiError) {
           this.messages[id] = this.messages[id].filter(
@@ -192,7 +187,11 @@ export const useChats = defineStore("chats", {
           );
           throw e;
         }
-        await interrupted("The connection was lost before the reply finished.");
+        await interrupted(
+          e instanceof Error && e.message
+            ? e.message
+            : "The connection was lost before the reply finished.",
+        );
         throw e;
       } finally {
         this.busy[id] = false;
