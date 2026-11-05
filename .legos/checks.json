@@ -1,0 +1,9 @@
+{
+  "setup": "cd frontend && npm ci --no-audit --no-fund",
+  "checks": [
+    { "name": "backend-vet", "command": "cd backend && go vet ./internal/... ./tests/..." },
+    { "name": "backend-test", "command": "cd backend && go test ./..." },
+    { "name": "frontend-typecheck", "command": "cd frontend && npm run -s typecheck" },
+    { "name": "frontend-test", "command": "cd frontend && npx vitest run" }
+  ]
+}
