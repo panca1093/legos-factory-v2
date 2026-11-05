@@ -138,7 +138,6 @@ defineExpose({ restore, focus: () => ta.value?.focus() });
             <Button
               variant="ghost"
               small
-              aria-haspopup="menu"
               :aria-expanded="menuOpen"
               :disabled="locked"
               @click="toggle"

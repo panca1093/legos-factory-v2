@@ -39,6 +39,10 @@ describe("chat stream parser", () => {
       "b",
     ]);
   });
+  it("keeps a trailing CR across chunks so CRLF-CRLF still ends the frame", () => {
+    const all = frames('event: delta\r\ndata: {"text":"a"}\r\n\r', "\n");
+    expect(all).toEqual([{ event: "delta", data: { text: "a" } }]);
+  });
   it("delivers the error frame and flushes a trailing unterminated frame", () => {
     const all = frames(
       'event: error\ndata: {"message":{"id":2},"error":"boom"}\n\nevent: done\ndata: {"message":{"id":3}}',
@@ -158,6 +162,16 @@ describe("markdown", () => {
       "<code>**not bold**</code>",
     );
   });
+  it("keeps emphasis markers out of hrefs and allows balanced parentheses", () => {
+    const html = renderMarkdown(
+      "[**w**](https://en.wikipedia.org/wiki/Go_(game)) and https://x.dev/a*b*c",
+    );
+    expect(html).toContain(
+      '<a href="https://en.wikipedia.org/wiki/Go_(game)" target="_blank" rel="noopener noreferrer"><strong>w</strong></a>',
+    );
+    const html2 = renderMarkdown("[x](https://x.dev/a**b**c)");
+    expect(html2).toContain('href="https://x.dev/a**b**c"');
+  });
   it("renders lists", () => {
     expect(renderMarkdown("- a\n- b")).toBe("<ul><li>a</li><li>b</li></ul>");
   });
@@ -250,9 +264,108 @@ describe("chats store send", () => {
   });
 });
 
+describe("chats store races and interrupted turns", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  const enc = new TextEncoder();
+  const sse = (s: string) =>
+    new ReadableStream({
+      start(c) {
+        c.enqueue(enc.encode(s));
+        c.close();
+      },
+    });
+  const msg = (id: number, role: string, content: string) => ({
+    id,
+    chat_id: "c",
+    role,
+    content,
+    attachments: [],
+    created_at: "",
+  });
+  const frame = (event: string, data: unknown) =>
+    `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  it("keeps the first exchange when the stream finishes before a stale GET resolves", async () => {
+    let release: (v: unknown) => void = () => {};
+    const stale = new Promise((r) => (release = r));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string }) => {
+        if (init?.method === "POST")
+          return {
+            ok: true,
+            body: sse(
+              frame("user_message", { message: msg(1, "user", "hi") }) +
+                frame("done", { message: msg(2, "assistant", "yo") }),
+            ),
+          };
+        if (url.endsWith("/messages")) {
+          await stale;
+          return { ok: true, text: async () => '{"messages":[]}' };
+        }
+        return { ok: true, text: async () => '{"chats":[]}' };
+      }),
+    );
+    const s = useChats();
+    const load = s.loadMessages("c");
+    await s.send("c", { content: "hi" });
+    release(null);
+    await load;
+    expect(s.messages.c.map((m) => m.id)).toEqual([1, 2]);
+  });
+
+  it("marks a stream that ends without done/error as failed and keeps turn ids distinct", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string }) => {
+        if (init?.method === "POST")
+          return {
+            ok: true,
+            body: sse(frame("delta", { text: "half" })),
+          };
+        if (url.endsWith("/messages"))
+          return {
+            ok: true,
+            text: async () =>
+              JSON.stringify({ messages: [msg(1, "user", "q1")] }),
+          };
+        return { ok: true, text: async () => '{"chats":[]}' };
+      }),
+    );
+    const s = useChats();
+    await s.send("c", { content: "q1" });
+    expect(s.busy.c).toBe(false);
+    let last = s.messages.c.at(-1)!;
+    expect(last.role).toBe("assistant");
+    expect(last.content).toBe("half");
+    expect(last.error).toContain("closed");
+    expect(last.pending).toBe(false);
+    await s.send("c", { content: "q2" });
+    const ids = s.messages.c.map((m) => m.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    last = s.messages.c.at(-1)!;
+    expect(last.error).toBeTruthy();
+  });
+
+  it("does not swap in a message with id 0", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        body: sse(frame("done", { message: msg(0, "assistant", "bad") })),
+        text: async () => '{"chats":[]}',
+      })),
+    );
+    const s = useChats();
+    await s.send("c", { content: "q" }).catch(() => undefined);
+    expect(s.messages.c.some((m) => m.id === 0)).toBe(false);
+  });
+});
+
 describe("rail recent chats", () => {
-  it("lists the latest chats and creates then opens a new one", async () => {
+  it("lists the latest chats and opens a draft without creating one", async () => {
     setActivePinia(createPinia());
+    const calls: string[] = [];
     const list = Array.from({ length: 7 }, (_, i) => ({
       id: `c${i}`,
       user_id: "u",
@@ -264,7 +377,7 @@ describe("rail recent chats", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: { method?: string }) => ({
-        ok: true,
+        ok: (calls.push(init?.method ?? "GET"), true),
         text: async () =>
           JSON.stringify(
             init?.method === "POST"
@@ -292,7 +405,8 @@ describe("rail recent chats", () => {
     );
     await w.find(".rail .lg-btn.primary").trigger("click");
     await flushPromises();
-    expect(router.currentRoute.value.path).toBe("/chats/new");
+    expect(router.currentRoute.value.fullPath).toBe("/chats?new=1");
+    expect(calls).not.toContain("POST");
     w.unmount();
   });
 });

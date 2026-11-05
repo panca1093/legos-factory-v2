@@ -32,7 +32,10 @@ export function createFrameParser(onEvent: (e: ChatStreamEvent) => void) {
   }
   return {
     push(chunk: string) {
-      buf += chunk.replace(/\r\n?/g, "\n");
+      buf += chunk;
+      const hold = buf.endsWith("\r") ? "\r" : "";
+      buf =
+        buf.slice(0, buf.length - hold.length).replace(/\r\n?/g, "\n") + hold;
       let i: number;
       while ((i = buf.indexOf("\n\n")) >= 0) {
         frame(buf.slice(0, i));
@@ -40,6 +43,7 @@ export function createFrameParser(onEvent: (e: ChatStreamEvent) => void) {
       }
     },
     flush() {
+      buf = buf.replace(/\r\n?/g, "\n");
       if (buf.trim()) frame(buf);
       buf = "";
     },
@@ -83,11 +87,15 @@ export async function streamChat(
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   const parser = createFrameParser(onEvent);
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    parser.push(decoder.decode(value, { stream: true }));
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parser.push(decoder.decode(value, { stream: true }));
+    }
+    parser.push(decoder.decode());
+    parser.flush();
+  } finally {
+    reader.cancel().catch(() => undefined);
   }
-  parser.push(decoder.decode());
-  parser.flush();
 }

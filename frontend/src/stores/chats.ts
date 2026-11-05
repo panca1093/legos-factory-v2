@@ -39,8 +39,13 @@ export interface ChatModel {
   harness?: string;
 }
 
-const TMP_USER = -1;
-const TMP_REPLY = -2;
+let tmpId = 0;
+const epoch = new Map<string, number>();
+const bump = (id: string) => {
+  const n = (epoch.get(id) ?? 0) + 1;
+  epoch.set(id, n);
+  return n;
+};
 const byActivity = (a: Chat, b: Chat) =>
   b.updated_at.localeCompare(a.updated_at);
 
@@ -84,22 +89,27 @@ export const useChats = defineStore("chats", {
       delete this.lastBody[id];
     },
     async loadMessages(id: string) {
+      const token = bump(id);
       const r = await api.get<{ messages?: ChatMessage[] }>(
         `/api/v1/chats/${id}/messages`,
       );
-      if (!this.busy[id]) this.messages[id] = r.messages ?? [];
+      if (token === epoch.get(id) && !this.busy[id])
+        this.messages[id] = r.messages ?? [];
     },
     async send(id: string, body: ChatStreamBody) {
+      const tmpUser = --tmpId;
+      const tmpReply = --tmpId;
       const base = {
         chat_id: id,
         created_at: new Date().toISOString(),
         attachments: [],
       };
+      bump(id);
       this.messages[id] = [
         ...(this.messages[id] ?? []),
         {
           ...base,
-          id: TMP_USER,
+          id: tmpUser,
           role: "user",
           content: body.content,
           attachments: (body.files ?? []).map((f) => ({
@@ -110,7 +120,7 @@ export const useChats = defineStore("chats", {
         },
         {
           ...base,
-          id: TMP_REPLY,
+          id: tmpReply,
           role: "assistant",
           content: "",
           pending: true,
@@ -118,10 +128,30 @@ export const useChats = defineStore("chats", {
       ];
       this.busy[id] = true;
       this.lastBody[id] = body;
-      const swap = (tmp: number, m: ChatMessage) => {
+      const find = (tmp: number) => this.messages[id].find((x) => x.id === tmp);
+      const markFailed = (tmp: number, text: string) => {
+        const m = find(tmp);
+        if (m) Object.assign(m, { pending: false, error: m.error ?? text });
+      };
+      const swap = (tmp: number, m: ChatMessage, error?: string) => {
+        if (!(m.id > 0))
+          return markFailed(tmp, "The server sent an invalid message.");
         this.messages[id] = this.messages[id].map((x) =>
-          x.id === tmp ? m : x,
+          x.id === tmp ? (error ? { ...m, error } : m) : x,
         );
+      };
+      let finished = false;
+      const interrupted = async (text: string) => {
+        markFailed(tmpReply, text);
+        const partial = find(tmpReply);
+        this.busy[id] = false;
+        await this.loadMessages(id).catch(() => undefined);
+        if (
+          partial &&
+          !find(tmpReply) &&
+          this.messages[id].at(-1)?.role !== "assistant"
+        )
+          this.messages[id] = [...this.messages[id], partial];
       };
       try {
         await streamChat(id, body, ({ event, data }) => {
@@ -130,13 +160,16 @@ export const useChats = defineStore("chats", {
             text?: string;
             error?: unknown;
           };
-          const reply = this.messages[id].find((x) => x.id === TMP_REPLY);
+          const reply = find(tmpReply);
           if (event === "user_message" && typeof d.message === "object")
-            swap(TMP_USER, d.message);
+            swap(tmpUser, d.message);
           else if (event === "delta" && reply) reply.content += d.text ?? "";
-          else if (event === "done" && typeof d.message === "object")
-            swap(TMP_REPLY, d.message);
-          else if (event === "error" && reply) {
+          else if (event === "done") {
+            finished = true;
+            if (typeof d.message === "object") swap(tmpReply, d.message);
+            else markFailed(tmpReply, "The server sent an invalid message.");
+          } else if (event === "error") {
+            finished = true;
             const persisted = typeof d.message === "object" ? d.message : null;
             const text =
               typeof d.error === "string"
@@ -146,17 +179,20 @@ export const useChats = defineStore("chats", {
                   (typeof d.message === "string"
                     ? d.message
                     : "The reply failed."));
-            if (persisted) swap(TMP_REPLY, { ...persisted, error: text });
-            else Object.assign(reply, { pending: false, error: text });
+            if (persisted) swap(tmpReply, persisted, text);
+            else markFailed(tmpReply, text);
           }
         });
+        if (!finished)
+          await interrupted("The connection closed before the reply finished.");
       } catch (e) {
         if (e instanceof ApiError) {
-          this.messages[id] = this.messages[id].filter((x) => x.id > 0);
+          this.messages[id] = this.messages[id].filter(
+            (x) => x.id !== tmpUser && x.id !== tmpReply,
+          );
           throw e;
         }
-        this.busy[id] = false;
-        await this.loadMessages(id).catch(() => undefined);
+        await interrupted("The connection was lost before the reply finished.");
         throw e;
       } finally {
         this.busy[id] = false;

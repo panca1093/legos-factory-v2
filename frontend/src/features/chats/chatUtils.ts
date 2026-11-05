@@ -89,21 +89,31 @@ const esc = (s: string) =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
+const LINK = /\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g;
+
+function emphasis(t: string) {
+  return t
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[\s(])\*([^*\s][^*]*)\*(?=$|[\s).,;:!?])/g, "$1<em>$2</em>");
+}
+
 function inline(escaped: string) {
+  const links: string[] = [];
   return escaped
+    .replace(/[\uE000\uE001]/g, "")
     .split("`")
     .map((part, i) => {
       if (i % 2) return `<code>${part}</code>`;
-      return part
-        .replace(
-          /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-          '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
-        )
-        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-        .replace(
-          /(^|[\s(])\*([^*\s][^*]*)\*(?=$|[\s).,;:!?])/g,
-          "$1<em>$2</em>",
+      const held = part.replace(LINK, (_, text: string, url: string) => {
+        links.push(
+          `<a href="${url}" target="_blank" rel="noopener noreferrer">${emphasis(text)}</a>`,
         );
+        return `\uE000${links.length - 1}\uE001`;
+      });
+      return emphasis(held).replace(
+        /\uE000(\d+)\uE001/g,
+        (_, n: string) => links[Number(n)],
+      );
     })
     .join("");
 }
@@ -157,4 +167,13 @@ export function renderMarkdown(src: string) {
   }
   out.push(blocks(src.slice(last)));
   return out.join("");
+}
+
+const mdCache = new Map<string, { src: string; html: string }>();
+export function renderMarkdownCached(key: string, src: string) {
+  const hit = mdCache.get(key);
+  if (hit?.src === src) return hit.html;
+  const html = renderMarkdown(src);
+  mdCache.set(key, { src, html });
+  return html;
 }

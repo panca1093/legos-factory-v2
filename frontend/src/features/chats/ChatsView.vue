@@ -24,7 +24,8 @@ import {
   chatTitle,
   formatSize,
   groupByRecency,
-  renderMarkdown,
+  renderMarkdownCached,
+  byteLength,
   type PendingFile,
 } from "./chatUtils";
 import "./chats.css";
@@ -41,12 +42,18 @@ const query = ref(""),
   titleDraft = ref(""),
   draftModel = ref(""),
   scroller = ref<HTMLElement>(),
+  creating = ref(false),
+  announce = ref(""),
+  ctxBtn = ref<{ $el: HTMLElement }>(),
+  ctxPanel = ref<HTMLElement>(),
+  narrow = ref(false),
   composer = ref<InstanceType<typeof ChatComposer>>();
 let stick = true;
 const chatId = computed(() => (route.params.id as string | undefined) || "");
 const chat = computed(() => store.chats.find((c) => c.id === chatId.value));
 const messages = computed(() => store.messages[chatId.value] ?? []);
 const busy = computed(() => !!store.busy[chatId.value]);
+const draft = computed(() => !chatId.value && !!route.query.new);
 const model = computed({
   get: () => (chat.value ? chat.value.model : draftModel.value),
   set: (id: string) => void setModel(id),
@@ -90,6 +97,24 @@ const fail = (e: unknown) =>
         ? e.message
         : String(e),
   );
+function closeCtx() {
+  ctxOpen.value = false;
+  void nextTick(() => ctxBtn.value?.$el.focus());
+}
+watch(ctxOpen, async (open) => {
+  if (!open) return;
+  narrow.value = window.matchMedia("(max-width: 860px)").matches;
+  await nextTick();
+  ctxPanel.value?.querySelector<HTMLElement>("input, select, button")?.focus();
+});
+watch(busy, (now, was) => {
+  if (!was || now) return;
+  const last = messages.value.at(-1);
+  if (last?.role === "assistant")
+    announce.value = last.error
+      ? "The reply failed."
+      : `Reply finished. ${last.content.slice(0, 160)}`;
+});
 function setList(hidden: boolean) {
   listHidden.value = hidden;
   try {
@@ -99,16 +124,12 @@ function setList(hidden: boolean) {
   }
 }
 async function newChat() {
-  try {
-    const c = await store.create({ model: draftModel.value });
-    await router.push(`/chats/${c.id}`);
-    await nextTick();
-    composer.value?.focus();
-  } catch (e) {
-    fail(e);
-  }
+  if (chatId.value || !draft.value)
+    await router.push({ path: "/chats", query: { new: "1" } });
+  await nextTick();
+  composer.value?.focus();
 }
-async function setModel(id: string) {
+async function setModel(id: string, el?: HTMLSelectElement) {
   if (!chat.value) {
     draftModel.value = id;
     return;
@@ -116,6 +137,7 @@ async function setModel(id: string) {
   try {
     await store.update(chat.value.id, { model: id });
   } catch (e) {
+    if (el) el.value = chat.value.model;
     fail(e);
   }
 }
@@ -151,8 +173,14 @@ async function send(p: { content: string; files: PendingFile[] }) {
   };
   try {
     if (!id) {
-      id = (await store.create({ model: draftModel.value })).id;
-      await router.replace(`/chats/${id}`);
+      if (creating.value) return;
+      creating.value = true;
+      try {
+        id = (await store.create({ model: draftModel.value })).id;
+        await router.replace(`/chats/${id}`);
+      } finally {
+        creating.value = false;
+      }
     }
     stick = true;
     await store.send(id, body);
@@ -167,7 +195,10 @@ function retry() {
   if (body.content)
     void send({
       content: body.content,
-      files: (body.files ?? []).map((f) => ({ ...f, size: f.content.length })),
+      files: (body.files ?? []).map((f) => ({
+        ...f,
+        size: byteLength(f.content),
+      })),
     });
 }
 const fileLabel = (a: ChatAttachment) =>
@@ -189,7 +220,7 @@ watch(
     stick = true;
     if (!id) return;
     try {
-      await store.loadMessages(id);
+      if (!store.busy[id] && !creating.value) await store.loadMessages(id);
       toBottom();
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
@@ -223,7 +254,7 @@ onMounted(async () => {
   <section
     class="chats"
     :class="{
-      'in-thread': !!chatId,
+      'in-thread': !!chatId || draft,
       'list-hidden': listHidden,
       'ctx-open': ctxOpen && !!chat,
     }"
@@ -280,6 +311,7 @@ onMounted(async () => {
         <h2>{{ chatId ? chatTitle(chat) : "New chat" }}</h2>
         <IconButton
           v-if="chat"
+          ref="ctxBtn"
           class="ctx-btn"
           label="Chat details"
           :aria-pressed="ctxOpen"
@@ -295,7 +327,7 @@ onMounted(async () => {
             factory.
           </p>
         </div>
-        <div class="ch-thread" aria-live="polite">
+        <div class="ch-thread">
           <article
             v-for="m in messages"
             :key="m.id"
@@ -313,7 +345,7 @@ onMounted(async () => {
               <div
                 v-else-if="m.content"
                 class="md"
-                v-html="renderMarkdown(m.content)"
+                v-html="renderMarkdownCached(chatId + ':' + m.id, m.content)"
               ></div>
               <span
                 v-if="m.pending && !m.content"
@@ -364,18 +396,27 @@ onMounted(async () => {
         ref="composer"
         v-model:model="model"
         :models="store.models"
-        :busy="busy"
+        :busy="busy || creating"
         :readonly="!session.canWrite"
         @send="send"
         @error="toast"
       />
     </div>
+    <div role="status" aria-live="polite" class="ch-sr">{{ announce }}</div>
     <div
       v-if="ctxOpen && chat"
       class="ctx-scrim"
       @click="ctxOpen = false"
     ></div>
-    <aside v-if="chat" class="ch-ctx" aria-label="Chat details">
+    <aside
+      v-if="chat"
+      ref="ctxPanel"
+      class="ch-ctx"
+      role="dialog"
+      :aria-modal="narrow"
+      aria-label="Chat details"
+      @keydown.esc="closeCtx"
+    >
       <h4>Title</h4>
       <input
         v-model="titleDraft"
@@ -392,7 +433,12 @@ onMounted(async () => {
         aria-label="Model"
         :value="chat.model"
         :disabled="!session.canWrite || busy"
-        @change="setModel(($event.target as HTMLSelectElement).value)"
+        @change="
+          setModel(
+            ($event.target as HTMLSelectElement).value,
+            $event.target as HTMLSelectElement,
+          )
+        "
       >
         <option v-for="m in store.models" :key="m.id" :value="m.id">
           {{ m.name }}
