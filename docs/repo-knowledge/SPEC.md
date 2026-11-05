@@ -73,7 +73,7 @@ routes:
   - paths: ["**/*.test.ts"]
     reviewers: [testing]
   - paths: ["src/ui/**", "**/*.vue"]
-    reviewers: [frontend, uiux]
+    reviewers: [frontend, ui_ux]
 ---
 ```
 

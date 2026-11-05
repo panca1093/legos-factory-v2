@@ -170,6 +170,33 @@ export interface KnowledgeRecord {
   created_at: string;
 }
 
+export interface KBDoc {
+  id: string;
+  source: "repo" | "factory";
+  project_id?: string;
+  path: string;
+  commit_sha: string;
+  content_hash: string;
+  type: string;
+  status: "draft" | "stable" | "deprecated";
+  trust: "unverified" | "machine" | "human";
+  title: string;
+  description: string;
+  meta: Record<string, unknown>;
+  links?: string[];
+  indexed_at: number | string;
+}
+
+export interface KBDocDetail {
+  doc: KBDoc;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  links: KBDoc[];
+  backlinks: KBDoc[];
+  editable: boolean;
+  default_available: boolean;
+}
+
 export interface WOEvent {
   id: number;
   work_order_id: string;
