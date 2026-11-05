@@ -45,7 +45,6 @@ export interface WorkOrder {
   objective: string;
   acceptance: string;
   state: WorkOrderState;
-  autonomy: "guided" | "assisted" | "delegated";
   builder_model: string;
   inspector_model: string;
   clarif_question?: string;
@@ -55,7 +54,7 @@ export interface WorkOrder {
   foreman_model?: string;
   architect_model?: string;
   plan_review?: "" | "pending" | "approved";
-  review_rounds?: number;
+  plan_revisions?: number;
   brief?: string;
   spec?: string;
   paused_at?: string;
@@ -154,6 +153,7 @@ export interface Settings {
   inspector_model: string;
   allowed_models: string[] | null;
   cataloger_summaries?: boolean;
+  jev_enabled?: boolean;
 }
 
 export type Trust = "verified" | "human_decision" | "ai_interpretation";

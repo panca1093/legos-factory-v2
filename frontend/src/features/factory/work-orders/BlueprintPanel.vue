@@ -86,17 +86,17 @@ const emit = defineEmits<{
       <div class="row">
         <BrickBot persona="foreman" class="compact" /><strong
           v-if="order.plan_review === 'approved'"
-          >The Foreman approved the Architect's plan. Your call.</strong
+          >The Foreman's review is done. The plan needs your decision.</strong
         ><strong v-else role="status" data-test="foreman-reviewing"
           >The Foreman is reviewing the Architect's plan…</strong
         >
       </div>
       <p>
         Inspect the outcome, contract and task dependencies before authorizing
-        execution.
-        <template v-if="order.review_rounds"
-          >The Foreman sent this plan back for revision
-          {{ order.review_rounds }} time(s).</template
+        execution. The Activity tab shows why the plan gate asked you.
+        <template v-if="order.plan_revisions"
+          >The plan gate sent this plan back for revision
+          {{ order.plan_revisions }} time(s).</template
         >
       </p>
       <div class="row wrap" style="margin-top: 14px">

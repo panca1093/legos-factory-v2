@@ -3,6 +3,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 import ActivityPanel from "../../src/features/factory/runs/ActivityPanel.vue";
 import {
   duration,
+  gateSummary,
   groupActivity,
   liveRuns,
   liveVerb,
@@ -347,5 +348,59 @@ describe("ActivityPanel actors", () => {
     expect(factory.findComponent({ name: "BrickBot" }).exists()).toBe(false);
     expect(foreman.find(".avatar.system").exists()).toBe(false);
     expect(foreman.findComponent({ name: "BrickBot" }).exists()).toBe(true);
+  });
+});
+
+describe("gate events", () => {
+  it("summarises a Jev gate by outcome, row and note", () => {
+    const e = ev(
+      "done_gate",
+      { outcome: "fix", row: 3, note: "criterion c2 is not covered" },
+      "jev",
+    );
+    expect(gateSummary(e)).toEqual({
+      gate: "Done gate",
+      outcome: "fix",
+      row: 3,
+      note: "criterion c2 is not covered",
+      tone: "orange",
+    });
+    expect(
+      gateSummary(ev("plan_gate", { outcome: "approve", row: 5 }, "jev"))?.tone,
+    ).toBe("green");
+    expect(
+      gateSummary(
+        ev(
+          "plan_gate",
+          { outcome: "escalate", row: 1, error: "judgment failed: boom" },
+          "jev",
+        ),
+      )?.note,
+    ).toBe("judgment failed: boom");
+    expect(gateSummary(ev("plan_ready"))).toBeNull();
+  });
+
+  it("shows the gate row in Activity with jev as a system actor", async () => {
+    const w = mount(ActivityPanel, {
+      props: {
+        events: [
+          ev(
+            "plan_gate",
+            { outcome: "revise", row: 3, note: "tasks overlap" },
+            "jev",
+            "Plan gate: revise (row 3)",
+          ),
+        ],
+        runs: [],
+      },
+    });
+    await flushPromises();
+    const gate = w.find('[data-test="gate-event"]');
+    expect(gate.text()).toContain("revise");
+    expect(gate.text()).toContain("table row 3");
+    expect(gate.text()).toContain("tasks overlap");
+    expect(w.find(".avatar.system").exists()).toBe(true);
+    expect(w.text()).toContain("Jev");
+    w.unmount();
   });
 });
