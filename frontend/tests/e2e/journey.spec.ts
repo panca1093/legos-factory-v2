@@ -199,15 +199,34 @@ test("knowledge notebook: read first, discussion opens on demand", async ({
   await page.getByRole("link", { name: "Knowledge", exact: true }).click();
   const items = page.locator(".nb-item");
   await expect(items.first()).toBeVisible();
-  await expect(page.locator(".nb-read h1")).toBeVisible();
+  await expect(page.locator(".nb-read .nb-h")).toBeVisible();
   await expect(page.locator(".nb-talk")).toHaveCount(0);
   await page.getByRole("searchbox", { name: "Search notes" }).fill("Inspector");
   const note = items.filter({ hasText: "Inspector playbook" }).first();
   await expect(note.locator("mark").first()).toBeVisible();
   await note.click();
-  await expect(page.locator(".nb-read h1")).toContainText("Inspector playbook");
+  await expect(page.locator(".nb-read .nb-h")).toContainText(
+    "Inspector playbook",
+  );
   await expect(page.locator("[data-test=kb-sha]")).toBeVisible();
-  await page.getByRole("button", { name: "Ask about this" }).click();
+  await expect(
+    page.getByRole("button", { name: "Ask about this" }),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    const p = document.querySelector(".prose")!;
+    const r = document.createRange();
+    r.selectNodeContents(p.querySelector("p, li") ?? p);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(r);
+  });
+  const ask = page.locator(".sel-ask");
+  await expect(ask).toBeVisible();
+  const box = (await ask.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.locator(".quote")).toBeVisible();
   await expect(page.locator(".nb-talk")).toBeVisible();
   const toChats = page.getByRole("button", { name: "Open in Chats" });
   await expect(toChats).toBeDisabled();

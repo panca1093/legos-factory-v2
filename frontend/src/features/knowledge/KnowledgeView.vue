@@ -1,17 +1,67 @@
+<script lang="ts">
+import { ref } from "vue";
+import { useToast } from "../../composables/useToast";
+import { api } from "../../services/api/client";
+
+const { toast } = useToast();
+const idQuery = (id: string) => `id=${encodeURIComponent(id)}`;
+const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+// Module scope: a pending delete must outlive the view that scheduled it.
+const pendingIds = ref(new Set<string>());
+const queued = new Map<string, { committed: boolean }>();
+let reloadList: (() => Promise<void>) | null = null;
+
+if (typeof window !== "undefined")
+  window.addEventListener("pagehide", () => {
+    for (const [id, e] of queued) {
+      if (e.committed) continue;
+      e.committed = true;
+      fetch(`/api/v1/kb/doc?${idQuery(id)}`, {
+        method: "DELETE",
+        keepalive: true,
+        credentials: "same-origin",
+      }).catch(() => {});
+    }
+  });
+
+function scheduleDelete(id: string, title: string, onUndo: () => void) {
+  const entry = { committed: false };
+  queued.set(id, entry);
+  pendingIds.value = new Set(pendingIds.value).add(id);
+  const settle = () => {
+    queued.delete(id);
+    const s = new Set(pendingIds.value);
+    s.delete(id);
+    pendingIds.value = s;
+  };
+  toast(
+    `Deleted “${title}”`,
+    () => {
+      settle();
+      onUndo();
+    },
+    async () => {
+      if (entry.committed) return settle();
+      entry.committed = true;
+      try {
+        await api.del(`/api/v1/kb/doc?${idQuery(id)}`);
+        await reloadList?.();
+        settle();
+      } catch (e) {
+        settle();
+        toast(`Could not delete “${title}”: ${errMsg(e)}`);
+        await reloadList?.();
+      }
+    },
+  );
+}
+</script>
 <script setup lang="ts">
-import {
-  computed,
-  nextTick,
-  onBeforeUnmount,
-  onMounted,
-  ref,
-  watch,
-} from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import { useRouter } from "vue-router";
 import { BookOpen, Layers } from "lucide-vue-next";
 import SearchField from "../../components/ui/SearchField.vue";
-import { useToast } from "../../composables/useToast";
-import { api } from "../../services/api/client";
 import { useFactory } from "../../stores/factory";
 import type { KBDoc, KBDocDetail } from "../../types/api";
 import DiscussPanel from "./DiscussPanel.vue";
@@ -29,21 +79,22 @@ import "./knowledge.css";
 
 const factory = useFactory();
 const router = useRouter();
-const { toast } = useToast();
 
 const docs = ref<KBDoc[]>([]),
+  draftCount = ref(0),
   loading = ref(true),
   error = ref("");
 const q = ref(""),
   nb = ref(NB_ALL),
+  status = ref("stable"),
   openId = ref(""),
+  openTitle = ref(""),
   discuss = ref(false),
   quote = ref(""),
   mobile = ref<"list" | "read" | "talk">("list"),
-  pending = ref(new Set<string>());
+  editState = ref<boolean | null>(null);
+let pinned = "";
 
-const idQuery = (id: string) => `id=${encodeURIComponent(id)}`;
-const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const projectName = (id?: string) =>
   !id
     ? "Factory-wide"
@@ -52,29 +103,72 @@ const ts = (d: KBDoc) =>
   typeof d.indexed_at === "number" ? d.indexed_at : Date.parse(d.indexed_at);
 
 const visible = computed(() =>
-  docs.value.filter((d) => !pending.value.has(d.id)),
+  docs.value.filter((d) => !pendingIds.value.has(d.id)),
 );
-const notebooks = computed(() => notebooksOf(visible.value, projectName));
-const list = computed(() =>
-  visible.value
-    .filter((d) => inNotebook(d, nb.value))
-    .sort((a, b) => ts(b) - ts(a)),
+const notebooks = computed(() =>
+  notebooksOf(visible.value, projectName, draftCount.value),
 );
-const openDoc = computed(() => list.value.find((d) => d.id === openId.value));
+const list = computed(() => {
+  const l = visible.value.filter((d) => inNotebook(d, nb.value));
+  return q.value.trim() ? l : [...l].sort((a, b) => ts(b) - ts(a));
+});
 
+let seq = 0;
 async function load() {
-  error.value = "";
-  const p = new URLSearchParams({ status: "all" });
+  const mine = ++seq;
+  const p = new URLSearchParams();
+  if (nb.value === NB_DRAFTS) {
+    p.set("source", "factory");
+    p.set("status", "draft");
+  } else p.set("status", status.value);
   if (q.value.trim()) p.set("q", q.value.trim());
   try {
     const res = await api.get<{ docs: KBDoc[] }>(`/api/v1/kb/docs?${p}`);
+    if (mine !== seq) return;
     docs.value = res.docs ?? [];
+    error.value = "";
   } catch (e) {
+    if (mine !== seq) return;
     docs.value = [];
     error.value = errMsg(e);
-  } finally {
-    loading.value = false;
   }
+  loading.value = false;
+  if (
+    nb.value !== NB_ALL &&
+    nb.value !== NB_DRAFTS &&
+    !notebooks.value.some((b) => b.key === nb.value)
+  )
+    nb.value = NB_ALL;
+  syncOpen();
+}
+
+let draftSeq = 0;
+async function loadDraftCount() {
+  const mine = ++draftSeq;
+  let n = 0;
+  try {
+    const res = await api.get<{ docs: KBDoc[] }>(
+      "/api/v1/kb/docs?source=factory&status=draft",
+    );
+    n = (res.docs ?? []).length;
+  } catch {
+    /* the count is a hint; the list reports real errors */
+  }
+  if (mine === draftSeq) draftCount.value = n;
+}
+async function refreshAll() {
+  await Promise.all([load(), loadDraftCount()]);
+  if (nb.value === NB_DRAFTS && !draftCount.value) {
+    nb.value = NB_ALL;
+    await load();
+  }
+}
+
+function syncOpen() {
+  if (editState.value !== null) return;
+  const id = openId.value;
+  if (id && (id === pinned || list.value.some((d) => d.id === id))) return;
+  openId.value = list.value[0]?.id ?? "";
 }
 
 let debounce: ReturnType<typeof setTimeout> | undefined;
@@ -82,35 +176,72 @@ watch(q, () => {
   clearTimeout(debounce);
   debounce = setTimeout(load, 250);
 });
-watch(
-  [list, nb],
-  () => {
-    if (!list.value.some((d) => d.id === openId.value))
-      openId.value = list.value[0]?.id ?? "";
-  },
-  { flush: "sync" },
-);
+watch(pendingIds, syncOpen);
 watch(openId, () => (quote.value = ""));
 
 onMounted(async () => {
   document.addEventListener("keydown", onKey);
+  reloadList = refreshAll;
   await Promise.allSettled([factory.refreshProjects()]);
-  await load();
+  await refreshAll();
 });
 onBeforeUnmount(() => {
   clearTimeout(debounce);
   document.removeEventListener("keydown", onKey);
+  if (reloadList === refreshAll) reloadList = null;
 });
 
+const leaveOk = () =>
+  editState.value !== true ||
+  window.confirm("Discard your unsaved changes to this note?");
+
 function select(id: string) {
+  if (id !== openId.value && !leaveOk()) return;
+  pinned = "";
   openId.value = id;
   mobile.value = "read";
 }
+function openLinked(id: string) {
+  if (!leaveOk()) return;
+  pinned = id;
+  openId.value = id;
+  mobile.value = "read";
+  clearTimeout(debounce);
+  if (nb.value !== NB_ALL || q.value) {
+    nb.value = NB_ALL;
+    q.value = "";
+    clearTimeout(debounce);
+    load();
+  }
+}
+function setNb(key: string) {
+  if (key === nb.value || !leaveOk()) return;
+  editState.value = null;
+  const wasDrafts = nb.value === NB_DRAFTS;
+  nb.value = key;
+  pinned = "";
+  if (wasDrafts || key === NB_DRAFTS) {
+    docs.value = [];
+    load();
+  } else syncOpen();
+}
+function setStatus(e: Event) {
+  const el = e.target as HTMLSelectElement;
+  if (!leaveOk()) {
+    el.value = status.value;
+    return;
+  }
+  status.value = el.value;
+  editState.value = null;
+  load();
+}
 function move(dir: 1 | -1) {
+  if (editState.value !== null) return;
   const i = list.value.findIndex((d) => d.id === openId.value);
   const next =
     list.value[Math.max(0, Math.min(list.value.length - 1, i + dir))];
   if (!next) return;
+  pinned = "";
   openId.value = next.id;
   nextTick(() =>
     document
@@ -144,39 +275,21 @@ function closeDiscuss() {
 }
 
 function afterReview() {
+  openId.value = "";
+  pinned = "";
   mobile.value = "list";
-  return load();
+  return refreshAll();
 }
 
 function remove(detail: KBDocDetail) {
   const { id, title } = detail.doc;
   const i = list.value.findIndex((d) => d.id === id);
   openId.value = (list.value[i + 1] ?? list.value[i - 1])?.id ?? "";
-  pending.value = new Set(pending.value).add(id);
+  pinned = "";
   mobile.value = "list";
-  const restore = () => {
-    const s = new Set(pending.value);
-    s.delete(id);
-    pending.value = s;
-  };
-  toast(
-    `Deleted “${title}”`,
-    () => {
-      restore();
-      openId.value = id;
-    },
-    async () => {
-      try {
-        await api.del(`/api/v1/kb/doc?${idQuery(id)}`);
-        await load();
-        restore();
-      } catch (e) {
-        restore();
-        toast(`Could not delete “${title}”: ${errMsg(e)}`);
-        await load();
-      }
-    },
-  );
+  scheduleDelete(id, title, () => {
+    openId.value = id;
+  });
 }
 
 const toChats = (id: string) => router.push(`/chats/${id}`);
@@ -205,7 +318,7 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
             :class="{ on: nb === b.key, drafts: b.key === NB_DRAFTS }"
             :aria-pressed="nb === b.key"
             :data-test="b.key === NB_DRAFTS ? 'drafts-shortcut' : undefined"
-            @click="nb = b.key"
+            @click="setNb(b.key)"
           >
             <Layers v-if="b.key === NB_ALL" class="icon" />
             <BookOpen v-else class="icon" />
@@ -213,6 +326,19 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
             ><span class="n">{{ b.count }}</span>
           </button>
         </div>
+        <select
+          v-if="nb !== NB_DRAFTS"
+          :value="status"
+          class="lg-field nb-status"
+          aria-label="Status"
+          data-test="kb-status"
+          @change="setStatus"
+        >
+          <option value="stable">Stable</option>
+          <option value="draft">Draft</option>
+          <option value="deprecated">Deprecated</option>
+          <option value="all">All statuses</option>
+        </select>
         <p v-if="error" class="notice" role="alert">{{ error }}</p>
         <p v-else-if="loading" class="small muted" role="status">
           Loading notes…
@@ -235,6 +361,11 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
             <!-- eslint-enable vue/no-v-html -->
             <span class="m"
               ><span class="tag">{{ d.type || "untyped" }}</span
+              ><span
+                v-if="d.status !== 'stable'"
+                class="nb-pill"
+                :class="d.status"
+                >{{ d.status }}</span
               >{{ d.source === "repo" ? "repo" : projectName(d.project_id) }} ·
               {{ when(d.indexed_at) }}</span
             >
@@ -249,15 +380,17 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
         </div>
       </aside>
       <NoteReader
-        v-if="openDoc"
-        :doc-id="openDoc.id"
+        v-if="openId"
+        :doc-id="openId"
         :discuss-open="discuss"
-        @open="select"
+        @open="openLinked"
         @back="mobile = 'list'"
-        @changed="load"
+        @changed="refreshAll"
         @closed="afterReview"
         @remove="remove"
         @ask="toggleDiscuss"
+        @loaded="openTitle = $event"
+        @editing="editState = $event"
       />
       <article v-else class="nb-read">
         <div class="nb-empty">
@@ -266,10 +399,10 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
         </div>
       </article>
       <DiscussPanel
-        v-if="discuss && openDoc"
+        v-if="discuss && openId"
         v-model:quote="quote"
-        :doc-id="openDoc.id"
-        :title="openDoc.title"
+        :doc-id="openId"
+        :title="openTitle"
         @close="closeDiscuss"
         @chat="toChats"
       />

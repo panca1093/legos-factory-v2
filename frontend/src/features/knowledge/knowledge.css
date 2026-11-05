@@ -211,7 +211,7 @@
   padding: 36px 32px 64px;
   animation: lg-rise var(--dur-slow) var(--ease-out) both;
 }
-.nb-doc h1,
+.nb-doc .nb-h,
 .nb-title {
   margin: 0 0 10px;
   font: 500 34px/40px var(--font-display);
@@ -260,13 +260,13 @@
   line-height: 26px;
   overflow-wrap: anywhere;
 }
-.prose h2 {
+.prose h3 {
   font: 600 19px/26px var(--font-sans);
   margin: 30px 0 8px;
   scroll-margin-top: 80px;
 }
-.prose h3,
-.prose h4 {
+.prose h4,
+.prose h5 {
   font: 600 16px/24px var(--font-sans);
   margin: 22px 0 6px;
   scroll-margin-top: 80px;
@@ -495,8 +495,9 @@
 .km.ai .prose p {
   margin: 0 0 8px;
 }
-.km.ai .prose h2,
-.km.ai .prose h3 {
+.km.ai .prose h3,
+.km.ai .prose h4,
+.km.ai .prose h5 {
   font-size: 14px;
   margin: 10px 0 4px;
 }
@@ -665,7 +666,7 @@
   .nb-edit {
     padding: 24px 20px 48px;
   }
-  .nb-doc h1,
+  .nb-doc .nb-h,
   .nb-title {
     font-size: 26px;
     line-height: 32px;
@@ -679,4 +680,17 @@
   .nb.talk {
     height: calc(100dvh - 190px);
   }
+}
+.nb-status {
+  min-height: 34px;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+.nb-empty .nb-back {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+}
+.nb-item .nb-pill {
+  padding: 0 6px;
 }

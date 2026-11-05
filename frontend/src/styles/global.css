@@ -1253,7 +1253,7 @@ input[type="checkbox"] {
   .catalog-illustration {
     display: none;
   }
-    .modal-backdrop {
+  .modal-backdrop {
     padding: 12px;
   }
   .modal {

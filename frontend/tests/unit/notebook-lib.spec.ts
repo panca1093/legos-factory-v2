@@ -34,8 +34,8 @@ it("builds a table of contents from headings outside code fences", () => {
     { id: "h-two-1", text: "Two" },
   ]);
   const html = renderMarkdown(body);
-  expect(html).toContain('<h2 id="h-one">One</h2>');
-  expect(html).toContain('<h3 id="h-two-1">Two</h3>');
+  expect(html).toContain('<h3 id="h-one">One</h3>');
+  expect(html).toContain('<h4 id="h-two-1">Two</h4>');
 });
 
 it("renders markdown without letting raw html or script urls through", () => {
@@ -75,15 +75,30 @@ it("groups notes into notebooks and keeps drafts separate", () => {
     doc({ id: "c", project_id: "p1" }),
     doc({ id: "d", status: "draft" }),
   ];
-  const nbs = notebooksOf(docs, (id) => (id ? "Greeter" : "Factory-wide"));
+  const nbs = notebooksOf(
+    docs.filter((d) => d.status !== "draft"),
+    (id) => (id ? "Greeter" : "Factory-wide"),
+    1,
+  );
   expect(nbs.map((n) => [n.key, n.count])).toEqual([
     ["all", 3],
     ["drafts", 1],
     ["p:", 1],
     ["p:p1", 2],
   ]);
-  expect(docs.filter((d) => inNotebook(d, "drafts")).map((d) => d.id)).toEqual([
+  expect(docs.filter((d) => inNotebook(d, "p:")).map((d) => d.id)).toEqual([
+    "a",
     "d",
   ]);
   expect(docs.filter((d) => inNotebook(d, "p:p1"))).toHaveLength(2);
+});
+
+it("keeps emphasis markers inside urls and code out of the formatting pass", () => {
+  const html = renderMarkdown(
+    "[a *b*](https://x.dev/*y*/_z_) and `*not em*` and *em*",
+  );
+  expect(html).toContain('href="https://x.dev/*y*/_z_"');
+  expect(html).toContain(">a <em>b</em></a>");
+  expect(html).toContain("<code>*not em*</code>");
+  expect(html).toContain("<em>em</em>");
 });

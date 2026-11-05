@@ -57,22 +57,31 @@ const scroll = () =>
     if (body.value) body.value.scrollTop = body.value.scrollHeight;
   });
 
+const forget = (docId: string) => {
+  const ids = chatIds();
+  delete ids[docId];
+  sessionStorage.setItem(key, JSON.stringify(ids));
+};
+
 async function loadHistory() {
+  const docId = props.docId;
   turns.value = [];
   error.value = "";
-  chatId.value = chatIds()[props.docId] ?? "";
+  chatId.value = chatIds()[docId] ?? "";
   if (!chatId.value) return;
   try {
     const r = await api.get<{ messages: ChatMessage[] }>(
       `/api/v1/chats/${chatId.value}/messages`,
     );
+    if (docId !== props.docId) return;
     turns.value = (r.messages ?? []).map(toTurn);
     scroll();
-  } catch {
-    const ids = chatIds();
-    delete ids[props.docId];
-    sessionStorage.setItem(key, JSON.stringify(ids));
-    chatId.value = "";
+  } catch (e) {
+    if (docId !== props.docId) return;
+    if (e instanceof ApiError && e.status === 404) {
+      forget(docId);
+      chatId.value = "";
+    }
   }
 }
 watch(() => props.docId, loadHistory);
@@ -82,16 +91,17 @@ onMounted(() => {
 });
 watch(quote, (q) => q && input.value?.focus());
 
-async function ensureChat() {
-  if (chatId.value) return chatId.value;
+async function ensureChat(docId: string, title: string) {
+  const known = chatIds()[docId];
+  if (known) return known;
   const r = await api.post<{ chat: { id: string } }>("/api/v1/chats", {
-    title: props.title.slice(0, 120),
+    title: title.slice(0, 120),
   });
-  chatId.value = r.chat.id;
   sessionStorage.setItem(
     key,
-    JSON.stringify({ ...chatIds(), [props.docId]: r.chat.id }),
+    JSON.stringify({ ...chatIds(), [docId]: r.chat.id }),
   );
+  if (docId === props.docId) chatId.value = r.chat.id;
   return r.chat.id;
 }
 
@@ -100,46 +110,60 @@ async function send(text: string) {
   if (!content || busy.value || !session.canWrite) return;
   const q = quote.value;
   const docId = props.docId;
+  const title = props.title;
   busy.value = true;
   error.value = "";
   draft.value = "";
   quote.value = "";
-  const mine: Turn = {
-    id: `u${Date.now()}`,
-    role: "user",
-    text: content,
-    quote: q || undefined,
-  };
-  const reply: Turn = { id: `a${Date.now()}`, role: "assistant", text: "" };
-  turns.value.push(mine, reply);
+  const mineId = `u${Date.now()}`;
+  let replyId = `a${Date.now()}`;
+  turns.value.push(
+    { id: mineId, role: "user", text: content, quote: q || undefined },
+    { id: replyId, role: "assistant", text: "" },
+  );
   scroll();
-  const onEvent = (e: ChatEvent) => {
+  const patch = (fn: (t: Turn) => void) => {
     if (docId !== props.docId) return;
-    const r = turns.value.find((t) => t.id === reply.id);
-    if (!r) return;
-    if (e.event === "delta") r.text += e.data.text;
-    else if (e.event === "done") {
-      r.text = e.data.message.content;
-      r.id = String(e.data.message.id);
-    } else if (e.event === "error") {
-      r.error = e.data.error;
-    }
+    const t = turns.value.find((x) => x.id === replyId);
+    if (t) fn(t);
+  };
+  const onEvent = (e: ChatEvent) => {
+    patch((r) => {
+      if (e.event === "delta") r.text += e.data.text;
+      else if (e.event === "done") {
+        r.text = e.data.message.content;
+        replyId = r.id = String(e.data.message.id);
+      } else if (e.event === "error") r.error = e.data.error;
+    });
     scroll();
   };
   try {
-    const id = await ensureChat();
-    await streamChat(
-      id,
-      { content, kb: { id: docId, ...(q ? { quote: q } : {}) } },
-      onEvent,
-    );
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const id = await ensureChat(docId, title);
+        await streamChat(
+          id,
+          { content, kb: { id: docId, ...(q ? { quote: q } : {}) } },
+          onEvent,
+        );
+        break;
+      } catch (e) {
+        if (!(e instanceof ApiError && e.status === 404 && attempt === 0))
+          throw e;
+        forget(docId);
+        if (docId === props.docId) chatId.value = "";
+      }
+    }
   } catch (e) {
+    if (docId !== props.docId) return;
     error.value = e instanceof Error ? e.message : String(e);
     if (e instanceof ApiError) {
-      turns.value = turns.value.filter((t) => t !== mine && t !== reply);
+      turns.value = turns.value.filter(
+        (t) => t.id !== mineId && t.id !== replyId,
+      );
       draft.value = content;
       quote.value = q;
-    } else reply.error = error.value;
+    } else patch((r) => (r.error = error.value));
   } finally {
     busy.value = false;
   }

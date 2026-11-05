@@ -2,6 +2,7 @@ import type { KBDoc } from "../../types/api";
 
 const esc = (s: string) =>
   s
+    .replace(/\uE000/g, "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -13,15 +14,24 @@ const slug = (s: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 
-function inline(escaped: string) {
-  return escaped
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
+function emphasis(t: string) {
+  return t
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
-    .replace(
-      /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
-    );
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+}
+
+function inline(escaped: string) {
+  const stash: string[] = [];
+  const keep = (html: string) => `\uE000${stash.push(html) - 1}\uE000`;
+  return emphasis(
+    escaped
+      .replace(/`([^`]+)`/g, (_, c) => keep(`<code>${c}</code>`))
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) =>
+        keep(
+          `<a href="${u}" target="_blank" rel="noopener noreferrer">${emphasis(t)}</a>`,
+        ),
+      ),
+  ).replace(/\uE000(\d+)\uE000/g, (_, i) => stash[+i]);
 }
 
 export type TocItem = { id: string; text: string };
@@ -73,7 +83,7 @@ export function renderMarkdown(src: string): string {
     const q = /^&gt;\s?(.*)$/.exec(line);
     if (h) {
       closeList();
-      const level = h[1].length + 1;
+      const level = h[1].length + 2;
       out.push(
         `<h${level} id="${toc[ti++]?.id ?? slug(h[2])}">${inline(h[2])}</h${level}>`,
       );
@@ -144,11 +154,10 @@ export type Notebook = { key: string; label: string; count: number };
 export function notebooksOf(
   docs: KBDoc[],
   projectName: (id?: string) => string,
+  draftCount: number,
 ): Notebook[] {
-  const live = docs.filter((d) => d.status !== "draft");
-  const drafts = docs.length - live.length;
   const by = new Map<string, Notebook>();
-  for (const d of live) {
+  for (const d of docs) {
     const key = d.project_id ?? "";
     const nb = by.get(key) ?? {
       key: `p:${key}`,
@@ -160,15 +169,15 @@ export function notebooksOf(
   }
   const books = [...by.values()].sort((a, b) => a.label.localeCompare(b.label));
   const out: Notebook[] = [
-    { key: NB_ALL, label: "All notes", count: live.length },
+    { key: NB_ALL, label: "All notes", count: docs.length },
   ];
-  if (drafts)
-    out.push({ key: NB_DRAFTS, label: "Drafts to review", count: drafts });
+  if (draftCount)
+    out.push({ key: NB_DRAFTS, label: "Drafts to review", count: draftCount });
   return [...out, ...books];
 }
 
 export function inNotebook(d: KBDoc, key: string): boolean {
-  if (key === NB_ALL) return d.status !== "draft";
-  if (key === NB_DRAFTS) return d.status === "draft";
-  return d.status !== "draft" && `p:${d.project_id ?? ""}` === key;
+  return (
+    key === NB_ALL || key === NB_DRAFTS || `p:${d.project_id ?? ""}` === key
+  );
 }

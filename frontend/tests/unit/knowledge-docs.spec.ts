@@ -104,10 +104,16 @@ beforeEach(() => {
       body: init?.body ? JSON.parse(init.body as string) : undefined,
     });
     const u = new URL(url, "http://x");
-    if (u.pathname === "/api/v1/kb/docs")
-      return new Response(
-        JSON.stringify({ docs: [factoryDoc, repoDoc, draftDoc] }),
-      );
+    if (u.pathname === "/api/v1/kb/docs") {
+      const st = u.searchParams.get("status");
+      const docs =
+        st === "draft"
+          ? [draftDoc]
+          : st === "all"
+            ? [factoryDoc, repoDoc, draftDoc]
+            : [factoryDoc, repoDoc];
+      return new Response(JSON.stringify({ docs }));
+    }
     if (u.pathname === "/api/v1/kb/doc" && method === "GET")
       return new Response(JSON.stringify(details[u.searchParams.get("id")!]));
     if (u.pathname === "/api/v1/chats" && method === "POST")
@@ -143,7 +149,7 @@ const items = (w: Awaited<ReturnType<typeof render>>) =>
 
 it("lists notebooks with counts and opens the newest note in the reader", async () => {
   const w = await render();
-  expect(calls[0].url).toBe("/api/v1/kb/docs?status=all");
+  expect(calls[0].url).toBe("/api/v1/kb/docs?status=stable");
   expect(w.find(".nb-books").text()).toContain("All notes2");
   expect(w.find(".nb-books").text()).toContain("Drafts to review1");
   expect(w.find(".nb-books").text()).toContain("Greeter2");
@@ -174,7 +180,7 @@ it("searches server-side after a pause and highlights the term", async () => {
   await vi.advanceTimersByTimeAsync(300);
   await flushPromises();
   expect(
-    calls.some((c) => c.url === "/api/v1/kb/docs?status=all&q=rounding"),
+    calls.some((c) => c.url === "/api/v1/kb/docs?status=stable&q=rounding"),
   ).toBe(true);
   expect(items(w)[0].html()).toContain("<mark>rounding</mark>");
   w.unmount();
@@ -239,6 +245,9 @@ it("rejects invalid frontmatter JSON without calling the API", async () => {
 async function openDrafts(w: Awaited<ReturnType<typeof render>>) {
   await w.find('[data-test="drafts-shortcut"]').trigger("click");
   await flushPromises();
+  expect(
+    calls.filter((c) => c.url.endsWith("source=factory&status=draft")).length,
+  ).toBeGreaterThan(1);
 }
 
 it("keeps drafts in their own notebook and approves with a note", async () => {
@@ -390,8 +399,8 @@ it("sends a selected passage as the quote", async () => {
   s.addRange(range);
   range.getBoundingClientRect = () => new DOMRect(10, 100, 50, 20);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  p.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-  await vi.advanceTimersByTimeAsync(20);
+  document.dispatchEvent(new Event("selectionchange"));
+  await vi.advanceTimersByTimeAsync(100);
   vi.useRealTimers();
   await flushPromises();
   await click("kb-ask-selection");
@@ -418,5 +427,155 @@ it("reports list failures inline", async () => {
   );
   const w = await render();
   expect(w.find('[role="alert"]').text()).toContain("boom");
+  w.unmount();
+});
+
+it("restores the note and reports it when the delayed DELETE fails", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const base = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+    init?.method === "DELETE"
+      ? new Response(
+          JSON.stringify({ error: { code: "FORBIDDEN", message: "nope" } }),
+          { status: 403 },
+        )
+      : base(url, init),
+  );
+  const w = await render();
+  await click("kb-delete");
+  expect(items(w)).toHaveLength(1);
+  await vi.advanceTimersByTimeAsync(6100);
+  await flushPromises();
+  expect(items(w)).toHaveLength(2);
+  expect(useToast().toasts.value.some((t) => t.message.includes("nope"))).toBe(
+    true,
+  );
+  w.unmount();
+});
+
+it("drops stale search responses", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const base = fetchMock.getMockImplementation()!;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url.includes("q=slow")) {
+      await gate;
+      return new Response(JSON.stringify({ docs: [repoDoc] }));
+    }
+    return base(url, init);
+  });
+  const w = await render();
+  const box = w.find("input[type=search]");
+  await box.setValue("slow");
+  await vi.advanceTimersByTimeAsync(300);
+  await box.setValue("rounding");
+  await vi.advanceTimersByTimeAsync(300);
+  await flushPromises();
+  release();
+  await flushPromises();
+  expect(items(w)[0].text()).toContain("Escalation");
+  expect(items(w)).toHaveLength(2);
+  w.unmount();
+});
+
+it("recovers when the remembered chat was deleted", async () => {
+  sessionStorage.setItem(
+    "legos-kb-chats",
+    JSON.stringify({ [factoryDoc.id]: "gone" }),
+  );
+  const base = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+    url.includes("/chats/gone/")
+      ? new Response(
+          JSON.stringify({ error: { code: "NOT_FOUND", message: "no chat" } }),
+          { status: 404 },
+        )
+      : base(url, init),
+  );
+  const w = await render();
+  await click("kb-ask");
+  const ta =
+    document.body.querySelector<HTMLTextAreaElement>(".composer textarea")!;
+  ta.value = "hi";
+  ta.dispatchEvent(new Event("input"));
+  await flushPromises();
+  await click("kb-send");
+  expect(calls.some((c) => c.url === "/api/v1/chats")).toBe(true);
+  expect(calls.some((c) => c.url === "/api/v1/chats/c1/messages")).toBe(true);
+  expect(JSON.parse(sessionStorage.getItem("legos-kb-chats")!)).toEqual({
+    [factoryDoc.id]: "c1",
+  });
+  expect(w.findAll('[data-test="kb-turn"]')).toHaveLength(2);
+  w.unmount();
+});
+
+it("opens a linked note that is outside the current search", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  details[backlink.id] = detailOf(backlink);
+  const base = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+    url.includes("q=money")
+      ? new Response(JSON.stringify({ docs: [repoDoc] }))
+      : base(url, init),
+  );
+  const w = await render();
+  await w.find("input[type=search]").setValue("money");
+  await vi.advanceTimersByTimeAsync(300);
+  await flushPromises();
+  expect(items(w)).toHaveLength(1);
+  const ref = [...document.body.querySelectorAll<HTMLElement>(".ref")].find(
+    (r) => r.textContent?.includes("Linked from"),
+  )!;
+  ref.click();
+  await flushPromises();
+  expect(items(w)).toHaveLength(2);
+  expect(document.body.querySelector(".nb-h")!.textContent).toBe("Linked from");
+  w.unmount();
+});
+
+it("ignores j/k while editing and confirms before leaving unsaved edits", async () => {
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const w = await render();
+  await click("kb-edit");
+  document.body.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "j", bubbles: true }),
+  );
+  await flushPromises();
+  expect(w.find(".nb-item.on").text()).toContain("Escalation");
+  const bd = document.body.querySelector<HTMLTextAreaElement>("#kb-body")!;
+  bd.value = "changed";
+  bd.dispatchEvent(new Event("input"));
+  await flushPromises();
+  await items(w)[1].trigger("click");
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(w.find(".nb-item.on").text()).toContain("Escalation");
+  confirm.mockReturnValue(true);
+  await items(w)[1].trigger("click");
+  await flushPromises();
+  expect(w.find(".nb-item.on").text()).toContain("Money");
+  confirm.mockRestore();
+  w.unmount();
+});
+
+it("filters by status and badges deprecated notes", async () => {
+  const dep = mk({
+    id: "d",
+    title: "Old",
+    status: "deprecated",
+    indexed_at: 5,
+  });
+  const base = fetchMock.getMockImplementation()!;
+  fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
+    url.includes("status=deprecated") && url.includes("/kb/docs")
+      ? new Response(JSON.stringify({ docs: [dep] }))
+      : base(url, init),
+  );
+  details[dep.id] = detailOf(dep);
+  const w = await render();
+  await w.find('[data-test="kb-status"]').setValue("deprecated");
+  await flushPromises();
+  expect(items(w)[0].text()).toContain("Old");
+  expect(items(w)[0].text()).toContain("deprecated");
   w.unmount();
 });

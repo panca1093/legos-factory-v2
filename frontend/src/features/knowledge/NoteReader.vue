@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import {
   ChevronLeft,
   GitBranch,
@@ -22,6 +29,8 @@ const emit = defineEmits<{
   closed: [];
   remove: [detail: KBDocDetail];
   ask: [quote?: string];
+  loaded: [title: string];
+  editing: [dirty: boolean | null];
 }>();
 const session = useSession();
 
@@ -78,13 +87,16 @@ async function load(id: string) {
   sel.value = null;
   busy.value = true;
   try {
-    detail.value = await api.get<KBDocDetail>(`/api/v1/kb/doc?${idQuery(id)}`);
+    const d = await api.get<KBDocDetail>(`/api/v1/kb/doc?${idQuery(id)}`);
+    if (id !== props.docId) return;
+    detail.value = d;
+    emit("loaded", d.doc.title);
   } catch (e) {
+    if (id !== props.docId) return;
     detail.value = null;
     error.value = errMsg(e);
-  } finally {
-    busy.value = false;
   }
+  busy.value = false;
   if (root.value) root.value.scrollTop = 0;
 }
 watch(() => props.docId, load, { immediate: true });
@@ -96,6 +108,22 @@ function startEdit() {
   error.value = "";
   editing.value = true;
 }
+const dirty = computed(
+  () =>
+    editing.value &&
+    !!detail.value &&
+    (bodyDraft.value !== detail.value.body ||
+      fmDraft.value !==
+        JSON.stringify(detail.value.frontmatter ?? {}, null, 2)),
+);
+watch([editing, dirty], () =>
+  emit("editing", editing.value ? dirty.value : null),
+);
+onBeforeUnmount(() => {
+  document.removeEventListener("selectionchange", checkSelection);
+  emit("editing", null);
+});
+onMounted(() => document.addEventListener("selectionchange", checkSelection));
 function cancelEdit() {
   editing.value = false;
   confirming.value = "";
@@ -113,8 +141,10 @@ async function act(fn: () => Promise<void>) {
     busy.value = false;
   }
 }
-const reload = async (id: string) =>
-  (detail.value = await api.get<KBDocDetail>(`/api/v1/kb/doc?${idQuery(id)}`));
+const reload = async (id: string) => {
+  const d = await api.get<KBDocDetail>(`/api/v1/kb/doc?${idQuery(id)}`);
+  if (id === props.docId) detail.value = d;
+};
 
 async function save() {
   if (!detail.value) return;
@@ -181,8 +211,10 @@ function jump(id: string) {
     ?.scrollIntoView?.({ behavior: "smooth", block: "start" });
 }
 
+let selTimer: ReturnType<typeof setTimeout> | undefined;
 function checkSelection() {
-  setTimeout(() => {
+  clearTimeout(selTimer);
+  selTimer = setTimeout(() => {
     const s = window.getSelection();
     const text = s?.toString().trim() ?? "";
     if (
@@ -196,12 +228,16 @@ function checkSelection() {
     }
     const r = s.getRangeAt(0).getBoundingClientRect();
     const box = root.value.getBoundingClientRect();
+    const half = 90;
     sel.value = {
       text,
-      left: Math.max(90, r.left - box.left + r.width / 2),
+      left: Math.min(
+        Math.max(half, r.left - box.left + r.width / 2),
+        Math.max(half, root.value.clientWidth - half),
+      ),
       top: Math.max(64, r.top - box.top + root.value.scrollTop - 44),
     };
-  }, 10);
+  }, 80);
 }
 async function askSelection() {
   const q = sel.value?.text;
@@ -214,6 +250,9 @@ async function askSelection() {
 <template>
   <article ref="root" class="nb-read" :aria-busy="busy" @mousedown="sel = null">
     <div v-if="!detail" class="nb-empty">
+      <IconButton class="nb-back" label="Back to notes" @click="emit('back')"
+        ><ChevronLeft class="icon"
+      /></IconButton>
       <p v-if="error" class="notice" role="alert">{{ error }}</p>
       <p v-else class="muted" role="status">Loading note…</p>
     </div>
@@ -293,7 +332,7 @@ async function askSelection() {
       </div>
 
       <div v-if="editing" class="nb-edit">
-        <h1 class="nb-title">{{ detail.doc.title }}</h1>
+        <h2 class="nb-title">{{ detail.doc.title }}</h2>
         <p v-if="error" class="notice" role="alert">{{ error }}</p>
         <label for="kb-fm">Frontmatter (JSON)</label>
         <textarea
@@ -320,7 +359,7 @@ async function askSelection() {
         </div>
       </div>
       <div v-else class="nb-doc">
-        <h1>{{ detail.doc.title }}</h1>
+        <h2 class="nb-h">{{ detail.doc.title }}</h2>
         <p class="nb-path small muted">
           <code>{{ detail.doc.path }}</code> · <GitBranch class="icon" /><code
             data-test="kb-sha"
@@ -368,14 +407,7 @@ async function askSelection() {
           >
         </nav>
         <!-- eslint-disable-next-line vue/no-v-html -- escape-then-format renderer -->
-        <div
-          ref="prose"
-          class="prose"
-          data-test="kb-rendered"
-          @mouseup="checkSelection"
-          @keyup="checkSelection"
-          v-html="html"
-        />
+        <div ref="prose" class="prose" data-test="kb-rendered" v-html="html" />
         <details
           v-if="Object.keys(detail.frontmatter ?? {}).length"
           class="props"
@@ -409,7 +441,7 @@ async function askSelection() {
         class="sel-ask"
         data-test="kb-ask-selection"
         :style="{ left: `${sel.left}px`, top: `${sel.top}px` }"
-        @mousedown.prevent
+        @mousedown.prevent.stop
         @click="askSelection"
       >
         <MessageSquare class="icon" />Ask about selection
