@@ -113,7 +113,7 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 	if err != nil {
 		return nil, err
 	}
-	conn.role, conn.workspace, conn.onStep = req.Role, req.WorkspaceDir, req.OnStep
+	conn.role, conn.workspace, conn.onStep, conn.onText = req.Role, req.WorkspaceDir, req.OnStep, req.OnText
 	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder
 	var meta map[string]any
 	if claudeReadOnly {
@@ -189,7 +189,7 @@ func (h *ACPHarness) Continue(_ context.Context, sessionID string, req model.Age
 	conn.text.Reset()
 	conn.steps, conn.tools = 0, nil
 	conn.costSeen = conn.cost != conn.costAttr // cost reported between turns belongs to this run
-	conn.onStep = req.OnStep
+	conn.onStep, conn.onText = req.OnStep, req.OnText
 	run.costBase = conn.costAttr
 	conn.mu.Unlock()
 	return h.launch(run, req.Prompt)
@@ -454,8 +454,9 @@ type acpConn struct {
 	role      model.AgentRole
 	workspace string
 	onStep    func(model.AgentStep)
+	onText    func(string)
 
-	mu       sync.Mutex
+	mu      sync.Mutex
 	text     strings.Builder
 	cost     float64
 	costSeen bool
@@ -699,6 +700,7 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 	u := p.Update
 	c.mu.Lock()
 	var step *model.AgentStep
+	var delta string
 	switch u.Kind {
 	case "agent_message_chunk":
 		var chunk struct {
@@ -707,6 +709,7 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 		}
 		if json.Unmarshal(u.Content, &chunk) == nil && chunk.Type == "text" {
 			c.text.WriteString(chunk.Text)
+			delta = chunk.Text
 		}
 	case "usage_update":
 		if u.Cost != nil {
@@ -731,9 +734,13 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 		}
 	}
 	onStep := c.onStep // Continue swaps it between prompts
+	onText := c.onText
 	c.mu.Unlock()
 	if step != nil && onStep != nil {
 		onStep(*step)
+	}
+	if delta != "" && onText != nil {
+		onText(delta)
 	}
 }
 

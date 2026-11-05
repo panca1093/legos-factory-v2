@@ -181,10 +181,12 @@ func runFake(t *testing.T, h *ACPHarness, req model.AgentRequest) (model.AgentRe
 
 func TestACPRunReportsStepsTextAndUsage(t *testing.T) {
 	var steps []model.AgentStep
+	var streamed strings.Builder
 	ws := t.TempDir()
 	res, err := runFake(t, fakeHarness(t, "ok"), model.AgentRequest{
 		Role: model.AgentInspector, ProviderID: "opencode-go", ModelID: "kimi", WorkspaceDir: ws, Prompt: "go",
 		OnStep: func(s model.AgentStep) { steps = append(steps, s) },
+		OnText: func(s string) { streamed.WriteString(s) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -205,6 +207,9 @@ func TestACPRunReportsStepsTextAndUsage(t *testing.T) {
 	}
 	if fmt.Sprint(steps) != fmt.Sprint(want) {
 		t.Fatalf("steps = %+v\nwant   %+v", steps, want)
+	}
+	if streamed.String() != res.Text {
+		t.Fatalf("OnText streamed %q, result text %q", streamed.String(), res.Text)
 	}
 	if res.TokensIn != 100 || res.TokensOut != 20 || res.CostMicros != 12300 || res.CostSource != "measured" || res.SessionRef != "fake-ses" {
 		t.Fatalf("result = %+v", res)
@@ -394,13 +399,17 @@ func TestACPKeptSessionTakesFurtherPrompts(t *testing.T) {
 	if err != nil || res.Text != "turn 1: first" || res.CostMicros != 10000 {
 		t.Fatalf("first turn: %+v, %v", res, err)
 	}
-	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentForeman, Prompt: "second", WorkspaceDir: ws})
+	var streamed string
+	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentForeman, Prompt: "second", WorkspaceDir: ws, OnText: func(s string) { streamed += s }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res, err = h.Result(ctx, next.ID())
 	if err != nil || res.Text != "turn 2: second" || res.CostMicros != 10000 || res.TokensOut != 2 {
 		t.Fatalf("a continued turn reports its own text and cost: %+v, %v", res, err)
+	}
+	if streamed != "turn 2: second" {
+		t.Fatalf("a continued turn streams to its own OnText: %q", streamed)
 	}
 	h.Close(ses.ID())
 	if _, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Prompt: "third"}); !errors.Is(err, model.ErrAgentSessionNotFound) {
