@@ -63,7 +63,7 @@ func (r *RunRepo) LatestRemediationState(ctx context.Context, woID string) (stri
 
 func (r *RunRepo) List(ctx context.Context, woID string) ([]model.Run, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT id, task_id, kind, state, harness,
-		output, error, tokens_in, tokens_out, cost_micros, created_at
+		output, error, tokens_in, tokens_out, cost_micros, created_at, finished_at
 		FROM runs WHERE work_order_id = ? ORDER BY created_at`, woID)
 	if err != nil {
 		return nil, err
@@ -73,11 +73,16 @@ func (r *RunRepo) List(ctx context.Context, woID string) ([]model.Run, error) {
 	for rows.Next() {
 		run := model.Run{WOID: woID}
 		var createdAt int64
+		var finishedAt sql.NullInt64
 		if err := rows.Scan(&run.ID, &run.TaskID, &run.Kind, &run.State, &run.Harness, &run.Output, &run.Error,
-			&run.TokensIn, &run.TokensOut, &run.CostMicros, &createdAt); err != nil {
+			&run.TokensIn, &run.TokensOut, &run.CostMicros, &createdAt, &finishedAt); err != nil {
 			return nil, err
 		}
 		run.CreatedAt = time.Unix(createdAt, 0)
+		if finishedAt.Valid {
+			t := time.Unix(finishedAt.Int64, 0)
+			run.FinishedAt = &t
+		}
 		out = append(out, run)
 	}
 	return out, rows.Err()
