@@ -1,6 +1,6 @@
 # Foreman-led work order flow — spec (draft v1)
 
-Status: draft for review · 2026-11-05 · not implemented
+Status: implemented · 2026-11-05 · live runs with a TypeSafe key still to be done
 
 ## Why
 
@@ -51,18 +51,18 @@ TASK_DECOMPOSITION / SPEC_AND_PLAN_GENERATION
 ARCHITECT_REVIEW                Foreman review notes → Jev → plan gate
  ├─ approve  → QUEUED
  ├─ revise   → PLANNING → Architect re-drafts (max 2 rounds)
- └─ escalate → WAITING_FOR_HUMAN
+ └─ escalate → stays in ARCHITECT_REVIEW, waiting for the human to approve or revise
 QUEUED → IMPLEMENTING           Builders, one task per job, in dependency order
 VERIFYING                       factory checks (gate)
 SPECIALIST_REVIEW               Inspector specialists ∥ Architect verification
-MERGE_READINESS                 Foreman validation notes → Jev → done gate
- ├─ done     → READY
+                                then Foreman validation notes → Jev → done gate
+ ├─ done     → PR_PREPARATION → MERGE_READINESS → NEEDS_HUMAN_REVIEW (as today)
  ├─ fix      → IMPLEMENTING (shares the revision budget, max 2)
- └─ escalate → NEEDS_HUMAN_REVIEW
-READY → human approves PR → PR opened
+ └─ escalate → PR_PREPARATION → MERGE_READINESS → NEEDS_HUMAN_REVIEW, with the reason
+NEEDS_HUMAN_REVIEW → human approves the PR → READY → PR opened
 ```
 
-Existing state names are reused so the UI and stored orders keep working. `REQUIREMENT_ANALYSIS` stops being an empty step and becomes Foreman intake. One new transition: `MERGE_READINESS → IMPLEMENTING` (fix).
+Existing state names are reused so the UI and stored orders keep working. `REQUIREMENT_ANALYSIS` stops being an empty step and becomes Foreman intake. **No new transition**: the done gate runs while the order is still in `SPECIALIST_REVIEW` (in the `evaluate` job, before `PR_PREPARATION`), so a fix uses the existing `SPECIALIST_REVIEW → IMPLEMENTING` transition. Readiness still ends in `NEEDS_HUMAN_REVIEW`, where the human approves the PR; `done` only means the gate found nothing to fix.
 
 ### 1. Factory preparation (deterministic)
 
@@ -112,7 +112,7 @@ Output: `planReply` gains a `spec` field (behaviour, interfaces, edge cases) nex
 
 ### 4. Plan gate (Foreman notes + Jev + code)
 
-The Foreman agent writes review notes: issues found and how each acceptance criterion is covered. It does not return a decision.
+The Foreman agent writes review notes: issues found (`notes`) and optional per-criterion coverage remarks (`coverage: [{criterion, remark}]`, criteria numbered `c1..cn`). It does not return a decision; `APPROVE` / `REVISE` / `CLARIFY` are gone from the review reply. The review runs in the Foreman's planning session, which closes when the gate decides.
 
 The factory then sends **one** Jev request. State:
 
@@ -153,27 +153,32 @@ Truth table, first matching row wins:
 | 4 | any answer unsettled | revise |
 | 5 | otherwise | approve |
 
-`revise` sends the Architect a note the code builds from the answers that triggered it (e.g. "criterion c3 is not covered; tasks t2 and t4 overlap") plus the Foreman's notes. When `plan_revisions` has reached 2, a revise outcome becomes **escalate**. A human revision resets the counter.
+`revise` sends the Architect a note the code builds from the answers that triggered it (e.g. "criterion c3 is not covered; tasks t2 and t4 overlap") plus the Foreman's notes. When `plan_revisions` has reached 2, a revise outcome becomes **escalate**. A human revision (or a human answer to a clarification) resets the counter. `plan_revisions` is a column on the work order (migration 010) and is also returned in the work order JSON.
 
-There is **one mode**. The `guided` / `assisted` / `delegated` autonomy levels are removed: an approve outcome starts the build with no human click, and a human is only asked when the table escalates. The manual Pause and Cancel controls stay.
+Wiring: `approve` moves `ARCHITECT_REVIEW → QUEUED` with actor `factory` and queues the root tasks. `revise` moves to `PLANNING` and enqueues a plan job. `escalate` keeps the order in `ARCHITECT_REVIEW` with `plan_review = approved` (the marker the existing approve/revise UI keys on) and records a `plan_escalated` event with the reason; it does not use `WAITING_FOR_HUMAN`, which stays reserved for Architect questions. Plan task ids are sent to Jev as `t1..tn`, not the stored `wo_..._task` ids.
+
+There is **one mode**. The `guided` / `assisted` / `delegated` autonomy levels are removed (backend, API and UI): an approve outcome starts the build with no human click, and a human is only asked when the table escalates. The manual Pause and Cancel controls stay. The create request still accepts an `autonomy` field and ignores it; the `autonomy` column stays unused and the work order JSON no longer carries it.
 
 ### 5. Build (factory + Builder)
 
 Unchanged except:
 
 - Tasks run strictly in dependency order (the dependency-loss bug is fixed in `451ffb5`).
-- The Builder prompt names the task's `scope` and lists the other tasks as "do not implement".
+- The Builder prompt names the task's own title, objective and `scope`, and lists the other tasks' titles as "other tasks — do not implement these".
 - On a retry after failed checks, the Builder gets the failing check's name, command and the tail of its output.
 
 ### 6. Verification (factory + Inspector ∥ Architect)
 
 - factory runs the detected checks. Failure loops back to the Builder, max 2 (already implemented).
 - When the checks pass, the Inspector specialists and the **Architect verification** run in parallel.
-- Architect verification input: spec, plan, diff, check results. Output: per criterion `met` / `not_met` / `unclear` with evidence, plus `deviations` (work outside the spec or plan).
+- Architect verification input: spec, plan, acceptance criteria numbered with the same `c1..cn` ids the gates use, the diff (changed files with hunks, within the same hunk budget as the done gate) and the check results. Output: `verdicts: [{criterion_id, status, evidence}]` with status `met` / `not_met` / `unclear` (case and `-`/space variants are normalised), plus `deviations` (work outside the spec or plan).
+- The two run concurrently inside the `inspect` job; both are ordinary accounted runs. The verification is stored on the work order (`architect_report`, migration 010: revision, verdicts, deviations) and recorded as an `architect_verified` event and an `architect_verification` knowledge record. A failed or invalid verification does not fail the inspection: it records `architect_verify_failed` and stores nothing, and the done gate then escalates (below).
 
 ### 7. Done gate (Foreman notes + Jev + code)
 
-The Foreman agent writes validation notes from the Inspector findings and the Architect report.
+The Foreman agent writes validation notes (`{"notes": "..."}`) from the Inspector findings, the check results and the Architect report. This is a separate Foreman run, not the planning session.
+
+If the Architect report is missing or was made on an older revision, the done gate escalates without a Foreman run or a Jev request. Without a Judge the done gate (and the Foreman validation run) is skipped entirely.
 
 The factory sends one Jev request. State: criteria, spec, a diff summary (per file: path, lines changed, the hunks up to a size budget; lock and generated files keep counts only), check results, open findings, the Architect verdicts (`architect_verdicts`: criterion, `met`/`not_met`/`unclear`, evidence) and `deviations`, and the Foreman notes.
 
@@ -193,7 +198,7 @@ Truth table:
 | 4 | any answer unsettled, or the Architect is `unclear` about a criterion or gave no verdict for it | fix |
 | 5 | otherwise | done → READY |
 
-`fix` returns to the Builder with a code-built note and uses the same revision budget as failed checks. When the budget is spent, fix becomes escalate (NEEDS_HUMAN_REVIEW).
+`fix` bumps the revision and returns to the Builder with reason `fix_done_gate` and the code-built note (rendered in the Builder prompt). It shares the `review_fixes` budget with blocker-finding remediation (`review_fixes < 2`). When the budget is spent, fix becomes escalate. `escalate` and `done` both continue to `PR_PREPARATION → MERGE_READINESS`; an escalation shows up as a `readiness_needs_human_review` event carrying the reason.
 
 ## Jev integration
 
@@ -203,7 +208,7 @@ Truth table:
 - Price: $0.042 per million input tokens; output is free. A gate request is roughly 5–20k tokens, well under one cent.
 - A failed call is an error that escalates. It is never read as "no".
 - **Jev is on exactly when `TYPESAFE_API_KEY` is set.** There is no separate setting. Jev is a paid API and cannot run without a key.
-- No API key: the plan gate escalates every plan to the human (the Foreman still writes the brief, answers Architect questions and writes review notes), and the done gate is skipped, leaving today's deterministic readiness rules (checks pass, no open blockers). Settings → Integrations shows whether Jev is on.
+- No API key: the plan gate escalates every plan to the human (the Foreman still writes the brief, answers Architect questions and writes review notes), and the done gate is skipped, leaving today's deterministic readiness rules (checks pass, no open blockers). Settings → Integrations shows whether Jev is on (`jev_enabled` on the settings response, true iff `TYPESAFE_API_KEY` is set).
 
 ### Code layout
 
@@ -216,7 +221,9 @@ Truth table:
 
 ### Audit
 
-Every gate run records an event (`actor: jev`) with the exact request payload, the answers, the truth-table row that matched and the outcome. Gate outcomes are reproducible from the payload.
+Every gate run records an event (`actor: jev`, kind `plan_gate` or `done_gate`) with the exact request payload, the answers, the truth-table row that matched and the outcome. Gate outcomes are reproducible from the payload. The stored event holds the full payload; the live SSE copy drops `request` and `unsent_request` (they can be 100KB). With no Judge nothing is sent, so no gate event is recorded for it (the plan escalation is recorded as `plan_escalated`).
+
+Event kinds added by this flow: `plan_reviewed` (Foreman notes), `plan_gate`, `plan_revision_requested`, `plan_escalated`, `architect_verified`, `architect_verify_failed`, `validation_started`, `foreman_validated`, `done_gate`, `fix_requested`.
 
 ### Privacy
 
@@ -240,6 +247,8 @@ The plan gate sends the request, criteria, brief, spec, plan and Foreman notes. 
 | 5 | Builder scope and failed-check output in prompts. | no |
 | 6 | Architect verification in parallel with the Inspector. | no |
 | 7 | Foreman validation and the done gate. | yes, for live runs |
+
+Steps 1 to 7 are implemented. Not yet exercised: a live run against the real TypeSafe API.
 
 Each step is its own commit with tests. Tests always use a fake `Judge`, so they never need a key.
 
