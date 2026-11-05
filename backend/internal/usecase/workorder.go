@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -48,20 +49,36 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 		ArchitectModel: architect,
 		CreatedBy:      u.ID,
 	}
-	if err := w.Store.Create(ctx, wo); err != nil {
-		return nil, err
-	}
 	var auth *model.GitAuth
 	if g, bound, err := w.Integrations.GitFor(ctx, proj); bound {
 		if err != nil {
-			return wo, fmt.Errorf("%w: repository connection unavailable: %v", ErrWorkspace, err)
+			return nil, fmt.Errorf("%w: repository connection unavailable: %v", ErrWorkspace, err)
 		}
 		a := g.GitAuth()
 		auth = &a
 	}
-	// isolated workspace: builders never touch the project source dir
-	if _, err := w.Sandbox.Prepare(ctx, wo.ID, proj.RepoURL, auth); err != nil {
-		return wo, fmt.Errorf("%w: could not prepare workspace: %v", ErrWorkspace, err)
+	// prepare before persisting: a stored CREATED order without a workspace gets resumed into planning on restart
+	dir, err := w.Sandbox.Prepare(ctx, wo.ID, proj.RepoURL, auth)
+	if err != nil {
+		return nil, fmt.Errorf("%w: could not prepare workspace: %v", ErrWorkspace, err)
+	}
+	p, err := repoProfile(dir)
+	if err != nil {
+		_ = w.Sandbox.Destroy(ctx, wo.ID)
+		return nil, fmt.Errorf("%w: %v", ErrWorkspace, err)
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		_ = w.Sandbox.Destroy(ctx, wo.ID)
+		return nil, err
+	}
+	wo.CheckProfile = string(b)
+	if p.Language != "" && p.Language != proj.Language {
+		_ = w.Projects.Store.SetLanguage(ctx, proj.ID, p.Language)
+	}
+	if err := w.Store.Create(ctx, wo); err != nil {
+		_ = w.Sandbox.Destroy(ctx, wo.ID)
+		return nil, err
 	}
 	return wo, nil
 }

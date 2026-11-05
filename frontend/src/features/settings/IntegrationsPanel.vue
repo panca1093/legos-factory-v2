@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
-import type { Connection, Provider } from "../../types/api";
+import type { Connection, Project, Provider } from "../../types/api";
 
 const factory = useFactory(),
   session = useSession();
@@ -50,7 +50,49 @@ const form = reactive({
 });
 const meta = computed(() => providers[form.provider]);
 
+const gitConnections = computed(() =>
+  factory.connections.filter(
+    (c) =>
+      c.scope === "shared" && c.status === "active" && c.provider !== "jira",
+  ),
+);
+function unavailableConnection(id: string) {
+  if (!id || gitConnections.value.some((c) => c.id === id)) return "";
+  return factory.connections.find((c) => c.id === id)?.name ?? id;
+}
+const links = reactive<
+  Record<string, { git_connection_id: string; remote_repo: string }>
+>({});
+watch(
+  () => factory.projects,
+  (projects) => {
+    for (const p of projects)
+      links[p.id] ??= {
+        git_connection_id: p.git_connection_id ?? "",
+        remote_repo: p.remote_repo ?? "",
+      };
+  },
+  { immediate: true },
+);
+function pickConnection(p: Project, id: string) {
+  const l = links[p.id];
+  l.git_connection_id = id;
+  if (id && !l.remote_repo && /^(https?:\/\/|git@)/.test(p.repo_url))
+    l.remote_repo =
+      p.repo_url.match(/[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/)?.[1] ?? "";
+}
+function saveLink(p: Project) {
+  const l = links[p.id];
+  void run(`link-${p.id}`, () =>
+    factory.bindProject(p.id, {
+      git_connection_id: l.git_connection_id,
+      remote_repo: l.remote_repo.trim(),
+    }),
+  );
+}
+
 onMounted(async () => {
+  factory.refreshProjects().catch(() => {});
   try {
     await factory.refreshConnections();
   } catch (e) {
@@ -187,6 +229,67 @@ function revoke(c: Connection) {
     <p v-if="!factory.connections.length && !loadError" class="help">
       No provider connections yet.
     </p>
+  </section>
+
+  <section v-if="session.canWrite" class="settings-section">
+    <h2>Project repositories</h2>
+    <p>
+      Remote repositories are cloned with the project's shared git connection;
+      without one, work orders cannot start.
+    </p>
+    <p v-if="!gitConnections.length" class="notice">
+      No active shared git connection yet. An admin can add one below with
+      Shared scope.
+    </p>
+    <div
+      v-for="p in factory.projects"
+      :key="p.id"
+      class="connection"
+      :data-project-link="p.id"
+    >
+      <div class="grow">
+        <h3>{{ p.name }}</h3>
+        <p>{{ p.repo_url }}</p>
+        <div v-if="links[p.id]" class="form-grid" style="margin-top: 8px">
+          <select
+            :id="`link-conn-${p.id}`"
+            :aria-label="`Git connection for ${p.name}`"
+            :value="links[p.id].git_connection_id"
+            @change="
+              pickConnection(p, ($event.target as HTMLSelectElement).value)
+            "
+          >
+            <option value="">Local only · no pull requests</option>
+            <option
+              v-if="unavailableConnection(links[p.id].git_connection_id)"
+              :value="links[p.id].git_connection_id"
+              disabled
+            >
+              {{ unavailableConnection(links[p.id].git_connection_id) }} ·
+              unavailable
+            </option>
+            <option v-for="c in gitConnections" :key="c.id" :value="c.id">
+              {{ c.name }} · {{ c.provider }}
+            </option>
+          </select>
+          <input
+            v-if="links[p.id].git_connection_id"
+            :id="`link-remote-${p.id}`"
+            v-model="links[p.id].remote_repo"
+            :aria-label="`Remote repository for ${p.name}`"
+            placeholder="owner/repo"
+          />
+        </div>
+      </div>
+      <button
+        class="btn small"
+        :data-test="`link-${p.id}`"
+        :disabled="!!busy"
+        @click="saveLink(p)"
+      >
+        {{ busy === `link-${p.id}` ? "Saving…" : "Save" }}
+      </button>
+    </div>
   </section>
 
   <section v-if="session.canWrite" class="settings-section">

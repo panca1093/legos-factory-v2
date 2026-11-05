@@ -12,7 +12,6 @@ type CreateProjectRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	RepoURL     string `json:"repo_url"`
-	Language    string `json:"language"`
 }
 
 func (r *CreateProjectRequest) Validate() error {

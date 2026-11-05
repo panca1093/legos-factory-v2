@@ -35,6 +35,7 @@ export function subscribe(
     "fix_requested",
     "verification_started",
     "verification_passed",
+    "verification_skipped",
     "baseline_started",
     "baseline_fail",
     "baseline_pass",

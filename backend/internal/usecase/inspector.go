@@ -16,11 +16,7 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
-	proj, err := f.Proj.Get(ctx, wo.ProjectID)
-	if err != nil {
-		return err
-	}
-	profile, err := model.ParseProfile(proj.QualityProfile, proj.Language)
+	profile, err := f.profile(ctx, wo)
 	if err != nil {
 		return err
 	}
@@ -47,7 +43,7 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 	if failed != "" {
 		f.Catalog.Record(ctx, wo, model.KnowledgeVerification, model.TrustVerified, "inspector",
 			fmt.Sprintf("Verification failed on revision %d (uncommitted workspace)", wo.Revision), results.String())
-		if wo.Revision >= MaxRevisionCycles {
+		if wo.VerifyFailures >= MaxRevisionCycles {
 			f.event(wo.ID, "foreman", "escalated", "Verification failed after max revision cycles; blocking", nil)
 			if err := f.step(ctx, wo, model.StateVerifying, model.StateSpecialistReview, "foreman", "Final evaluation after exhausted retries"); err != nil {
 				return err
@@ -60,14 +56,23 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 			}
 			return f.evaluateReadiness(ctx, wo, true)
 		}
+		newRev, failures := wo.Revision+1, wo.VerifyFailures+1
+		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": failures}); err != nil {
+			return err
+		}
+		wo.Revision, wo.CommitSHA, wo.VerifyFailures = newRev, "", failures
 		if err := f.step(ctx, wo, model.StateVerifying, model.StateImplementing, "foreman",
-			fmt.Sprintf("Check %q failed; returning to builder", failed)); err != nil {
+			fmt.Sprintf("Check %q failed; returning to builder (attempt %d of %d)", failed, failures, MaxRevisionCycles)); err != nil {
 			return err
 		}
 		_, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, "", map[string]any{"reason": "fix_failed_verification"})
 		return err
 	}
-	f.event(wo.ID, "inspector", "verification_passed", "All deterministic checks passed", nil)
+	if len(profile.Checks) == 0 {
+		f.event(wo.ID, "inspector", "verification_skipped", "No checks detected in the repository; add .legos/checks.json to define them", nil)
+	} else {
+		f.event(wo.ID, "inspector", "verification_passed", "All deterministic checks passed", nil)
+	}
 	if err := f.commitVerified(ctx, wo); err != nil {
 		return err
 	}
@@ -141,18 +146,18 @@ func (f *Foreman) handleInspect(ctx context.Context, job model.Job) error {
 		}
 		return f.enqueue(ctx, JobEvaluate, wo.ID, "")
 	}
-	if wo.Revision >= MaxRevisionCycles {
+	if wo.ReviewFixes >= MaxRevisionCycles {
 		f.event(wo.ID, "foreman", "escalated", "Blocker findings remain after max revision cycles; escalating to human", nil)
 		if err := f.step(ctx, wo, model.StateSpecialistReview, model.StateWaitingForHuman, "foreman", "Escalated: blocker findings unresolved"); err != nil {
 			return err
 		}
 		return nil
 	}
-	newRev := wo.Revision + 1
-	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": ""}); err != nil {
+	newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "review_fixes": fixes}); err != nil {
 		return err
 	}
-	wo.Revision, wo.CommitSHA = newRev, ""
+	wo.Revision, wo.CommitSHA, wo.ReviewFixes = newRev, "", fixes
 	f.event(wo.ID, "foreman", "fix_requested", fmt.Sprintf("Revision %d: requesting bounded remediation", newRev), nil)
 	if err := f.step(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "foreman", "Fix required; returning to builder"); err != nil {
 		return err

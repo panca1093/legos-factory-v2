@@ -27,6 +27,7 @@ type ProjectStore interface {
 	List(ctx context.Context) ([]model.Project, error)
 	Create(ctx context.Context, p *model.Project) error
 	SetBinding(ctx context.Context, id, connectionID, remoteRepo string) error
+	SetLanguage(ctx context.Context, id, language string) error
 }
 
 type MemberStore interface {
@@ -71,6 +72,7 @@ type SettingsReader interface {
 // SHA, "" when not under version control) and pushing a branch to origin.
 type Sandbox interface {
 	Prepare(ctx context.Context, woID, repoURL string, auth *model.GitAuth) (string, error)
+	Destroy(ctx context.Context, woID string) error
 	RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration) model.CheckResult
 	Commit(ctx context.Context, dir, message string) (string, error)
 	PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (base string, err error)

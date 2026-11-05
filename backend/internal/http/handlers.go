@@ -33,13 +33,7 @@ func (s *Server) handleCreateProject(c echo.Context) error {
 	if err := req.Validate(); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
 	}
-	p := &model.Project{
-		Name: req.Name, Description: req.Description, RepoURL: req.RepoURL,
-		Language: req.Language,
-	}
-	if p.Language == "" {
-		p.Language = "go"
-	}
+	p := &model.Project{Name: req.Name, Description: req.Description, RepoURL: req.RepoURL}
 	if err := s.Projects.Create(c.Request().Context(), currentUser(c), p); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not create project")
 	}

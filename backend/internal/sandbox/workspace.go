@@ -68,6 +68,10 @@ func (l Local) Prepare(ctx context.Context, woID, repoURL string, auth *model.Gi
 	return ws.Dir, nil
 }
 
+func (l Local) Destroy(ctx context.Context, woID string) error {
+	return Destroy(ctx, woID, l.DataDir)
+}
+
 // PushBranch pushes the workspace HEAD to branch on origin and returns the
 // remote default branch the change should merge into.
 func (Local) PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (string, error) {

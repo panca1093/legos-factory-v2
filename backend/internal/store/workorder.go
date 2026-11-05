@@ -18,7 +18,7 @@ type WorkOrderRepo struct{ DB *sql.DB }
 const woCols = `id, project_id, title, objective, acceptance, state, autonomy,
 	builder_model, inspector_model, clarif_question, clarif_answer, revision,
 	commit_sha, source_ref, pr_url, pr_ref, foreman_model, architect_model, plan_review, review_rounds,
-	paused_at, pause_reason, kb_base_sha, created_by, created_at, updated_at`
+	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, created_by, created_at, updated_at`
 
 func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	if wo.ID == "" {
@@ -28,11 +28,11 @@ func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	wo.CreatedAt, wo.UpdatedAt = now, now
 	_, err := r.DB.ExecContext(ctx, `INSERT INTO work_orders
 		(id, project_id, title, objective, acceptance, state, autonomy, builder_model, inspector_model,
-		 clarif_question, clarif_answer, revision, source_ref, foreman_model, architect_model, created_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 clarif_question, clarif_answer, revision, source_ref, foreman_model, architect_model, check_profile, created_by, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		wo.ID, wo.ProjectID, wo.Title, wo.Objective, wo.Acceptance, string(wo.State), wo.Autonomy,
 		wo.BuilderModel, wo.InspectorModel, wo.ClarifQuestion, wo.ClarifAnswer, wo.Revision,
-		wo.SourceRef, wo.ForemanModel, wo.ArchitectModel, wo.CreatedBy, now.Unix(), now.Unix())
+		wo.SourceRef, wo.ForemanModel, wo.ArchitectModel, wo.CheckProfile, wo.CreatedBy, now.Unix(), now.Unix())
 	return err
 }
 
@@ -66,7 +66,7 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	err := scan(&wo.ID, &wo.ProjectID, &wo.Title, &wo.Objective, &wo.Acceptance, &state, &wo.Autonomy,
 		&wo.BuilderModel, &wo.InspectorModel, &wo.ClarifQuestion, &wo.ClarifAnswer, &wo.Revision,
 		&wo.CommitSHA, &wo.SourceRef, &wo.PRURL, &wo.PRRef, &wo.ForemanModel, &wo.ArchitectModel, &wo.PlanReview,
-		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CreatedBy, &createdAt, &updatedAt)
+		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.CreatedBy, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrWorkOrderNotFound
 	}
@@ -161,7 +161,7 @@ func (r *WorkOrderRepo) Plan(ctx context.Context, woID string) ([]model.Task, er
 	}
 	defer rows.Close()
 	var out []model.Task
-	byID := map[string]*model.Task{}
+	byID := map[string]int{} // index, not pointer: append may move the backing array
 	for rows.Next() {
 		var t model.Task
 		if err := rows.Scan(&t.ID, &t.WOID, &t.Seq, &t.Title, &t.Objective, &t.Role); err != nil {
@@ -169,7 +169,7 @@ func (r *WorkOrderRepo) Plan(ctx context.Context, woID string) ([]model.Task, er
 		}
 		t.Deps = []string{}
 		out = append(out, t)
-		byID[t.ID] = &out[len(out)-1]
+		byID[t.ID] = len(out) - 1
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -185,8 +185,8 @@ func (r *WorkOrderRepo) Plan(ctx context.Context, woID string) ([]model.Task, er
 		if err := depRows.Scan(&taskID, &dep); err != nil {
 			return nil, err
 		}
-		if t, ok := byID[taskID]; ok {
-			t.Deps = append(t.Deps, dep)
+		if i, ok := byID[taskID]; ok {
+			out[i].Deps = append(out[i].Deps, dep)
 		}
 	}
 	return out, depRows.Err()

@@ -199,7 +199,14 @@ func (f *Foreman) profile(ctx context.Context, wo *model.WorkOrder) (model.Profi
 	if err != nil {
 		return model.Profile{}, err
 	}
-	return model.ParseProfile(proj.QualityProfile, proj.Language)
+	if q := strings.TrimSpace(proj.QualityProfile); q != "" && q != "{}" && q != "[]" {
+		return model.ParseProfile(proj.QualityProfile, proj.Language)
+	}
+	if wo.CheckProfile != "" {
+		return model.ParseProfile(wo.CheckProfile, proj.Language)
+	}
+	// orders created before the profile was stored at creation
+	return repoProfile(f.workspaceDir(wo.ID))
 }
 
 // runSetup installs dependencies in dir. A failure is reported, not fatal:

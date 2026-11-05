@@ -262,7 +262,7 @@ function observed(role: string) {
           ><span class="grow"
             ><strong class="small">{{ p.name }}</strong>
             <p>
-              {{ p.language }} ·
+              {{ p.language || "not detected yet" }} ·
               {{
                 factory.workOrders.filter(
                   (w) => w.project_id === p.id && isActive(w),

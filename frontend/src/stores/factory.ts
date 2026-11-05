@@ -158,11 +158,7 @@ export const useFactory = defineStore("factory", {
         key,
       });
     },
-    async createProject(input: {
-      name: string;
-      repo_url: string;
-      language: string;
-    }) {
+    async createProject(input: { name: string; repo_url: string }) {
       const res = await api.post<Project>("/api/v1/projects", input);
       this.projects = [...this.projects.filter((p) => p.id !== res.id), res];
       await this.refreshProjects().catch(() => {});
