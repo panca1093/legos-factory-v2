@@ -527,3 +527,34 @@ func toAny(v any) []any {
 	}
 	return nil
 }
+
+func TestRepoPlaybooksSurviveAnotherWorkOrdersNewerBase(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	r.workspace(t, map[string]string{
+		"docs/review.md": playbookDoc("Review rules", "inspector", "", "Review rule."),
+		"docs/gone.md":   playbookDoc("Gone rules", "inspector", "", "Gone rule."),
+	})
+	r.f.syncRepo(ctx, r.wo, true)
+
+	b := *r.wo
+	b.ID = "wo_b"
+	if err := r.wos.Create(ctx, &b); err != nil {
+		t.Fatal(err)
+	}
+	r.workspaceFor(t, b.ID, map[string]string{"docs/review.md": playbookDoc("Review rules", "foreman", "", "Review rule.")})
+	r.f.syncRepo(ctx, &b, true)
+
+	a, _ := r.wos.Get(ctx, r.wo.ID)
+	bb, _ := r.wos.Get(ctx, b.ID)
+	inspA, _ := r.ctxFor(a, string(model.AgentInspector), "backend", "x")
+	foreA, _ := r.ctxFor(a, string(model.AgentForeman), "", "x")
+	if !strings.Contains(inspA, "Review rule.") || !strings.Contains(inspA, "Gone rule.") || strings.Contains(foreA, "Review rule.") {
+		t.Fatalf("work order A lost its playbooks:\ninspector:\n%s\nforeman:\n%s", inspA, foreA)
+	}
+	inspB, _ := r.ctxFor(bb, string(model.AgentInspector), "backend", "x")
+	foreB, _ := r.ctxFor(bb, string(model.AgentForeman), "", "x")
+	if strings.Contains(inspB, "Review rule.") || strings.Contains(inspB, "Gone rule.") || !strings.Contains(foreB, "Review rule.") {
+		t.Fatalf("work order B read the wrong playbooks:\ninspector:\n%s\nforeman:\n%s", inspB, foreB)
+	}
+}

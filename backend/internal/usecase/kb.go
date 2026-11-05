@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -85,10 +86,25 @@ func (k *KB) SyncRepo(ctx context.Context, projectID, dir string, force bool) (s
 
 // Playbooks returns the stable playbooks written for role, repository ones
 // first since the repo wins, each ordered by path. A playbook without a
-// specialty applies to every specialty of its role.
-func (k *KB) Playbooks(ctx context.Context, projectID, role, specialty string) []model.KBDoc {
+// specialty applies to every specialty of its role. Repository playbooks are
+// discovered at baseSHA, never from the shared index another work order may
+// have replaced; without a base only a non-git workspace falls back to the index.
+func (k *KB) Playbooks(ctx context.Context, projectID, role, specialty, dir, baseSHA string) []model.KBDoc {
 	var out []model.KBDoc
+	match := func(meta map[string]any) bool {
+		if metaStr(meta, "role") != role {
+			return false
+		}
+		s := metaStr(meta, "specialty")
+		return s == "" || s == specialty
+	}
+	if baseSHA != "" {
+		out = k.gitPlaybooks(projectID, dir, baseSHA, match)
+	}
 	for _, source := range []string{model.KBSourceRepo, model.KBSourceFactory} {
+		if source == model.KBSourceRepo && (baseSHA != "" || dir == "" || kb.GitHead(dir) != "") {
+			continue
+		}
 		docs, err := k.Idx.List(ctx, model.KBQuery{
 			ProjectID: projectID, Sources: []string{source}, Types: []string{model.KBTypePlaybook}, Limit: 500,
 		})
@@ -97,14 +113,37 @@ func (k *KB) Playbooks(ctx context.Context, projectID, role, specialty string) [
 			continue
 		}
 		for _, d := range docs {
-			if metaStr(d.Meta, "role") != role {
-				continue
+			if match(d.Meta) {
+				out = append(out, d)
 			}
-			if s := metaStr(d.Meta, "specialty"); s != "" && s != specialty {
-				continue
-			}
-			out = append(out, d)
 		}
+	}
+	return out
+}
+
+func (k *KB) gitPlaybooks(projectID, dir, baseSHA string, match func(map[string]any) bool) []model.KBDoc {
+	paths, err := kb.GitPlaybookPaths(dir, baseSHA)
+	if err != nil {
+		k.Log.Warn("kb: playbook lookup failed", "source", model.KBSourceRepo, "err", err)
+		return nil
+	}
+	var out []model.KBDoc
+	for _, p := range paths {
+		front, _, err := kb.ReadGitMarkdown(dir, baseSHA, p)
+		if err != nil || metaStr(front, "type") != model.KBTypePlaybook {
+			continue
+		}
+		if st := metaStr(front, "status"); st == model.KBStatusDraft || st == model.KBStatusDeprecated || !match(front) {
+			continue
+		}
+		title := metaStr(front, "title")
+		if title == "" {
+			title = strings.TrimSuffix(path.Base(p), ".md")
+		}
+		out = append(out, model.KBDoc{
+			ID: kb.DocID(model.KBSourceRepo, projectID, p), Source: model.KBSourceRepo, ProjectID: projectID,
+			Path: p, Type: model.KBTypePlaybook, Title: title, Meta: front,
+		})
 	}
 	return out
 }
@@ -141,7 +180,7 @@ func (k *KB) Context(ctx context.Context, projectID, role, specialty, query, dir
 	ids := []string{}
 	inlined := map[string]bool{}
 	heading := ""
-	for _, d := range k.Playbooks(ctx, projectID, role, specialty) {
+	for _, d := range k.Playbooks(ctx, projectID, role, specialty, dir, baseSHA) {
 		body, err := k.playbookBody(d, dir, baseSHA)
 		if err != nil {
 			k.Log.Warn("kb: playbook unreadable", "doc", d.ID, "err", err)

@@ -172,6 +172,30 @@ func ReadGitMarkdown(root, sha, rel string) (map[string]any, string, error) {
 	return parseMarkdown(out)
 }
 
+// GitPlaybookPaths lists the markdown files at sha whose front matter may
+// declare type Playbook, sorted. Callers still check the parsed front matter.
+func GitPlaybookPaths(root, sha string) ([]string, error) {
+	if !commitRef.MatchString(sha) {
+		return nil, fmt.Errorf("invalid commit %q", sha)
+	}
+	out, err := exec.Command("git", "-C", root, "grep", "-l", "-I", "-e", "^type: *Playbook", sha, "--", "*.md").Output()
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 1 {
+		return []string{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if p := strings.TrimPrefix(line, sha+":"); p != "" {
+			paths = append(paths, p)
+		}
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
 func parseMarkdown(data []byte) (map[string]any, string, error) {
 	fr, body := splitFront(data)
 	front := map[string]any{}
