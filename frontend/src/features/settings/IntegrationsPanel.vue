@@ -56,6 +56,10 @@ const gitConnections = computed(() =>
       c.scope === "shared" && c.status === "active" && c.provider !== "jira",
   ),
 );
+function unavailableConnection(id: string) {
+  if (!id || gitConnections.value.some((c) => c.id === id)) return "";
+  return factory.connections.find((c) => c.id === id)?.name ?? id;
+}
 const links = reactive<
   Record<string, { git_connection_id: string; remote_repo: string }>
 >({});
@@ -256,6 +260,14 @@ function revoke(c: Connection) {
             "
           >
             <option value="">Local only · no pull requests</option>
+            <option
+              v-if="unavailableConnection(links[p.id].git_connection_id)"
+              :value="links[p.id].git_connection_id"
+              disabled
+            >
+              {{ unavailableConnection(links[p.id].git_connection_id) }} ·
+              unavailable
+            </option>
             <option v-for="c in gitConnections" :key="c.id" :value="c.id">
               {{ c.name }} · {{ c.provider }}
             </option>

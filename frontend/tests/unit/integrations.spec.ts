@@ -145,3 +145,28 @@ it("links an existing project to a shared git connection", async () => {
   });
   w.unmount();
 });
+
+it("shows a project's current connection even when it is no longer selectable", async () => {
+  const f = useFactory();
+  f.projects = [
+    {
+      id: "pos",
+      name: "POS Test",
+      repo_url: "https://github.com/acme/pos.git",
+      language: "go",
+      description: "",
+      created_at: "",
+      git_connection_id: "c2",
+      remote_repo: "acme/pos",
+    },
+  ];
+  const w = await render();
+  const options = w.find("#link-conn-pos").findAll("option");
+  expect(options.map((o) => o.text())).toContain("My Jira · unavailable");
+  expect(
+    options
+      .find((o) => o.text().endsWith("unavailable"))
+      ?.attributes("disabled"),
+  ).toBeDefined();
+  w.unmount();
+});
