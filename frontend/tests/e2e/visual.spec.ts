@@ -76,6 +76,7 @@ const viewports = [
   { name: "desktop", width: 1440, height: 1110 },
   { name: "tablet", width: 1024, height: 900 },
   { name: "mobile", width: 390, height: 844 },
+  { name: "small", width: 375, height: 812 },
 ];
 for (const viewport of viewports)
   test(`app layout ${viewport.name}`, async ({ browser }) => {
@@ -127,7 +128,6 @@ for (const viewport of viewports)
     await expect(
       app.locator(".topnav a.active, .tabbar a.active").first(),
     ).toHaveText("Factory");
-    await app.getByRole("button", { name: "List view" }).click();
     await capture("03-factory-list");
     await app.goto("/factory/LF-128");
     await capture("04-blueprint");
@@ -168,7 +168,7 @@ for (const viewport of viewports)
     await app.goto("/");
     await app.getByRole("button", { name: "Switch theme" }).click();
     await capture("16-overview-dark");
-    if (viewport.name === "mobile") {
+    if (viewport.width <= 720) {
       await app.getByRole("button", { name: "Show sidebar" }).click();
       await capture("17-mobile-navigation");
     }

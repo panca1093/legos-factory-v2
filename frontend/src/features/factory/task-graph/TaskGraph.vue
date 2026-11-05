@@ -15,6 +15,8 @@ import {
   type GraphEdge,
   type GraphLayout,
   type LayoutEngine,
+  NODE_HEIGHT,
+  NODE_WIDTH,
 } from "./layout";
 import { loadElk } from "./elk";
 import { persona, taskState } from "../../../composables/presentation";
@@ -31,8 +33,8 @@ const props = withDefaults(
 const emit = defineEmits<{ select: [string] }>();
 const markers = {
   "": "var(--muted)",
-  "-active": "var(--violet)",
-  "-cycle": "var(--red)",
+  "-active": "var(--accent)",
+  "-cycle": "var(--danger)",
 };
 const MIN_ZOOM = 0.2,
   MAX_ZOOM = 2,
@@ -42,6 +44,7 @@ const direction = ref<Direction>(
   ),
   graph = ref<GraphLayout | null>(null),
   selectedID = ref<string | null>(null),
+  hoverID = ref<string | null>(null),
   inspectID = ref<string | null>(null),
   focus = ref(false),
   zoom = ref(1),
@@ -92,11 +95,24 @@ const progress = computed(() =>
     ? Math.round((counts.value.completed / props.tasks.length) * 100)
     : 0,
 );
-const focused = computed(() =>
-  focus.value && selectedID.value && graph.value
-    ? lineage(selectedID.value, graph.value.edges)
-    : null,
-);
+const focused = computed(() => {
+  const id = focus.value ? selectedID.value : hoverID.value;
+  return id && graph.value ? lineage(id, graph.value.edges) : null;
+});
+// Alternating bands, one per rank, so a column or row reads as one wave of parallel work.
+const bands = computed(() => {
+  const g = graph.value;
+  if (!g) return [];
+  const down = direction.value === "DOWN",
+    size = down ? NODE_HEIGHT : NODE_WIDTH,
+    total = down ? g.height : g.width,
+    at = g.ranks.map((r) => (down ? r.y - NODE_HEIGHT / 2 : r.x)),
+    start = at.map((a, i) => (i ? (at[i - 1] + size + a) / 2 : 0));
+  return start.map((from, i) => ({
+    from,
+    span: (i + 1 < start.length ? start[i + 1] : total) - from,
+  }));
+});
 const selected = computed(() =>
   props.tasks.find((t) => t.id === inspectID.value),
 );
@@ -250,9 +266,10 @@ function endPan() {
   <section class="tg">
     <div class="graph-toolbar">
       <div>
-        <h2>The blueprint, in motion.</h2>
+        <h2>Task graph</h2>
         <p class="help">
-          Dependencies point forward. Select a task to inspect its contract.
+          Dependencies point forward. Hover a task to trace its path, click to
+          inspect it.
         </p>
       </div>
       <div class="tg-controls">
@@ -359,6 +376,16 @@ function endPan() {
                 <path d="M0,0 L8,3 L0,6 Z" :fill="fill" />
               </marker>
             </defs>
+            <rect
+              v-for="(b, i) in bands"
+              :key="i"
+              class="tg-band"
+              :class="{ alt: i % 2 }"
+              :x="direction === 'DOWN' ? 0 : b.from"
+              :y="direction === 'DOWN' ? b.from : 0"
+              :width="direction === 'DOWN' ? graph.width : b.span"
+              :height="direction === 'DOWN' ? b.span : graph.height"
+            />
             <text
               v-for="rank in graph.ranks"
               :key="rank.label"
@@ -397,6 +424,10 @@ function endPan() {
             }"
             :aria-label="`${n.title}: ${status(n.id).label}`"
             @click="select(n.id)"
+            @pointerenter="hoverID = n.id"
+            @pointerleave="hoverID = null"
+            @focus="hoverID = n.id"
+            @blur="hoverID = null"
           >
             <span class="tg-node-head"
               ><BrickBot :persona="persona(n.role)" :size="16" /><span

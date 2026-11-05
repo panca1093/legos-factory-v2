@@ -35,7 +35,10 @@ beforeEach(() => {
 async function render(id = "LF-128") {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: "/factory/:id", component: WorkOrderView }],
+    routes: [
+      { path: "/factory", component: { render: () => null } },
+      { path: "/factory/:id", component: WorkOrderView },
+    ],
   });
   await router.push(`/factory/${id}`);
   await router.isReady();
@@ -72,9 +75,7 @@ it("submits human revision notes and approval through existing contracts", async
   const decision = vi.spyOn(f, "planDecision").mockResolvedValue();
   const { w } = await render();
   expect(w.find('[data-test="foreman-reviewing"]').exists()).toBe(true);
-  expect(
-    w.find('[data-test="approve-plan"]').attributes("disabled"),
-  ).toBeDefined();
+  expect(w.find('[data-test="approve-plan"]').exists()).toBe(false);
   review.plan_review = "approved" as never;
   f.detail = { work_order: { ...review }, plan: tasks, runs: [] };
   await flushPromises();
@@ -98,13 +99,11 @@ it("submits human revision notes and approval through existing contracts", async
   w.unmount();
 });
 
-it("pauses a running order and resumes it from the run banner", async () => {
+it("pauses a running order and resumes it from the Now card", async () => {
   const f = useFactory();
   const pause = vi.spyOn(f, "pause").mockResolvedValue();
   const resume = vi.spyOn(f, "resume").mockResolvedValue();
-  const { w, router } = await render("LF-127");
-  await router.replace({ query: { tab: "graph" } });
-  await flushPromises();
+  const { w } = await render("LF-127");
   await w.find('[data-test="execution-pause"]').trigger("click");
   await flushPromises();
   expect(pause).toHaveBeenCalledWith("LF-127");

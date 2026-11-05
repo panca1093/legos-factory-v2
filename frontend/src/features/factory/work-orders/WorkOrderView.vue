@@ -1,46 +1,62 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import {
-  ArrowLeft,
-  Ban,
-  GitBranch,
-  Clock,
-  ShieldCheck,
-  GitPullRequest,
-  FileText,
-} from "lucide-vue-next";
+import { ArrowLeft, GitBranch } from "lucide-vue-next";
+import "../factory.css";
 import { useFactory } from "../../../stores/factory";
 import { useSession } from "../../../stores/session";
 import { subscribe } from "../../../services/events/sse";
-import StatusBadge from "../../../components/ui/StatusBadge.vue";
 import AppDialog from "../../../components/ui/AppDialog.vue";
+import {
+  money,
+  orderStatus,
+  shipState,
+  stageIndex,
+  stageTabs,
+} from "../../../composables/presentation";
 import BlueprintPanel from "./BlueprintPanel.vue";
-import WorkOrderSidebar from "./WorkOrderSidebar.vue";
+import StageTrack from "./StageTrack.vue";
+import NowCard from "./NowCard.vue";
 import TaskGraph from "../task-graph/TaskGraph.vue";
 import ActivityPanel from "../runs/ActivityPanel.vue";
-import RunBanner from "../runs/RunBanner.vue";
-import QualityPanel from "../reviews/QualityPanel.vue";
+import ReviewPanel from "../reviews/ReviewPanel.vue";
 import ChangesPanel from "../reviews/ChangesPanel.vue";
+import { escalationReason } from "../runs/agentActivity";
 const factory = useFactory(),
   session = useSession(),
   route = useRoute(),
   router = useRouter();
 const tabs = [
-  { key: "blueprint", label: "Blueprint", icon: FileText },
-  { key: "graph", label: "Task graph", icon: GitBranch },
-  { key: "activity", label: "Activity", icon: Clock },
-  { key: "quality", label: "Quality", icon: ShieldCheck },
-  { key: "changes", label: "Changes & PR", icon: GitPullRequest },
+  { key: "plan", label: "Plan" },
+  { key: "progress", label: "Progress" },
+  { key: "review", label: "Review" },
+  { key: "changes", label: "Changes & PR" },
 ];
+const legacyTabs: Record<string, string> = {
+  blueprint: "plan",
+  graph: "progress",
+  activity: "progress",
+  quality: "review",
+};
 const id = computed(() => String(route.params.id)),
   order = computed(() => factory.detail?.work_order),
   tasks = computed(() => factory.detail?.plan ?? []),
   runs = computed(() => factory.detail?.runs ?? []);
-const tab = computed(() =>
-  tabs.some((t) => t.key === route.query.tab)
-    ? String(route.query.tab)
-    : "blueprint",
+// Pinned on first load so the page doesn't change tab while the order advances.
+const landing = ref("");
+const tab = computed(() => {
+  const q = String(route.query.tab ?? ""),
+    key = legacyTabs[q] ?? q;
+  return tabs.some((t) => t.key === key) ? key : landing.value || "plan";
+});
+watch(
+  [order, runs],
+  () => {
+    if (order.value && !landing.value)
+      landing.value =
+        stageTabs[stageIndex(order.value, runs.value, factory.events)];
+  },
+  { immediate: true },
 );
 const project = computed(() =>
   factory.projects.find((p) => p.id === order.value?.project_id),
@@ -73,15 +89,25 @@ const modalTitle = computed(
       cancel: "Cancel this work order?",
     })[modal.value ?? "approve"],
 );
-const canCancel = computed(
+const crewModels = computed(
   () =>
-    order.value &&
-    !["READY", "CANCELLED", "BLOCKED"].includes(order.value.state),
+    ["foreman", "architect", "builder", "inspector"]
+      .map((r) => {
+        const m = order.value?.[`${r}_model` as "builder_model"];
+        return m ? `${r[0].toUpperCase()}${r.slice(1)}: ${m}` : "";
+      })
+      .filter(Boolean)
+      .join(" · ") || "Workspace default models",
 );
+const status = computed(() => order.value && orderStatus(order.value)),
+  ship = computed(() => (order.value ? shipState(order.value) : null)),
+  reason = computed(() => escalationReason(factory.events)),
+  cost = computed(() => runs.value.reduce((n, r) => n + r.cost_micros, 0));
 watch(
   id,
   async (value, _old, onCleanup) => {
     factory.clearDetail();
+    landing.value = "";
     actionError.value = "";
     modal.value = null;
     let active = true;
@@ -143,6 +169,9 @@ async function decision() {
 function setTab(key: string) {
   void router.replace({ query: { ...route.query, tab: key } });
 }
+function goStage(i: number) {
+  setTab(stageTabs[i]);
+}
 function tabKeys(event: KeyboardEvent, index: number) {
   if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
   event.preventDefault();
@@ -187,141 +216,138 @@ function download() {
   <div v-else-if="!order" class="panel empty" aria-busy="true">
     Loading work order…
   </div>
-  <div v-else>
-    <RouterLink to="/factory" class="detail-back"
-      ><ArrowLeft class="icon" />Back to factory</RouterLink
-    >
-    <div class="detail-title">
-      <div>
-        <div class="eyebrow">
-          {{ project?.name || "Project" }} / {{ order.id }}
+  <div v-else class="fx-page">
+    <div class="fx-head">
+      <RouterLink to="/factory" class="fx-back" aria-label="Back to factory"
+        ><ArrowLeft class="icon"
+      /></RouterLink>
+      <div class="grow">
+        <div class="fx-crumb">
+          <RouterLink to="/factory">Factory</RouterLink> /
+          {{ project?.name || "Project" }} ·
+          <span class="mono">{{ order.id }}</span>
         </div>
         <h1>{{ order.title }}</h1>
+        <div class="fx-meta">
+          <span
+            ><GitBranch class="icon" />{{
+              project?.repo_url || "Repository not reported"
+            }}</span
+          ><span>Revision {{ order.revision }}</span
+          ><span>{{ money(cost) }} · {{ runs.length }} runs</span
+          ><span data-test="crew-models" :title="crewModels">{{
+            crewModels
+          }}</span>
+        </div>
       </div>
-      <StatusBadge :state="order.state" />
+      <span class="fx-pill" :class="status?.tone">{{ status?.label }}</span>
     </div>
-    <div class="detail-meta">
-      <span class="row" style="gap: 5px"
-        ><GitBranch class="icon" />{{
-          project?.repo_url || "Repository not reported"
-        }}</span
-      ><span>Revision {{ order.revision }}</span
-      ><span class="grow"></span
-      ><button
-        v-if="session.canWrite && canCancel"
-        class="btn text small"
-        :disabled="busy"
-        @click="open('cancel')"
-      >
-        <Ban class="icon" />Cancel
-      </button>
-    </div>
-    <div
+    <StageTrack
+      :order="order"
+      :runs="runs"
+      :events="factory.events"
+      @select="goStage"
+    />
+    <p
       v-if="route.query.planningError && order.state === 'CREATED'"
       class="notice"
       role="alert"
-      style="margin-bottom: 20px"
     >
       Your work order was saved, but planning could not start:
       {{ route.query.planningError }}. Retry with Draft blueprint below.
-    </div>
+    </p>
     <div v-if="actionError && !modal" class="error-state" role="alert">
       {{ actionError }}
     </div>
-    <div class="detail-layout">
-      <div class="detail-main">
-        <div class="tabs" role="tablist" aria-label="Work order sections">
-          <button
-            v-for="(t, i) in tabs"
-            :id="'order-tab-' + t.key"
-            :key="t.key"
-            role="tab"
-            :tabindex="tab === t.key ? 0 : -1"
-            :aria-selected="tab === t.key"
-            :aria-controls="'order-panel-' + t.key"
-            :class="{ active: tab === t.key }"
-            @click="setTab(t.key)"
-            @keydown="tabKeys($event, i)"
-          >
-            {{ t.label }}
-          </button>
-        </div>
-        <div
-          :id="'order-panel-' + tab"
-          role="tabpanel"
-          :aria-labelledby="'order-tab-' + tab"
-        >
-          <RunBanner
-            v-if="tab === 'graph' || tab === 'activity' || order.paused_at"
-            :order="order"
-            :tasks="tasks"
-            :runs="runs"
-            :can-write="session.canWrite"
-            :busy="busy"
-            @pause="act(() => factory.pause(id))"
-            @resume="act(() => factory.resume(id))"
-          />
-          <Transition name="view" mode="out-in"
-            ><BlueprintPanel
-              v-if="tab === 'blueprint'"
-              key="blueprint"
-              :order="order"
-              :tasks="tasks"
-              :can-write="session.canWrite"
-              :can-clarify="canClarify"
-              :busy="busy"
-              @draft="act(() => factory.planGenerate(id))"
-              @approve="act(() => factory.planDecision(id, 'approve'))"
-              @revise="open('revise')"
-              @clarify="open('clarify')"
-              @export="download" /><TaskGraph
-              v-else-if="tab === 'graph'"
-              key="graph"
-              :tasks="tasks"
-              :runs="runs" /><ActivityPanel
-              v-else-if="tab === 'activity'"
-              key="activity"
-              :events="factory.events"
-              :runs="runs"
-              :tasks="tasks"
-              :can-retry="session.canWrite && order.state === 'IMPLEMENTING'"
-              :revision="order.revision"
-              :steer="
-                session.canWrite
-                  ? (runID: string, m: string) => factory.steer(id, runID, m)
-                  : undefined
-              "
-              @retry="(taskID) => act(() => factory.retryTask(id, taskID))"
-              @retry-remediation="
-                act(() => factory.retryRemediation(id))
-              " /><QualityPanel
-              v-else-if="tab === 'quality'"
-              key="quality"
-              :checks="factory.quality"
-              :findings="factory.findings"
-              :revision="order.revision" /><ChangesPanel
-              v-else
-              key="changes"
-              :runs="runs"
-              :findings="factory.findings"
-              :state="order.state"
-              :can-write="session.canWrite"
-              :busy="busy"
-              :publish-to="
-                project?.git_connection_id ? project.remote_repo : ''
-              "
-              :pr-url="order.pr_url"
-              :pr-ref="order.pr_ref"
-              :source-ref="order.source_ref"
-              @decision="open"
-              @finding="
-                (f, action, note) =>
-                  act(() => factory.decideFinding(id, f, action, note))
-              "
-          /></Transition>
-        </div>
+    <NowCard
+      :order="order"
+      :tasks="tasks"
+      :runs="runs"
+      :events="factory.events"
+      :can-write="session.canWrite"
+      :can-clarify="canClarify"
+      :busy="busy"
+      @draft="act(() => factory.planGenerate(id))"
+      @approve-plan="act(() => factory.planDecision(id, 'approve'))"
+      @revise-plan="open('revise')"
+      @clarify="open('clarify')"
+      @pause="act(() => factory.pause(id))"
+      @resume="act(() => factory.resume(id))"
+      @cancel="open('cancel')"
+      @goto="setTab"
+    />
+    <div class="fx-tabs" role="tablist" aria-label="Work order sections">
+      <button
+        v-for="(t, i) in tabs"
+        :id="'order-tab-' + t.key"
+        :key="t.key"
+        role="tab"
+        :tabindex="tab === t.key ? 0 : -1"
+        :aria-selected="tab === t.key"
+        :aria-controls="'order-panel-' + t.key"
+        :class="{ active: tab === t.key }"
+        @click="setTab(t.key)"
+        @keydown="tabKeys($event, i)"
+      >
+        {{ t.label }}
+      </button>
+    </div>
+    <div
+      :id="'order-panel-' + tab"
+      role="tabpanel"
+      :aria-labelledby="'order-tab-' + tab"
+    >
+      <BlueprintPanel
+        v-if="tab === 'plan'"
+        :order="order"
+        :tasks="tasks"
+        @export="download"
+      />
+      <div v-else-if="tab === 'progress'" class="fx-stack">
+        <TaskGraph :tasks="tasks" :runs="runs" />
+        <ActivityPanel
+          :events="factory.events"
+          :runs="runs"
+          :tasks="tasks"
+          :can-retry="session.canWrite && order.state === 'IMPLEMENTING'"
+          :revision="order.revision"
+          :steer="
+            session.canWrite
+              ? (runID: string, m: string) => factory.steer(id, runID, m)
+              : undefined
+          "
+          @retry="(taskID) => act(() => factory.retryTask(id, taskID))"
+          @retry-remediation="act(() => factory.retryRemediation(id))"
+        />
       </div>
-      <WorkOrderSidebar :order="order" :project="project" :runs="runs" />
+      <ReviewPanel
+        v-else-if="tab === 'review'"
+        :checks="factory.quality"
+        :findings="factory.findings"
+        :revision="order.revision"
+        :events="factory.events"
+        :state="order.state"
+        :can-write="session.canWrite"
+        :busy="busy"
+        @finding="
+          (f, action, note) =>
+            act(() => factory.decideFinding(id, f, action, note))
+        "
+      />
+      <ChangesPanel
+        v-else
+        :runs="runs"
+        :state="order.state"
+        :can-write="session.canWrite"
+        :busy="busy"
+        :ship="ship"
+        :reason="reason"
+        :publish-to="project?.git_connection_id ? project.remote_repo : ''"
+        :pr-url="order.pr_url"
+        :pr-ref="order.pr_ref"
+        :source-ref="order.source_ref"
+        @decision="open"
+      />
     </div>
   </div>
   <AppDialog
@@ -337,8 +363,11 @@ function download() {
         available.
       </p>
       <p v-else-if="modal === 'approve'" class="notice">
-        This records your local approval for the current work order. It does not
-        create, publish or merge a pull request.
+        {{
+          project?.git_connection_id
+            ? "Approving pushes the verified commit to a work branch and opens a pull request. The work order finishes when that pull request is merged."
+            : "This records your local approval for the current work order. No pull request is created."
+        }}
       </p>
       <p v-else class="small muted">
         Record what should change and why. Your note stays in the work-order

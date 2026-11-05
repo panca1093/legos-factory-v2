@@ -65,6 +65,9 @@ export function subscribe(
     "escalated",
     "pr_approved",
     "pr_declined",
+    "pr_merged",
+    "pr_closed",
+    "pr_track_failed",
     "revision_requested",
     "cancelled",
   ];

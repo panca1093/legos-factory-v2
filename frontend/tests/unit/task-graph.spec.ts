@@ -55,9 +55,9 @@ it("renders role, sequence, status and progress like the reference design", asyn
   expect(baseline.find(".tg-badge").text()).toBe("Needed by 2");
   expect(w.find('[data-node="inspection"] .tg-badge').exists()).toBe(false);
   expect(w.findAll(".tg-rank").map((r) => r.text())).toEqual([
-    "Stage 1",
-    "Stage 2",
-    "Stage 3",
+    "Wave 1",
+    "Wave 2",
+    "Wave 3",
   ]);
   expect(w.findAll(".tg-edge.cycle")).toHaveLength(0);
   w.unmount();

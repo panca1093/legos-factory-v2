@@ -87,7 +87,7 @@ test("full work order journey: project → plan → graph → build → quality 
     page.getByText("Architect review", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Approve plan", exact: true }).click();
-  await page.getByRole("tab", { name: "Task graph", exact: true }).click();
+  await page.getByRole("tab", { name: "Progress", exact: true }).click();
   await expect(page.locator(".task-brick")).toHaveCount(4);
   await page.locator(".task-brick").first().click();
   await expect(page.getByRole("dialog")).toBeVisible();
@@ -96,11 +96,11 @@ test("full work order journey: project → plan → graph → build → quality 
   ).toBeVisible();
   await page.getByRole("button", { name: "Close dialog" }).click();
   await expect(
-    page.locator(".detail-title").getByText("PR decision", { exact: true }),
+    page.getByText("Waiting for your approval", { exact: true }).first(),
   ).toBeVisible({
     timeout: 120_000,
   });
-  await page.getByRole("tab", { name: "Quality", exact: true }).click();
+  await page.getByRole("tab", { name: "Review", exact: true }).click();
   await expect(
     page.getByText("Current revision 1", { exact: true }),
   ).toBeVisible();
@@ -110,18 +110,22 @@ test("full work order journey: project → plan → graph → build → quality 
   await page.locator("[data-check]").first().click();
   await expect(page.getByRole("dialog")).toContainText("Exit code:");
   await page.getByRole("button", { name: "Close dialog" }).click();
-  await page.getByRole("tab", { name: "Activity", exact: true }).click();
+  await page.getByRole("tab", { name: "Progress", exact: true }).click();
   await expect(page.getByText("Execution runs", { exact: true })).toBeVisible();
+  await page.getByText("Execution runs", { exact: true }).click();
   await expect(page.getByText("mock", { exact: true }).first()).toBeVisible();
-  await page.getByRole("tab", { name: "Changes & PR", exact: true }).click();
+  await page.getByRole("tab", { name: "Review", exact: true }).click();
   await expect(page.getByText("blocker", { exact: true })).toBeVisible();
   await expect(page.getByText("resolved", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Changes & PR", exact: true }).click();
   await page.getByRole("button", { name: "Approve", exact: true }).click();
   await page.fill("#decision-notes", "Evidence reviewed at revision 1");
   await page
     .getByRole("button", { name: "Record approval", exact: true })
     .click();
-  await expect(page.getByText("Assembled", { exact: true })).toBeVisible({
+  await expect(
+    page.getByText("Approved · no pull request").first(),
+  ).toBeVisible({
     timeout: 30_000,
   });
 });
