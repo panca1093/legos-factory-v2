@@ -326,3 +326,26 @@ describe("steering and plan progress", () => {
     w.unmount();
   });
 });
+
+describe("ActivityPanel actors", () => {
+  it("renders non-crew actors with the system avatar instead of the Foreman bot", () => {
+    const w = mount(ActivityPanel, {
+      props: {
+        runs: [],
+        events: [
+          ev("state_changed", undefined, "factory", "Plan queued"),
+          ev("plan_reviewed", undefined, "foreman", "Plan approved"),
+        ],
+      },
+    });
+    const [foreman, factory] = w.findAll("article.event");
+    expect(factory.find(".avatar.system").exists()).toBe(true);
+    expect(factory.find(".avatar.system").attributes("aria-hidden")).toBe(
+      "true",
+    );
+    expect(factory.find("strong").text()).toBe("Factory");
+    expect(factory.findComponent({ name: "BrickBot" }).exists()).toBe(false);
+    expect(foreman.find(".avatar.system").exists()).toBe(false);
+    expect(foreman.findComponent({ name: "BrickBot" }).exists()).toBe(true);
+  });
+});

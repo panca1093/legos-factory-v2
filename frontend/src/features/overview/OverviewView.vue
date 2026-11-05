@@ -74,7 +74,10 @@ async function load() {
 }
 onMounted(load);
 function observed(role: string) {
-  const e = factory.liveEvents.find((e) => e.actor.toLowerCase() === role);
+  const actors = role === "foreman" ? ["foreman", "factory"] : [role];
+  const e = factory.liveEvents.find((e) =>
+    actors.includes(e.actor.toLowerCase()),
+  );
   return e
     ? e.kind.replaceAll("_", " ")
     : role === "cataloger"

@@ -25,6 +25,8 @@ export type Persona = (typeof crew)[number]["id"];
 export function persona(role: string): Persona {
   return crew.find((c) => c.id === role.toLowerCase())?.id ?? "foreman";
 }
+export const isCrew = (actor: string) =>
+  crew.some((c) => c.id === actor.toLowerCase());
 export const money = (micros: number = 0) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(
     micros / 1_000_000,
