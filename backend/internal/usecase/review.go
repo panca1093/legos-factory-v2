@@ -2,24 +2,25 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
+	"strings"
 
 	"legos-factory/backend/internal/model"
 )
 
-// Foreman review: an independent agent run (the Foreman's own model) checks
-// the Architect's draft. APPROVE readies it for execution, REVISE sends it
-// back to the Architect once, CLARIFY asks a human. A second REVISE goes to a
-// human too, so the two agents can never loop.
-
-const maxForemanRevisions = 1
+// Plan review (SPEC section 4): the Foreman agent writes review notes, then
+// the plan gate decides in code from Jev's typed answers (gates.go): approve
+// starts the build, revise sends the plan back to the Architect (bounded by
+// maxPlanRevisions), escalate leaves it for a human.
 
 func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	wo, err := f.WO.Get(ctx, job.WOID)
 	if err != nil {
 		return err
 	}
-	defer f.closePlanning(wo.ID) // the plan review ends the Foreman's planning session, whatever it decides
+	defer f.closePlanning(wo.ID) // the plan review ends the Foreman's planning session, whatever the gate decides
 	if wo.State != model.StateArchitectReview || wo.PlanReview != "pending" {
 		return nil // superseded: the plan was revised, approved or escalated meanwhile
 	}
@@ -31,46 +32,102 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	var r reviewReply
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+taskList(tasks), f.workspaceDir(wo.ID), wo.KBBaseSHA)
 	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanReviewPrompt(wo, tasks)+kbText,
-		map[string]string{"stage": "review", "review_round": fmt.Sprint(wo.ReviewRounds), "clarification_answer": wo.ClarifAnswer},
+		map[string]string{"stage": "review", "clarification_answer": wo.ClarifAnswer},
 		"", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})
 	if err != nil {
 		return err
 	}
+	review := r.text()
 	f.Catalog.Record(ctx, wo, model.KnowledgePlanReview, model.TrustAIInterpretation, "foreman",
-		"Foreman plan review: "+r.Decision, r.Notes+r.QuestionText, "run:"+runID)
+		"Foreman plan review notes", review, "run:"+runID)
+	f.event(wo.ID, "foreman", "plan_reviewed", "Foreman review notes ready", map[string]any{"notes": review, "run_id": runID})
+	return f.planGate(ctx, wo, tasks, review)
+}
 
-	switch r.Decision {
-	case "APPROVE":
+func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []model.Task, review string) error {
+	in := PlanGateInput{
+		Request:       wo.Title + "\n\n" + wo.Objective,
+		Criteria:      splitCriteria(wo.Acceptance),
+		Brief:         wo.Brief,
+		Spec:          wo.Spec,
+		Tasks:         gateTasks(tasks),
+		ForemanReview: review,
+		PlanRevisions: wo.PlanRevisions,
+	}
+	state, qs := planGateState(in)
+	res, over, jerr := f.askJudge(ctx, state, qs)
+	out := decidePlanGate(in, qs, res.Answers, jerr, over)
+	if !errors.Is(jerr, errNoJudge) {
+		f.recordGate(wo.ID, "plan", state, qs, res, out, jerr)
+	}
+	switch out.Outcome {
+	case GateApprove:
 		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "approved"}); err != nil {
 			return err
 		}
-		wo.PlanReview = "approved"
-		f.event(wo.ID, "foreman", "plan_reviewed", "Foreman approved the plan; "+awaitingText(wo), map[string]any{"notes": r.Notes})
-		if wo.Autonomy == "delegated" {
-			return f.approvePlan(ctx, wo, "policy", "Delegated autonomy: execution authorized after Foreman review")
+		return f.approvePlan(ctx, wo, "factory", "Plan gate approved the plan; build starts")
+	case GateRevise:
+		revisions := wo.PlanRevisions + 1
+		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "", "plan_revisions": revisions, "clarif_rounds": 0}); err != nil {
+			return err
 		}
+		f.event(wo.ID, "factory", "plan_revision_requested", out.Note, map[string]any{"revision": revisions})
+		if err := f.step(ctx, wo, model.StateArchitectReview, model.StatePlanning, "factory", "Plan gate requested a plan revision"); err != nil {
+			return err
+		}
+		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": "Plan gate: " + out.Note + "\n\nForeman review: " + review})
+	default: // escalate: the order stays in ARCHITECT_REVIEW and the human approves or revises
+		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "approved"}); err != nil {
+			return err
+		}
+		msg := "The plan needs a human decision: " + out.Note
+		if errors.Is(jerr, errNoJudge) {
+			msg = "Jev is not configured; the plan needs human approval"
+		}
+		f.event(wo.ID, "factory", "plan_escalated", msg, map[string]any{"reason": out.Note, "row": out.Row})
 		return nil
-	case "REVISE":
-		if wo.ReviewRounds >= maxForemanRevisions {
-			return f.askHuman(ctx, wo, "foreman",
-				"The Foreman still requests changes after a revision: "+r.Notes+" How should the plan proceed?")
-		}
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "", "review_rounds": wo.ReviewRounds + 1, "clarif_rounds": 0}); err != nil {
-			return err
-		}
-		f.event(wo.ID, "foreman", "plan_revision_requested", r.Notes, nil)
-		if err := f.step(ctx, wo, model.StateArchitectReview, model.StatePlanning, "foreman", "Foreman requested a plan revision"); err != nil {
-			return err
-		}
-		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": "Foreman review: " + r.Notes})
-	default: // CLARIFY
-		return f.askHuman(ctx, wo, "foreman", r.QuestionText)
 	}
 }
 
-func awaitingText(wo *model.WorkOrder) string {
-	if wo.Autonomy == "delegated" {
-		return "delegated autonomy starts execution"
+// gateTasks numbers the plan t1..tn for Jev; stored task ids carry the work order id.
+func gateTasks(tasks []model.Task) []PlanTask {
+	ids := make(map[string]string, len(tasks))
+	for i, t := range tasks {
+		ids[t.ID] = fmt.Sprintf("t%d", i+1)
 	}
-	return "awaiting human plan approval"
+	out := make([]PlanTask, len(tasks))
+	for i, t := range tasks {
+		deps := make([]string, 0, len(t.Deps))
+		for _, d := range t.Deps {
+			if id, ok := ids[d]; ok {
+				deps = append(deps, id)
+			}
+		}
+		out[i] = PlanTask{ID: ids[t.ID], Title: t.Title, Objective: t.Objective, Scope: t.Scope, Deps: deps}
+	}
+	return out
+}
+
+// askJudge sends one Jev request. Without a Judge it returns errNoJudge, and
+// over the context limit it sends nothing and reports over.
+func (f *Factory) askJudge(ctx context.Context, state any, qs map[string]Noul) (res JudgeResult, over bool, err error) {
+	switch {
+	case f.Judge == nil:
+		return res, false, errNoJudge
+	case overLimit(state, qs):
+		return res, true, nil
+	}
+	res, err = f.Judge.Ask(ctx, state, qs)
+	return res, false, err
+}
+
+// recordGate stores the gate's audit event with the exact Jev request; the
+// live copy drops the request, which can be 100KB of plan or diff.
+func (f *Factory) recordGate(woID, gate string, state any, qs map[string]Noul, res JudgeResult, out GateOutcome, jerr error) {
+	full := gateEvent(gate, state, qs, res, out, jerr)
+	live := maps.Clone(full)
+	delete(live, "request")
+	delete(live, "unsent_request")
+	msg := fmt.Sprintf("%s gate: %s (row %d)", strings.ToUpper(gate[:1])+gate[1:], out.Outcome, out.Row)
+	f.eventLive(woID, "jev", gate+"_gate", msg, full, live)
 }

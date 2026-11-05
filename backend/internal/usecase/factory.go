@@ -357,13 +357,19 @@ func (f *Factory) step(ctx context.Context, wo *model.WorkOrder, from, to model.
 }
 
 func (f *Factory) event(woID, actor, kind, message string, payload map[string]any) {
+	f.eventLive(woID, actor, kind, message, payload, payload)
+}
+
+// eventLive stores payload and publishes live in its place, for payloads too
+// large to stream (a gate's exact Jev request).
+func (f *Factory) eventLive(woID, actor, kind, message string, payload, live map[string]any) {
 	ev, err := f.WO.AppendEvent(context.Background(), woID, actor, kind, message, payload)
 	if err != nil {
 		f.Log.Error("append event failed", "err", err)
 		return
 	}
 	f.Bus.Publish(model.LiveEvent{WOID: woID, Actor: actor, Kind: kind, Message: message, Payload: map[string]any{
-		"id": ev.ID, "payload": payload,
+		"id": ev.ID, "payload": live,
 	}})
 }
 

@@ -123,6 +123,9 @@ func sessionRig(t *testing.T, h Harness) *rig {
 	if err := r.wos.UpdateState(context.Background(), r.wo.ID, model.StateCreated); err != nil {
 		t.Fatal(err)
 	}
+	if err := r.wos.UpdateFields(context.Background(), r.wo.ID, map[string]any{"acceptance": r.wo.Acceptance}); err != nil {
+		t.Fatal(err)
+	}
 	return r
 }
 
@@ -352,8 +355,9 @@ func TestRepeatedQuestionReusesTheStoredAnswer(t *testing.T) {
 }
 
 func TestNewPlanningRoundResetsTheAnswerCap(t *testing.T) {
-	h := &sessHarness{architect: []string{clarifyJSON, planJSON}, answer: answerJSON, review: `{"decision":"REVISE","notes":"cover failures"}`}
+	h := &sessHarness{architect: []string{clarifyJSON, planJSON}, answer: answerJSON, review: `{"notes":"cover failures"}`}
 	r := sessionRig(t, h)
+	r.f.Judge = &fakeJudge{over: map[string]float64{"scope_creep": 0.9}}
 	r.plan(t)
 	if wo := r.reload(t); wo.ClarifRounds != 1 {
 		t.Fatalf("rounds = %d", wo.ClarifRounds)
@@ -363,7 +367,7 @@ func TestNewPlanningRoundResetsTheAnswerCap(t *testing.T) {
 	}
 	wo := r.reload(t)
 	if wo.ClarifRounds != 0 || len(wo.Clarifications) != 1 {
-		t.Fatalf("a Foreman revision starts a new round and keeps the log: rounds %d answers %d", wo.ClarifRounds, len(wo.Clarifications))
+		t.Fatalf("a plan-gate revision starts a new round and keeps the log: rounds %d answers %d", wo.ClarifRounds, len(wo.Clarifications))
 	}
 }
 

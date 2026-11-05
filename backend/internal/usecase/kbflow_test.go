@@ -18,7 +18,8 @@ import (
 
 const (
 	planJSON    = `{"decision":"APPROVE","summary":"s","spec":"sp","tasks":[{"id":"t1","title":"Round money","objective":"o","role":"builder"}]}`
-	reviewJSON  = `{"decision":"APPROVE","notes":"ok"}`
+	reviewJSON  = `{"notes":"ok"}`
+	verifyJSON  = `{"verdicts":[{"criterion_id":"c1","status":"met","evidence":"round.go rounds to integer rupiah"}],"deviations":[]}`
 	noFindings  = `{"findings":[]}`
 	moneyDoc    = "# Money\n\nMoney is integer rupiah; never use floats for rounding.\n"
 	routingBody = "---\ntype: Reviewer Routing\nroutes:\n  - paths: [\"src/**/*.ts\", \"!src/**/*.test.ts\"]\n    reviewers: [backend]\n  - paths: [\"**/*.test.ts\"]\n    reviewers: [testing]\n---\n\n# Routing\n"
@@ -28,7 +29,8 @@ type replyHarness struct {
 	mu       sync.Mutex
 	prompts  map[string][]string // by role
 	specials []string
-	last     model.AgentRequest
+	reqs     map[string]model.AgentRequest // by session id
+	verify   string                        // overrides the Architect verification reply
 }
 
 func (*replyHarness) Name() string { return "fake" }
@@ -42,14 +44,25 @@ func (h *replyHarness) Start(_ context.Context, req model.AgentRequest) (model.A
 	if req.Role == model.AgentInspector {
 		h.specials = append(h.specials, req.Context["specialty"])
 	}
-	h.last = req
-	return fakeSession{}, nil
+	if h.reqs == nil {
+		h.reqs = map[string]model.AgentRequest{}
+	}
+	id := fmt.Sprintf("r%d", len(h.reqs)+1)
+	h.reqs[id] = req
+	return idSession(id), nil
 }
 func (*replyHarness) Cancel(context.Context, string) error { return nil }
-func (h *replyHarness) Result(context.Context, string) (model.AgentResult, error) {
+func (h *replyHarness) Result(_ context.Context, id string) (model.AgentResult, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	text := map[model.AgentRole]string{model.AgentArchitect: planJSON, model.AgentForeman: reviewJSON, model.AgentInspector: noFindings}[h.last.Role]
+	req := h.reqs[id]
+	text := map[model.AgentRole]string{model.AgentArchitect: planJSON, model.AgentForeman: reviewJSON, model.AgentInspector: noFindings}[req.Role]
+	if req.Role == model.AgentArchitect && req.Context["stage"] == "verify" {
+		text = verifyJSON
+		if h.verify != "" {
+			text = h.verify
+		}
+	}
 	return model.AgentResult{Text: text}, nil
 }
 
@@ -85,7 +98,7 @@ func newRig(t *testing.T) *rig {
 	}
 	projects := &store.ProjectRepo{DB: db}
 	q := &fakeQueue{}
-	f.Proj, f.KB, f.Sched, f.Findings = projects, know, q, &store.FindingRepo{DB: db}
+	f.Proj, f.KB, f.Sched, f.Findings, f.Quality = projects, know, q, &store.FindingRepo{DB: db}, &store.QualityRepo{DB: db}
 	f.Catalog = &Cataloger{Knowledge: &JournalStore{KB: know, Proj: projects}, Proj: projects, Settings: &store.SettingsRepo{DB: db}, Log: slog.Default()}
 	f.Model = func(model.AgentRole, *model.WorkOrder) (string, string) { return "p", "m" }
 	f.DataDir = t.TempDir()

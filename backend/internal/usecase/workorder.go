@@ -41,7 +41,6 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 		Objective:      req.Objective,
 		Acceptance:     req.Acceptance,
 		State:          model.StateCreated,
-		Autonomy:       req.Autonomy,
 		BuilderModel:   req.BuilderModel,
 		InspectorModel: req.InspectorModel,
 		SourceRef:      req.SourceRef,

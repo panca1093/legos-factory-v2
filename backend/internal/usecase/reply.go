@@ -143,23 +143,86 @@ func (p *planReply) validate() error {
 	return nil
 }
 
-// reviewReply is the Foreman's independent plan review.
+// coverageRemark is the Foreman's note on how one acceptance criterion is
+// (or is not) covered by the plan.
+type coverageRemark struct {
+	Criterion string `json:"criterion"`
+	Remark    string `json:"remark"`
+}
+
+// reviewReply is the Foreman's notes on the plan. It carries no decision: the
+// plan gate decides in code (gates.go).
 type reviewReply struct {
-	Decision     string `json:"decision"`
-	Notes        string `json:"notes"`
-	QuestionText string `json:"question_text"`
+	Notes    string           `json:"notes"`
+	Coverage []coverageRemark `json:"coverage"`
 }
 
 func (r *reviewReply) validate() error {
-	if err := oneOf("decision", r.Decision, "APPROVE", "REVISE", "CLARIFY"); err != nil {
-		return err
+	if strings.TrimSpace(r.Notes) == "" {
+		return errors.New("notes is required")
 	}
-	switch {
-	case r.Decision == "REVISE" && strings.TrimSpace(r.Notes) == "":
-		return errors.New("REVISE requires notes for the Architect")
-	case r.Decision == "CLARIFY" && strings.TrimSpace(r.QuestionText) == "":
-		return errors.New("CLARIFY requires question_text for the human")
+	for i, c := range r.Coverage {
+		if strings.TrimSpace(c.Criterion) == "" || strings.TrimSpace(c.Remark) == "" {
+			return fmt.Errorf("coverage[%d] needs a criterion and a remark", i)
+		}
 	}
+	return nil
+}
+
+// text renders the reply as the review the plan gate and the Architect read.
+func (r *reviewReply) text() string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(r.Notes))
+	if len(r.Coverage) > 0 {
+		b.WriteString("\n\nCoverage:")
+		for _, c := range r.Coverage {
+			b.WriteString("\n- " + strings.TrimSpace(c.Criterion) + ": " + strings.TrimSpace(c.Remark))
+		}
+	}
+	return b.String()
+}
+
+// validationReply is the Foreman's notes on whether the finished work is done.
+type validationReply struct {
+	Notes string `json:"notes"`
+}
+
+func (r *validationReply) validate() error {
+	if strings.TrimSpace(r.Notes) == "" {
+		return errors.New("notes is required")
+	}
+	return nil
+}
+
+// verifyReply is the Architect's check of the built result against its spec
+// and plan.
+type verifyReply struct {
+	Verdicts   []ArchitectVerdict `json:"verdicts"`
+	Deviations []string           `json:"deviations"`
+}
+
+func (r *verifyReply) validate() error {
+	if r.Verdicts == nil {
+		return errors.New("verdicts is required (one entry per acceptance criterion)")
+	}
+	for i := range r.Verdicts {
+		v := &r.Verdicts[i]
+		v.CriterionID = strings.TrimSpace(v.CriterionID)
+		v.Status = strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(strings.TrimSpace(v.Status)), "-", "_"), " ", "_")
+		if v.CriterionID == "" {
+			return fmt.Errorf("verdicts[%d] needs a criterion_id", i)
+		}
+		if err := oneOf(fmt.Sprintf("verdicts[%d].status", i), v.Status, "met", "not_met", "unclear"); err != nil {
+			return err
+		}
+	}
+	var deviations []string
+	for _, d := range r.Deviations {
+		if d = strings.TrimSpace(d); d != "" {
+			deviations = append(deviations, d)
+		}
+	}
+	r.Deviations = deviations
 	return nil
 }
 

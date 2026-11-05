@@ -39,16 +39,7 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 		title = fmt.Sprintf("Remediation implemented (revision %d)", wo.Revision)
 	}
 	f.Catalog.Record(ctx, wo, model.KnowledgeImplementation, model.TrustAIInterpretation, "builder", title, res.Text, "run:"+runID)
-	if err := f.maybeAdvanceAfterImplementation(ctx, wo); err != nil {
-		return err
-	}
-	if wo.Autonomy == "guided" {
-		// guided autonomy: a human advances every build step
-		if cur, err := f.WO.Get(ctx, wo.ID); err == nil && cur.PausedAt == nil && !cur.State.Terminal() {
-			return f.pause(ctx, cur, "factory", "Guided autonomy: build step finished; resume to run the next step")
-		}
-	}
-	return nil
+	return f.maybeAdvanceAfterImplementation(ctx, wo)
 }
 
 // runBuilder runs the builder agent and fails permanently when the workspace
@@ -75,7 +66,8 @@ func (f *Factory) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 	}
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentBuilder), "", woQuery(wo)+" "+f.taskText(ctx, wo.ID, job.TaskID), woDir, wo.KBBaseSHA)
 	opts.Audit = audit
-	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job)+kbText, nil, job.TaskID, opts)
+	tasks, _ := f.WO.Plan(ctx, wo.ID) // without the plan the prompt just omits the task's scope
+	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job, tasks)+kbText, nil, job.TaskID, opts)
 	if err != nil {
 		return res, runID, err
 	}
