@@ -33,11 +33,16 @@ export const money = (micros: number = 0) =>
   );
 export const projectColor = (index: number) =>
   ["#8B7AD8", "#5D9FAC", "#C58D66", "#6DA58A"][Math.max(0, index) % 4];
-export const attentionStates: WorkOrderState[] = [
-  "WAITING_FOR_HUMAN",
-  "ARCHITECT_REVIEW",
-  "NEEDS_HUMAN_REVIEW",
-  "BLOCKED",
+export const isNeedsYou = (w: WorkOrder) =>
+  ["WAITING_FOR_HUMAN", "NEEDS_HUMAN_REVIEW", "BLOCKED"].includes(w.state) ||
+  (w.state === "ARCHITECT_REVIEW" && w.plan_review === "approved");
+export const needsYou = (orders: WorkOrder[]) => orders.filter(isNeedsYou);
+const preBuildStates: WorkOrderState[] = [
+  "CREATED",
+  "REQUIREMENT_ANALYSIS",
+  "TASK_DECOMPOSITION",
+  "SPEC_AND_PLAN_GENERATION",
+  "PLANNING",
 ];
 export const runningStates: WorkOrderState[] = [
   "QUEUED",
@@ -47,8 +52,12 @@ export const runningStates: WorkOrderState[] = [
   "PR_PREPARATION",
   "MERGE_READINESS",
 ];
+export const isRunning = (w: WorkOrder) =>
+  runningStates.includes(w.state) ||
+  preBuildStates.includes(w.state) ||
+  (w.state === "ARCHITECT_REVIEW" && !isNeedsYou(w));
 export const isFinished = (w: WorkOrder) =>
-  !!w.pr_merged_at || ["CANCELLED", "BLOCKED"].includes(w.state);
+  !!w.pr_merged_at || w.state === "CANCELLED";
 export const isActive = (w: WorkOrder) => !isFinished(w);
 
 export const stages = ["Brief", "Plan", "Build", "Review", "Ship"] as const;
@@ -83,10 +92,6 @@ export function stageIndex(w: WorkOrder, runs?: { kind: string }[]): number {
     (runs ? Math.max(0, ...runs.map((r) => runStage[r.kind] ?? 0)) : -1)
   );
 }
-export const waitingOnHuman = (w: WorkOrder) =>
-  w.state === "WAITING_FOR_HUMAN" ||
-  w.state === "NEEDS_HUMAN_REVIEW" ||
-  (w.state === "ARCHITECT_REVIEW" && w.plan_review === "approved");
 const actorByState: Partial<Record<WorkOrderState, string>> = {
   CREATED: "foreman",
   REQUIREMENT_ANALYSIS: "foreman",
@@ -100,7 +105,7 @@ const actorByState: Partial<Record<WorkOrderState, string>> = {
 };
 // Who holds the order right now: a crew member, the factory's code, or you.
 export const actorOf = (w: WorkOrder) =>
-  waitingOnHuman(w) ? "you" : (actorByState[w.state] ?? "factory");
+  isNeedsYou(w) ? "you" : (actorByState[w.state] ?? "factory");
 export type StageStatus = "done" | "cur" | "wait" | "stop" | "todo";
 export function stageStatuses(
   w: WorkOrder,
@@ -114,7 +119,7 @@ export function stageStatuses(
         ? "todo"
         : ["BLOCKED", "CANCELLED"].includes(w.state)
           ? "stop"
-          : waitingOnHuman(w)
+          : isNeedsYou(w)
             ? "wait"
             : "cur",
   );

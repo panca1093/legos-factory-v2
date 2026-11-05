@@ -8,6 +8,7 @@ import type {
   QualityCheck,
   Finding,
   WOEvent,
+  UsageSummary,
 } from "../../src/types/api";
 export const user = {
   id: "usr-test",
@@ -91,6 +92,38 @@ export const overview: Overview = {
     spent_micros: 18400000,
     reserved_micros: 0,
     available_micros: 21600000,
+  },
+};
+export const usage: UsageSummary = {
+  days: 365,
+  from: "2025-10-25",
+  to: "2026-10-24",
+  activity: Array.from({ length: 365 }, (_, i) => ({
+    date: new Date(Date.UTC(2025, 9, 25 + i)).toISOString().slice(0, 10),
+    count: (i * 7) % 11 < 4 ? 0 : (i * 5) % 9,
+  })),
+  roles: [
+    {
+      role: "builder",
+      tokens_in: 120000,
+      tokens_out: 8000,
+      cost_micros: 450000,
+      runs: 12,
+    },
+    {
+      role: "architect",
+      tokens_in: 40000,
+      tokens_out: 6000,
+      cost_micros: 210000,
+      runs: 5,
+    },
+  ],
+  month_to_date: {
+    month: "2026-10",
+    tokens_in: 20000,
+    tokens_out: 3000,
+    cost_micros: 180000,
+    runs: 4,
   },
 };
 export const settings: Settings = {

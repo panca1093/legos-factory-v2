@@ -122,8 +122,8 @@ describe("ELK graph shaping", () => {
     ]);
     expect(g.nodes.map((n) => n.dependents)).toEqual([1, 0]);
     expect(g.ranks).toEqual([
-      { label: "Stage 1", x: 32, y: 38 },
-      { label: "Stage 2", x: 336, y: 38 },
+      { label: "Wave 1", x: 32, y: 38 },
+      { label: "Wave 2", x: 336, y: 38 },
     ]);
     expect(g.diagnostics).toEqual(["note"]);
   });

@@ -175,10 +175,16 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		}
 	}
 	srv.Usage = usageTracker
+	listModels := func(ctx context.Context) ([]model.ModelInfo, error) {
+		// mock harness exposes a single scriptable pseudo-model
+		return []model.ModelInfo{{
+			ProviderID: "mock", ModelID: "mock-local", Name: "Scripted Mock (no real model)", Harness: "mock",
+		}}, nil
+	}
 	if lister != nil {
 		harnessName := realH.Name()
-		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) {
-			models, err := lister.Models(c.Request().Context())
+		listModels = func(ctx context.Context) ([]model.ModelInfo, error) {
+			models, err := lister.Models(ctx)
 			if err != nil {
 				return nil, err
 			}
@@ -190,13 +196,30 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			}
 			return out, nil
 		}
-	} else {
-		// mock harness exposes a single scriptable pseudo-model
-		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) {
-			return []model.ModelInfo{{
-				ProviderID: "mock", ModelID: "mock-local", Name: "Scripted Mock (no real model)", Harness: "mock",
-			}}, nil
-		}
+	}
+	srv.Models = func(c echo.Context) ([]model.ModelInfo, error) { return listModels(c.Request().Context()) }
+
+	// Chat needs a harness that can hold an agent read-only; the OpenCode HTTP
+	// harness cannot restrict a session, so chats are off there.
+	var chatH usecase.Harness
+	switch {
+	case cfg.Harness == "acp":
+		chatH = realH
+	case realH == nil:
+		chatH = mockH
+	}
+	srv.Chat = &usecase.Chat{
+		Store: &store.ChatRepo{DB: db}, Docs: srv.KBDocs, Projects: projects,
+		Settings: settingsRepo, Usage: usageTracker, Harness: chatH,
+		Models: listModels,
+		Default: func(ctx context.Context) string {
+			p, m := modelFor(model.AgentArchitect, &model.WorkOrder{})
+			if m == "" {
+				return ""
+			}
+			return p + "/" + m
+		},
+		Dir: filepath.Join(cfg.DataDir, "chat"),
 	}
 
 	return &App{Cfg: cfg, DBCloser: db.Close, Server: srv, Sched: sched, settings: settingsRepo, log: log}, nil

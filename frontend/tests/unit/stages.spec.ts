@@ -3,6 +3,7 @@ import {
   actorOf,
   isActive,
   isFinished,
+  isNeedsYou,
   orderStatus,
   shipState,
   stageIndex,
@@ -106,9 +107,10 @@ it("reports every Ship sub-state and finishes Ship only when merged", () => {
   expect(isFinished(merged)).toBe(true);
 });
 
-it("treats merged, cancelled and blocked as finished; READY is no longer assembled", () => {
+it("treats merged and cancelled as finished, blocked as needing you; READY is no longer assembled", () => {
   expect(isFinished(wo("CANCELLED"))).toBe(true);
-  expect(isFinished(wo("BLOCKED"))).toBe(true);
+  expect(isFinished(wo("BLOCKED"))).toBe(false);
+  expect(isNeedsYou(wo("BLOCKED"))).toBe(true);
   expect(isFinished(wo("READY"))).toBe(false);
   expect(isFinished(wo("NEEDS_HUMAN_REVIEW"))).toBe(false);
   expect(stateInfo("READY").label).not.toBe("Assembled");

@@ -20,11 +20,5 @@ export default defineConfig({
       env: { FACTORY_API_URL: "http://127.0.0.1:18081" },
       timeout: 30_000,
     },
-    {
-      command: "node scripts/serve-prototype.mjs",
-      url: "http://127.0.0.1:15174",
-      reuseExistingServer: false,
-      timeout: 30_000,
-    },
   ],
 });

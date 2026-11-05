@@ -110,6 +110,14 @@ func (h *MockHarness) execute(ctx context.Context, req model.AgentRequest) (mode
 		return h.builder(req, res)
 	case model.AgentInspector:
 		return h.inspector(req, res)
+	case model.AgentChat:
+		res.Text = "Scripted mock reply: this is not a real model output."
+		if req.OnText != nil {
+			for _, w := range strings.SplitAfter(res.Text, " ") {
+				req.OnText(w)
+			}
+		}
+		return res, nil
 	case model.AgentCataloger:
 		res.Text = fmt.Sprintf("Scripted mock summary of %s knowledge record(s); not a real model output.", req.Context["record_count"])
 		return res, nil
