@@ -28,8 +28,9 @@ func (f *Foreman) handleReview(ctx context.Context, job model.Job) error {
 	}
 	f.event(wo.ID, "foreman", "plan_review_started", "Foreman reviewing the Architect's plan", nil)
 	var r reviewReply
-	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanReviewPrompt(wo, tasks),
-		map[string]string{"review_round": fmt.Sprint(wo.ReviewRounds), "clarification_answer": wo.ClarifAnswer}, "", &r)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+taskList(tasks))
+	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanReviewPrompt(wo, tasks)+kbText,
+		map[string]string{"review_round": fmt.Sprint(wo.ReviewRounds), "clarification_answer": wo.ClarifAnswer}, "", &r, runOpts{Audit: audit})
 	if err != nil {
 		return err
 	}

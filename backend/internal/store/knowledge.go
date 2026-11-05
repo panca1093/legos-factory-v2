@@ -142,3 +142,21 @@ func ftsQuery(text string) string {
 func placeholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
+
+// All returns every record, oldest first, for the one-time export to the factory bundle.
+func (r *KnowledgeRepo) All(ctx context.Context) ([]model.KnowledgeRecord, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT `+kCols+` FROM knowledge_records k ORDER BY k.created_at, k.rowid`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.KnowledgeRecord
+	for rows.Next() {
+		k, err := scanK(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *k)
+	}
+	return out, rows.Err()
+}

@@ -32,11 +32,15 @@ type file struct {
 
 // Sync brings the index in line with the markdown files under root.
 func Sync(ctx context.Context, idx Index, emb Embedder, source, projectID, root, commitSHA string) (SyncStats, error) {
-	var st SyncStats
 	files, err := collect(root, source == model.KBSourceFactory)
 	if err != nil {
-		return st, err
+		return SyncStats{}, err
 	}
+	return syncFiles(ctx, idx, emb, source, projectID, files, commitSHA)
+}
+
+func syncFiles(ctx context.Context, idx Index, emb Embedder, source, projectID string, files []file, commitSHA string) (SyncStats, error) {
+	var st SyncStats
 	byName := map[string]string{}
 	for _, f := range files {
 		k := strings.ToLower(strings.TrimSuffix(path.Base(f.rel), ".md"))
@@ -71,7 +75,7 @@ func Sync(ctx context.Context, idx Index, emb Embedder, source, projectID, root,
 			continue
 		}
 		p.CommitSHA = commitSHA
-		if err := idx.Upsert(ctx, p, emb.Embed(p.Title+"\n"+p.Description+"\n"+p.Headings+"\n"+p.Body)); err != nil {
+		if err := idx.Upsert(ctx, p, embedText(emb, p)); err != nil {
 			return st, err
 		}
 		st.Changed++
@@ -96,7 +100,7 @@ func collect(root string, factory bool) ([]file, error) {
 	sort.Strings(paths)
 	var out []file
 	for _, rel := range paths {
-		if len(out) >= maxDocs {
+		if len(out) >= maxDocs && !factory {
 			break
 		}
 		if skipped(rel, factory) {
@@ -162,4 +166,8 @@ func listMD(root string) ([]string, error) {
 func isWorkTree(root string) bool {
 	out, err := exec.Command("git", "-C", root, "rev-parse", "--is-inside-work-tree").Output()
 	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+func embedText(emb Embedder, p model.KBParsed) []float32 {
+	return emb.Embed(p.Title + "\n" + p.Description + "\n" + p.Headings + "\n" + p.Body)
 }

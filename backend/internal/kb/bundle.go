@@ -123,7 +123,16 @@ func (b *Bundle) Read(p string) (map[string]any, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	data, err := os.ReadFile(filepath.Join(b.root, filepath.FromSlash(rel)))
+	return ReadMarkdown(b.root, rel)
+}
+
+// ReadMarkdown reads one markdown file under root, splitting frontmatter from the body.
+func ReadMarkdown(root, rel string) (map[string]any, string, error) {
+	rel = path.Clean(filepath.ToSlash(rel))
+	if rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
+		return nil, "", fmt.Errorf("path %q escapes the root", rel)
+	}
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 	if err != nil {
 		return nil, "", err
 	}
@@ -184,12 +193,58 @@ func (b *Bundle) writeRaw(rel string, data []byte, message string) (string, erro
 	return b.commit(message)
 }
 
-func (b *Bundle) putFile(rel string, data []byte) error {
+// File is one document for WriteMany.
+type File struct {
+	Path  string
+	Front map[string]any
+	Body  string
+}
+
+// WriteMany writes every file and commits once, regenerating each affected index.md once.
+func (b *Bundle) WriteMany(files []File, message string) (string, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	dirs := map[string]bool{}
+	for _, f := range files {
+		rel, err := cleanPath(f.Path)
+		if err != nil {
+			return "", err
+		}
+		data, err := render(f.Front, f.Body)
+		if err != nil {
+			return "", err
+		}
+		if err := b.putRaw(rel, data); err != nil {
+			return "", err
+		}
+		for d := path.Dir(rel); ; d = path.Dir(d) {
+			dirs[d] = true
+			if d == "." {
+				break
+			}
+		}
+	}
+	for d := range dirs {
+		if err := b.regenIndex(d); err != nil {
+			return "", err
+		}
+	}
+	if err := b.logEntry(message); err != nil {
+		return "", err
+	}
+	return b.commit(message)
+}
+
+func (b *Bundle) putRaw(rel string, data []byte) error {
 	abs := filepath.Join(b.root, filepath.FromSlash(rel))
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(abs, data, 0o644); err != nil {
+	return os.WriteFile(abs, data, 0o644)
+}
+
+func (b *Bundle) putFile(rel string, data []byte) error {
+	if err := b.putRaw(rel, data); err != nil {
 		return err
 	}
 	for d := path.Dir(rel); ; d = path.Dir(d) {

@@ -44,6 +44,7 @@ type Foreman struct {
 	Bus          Publisher
 	Usage        Budget
 	Catalog      *Cataloger
+	KB           *KB
 	Integrations *Integrations
 	Sandbox      Sandbox
 	DataDir      string
@@ -108,8 +109,9 @@ func (f *Foreman) ResumeOnStart(ctx context.Context) error {
 // running on success so the caller completes it (completeRuns) or fails it
 // (failRuns) once its work is integrated; agent_completed is left to the caller.
 type runOpts struct {
-	Dir  string
-	Hold bool
+	Dir   string
+	Hold  bool
+	Audit map[string]any // knowledge commits and document ids, recorded on agent_started
 }
 
 func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID, prompt string, extra map[string]string, taskID string, opts runOpts) (model.AgentResult, string, error) {
@@ -145,8 +147,12 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 		return model.AgentResult{}, "", err
 	}
 	runRef := map[string]any{"run_id": runID, "task_id": taskID}
+	started := map[string]any{"run_id": runID, "task_id": taskID}
+	for k, v := range opts.Audit {
+		started[k] = v
+	}
 	f.event(wo.ID, string(role), "agent_started",
-		fmt.Sprintf("%s agent started (%s harness, model %s)", role, h.Name(), modelID), runRef)
+		fmt.Sprintf("%s agent started (%s harness, model %s)", role, h.Name(), modelID), started)
 
 	var lastStep atomic.Int64
 	lastStep.Store(time.Now().UnixNano())
@@ -301,9 +307,9 @@ func (f *Foreman) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Ch
 // runStructured runs role and decodes its reply into v. An invalid reply is
 // retried once with the schema error; a second failure is permanent, so a
 // malformed answer never drives a transition.
-func (f *Foreman) runStructured(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, prompt string, extra map[string]string, taskID string, v reply) (model.AgentResult, string, error) {
+func (f *Foreman) runStructured(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, prompt string, extra map[string]string, taskID string, v reply, opts runOpts) (model.AgentResult, string, error) {
 	provider, modelID := f.Model(role, wo)
-	res, runID, err := f.runAgent(ctx, wo, role, provider, modelID, prompt, extra, taskID, runOpts{})
+	res, runID, err := f.runAgent(ctx, wo, role, provider, modelID, prompt, extra, taskID, opts)
 	if err != nil {
 		return res, runID, err
 	}
@@ -313,7 +319,7 @@ func (f *Foreman) runStructured(ctx context.Context, wo *model.WorkOrder, role m
 	}
 	f.event(wo.ID, string(role), "agent_reply_invalid", fmt.Sprintf("%s reply rejected: %v; asking once more", role, derr), nil)
 	retry := prompt + "\n\nYour previous reply was rejected: " + derr.Error() + "\nReply again with ONLY the JSON object."
-	res, runID, err = f.runAgent(ctx, wo, role, provider, modelID, retry, extra, taskID, runOpts{})
+	res, runID, err = f.runAgent(ctx, wo, role, provider, modelID, retry, extra, taskID, opts)
 	if err != nil {
 		return res, runID, err
 	}

@@ -46,10 +46,12 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 			fmt.Sprintf("%d prior project record(s) provided to the Architect", len(prior)), map[string]any{"refs": priorRefs})
 	}
 
+	f.syncRepo(ctx, wo, true)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "", woQuery(wo))
 	notes, _ := job.Payload["notes"].(string)
 	var plan planReply
-	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes)+knowledgePrompt(prior),
-		map[string]string{"clarification_answer": wo.ClarifAnswer}, "", &plan)
+	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes)+knowledgePrompt(prior)+kbText,
+		map[string]string{"clarification_answer": wo.ClarifAnswer}, "", &plan, runOpts{Audit: audit})
 	if err != nil {
 		return err
 	}

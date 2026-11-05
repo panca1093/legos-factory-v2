@@ -89,20 +89,22 @@ func (f *Foreman) handleInspect(ctx context.Context, job model.Job) error {
 	if err != nil {
 		f.event(wo.ID, "inspector", "changed_files_unavailable", err.Error(), nil)
 	}
-	picks := SelectSpecialists(files)
+	picks, routing := f.reviewers(ctx, wo, files)
 	names := make([]string, 0, len(picks))
 	for _, p := range picks {
 		names = append(names, p.Specialty)
 	}
 	f.event(wo.ID, "foreman", "inspection_specialists",
 		fmt.Sprintf("Specialist review by %s (%d changed files)", strings.Join(names, ", "), len(files)),
-		map[string]any{"specialists": picks})
+		map[string]any{"specialists": picks, "routing": routing})
 
 	blockers, total := 0, 0
 	for _, p := range picks {
 		var out findingsReply
-		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files),
-			map[string]string{"specialty": p.Specialty}, "", &out)
+		kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentInspector), p.Specialty,
+			woQuery(wo)+" "+strings.Join(files, " ")+" "+p.Specialty)
+		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files)+kbText,
+			map[string]string{"specialty": p.Specialty}, "", &out, runOpts{Audit: audit})
 		if err != nil {
 			return err
 		}

@@ -119,24 +119,19 @@ The FTS rowid maps through a `kb_fts_map(doc_id TEXT PRIMARY KEY, fts_rowid INTE
 
 ## Retrieval and delivery
 
-- **`Retriever` interface:** `Search(ctx, Query{ProjectID, Text, Roles, Types, Limit}) []Hit`. The v1 implementation ranks by FTS5 bm25 through the existing `ftsQuery` sanitizer, adds linked docs as "see also", and breaks ties by path.
-- **Per role:**
-  - Architect, Foreman review, Builder and Inspector get the top 8 repo and journal hits for their query text (work order, plus task, plus changed files and specialty).
-  - Their own stable playbooks are always included. Drafts and deprecated docs are never included.
-- **Prompt block** (pointers, never content), ending with the precedence rule:
+Agents never read factory files. The factory resolves what each role needs and puts it in the prompt, so no agent needs read access to `<data_dir>/knowledge`.
+
+- **Playbooks are inlined.** Stable playbooks (type `Playbook`, meta `role` = the agent role, and for inspectors meta `specialty` = the pick) are copied into the prompt, factory-wide and the project's own. The Foreman review prompt gets `playbooks/foreman/*`, an Inspector gets its specialty's playbook, and the Architect and Builder get any playbook whose role matches. Drafts and deprecated docs are never offered.
+- **Journal hits stay one-line summaries**, as the Architect's prior-knowledge block does today.
+- **Repo docs are pointers.** For the Architect, Foreman review, Builder and Inspector the index is searched (source `repo`, the project) with the query text: the work order, plus the task (Builder) or the plan (Foreman), plus the changed files and specialty (Inspector). The top 8 hits go into the prompt as pointers, never content, and linked docs are marked as see-also:
   ```
-  Documents that may matter for this work; read the ones you need.
-  Repository (in your workspace):
+  Repository documents that may matter for this work. They are in your workspace; read the ones you need:
   - docs/money.md — Money is integer rupiah — …
-  Factory (read-only, at <path>):
-  - playbooks/foreman/escalation.md — When to ask a human — …
+  - docs/ledger.md — Ledger — … (see also, linked from docs/money.md)
   If a repository document and a factory playbook disagree, follow the repository. If you cannot tell which applies, ask a human.
   ```
-- **Reading factory docs:** agents need read access to `<data_dir>/knowledge`.
-  - Claude ACP: allow reads under that path in `answerPermission`.
-  - OpenCode: an extra allowed directory. Its config needs checking during implementation.
-  - The Foreman escalation playbook is inlined in the Foreman prompt, so it never depends on a read.
-- **Audit:** `agent_started` gains `{kb_repo_commit, kb_factory_commit, kb_docs:[ids]}`.
+  With no hits there is no repo block; the precedence line stays only when a playbook was inlined.
+- **Audit:** `agent_started` carries `{kb_repo_commit, kb_factory_commit, kb_docs:[ids pointed to or inlined]}`.
 
 ## Code layout and contracts
 
@@ -227,7 +222,7 @@ Doc ids contain `:` and `/`, so they travel in the `id` query parameter.
 1. Factory bundle: layout, OKF writer, git commit, embedded default playbooks seeded on first start. Verify: bundle tests.
 2. Index: migration, sync for both sources, `Retriever` (FTS5 and links). Verify: store tests, including rebuild.
 3. Replace `knowledge_records`: `Record`, `Relevant` and the handlers go through the bundle and index, plus a one-time export. Verify: existing cataloger and knowledge tests pass against the new path, plus the export test.
-4. Delivery: pointer block per role, the Foreman playbook inlined, the read permission for the factory path, and the audit payload. Verify: prompt and permission tests.
+4. Delivery: playbooks inlined per role, repo pointer block with the precedence line, and the audit payload. Verify: prompt tests.
 5. Reviewer routing: parse, resolve, draft proposal, deterministic picks. Verify: routing tests.
 6. Learning drafts: the Cataloger proposes drafts from disputes and clarifications, with approve and discard. Verify: usecase tests.
 7. Knowledge UI: list, view, edit, approve, discard and reset. Verify: unit tests, then a browser check.
@@ -235,5 +230,4 @@ Doc ids contain `:` and `/`, so they travel in the `id` query parameter.
 
 ## Open points to confirm while building
 
-- OpenCode's way to allow reading a directory outside the workspace. Fallback: inline the factory hits for OpenCode only.
 - Draft generation needs a rule for when the Cataloger proposes, to avoid noise. Proposal: on every dispute, and when the same kind of clarification has been answered twice in one project.

@@ -23,6 +23,7 @@ func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
 			return err
 		}
 	}
+	f.syncRepo(ctx, wo, false)
 	// first transition in: record the failing baseline before any change,
 	// so verification evidence is revision-specific from the start
 	if err := f.recordBaseline(ctx, wo); err != nil {
@@ -73,7 +74,9 @@ func (f *Foreman) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 			}
 		}
 	}
-	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job), nil, job.TaskID, opts)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentBuilder), "", woQuery(wo)+" "+f.taskText(ctx, wo.ID, job.TaskID))
+	opts.Audit = audit
+	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job)+kbText, nil, job.TaskID, opts)
 	if err != nil {
 		return res, runID, err
 	}
