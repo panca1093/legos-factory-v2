@@ -42,7 +42,7 @@ func TestFindingDispositionsAndEscalationPause(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	f := &Foreman{WO: wos, Findings: findings, Bus: nopBus{}, Log: slog.Default()}
+	f := &Factory{WO: wos, Findings: findings, Bus: nopBus{}, Log: slog.Default()}
 
 	if _, err := f.DecideFinding(ctx, "wo1", "f1", "u1", model.FindingDecisionRequest{Action: "ignore"}); err == nil {
 		t.Fatal("unknown actions must be rejected")

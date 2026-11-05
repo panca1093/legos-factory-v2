@@ -93,7 +93,7 @@ func TestRunBuilderRequiresFileChanges(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var dir string
 			h := writeOnStart{writingHarness{tc.file, tc.content}, &dir}
-			f, wo, wos := monitorForeman(t, h)
+			f, wo, wos := monitorFactory(t, h)
 			if err := wos.ReplacePlan(context.Background(), wo.ID, []model.Task{{ID: "T1", WOID: wo.ID, Title: "t", Role: "builder"}}); err != nil {
 				t.Fatal(err)
 			}
@@ -133,7 +133,7 @@ func TestRunBuilderRequiresFileChanges(t *testing.T) {
 
 func TestRemediationWithoutChangesFailsItsRun(t *testing.T) {
 	var dir string
-	f, wo, wos := monitorForeman(t, writeOnStart{writingHarness{}, &dir})
+	f, wo, wos := monitorFactory(t, writeOnStart{writingHarness{}, &dir})
 	f.Sandbox = dirSandbox{}
 	f.DataDir = t.TempDir()
 	dir = f.workspaceDir(wo.ID)
@@ -163,7 +163,7 @@ func TestRemediationWithoutChangesFailsItsRun(t *testing.T) {
 }
 
 func TestCompleteRunsRecordsEachRunsOwnResult(t *testing.T) {
-	f, wo, _ := monitorForeman(t, writingHarness{})
+	f, wo, _ := monitorFactory(t, writingHarness{})
 	ctx := context.Background()
 	runs := []heldRun{{"r1", model.AgentResult{Text: "task", TokensOut: 10}}, {"r2", model.AgentResult{Text: "resolve", TokensOut: 20}}}
 	for _, r := range runs {
@@ -187,7 +187,7 @@ func TestCompleteRunsRecordsEachRunsOwnResult(t *testing.T) {
 }
 
 func TestRunStateWritesSurviveExpiredJobContext(t *testing.T) {
-	f, wo, _ := monitorForeman(t, writingHarness{})
+	f, wo, _ := monitorFactory(t, writingHarness{})
 	ctx, cancel := context.WithCancel(context.Background())
 	for _, id := range []string{"r1", "r2"} {
 		if err := f.Runs.Start(ctx, id, wo.ID, "", "builder", "fake"); err != nil {
@@ -210,7 +210,7 @@ func TestRunStateWritesSurviveExpiredJobContext(t *testing.T) {
 }
 
 func TestWorkspaceLocksArePerWorkOrder(t *testing.T) {
-	f, _, _ := monitorForeman(t, writingHarness{})
+	f, _, _ := monitorFactory(t, writingHarness{})
 	f.Sandbox = dirSandbox{}
 	held := f.wsLock("woA")
 	held.Lock()

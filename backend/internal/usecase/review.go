@@ -14,7 +14,7 @@ import (
 
 const maxForemanRevisions = 1
 
-func (f *Foreman) handleReview(ctx context.Context, job model.Job) error {
+func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	wo, err := f.WO.Get(ctx, job.WOID)
 	if err != nil {
 		return err

@@ -1,4 +1,4 @@
-// Package usecase implements the Foreman: a deterministic pipeline
+// Package usecase implements the Factory: a deterministic pipeline
 // driver. Agent reasoning produces plans, code and findings; every workflow
 // transition is validated by the model state machine and executed here.
 package usecase
@@ -32,7 +32,7 @@ func stateConflict(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", model.ErrStateConflict, fmt.Sprintf(format, args...))
 }
 
-type Foreman struct {
+type Factory struct {
 	WO           WorkOrderStore
 	Runs         RunStore
 	Findings     FindingStore
@@ -62,7 +62,7 @@ var runSeq atomic.Int64
 
 // Handlers maps each job kind to the step that executes it; app registers
 // them with the scheduler.
-func (f *Foreman) Handlers() map[string]func(context.Context, model.Job) error {
+func (f *Factory) Handlers() map[string]func(context.Context, model.Job) error {
 	return map[string]func(context.Context, model.Job) error{
 		JobPlan:      f.handlePlan,
 		JobReview:    f.handleReview,
@@ -80,7 +80,7 @@ func (f *Foreman) Handlers() map[string]func(context.Context, model.Job) error {
 // pre-execution states. Planning is side-effect free (reasoning + DB
 // writes), so automatic resume is safe; execution-phase work orders are
 // NOT auto-resumed and wait for an explicit human action.
-func (f *Foreman) ResumeOnStart(ctx context.Context) error {
+func (f *Factory) ResumeOnStart(ctx context.Context) error {
 	wos, err := f.WO.List(ctx)
 	if err != nil {
 		return err
@@ -95,7 +95,7 @@ func (f *Foreman) ResumeOnStart(ctx context.Context) error {
 			if _, err := f.Sched.Enqueue(ctx, JobPlan, wo.ID, "", map[string]any{"reason": "startup_resume"}); err != nil {
 				return err
 			}
-			f.event(wo.ID, "foreman", "resumed", "Planning resumed after restart", nil)
+			f.event(wo.ID, "factory", "resumed", "Planning resumed after restart", nil)
 		}
 	}
 	return nil
@@ -115,7 +115,7 @@ type runOpts struct {
 	Audit map[string]any // knowledge commits and document ids, recorded on agent_started
 }
 
-func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID, prompt string, extra map[string]string, taskID string, opts runOpts) (model.AgentResult, string, error) {
+func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID, prompt string, extra map[string]string, taskID string, opts runOpts) (model.AgentResult, string, error) {
 	if f.Usage != nil {
 		release, ok := f.Usage.Reserve(50_000) // conservative estimate per agent run
 		if !ok {
@@ -196,26 +196,26 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	return res, runID, nil
 }
 
-func (f *Foreman) wsLock(woID string) *sync.Mutex       { return lockFor(&f.wsMu, woID) }
-func (f *Foreman) baselineLock(woID string) *sync.Mutex { return lockFor(&f.baselineMu, woID) }
+func (f *Factory) wsLock(woID string) *sync.Mutex       { return lockFor(&f.wsMu, woID) }
+func (f *Factory) baselineLock(woID string) *sync.Mutex { return lockFor(&f.baselineMu, woID) }
 
 func lockFor(m *sync.Map, id string) *sync.Mutex {
 	mu, _ := m.LoadOrStore(id, &sync.Mutex{})
 	return mu.(*sync.Mutex)
 }
 
-func (f *Foreman) release(release func(actual int64)) {
+func (f *Factory) release(release func(actual int64)) {
 	release(0)
 }
 
-func (f *Foreman) failRun(ctx context.Context, woID string, role model.AgentRole, runID string, err error) {
+func (f *Factory) failRun(ctx context.Context, woID string, role model.AgentRole, runID string, err error) {
 	_ = f.Runs.Fail(context.WithoutCancel(ctx), runID, err.Error())
 	f.event(woID, string(role), "agent_failed", fmt.Sprintf("%s agent failed: %v", role, err), map[string]any{"run_id": runID})
 }
 
 // watchStall reports once when a run goes StallAfter without a new step, and
 // re-arms after progress. stop waits for the watcher so no stall lands after the run ends.
-func (f *Foreman) watchStall(woID string, role model.AgentRole, runID string, lastStep *atomic.Int64) (stop func()) {
+func (f *Factory) watchStall(woID string, role model.AgentRole, runID string, lastStep *atomic.Int64) (stop func()) {
 	after := f.StallAfter
 	if after <= 0 {
 		after = defaultStallAfter
@@ -268,7 +268,7 @@ func stepMessage(role model.AgentRole, st model.AgentStep) string {
 
 // ---- transitions & events ----
 
-func (f *Foreman) step(ctx context.Context, wo *model.WorkOrder, from, to model.State, actor, msg string) error {
+func (f *Factory) step(ctx context.Context, wo *model.WorkOrder, from, to model.State, actor, msg string) error {
 	if wo.State != from {
 		return fmt.Errorf("INVALID_STATE_TRANSITION: WO %s is %s, expected %s (→ %s)", wo.ID, wo.State, from, to)
 	}
@@ -283,7 +283,7 @@ func (f *Foreman) step(ctx context.Context, wo *model.WorkOrder, from, to model.
 	return nil
 }
 
-func (f *Foreman) event(woID, actor, kind, message string, payload map[string]any) {
+func (f *Factory) event(woID, actor, kind, message string, payload map[string]any) {
 	ev, err := f.WO.AppendEvent(context.Background(), woID, actor, kind, message, payload)
 	if err != nil {
 		f.Log.Error("append event failed", "err", err)
@@ -296,11 +296,11 @@ func (f *Foreman) event(woID, actor, kind, message string, payload map[string]an
 
 // ---- helpers ----
 
-func (f *Foreman) workspaceDir(woID string) string {
+func (f *Factory) workspaceDir(woID string) string {
 	return f.DataDir + "/workspaces/" + woID
 }
 
-func (f *Foreman) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Check, r model.CheckResult) error {
+func (f *Factory) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Check, r model.CheckResult) error {
 	exit := 0
 	if r.ExitCode != nil {
 		exit = *r.ExitCode
@@ -316,7 +316,7 @@ func (f *Foreman) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Ch
 // runStructured runs role and decodes its reply into v. An invalid reply is
 // retried once with the schema error; a second failure is permanent, so a
 // malformed answer never drives a transition.
-func (f *Foreman) runStructured(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, prompt string, extra map[string]string, taskID string, v reply, opts runOpts) (model.AgentResult, string, error) {
+func (f *Factory) runStructured(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, prompt string, extra map[string]string, taskID string, v reply, opts runOpts) (model.AgentResult, string, error) {
 	provider, modelID := f.Model(role, wo)
 	res, runID, err := f.runAgent(ctx, wo, role, provider, modelID, prompt, extra, taskID, opts)
 	if err != nil {
@@ -338,11 +338,11 @@ func (f *Foreman) runStructured(ctx context.Context, wo *model.WorkOrder, role m
 	return res, runID, nil
 }
 
-func (f *Foreman) enqueue(ctx context.Context, kind, woID, reason string) error {
+func (f *Factory) enqueue(ctx context.Context, kind, woID, reason string) error {
 	return f.enqueuePayload(ctx, kind, woID, map[string]any{"reason": reason})
 }
 
-func (f *Foreman) enqueuePayload(ctx context.Context, kind, woID string, payload map[string]any) error {
+func (f *Factory) enqueuePayload(ctx context.Context, kind, woID string, payload map[string]any) error {
 	_, err := f.Sched.Enqueue(ctx, kind, woID, "", payload)
 	return err
 }

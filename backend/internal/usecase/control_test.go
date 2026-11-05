@@ -35,7 +35,7 @@ func (h *steerHarness) Steer(_ context.Context, _, text string) error {
 
 func TestSteerReachesTheRunningAgent(t *testing.T) {
 	h := &steerHarness{steered: make(chan string, 1)}
-	f, wo, wos := monitorForeman(t, h)
+	f, wo, wos := monitorFactory(t, h)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	type out struct {
@@ -83,7 +83,7 @@ func TestSteerReachesTheRunningAgent(t *testing.T) {
 
 func TestSteerNeedsASteerableHarness(t *testing.T) {
 	h := &blockingHarness{release: make(chan struct{})}
-	f, wo, _ := monitorForeman(t, h)
+	f, wo, _ := monitorFactory(t, h)
 	go func() {
 		_, _, _ = f.runAgent(context.Background(), wo, model.AgentBuilder, "p", "m", "go", nil, "", runOpts{})
 	}()
@@ -94,7 +94,7 @@ func TestSteerNeedsASteerableHarness(t *testing.T) {
 	}
 }
 
-func waitLive(t *testing.T, f *Foreman, ended func() error) string {
+func waitLive(t *testing.T, f *Factory, ended func() error) string {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
@@ -140,7 +140,7 @@ func (q *fakeQueue) HasActive(context.Context, string, string, string) bool {
 
 func TestRetryTask(t *testing.T) {
 	ctx := context.Background()
-	f, wo, wos := monitorForeman(t, nil)
+	f, wo, wos := monitorFactory(t, nil)
 	q := &fakeQueue{}
 	f.Sched = q
 	if err := wos.ReplacePlan(ctx, wo.ID, []model.Task{
@@ -176,7 +176,7 @@ func TestRetryTask(t *testing.T) {
 
 func TestRetryRemediation(t *testing.T) {
 	ctx := context.Background()
-	f, wo, wos := monitorForeman(t, nil)
+	f, wo, wos := monitorFactory(t, nil)
 	q := &fakeQueue{}
 	f.Sched = q
 	if err := wos.ReplacePlan(ctx, wo.ID, []model.Task{{ID: "T1", WOID: wo.ID, Title: "a", Role: "builder"}}); err != nil {

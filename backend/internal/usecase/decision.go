@@ -12,7 +12,7 @@ import (
 // Human decisions: plan approval/revision, clarification, PR disposition, cancel.
 
 // ApprovePlan is the human authorization to execute a Foreman-reviewed plan.
-func (f *Foreman) ApprovePlan(ctx context.Context, woID string) error {
+func (f *Factory) ApprovePlan(ctx context.Context, woID string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err
@@ -25,7 +25,7 @@ func (f *Foreman) ApprovePlan(ctx context.Context, woID string) error {
 
 // approvePlan moves ARCHITECT_REVIEW → QUEUED and enqueues root tasks; actor
 // is "human" or "policy" (delegated autonomy).
-func (f *Foreman) approvePlan(ctx context.Context, wo *model.WorkOrder, actor, msg string) error {
+func (f *Factory) approvePlan(ctx context.Context, wo *model.WorkOrder, actor, msg string) error {
 	woID := wo.ID
 	tasks, err := f.WO.Plan(ctx, woID)
 	if err != nil {
@@ -43,7 +43,7 @@ func (f *Foreman) approvePlan(ctx context.Context, wo *model.WorkOrder, actor, m
 			return err
 		}
 	}
-	f.event(woID, "foreman", "execution_queued", fmt.Sprintf("%d task(s) queued", len(roots)), nil)
+	f.event(woID, "factory", "execution_queued", fmt.Sprintf("%d task(s) queued", len(roots)), nil)
 	trust := model.TrustHumanDecision
 	if actor != "human" {
 		trust = model.TrustVerified // a deterministic policy decision, not a person's
@@ -54,7 +54,7 @@ func (f *Foreman) approvePlan(ctx context.Context, wo *model.WorkOrder, actor, m
 }
 
 // RevisePlan sends the plan back to the Architect (ARCHITECT_REVIEW → PLANNING).
-func (f *Foreman) RevisePlan(ctx context.Context, woID, notes string) error {
+func (f *Factory) RevisePlan(ctx context.Context, woID, notes string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err
@@ -73,7 +73,7 @@ func (f *Foreman) RevisePlan(ctx context.Context, woID, notes string) error {
 
 // AnswerClarification records the human answer and has the Architect
 // re-draft the plan with it; the Foreman then reviews the new draft.
-func (f *Foreman) AnswerClarification(ctx context.Context, woID, answer string) error {
+func (f *Factory) AnswerClarification(ctx context.Context, woID, answer string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err
@@ -98,7 +98,7 @@ func (f *Foreman) AnswerClarification(ctx context.Context, woID, answer string) 
 // HumanPRDecision records the final human disposition from
 // NEEDS_HUMAN_REVIEW: approve → READY, request_changes → new revision fix
 // loop, decline → CANCELLED. It never merges or publishes anything.
-func (f *Foreman) HumanPRDecision(ctx context.Context, woID, decision, reason string) error {
+func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err
@@ -152,7 +152,7 @@ func (f *Foreman) HumanPRDecision(ctx context.Context, woID, decision, reason st
 }
 
 // Cancel stops pending jobs and transitions the WO to CANCELLED.
-func (f *Foreman) Cancel(ctx context.Context, woID string) error {
+func (f *Factory) Cancel(ctx context.Context, woID string) error {
 	if err := f.Sched.CancelWO(ctx, woID); err != nil {
 		return err
 	}
@@ -176,7 +176,7 @@ func (f *Foreman) Cancel(ctx context.Context, woID string) error {
 
 // recordPRDecision stores the human disposition. The PR reference is local:
 // nothing is pushed and no remote pull request is created.
-func (f *Foreman) recordPRDecision(ctx context.Context, wo *model.WorkOrder, title, reason string) {
+func (f *Factory) recordPRDecision(ctx context.Context, wo *model.WorkOrder, title, reason string) {
 	ref := fmt.Sprintf("local:%s@%s", wo.ID, orUnversioned(wo.CommitSHA))
 	f.Catalog.Record(ctx, wo, model.KnowledgePRDecision, model.TrustHumanDecision, "human",
 		fmt.Sprintf("%s: %q", title, wo.Title), fmt.Sprintf("Reason: %s\nPR reference: %s (no remote PR)", reason, ref), "pr:"+ref)
@@ -186,7 +186,7 @@ func (f *Foreman) recordPRDecision(ctx context.Context, wo *model.WorkOrder, tit
 // a work branch and find-or-create the pull request, so retries are safe.
 const JobOpenPR = "open_pr"
 
-func (f *Foreman) handleOpenPR(ctx context.Context, job model.Job) error {
+func (f *Factory) handleOpenPR(ctx context.Context, job model.Job) error {
 	wo, err := f.WO.Get(ctx, job.WOID)
 	if err != nil {
 		return err
@@ -222,15 +222,15 @@ func (f *Foreman) handleOpenPR(ctx context.Context, job model.Job) error {
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"pr_url": pr.URL, "pr_ref": pr.Ref}); err != nil {
 		return err
 	}
-	f.event(wo.ID, "foreman", "pr_opened", fmt.Sprintf("Pull request %s opened from %s into %s", pr.Ref, branch, base),
+	f.event(wo.ID, "factory", "pr_opened", fmt.Sprintf("Pull request %s opened from %s into %s", pr.Ref, branch, base),
 		map[string]any{"url": pr.URL, "ref": pr.Ref, "branch": branch, "base": base})
-	f.Catalog.Record(ctx, wo, model.KnowledgePROpened, model.TrustVerified, "foreman", "Pull request opened: "+pr.Ref,
+	f.Catalog.Record(ctx, wo, model.KnowledgePROpened, model.TrustVerified, "factory", "Pull request opened: "+pr.Ref,
 		fmt.Sprintf("URL: %s\nBranch: %s → %s\nCommit: %s", pr.URL, branch, base, orUnversioned(wo.CommitSHA)), "pr:"+pr.Ref)
 	return nil
 }
 
-func (f *Foreman) prFailed(wo *model.WorkOrder, err error) error {
-	f.event(wo.ID, "foreman", "pr_open_failed", "Could not open pull request: "+err.Error(), nil)
+func (f *Factory) prFailed(wo *model.WorkOrder, err error) error {
+	f.event(wo.ID, "factory", "pr_open_failed", "Could not open pull request: "+err.Error(), nil)
 	return err
 }
 
@@ -248,7 +248,7 @@ func prBody(wo *model.WorkOrder) string {
 // DecideFinding records a human disposition. Disputed findings stop
 // blocking readiness but keep the reason; escalating pauses the order until a
 // human resumes it.
-func (f *Foreman) DecideFinding(ctx context.Context, woID, findingID, actorID string, req model.FindingDecisionRequest) (*model.Finding, error) {
+func (f *Factory) DecideFinding(ctx context.Context, woID, findingID, actorID string, req model.FindingDecisionRequest) (*model.Finding, error) {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return nil, err

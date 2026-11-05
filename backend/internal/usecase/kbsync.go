@@ -12,7 +12,7 @@ func woQuery(wo *model.WorkOrder) string {
 	return wo.Title + " " + wo.Objective + " " + wo.Acceptance
 }
 
-func (f *Foreman) taskText(ctx context.Context, woID, taskID string) string {
+func (f *Factory) taskText(ctx context.Context, woID, taskID string) string {
 	if taskID == "" {
 		return ""
 	}
@@ -30,7 +30,7 @@ func (f *Foreman) taskText(ctx context.Context, woID, taskID string) string {
 
 // syncRepo indexes the work order workspace for its project. A failure is
 // logged and reported as an event; it never fails the job.
-func (f *Foreman) syncRepo(ctx context.Context, wo *model.WorkOrder, force bool) {
+func (f *Factory) syncRepo(ctx context.Context, wo *model.WorkOrder, force bool) {
 	if f.KB == nil {
 		return
 	}

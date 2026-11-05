@@ -13,12 +13,12 @@ import (
 
 // Builder: baseline verification, task implementation and DAG advancement.
 
-func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
+func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 	wo, err := f.WO.Get(ctx, job.WOID)
 	if err != nil {
 		return err
 	}
-	if err := f.step(ctx, wo, model.StateQueued, model.StateImplementing, "foreman", "Builder started implementation"); err != nil {
+	if err := f.step(ctx, wo, model.StateQueued, model.StateImplementing, "factory", "Builder started implementation"); err != nil {
 		if wo.State != model.StateImplementing {
 			return err
 		}
@@ -45,7 +45,7 @@ func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
 	if wo.Autonomy == "guided" {
 		// guided autonomy: a human advances every build step
 		if cur, err := f.WO.Get(ctx, wo.ID); err == nil && cur.PausedAt == nil && !cur.State.Terminal() {
-			return f.pause(ctx, cur, "foreman", "Guided autonomy: build step finished; resume to run the next step")
+			return f.pause(ctx, cur, "factory", "Guided autonomy: build step finished; resume to run the next step")
 		}
 	}
 	return nil
@@ -56,7 +56,7 @@ func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
 // a later task may legitimately add nothing when an earlier one did the work.
 // A plan task in a git workspace runs in its own worktree and counts as done
 // only once merged back.
-func (f *Foreman) runBuilder(ctx context.Context, wo *model.WorkOrder, job model.Job, provider, modelID string) (model.AgentResult, string, error) {
+func (f *Factory) runBuilder(ctx context.Context, wo *model.WorkOrder, job model.Job, provider, modelID string) (model.AgentResult, string, error) {
 	woDir := f.workspaceDir(wo.ID)
 	opts := runOpts{Dir: woDir, Hold: true}
 	branch := ""
@@ -101,7 +101,7 @@ type heldRun struct {
 	res model.AgentResult
 }
 
-func (f *Foreman) requireChanges(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, runID string) error {
+func (f *Factory) requireChanges(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, runID string) error {
 	changed, err := f.Sandbox.ChangedFiles(ctx, dir)
 	if err != nil {
 		return err
@@ -121,7 +121,7 @@ func (f *Foreman) requireChanges(ctx context.Context, wo *model.WorkOrder, job m
 // integrateTask commits the task worktree and merges it into the work order
 // workspace. On a conflict the builder resolves it once in its worktree
 // against the latest workspace HEAD; it returns the runs that resolution used.
-func (f *Foreman) integrateTask(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, branch, provider, modelID string) ([]heldRun, error) {
+func (f *Factory) integrateTask(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, branch, provider, modelID string) ([]heldRun, error) {
 	woDir := f.workspaceDir(wo.ID)
 	msg := fmt.Sprintf("legos-factory: %s task %s", wo.ID, job.TaskID)
 	if _, err := f.Sandbox.Commit(ctx, dir, msg); err != nil {
@@ -155,7 +155,7 @@ func (f *Foreman) integrateTask(ctx context.Context, wo *model.WorkOrder, job mo
 	return runs, f.afterMerge(ctx, wo, job, woDir, dir, branch, err)
 }
 
-func (f *Foreman) mergeTask(ctx context.Context, woID, woDir, branch, msg string) (bool, error) {
+func (f *Factory) mergeTask(ctx context.Context, woID, woDir, branch, msg string) (bool, error) {
 	mu := f.wsLock(woID)
 	mu.Lock()
 	defer mu.Unlock()
@@ -163,7 +163,7 @@ func (f *Foreman) mergeTask(ctx context.Context, woID, woDir, branch, msg string
 }
 
 // afterMerge removes a merged task's worktree; a failed one is kept for inspection.
-func (f *Foreman) afterMerge(ctx context.Context, wo *model.WorkOrder, job model.Job, woDir, dir, branch string, err error) error {
+func (f *Factory) afterMerge(ctx context.Context, wo *model.WorkOrder, job model.Job, woDir, dir, branch string, err error) error {
 	if err != nil {
 		return err
 	}
@@ -174,7 +174,7 @@ func (f *Foreman) afterMerge(ctx context.Context, wo *model.WorkOrder, job model
 	return nil
 }
 
-func (f *Foreman) completeRuns(ctx context.Context, woID string, runs []heldRun) error {
+func (f *Factory) completeRuns(ctx context.Context, woID string, runs []heldRun) error {
 	for _, r := range runs {
 		if err := f.Runs.Complete(context.WithoutCancel(ctx), r.id, r.res); err != nil {
 			return err
@@ -184,17 +184,17 @@ func (f *Foreman) completeRuns(ctx context.Context, woID string, runs []heldRun)
 	return nil
 }
 
-func (f *Foreman) failRuns(ctx context.Context, woID string, runs []heldRun, err error) {
+func (f *Factory) failRuns(ctx context.Context, woID string, runs []heldRun, err error) {
 	for _, r := range runs {
 		f.failRun(ctx, woID, model.AgentBuilder, r.id, err)
 	}
 }
 
-func (f *Foreman) taskDir(woID, taskID string) string {
+func (f *Factory) taskDir(woID, taskID string) string {
 	return filepath.Join(f.DataDir, "workspaces", woID+".tasks", filepath.Base(taskID))
 }
 
-func (f *Foreman) profile(ctx context.Context, wo *model.WorkOrder) (model.Profile, error) {
+func (f *Factory) profile(ctx context.Context, wo *model.WorkOrder) (model.Profile, error) {
 	proj, err := f.Proj.Get(ctx, wo.ProjectID)
 	if err != nil {
 		return model.Profile{}, err
@@ -211,7 +211,7 @@ func (f *Foreman) profile(ctx context.Context, wo *model.WorkOrder) (model.Profi
 
 // runSetup installs dependencies in dir. A failure is reported, not fatal:
 // the checks or the builder will surface it with their own evidence.
-func (f *Foreman) runSetup(ctx context.Context, wo *model.WorkOrder, profile model.Profile, dir, actor string) {
+func (f *Factory) runSetup(ctx context.Context, wo *model.WorkOrder, profile model.Profile, dir, actor string) {
 	if profile.Setup == "" {
 		return
 	}
@@ -239,7 +239,7 @@ func withConflictMarkers(dir string, files []string) []string {
 // recordBaseline runs the deterministic checks once, before implementation,
 // when no verification evidence exists yet. A passing baseline is recorded
 // as PASS — it still counts as evidence for the original revision.
-func (f *Foreman) recordBaseline(ctx context.Context, wo *model.WorkOrder) error {
+func (f *Factory) recordBaseline(ctx context.Context, wo *model.WorkOrder) error {
 	// parallel tasks arrive together; one records the baseline, apart from the merge lock so merges are not held up
 	mu := f.baselineLock(wo.ID)
 	mu.Lock()
@@ -273,7 +273,7 @@ func (f *Foreman) recordBaseline(ctx context.Context, wo *model.WorkOrder) error
 
 // maybeAdvanceAfterImplementation enqueues newly ready tasks or, when all
 // tasks are done, moves to verification.
-func (f *Foreman) maybeAdvanceAfterImplementation(ctx context.Context, wo *model.WorkOrder) error {
+func (f *Factory) maybeAdvanceAfterImplementation(ctx context.Context, wo *model.WorkOrder) error {
 	tasks, err := f.WO.Plan(ctx, wo.ID)
 	if err != nil {
 		return err
@@ -290,7 +290,7 @@ func (f *Foreman) maybeAdvanceAfterImplementation(ctx context.Context, wo *model
 		}
 	}
 	if len(tasks) > 0 && len(done) == len(tasks) {
-		if err := f.step(ctx, wo, model.StateImplementing, model.StateVerifying, "foreman", "Implementation complete; verifying"); err != nil {
+		if err := f.step(ctx, wo, model.StateImplementing, model.StateVerifying, "factory", "Implementation complete; verifying"); err != nil {
 			if wo.State != model.StateVerifying {
 				return err
 			}

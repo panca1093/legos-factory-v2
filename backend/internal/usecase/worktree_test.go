@@ -51,9 +51,9 @@ func gitRun(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-func worktreeForeman(t *testing.T, h Harness, tasks ...string) (*Foreman, *model.WorkOrder) {
+func worktreeFactory(t *testing.T, h Harness, tasks ...string) (*Factory, *model.WorkOrder) {
 	t.Helper()
-	f, wo, wos := monitorForeman(t, h)
+	f, wo, wos := monitorFactory(t, h)
 	var plan []model.Task
 	for _, id := range tasks {
 		plan = append(plan, model.Task{ID: id, WOID: wo.ID, Title: id, Role: "builder"})
@@ -85,7 +85,7 @@ func worktreeForeman(t *testing.T, h Harness, tasks ...string) (*Foreman, *model
 	return f, wo
 }
 
-func runKinds(t *testing.T, f *Foreman, woID string) map[string][]string {
+func runKinds(t *testing.T, f *Factory, woID string) map[string][]string {
 	t.Helper()
 	evs, err := f.WO.(*store.WorkOrderRepo).Events(context.Background(), woID, 0, 200)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestParallelTasksRunInOwnWorktreesAndMerge(t *testing.T) {
 	h := &scriptHarness{write: func(req model.AgentRequest) map[string]string {
 		return map[string]string{taskOf(req) + ".txt": taskOf(req) + "\n"}
 	}}
-	f, wo := worktreeForeman(t, h, "T1", "T2")
+	f, wo := worktreeFactory(t, h, "T1", "T2")
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i, id := range []string{"T1", "T2"} {
@@ -175,7 +175,7 @@ func TestConflictingTaskIsResolvedByBuilder(t *testing.T) {
 				}
 				return map[string]string{"shared.txt": taskOf(req) + "\n"}
 			}}
-			f, wo := worktreeForeman(t, h, "T1", "T2")
+			f, wo := worktreeFactory(t, h, "T1", "T2")
 			ctx := context.Background()
 			var err error
 			t2 := make(chan struct{})

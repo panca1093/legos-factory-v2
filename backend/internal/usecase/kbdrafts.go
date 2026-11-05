@@ -12,7 +12,7 @@ import (
 // Learning drafts are deterministic templates: a human edits and approves
 // them, or discards them. Until approved they are never offered to agents.
 
-func (f *Foreman) writeDraft(ctx context.Context, wo *model.WorkOrder, name, title, role, specialty, body string, refs []string) {
+func (f *Factory) writeDraft(ctx context.Context, wo *model.WorkOrder, name, title, role, specialty, body string, refs []string) {
 	front := map[string]any{
 		"type": model.KBTypePlaybook, "title": title, "description": firstRunes(oneLine(body), 200),
 		"status": model.KBStatusDraft, "role": role, "source_refs": refs,
@@ -30,7 +30,7 @@ func (f *Foreman) writeDraft(ctx context.Context, wo *model.WorkOrder, name, tit
 		map[string]any{"path": rel})
 }
 
-func (f *Foreman) draftFromDispute(ctx context.Context, wo *model.WorkOrder, fd *model.Finding, note string) {
+func (f *Factory) draftFromDispute(ctx context.Context, wo *model.WorkOrder, fd *model.Finding, note string) {
 	if f.KB == nil {
 		return
 	}
@@ -40,7 +40,7 @@ func (f *Foreman) draftFromDispute(ctx context.Context, wo *model.WorkOrder, fd 
 		string(model.AgentInspector), fd.Specialty, body, []string{"finding:" + fd.ID, "wo:" + wo.ID})
 }
 
-func (f *Foreman) draftFromClarification(ctx context.Context, wo *model.WorkOrder, question, answer string) {
+func (f *Factory) draftFromClarification(ctx context.Context, wo *model.WorkOrder, question, answer string) {
 	if f.KB == nil {
 		return
 	}

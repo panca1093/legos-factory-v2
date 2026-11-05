@@ -13,7 +13,7 @@ import (
 
 // Pause stops a work order after its current step: the scheduler no longer
 // claims its jobs, so queued work waits and nothing is lost. Stop is Cancel.
-func (f *Foreman) Pause(ctx context.Context, woID, actor, reason string) error {
+func (f *Factory) Pause(ctx context.Context, woID, actor, reason string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err
@@ -27,7 +27,7 @@ func (f *Foreman) Pause(ctx context.Context, woID, actor, reason string) error {
 	return f.pause(ctx, wo, actor, reason)
 }
 
-func (f *Foreman) pause(ctx context.Context, wo *model.WorkOrder, actor, reason string) error {
+func (f *Factory) pause(ctx context.Context, wo *model.WorkOrder, actor, reason string) error {
 	now := time.Now()
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"paused_at": now.Unix(), "pause_reason": reason}); err != nil {
 		return err
@@ -38,7 +38,7 @@ func (f *Foreman) pause(ctx context.Context, wo *model.WorkOrder, actor, reason 
 }
 
 // Resume lets the scheduler pick up the order's queued work again.
-func (f *Foreman) Resume(ctx context.Context, woID, actor string) error {
+func (f *Factory) Resume(ctx context.Context, woID, actor string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err
@@ -60,7 +60,7 @@ type liveSession struct {
 }
 
 // Steer sends a human message into a running agent turn without stopping it.
-func (f *Foreman) Steer(ctx context.Context, woID, runID, message, actor string) error {
+func (f *Factory) Steer(ctx context.Context, woID, runID, message, actor string) error {
 	message = strings.TrimSpace(message)
 	if message == "" {
 		return fmt.Errorf("%w: message is required", ErrInvalid)
@@ -88,7 +88,7 @@ func (f *Foreman) Steer(ctx context.Context, woID, runID, message, actor string)
 }
 
 // RetryTask re-runs a plan task whose build failed, from a fresh worktree.
-func (f *Foreman) RetryTask(ctx context.Context, woID, taskID, actor string) error {
+func (f *Factory) RetryTask(ctx context.Context, woID, taskID, actor string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err
@@ -122,7 +122,7 @@ func (f *Foreman) RetryTask(ctx context.Context, woID, taskID, actor string) err
 
 // RetryRemediation re-runs the remediation build of a work order whose last
 // remediation run failed after every plan task was done.
-func (f *Foreman) RetryRemediation(ctx context.Context, woID, actor string) error {
+func (f *Factory) RetryRemediation(ctx context.Context, woID, actor string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
 		return err

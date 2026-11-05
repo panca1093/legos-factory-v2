@@ -57,7 +57,13 @@ const taskTitle = computed(
           <div class="event-body"><AgentRunCard :run="it" /></div>
         </article>
         <article v-else :key="it.event.id" class="event">
-          <BrickBot :persona="persona(it.event.actor)" class="compact" />
+          <span
+            v-if="it.event.actor === 'factory'"
+            class="avatar system"
+            aria-label="Factory"
+            >⚙</span
+          >
+          <BrickBot v-else :persona="persona(it.event.actor)" class="compact" />
           <div class="event-body">
             <div class="row between">
               <strong class="small">{{

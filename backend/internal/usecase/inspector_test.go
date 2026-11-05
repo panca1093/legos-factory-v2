@@ -13,7 +13,7 @@ import (
 
 func TestFailedVerificationLoopIsBounded(t *testing.T) {
 	ctx := context.Background()
-	f, wo, wos := monitorForeman(t, nil)
+	f, wo, wos := monitorFactory(t, nil)
 	db := wos.DB
 	q := &fakeQueue{}
 	f.Sched, f.Sandbox, f.DataDir = q, failSandbox{}, t.TempDir()
@@ -54,7 +54,7 @@ func (failSandbox) RunCheck(context.Context, string, model.Check, time.Duration)
 
 func TestHumanRevisionResetsVerifyBudget(t *testing.T) {
 	ctx := context.Background()
-	f, wo, wos := monitorForeman(t, nil)
+	f, wo, wos := monitorFactory(t, nil)
 	f.Sched, f.Sandbox, f.DataDir = &fakeQueue{}, failSandbox{}, t.TempDir()
 	if err := os.MkdirAll(f.workspaceDir(wo.ID), 0o755); err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestHumanRevisionResetsVerifyBudget(t *testing.T) {
 
 func TestNoChecksEmitsSkippedNotPassed(t *testing.T) {
 	ctx := context.Background()
-	f, wo, wos := monitorForeman(t, nil)
+	f, wo, wos := monitorFactory(t, nil)
 	f.Sched, f.Sandbox, f.DataDir = &fakeQueue{}, dirSandbox{}, t.TempDir()
 	if err := os.MkdirAll(f.workspaceDir(wo.ID), 0o755); err != nil {
 		t.Fatal(err)
