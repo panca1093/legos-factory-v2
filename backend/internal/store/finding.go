@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -42,6 +43,21 @@ func (r *FindingRepo) SetDisposition(ctx context.Context, id, status, note, by s
 func (r *FindingRepo) ResolveOpen(ctx context.Context, woID string) error {
 	_, err := r.DB.ExecContext(ctx, `UPDATE findings SET status = 'resolved', updated_at = ?
 		WHERE wo_id = ? AND status IN ('open','confirmed','escalated')`, time.Now().Unix(), woID)
+	return err
+}
+
+// ResolveOpenExcept resolves the order's open findings except those raised by the given runs.
+func (r *FindingRepo) ResolveOpenExcept(ctx context.Context, woID string, runIDs []string) error {
+	q := `UPDATE findings SET status = 'resolved', updated_at = ?
+		WHERE wo_id = ? AND status IN ('open','confirmed','escalated')`
+	args := []any{time.Now().Unix(), woID}
+	if len(runIDs) > 0 {
+		q += ` AND run_id NOT IN (?` + strings.Repeat(",?", len(runIDs)-1) + `)`
+		for _, id := range runIDs {
+			args = append(args, id)
+		}
+	}
+	_, err := r.DB.ExecContext(ctx, q, args...)
 	return err
 }
 

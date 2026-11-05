@@ -55,7 +55,6 @@ const order = (
     "Prevent duplicate ledger entries when a payment request is retried after a timeout. Preserve the response contract.",
   acceptance:
     "Repeated requests with the same key produce one ledger entry. Conflicting payloads return a clear conflict. Existing clients keep working.",
-  autonomy: "assisted",
   builder_model: "test/builder",
   inspector_model: "test/inspector",
   revision: 1,

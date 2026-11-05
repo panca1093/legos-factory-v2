@@ -6,7 +6,7 @@ import type { WOEvent, Run, Task } from "../../../types/api";
 import AgentLiveCard from "./AgentLiveCard.vue";
 import AgentRunCard from "./AgentRunCard.vue";
 import PlanProgress from "./PlanProgress.vue";
-import { groupActivity, liveRuns } from "./agentActivity";
+import { gateSummary, groupActivity, liveRuns } from "./agentActivity";
 const props = withDefaults(
   defineProps<{
     events: WOEvent[];
@@ -73,6 +73,22 @@ const taskTitle = computed(
               }}</time>
             </div>
             <p>{{ it.event.message }}</p>
+            <div
+              v-if="gateSummary(it.event)"
+              class="row wrap"
+              data-test="gate-event"
+              style="gap: 8px; margin-top: 4px"
+            >
+              <span class="pill" :class="gateSummary(it.event)!.tone">{{
+                gateSummary(it.event)!.outcome
+              }}</span
+              ><span class="tiny muted"
+                >{{ gateSummary(it.event)!.gate }} · table row
+                {{ gateSummary(it.event)!.row }}</span
+              ><span v-if="gateSummary(it.event)!.note" class="small">{{
+                gateSummary(it.event)!.note
+              }}</span>
+            </div>
             <span class="tiny muted">{{
               it.event.kind.replaceAll("_", " ")
             }}</span>

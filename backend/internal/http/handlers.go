@@ -366,6 +366,7 @@ func (s *Server) handleGetSettings(c echo.Context) error {
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load settings")
 	}
+	settings.JevEnabled = s.Cfg.TypeSafeKey != ""
 	return c.JSON(http.StatusOK, settings)
 }
 
@@ -386,6 +387,7 @@ func (s *Server) handlePutSettings(c echo.Context) error {
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not reload settings")
 	}
+	out.JevEnabled = s.Cfg.TypeSafeKey != ""
 	return c.JSON(http.StatusOK, out)
 }
 

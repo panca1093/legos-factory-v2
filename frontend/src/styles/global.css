@@ -1515,33 +1515,6 @@ select {
     padding-left: 49px;
   }
 }
-.autonomy-levels {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-.level {
-  border: 1px solid var(--line);
-  background: var(--bg);
-  border-radius: 11px;
-  padding: 14px;
-  text-align: left;
-}
-.level.selected {
-  border-color: var(--violet);
-  background: var(--violet-soft);
-  box-shadow: 0 0 0 1px var(--violet);
-}
-.level b {
-  display: block;
-  font-size: 12px;
-  margin: 7px 0;
-}
-.level p {
-  font-size: 10px;
-  color: var(--muted);
-  line-height: 1.7;
-}
 .user-row {
   display: flex;
   align-items: center;
@@ -2379,21 +2352,6 @@ input[type="checkbox"] {
   }
   .settings-section {
     padding: 19px;
-  }
-  .autonomy-levels {
-    grid-template-columns: 1fr;
-  }
-  .level {
-    padding: 12px;
-    display: grid;
-    grid-template-columns: 24px 1fr;
-    gap: 0 10px;
-  }
-  .level > b {
-    margin: 0;
-  }
-  .level > p {
-    grid-column: 2;
   }
   .catalog-hero {
     grid-template-columns: 1fr;

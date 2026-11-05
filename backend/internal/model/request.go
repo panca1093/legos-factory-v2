@@ -30,7 +30,7 @@ type CreateWorkOrderRequest struct {
 	Title          string `json:"title"`
 	Objective      string `json:"objective"`
 	Acceptance     string `json:"acceptance"`
-	Autonomy       string `json:"autonomy"`
+	Autonomy       string `json:"autonomy"` // accepted for compatibility, ignored
 	BuilderModel   string `json:"builder_model"`
 	InspectorModel string `json:"inspector_model"`
 	SourceRef      string `json:"source_ref"`
@@ -47,11 +47,6 @@ func (r *CreateWorkOrderRequest) Validate() error {
 		return fmt.Errorf("objective is required")
 	case r.ProjectID == "":
 		return fmt.Errorf("project_id is required")
-	}
-	switch r.Autonomy {
-	case "", "guided", "assisted", "delegated":
-	default:
-		return fmt.Errorf("autonomy must be guided, assisted or delegated")
 	}
 	r.SourceRef = strings.TrimSpace(r.SourceRef)
 	if r.SourceRef != "" && !sourceRefPattern.MatchString(r.SourceRef) {

@@ -37,15 +37,6 @@ defineProps<{ order: WorkOrder; project?: Project; runs: Run[] }>();
       <p class="help">Editing existing assignments is unavailable.</p>
     </section>
     <section class="side-section">
-      <div class="side-label">Autonomy</div>
-      <strong class="small" style="text-transform: capitalize">{{
-        order.autonomy
-      }}</strong>
-      <p class="help" style="margin-top: 5px">
-        Execution follows backend policy and evidence gates.
-      </p>
-    </section>
-    <section class="side-section">
       <div class="side-label">Recorded usage</div>
       <div class="row between">
         <strong>{{

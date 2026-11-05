@@ -9,4 +9,5 @@ type Settings struct {
 	AllowedModels      []string          `json:"allowed_models"`
 	CatalogerSummaries bool              `json:"cataloger_summaries"`
 	Extra              map[string]string `json:"extra,omitempty"`
+	JevEnabled         bool              `json:"jev_enabled"` // response only: true iff TYPESAFE_API_KEY is set
 }

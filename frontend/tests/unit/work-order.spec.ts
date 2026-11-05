@@ -98,7 +98,7 @@ it("submits human revision notes and approval through existing contracts", async
   w.unmount();
 });
 
-it("pauses a running order and resumes a guided step from the run banner", async () => {
+it("pauses a running order and resumes it from the run banner", async () => {
   const f = useFactory();
   const pause = vi.spyOn(f, "pause").mockResolvedValue();
   const resume = vi.spyOn(f, "resume").mockResolvedValue();
@@ -111,20 +111,21 @@ it("pauses a running order and resumes a guided step from the run banner", async
   f.detail = {
     work_order: {
       ...f.detail!.work_order,
-      autonomy: "guided",
       paused_at: "2026-10-24T00:00:00Z",
-      pause_reason:
-        "Guided autonomy: build step finished; resume to run the next step",
+      pause_reason: "checking scope",
     },
     plan: tasks,
     runs: [],
   };
   await flushPromises();
-  expect(w.find('[data-test="pause-reason"]').text()).toContain("Guided");
+  expect(w.find('[data-test="pause-reason"]').text()).toContain(
+    "checking scope",
+  );
   const step = w.find('[data-test="execution-step"]');
-  expect(step.text()).toContain("Next step");
+  expect(step.text()).toContain("Resume");
   await step.trigger("click");
   await flushPromises();
   expect(resume).toHaveBeenCalledWith("LF-127");
+  expect(w.text()).not.toMatch(/autonomy/i);
   w.unmount();
 });

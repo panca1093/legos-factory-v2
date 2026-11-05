@@ -206,7 +206,6 @@ function download() {
           project?.repo_url || "Repository not reported"
         }}</span
       ><span>Revision {{ order.revision }}</span
-      ><span class="pill">{{ order.autonomy }}</span
       ><span class="grow"></span
       ><button
         v-if="session.canWrite && canCancel"

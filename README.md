@@ -122,12 +122,13 @@ npm run e2e                      # Playwright journey (needs backend on :8080)
 
 ```text
 Create Project → Create Work Order → Architect draft
-→ Foreman review (APPROVE / REVISE once / CLARIFY ⇄ human) → human plan approval
-  (delegated autonomy: starts after the Foreman review; guided: pauses after every build step)
+→ Foreman review notes → plan gate (Jev answers, truth table in code: approve starts the build,
+  revise re-plans up to twice, escalate waits for a human; without TYPESAFE_API_KEY every plan waits for a human)
 → baseline verification (failing evidence at revision 0) → Builder tasks (DAG)
 → deterministic checks (go test / go vet, really executed)
 → specialist Inspectors chosen from the changed files (blocker finding on rev 0) → bounded fix (rev 1)
-→ re-verify → clean re-inspection → merge readiness → NEEDS_HUMAN_REVIEW
+→ re-verify → clean re-inspection (Architect verification runs alongside the Inspectors)
+→ Foreman validation notes → done gate (fix / escalate / done) → merge readiness → NEEDS_HUMAN_REVIEW
 → human PR decision (approve → READY / request changes / decline)
 ```
 

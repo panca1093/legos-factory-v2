@@ -22,7 +22,6 @@ const form = reactive({
   title: "",
   objective: "",
   acceptance: "",
-  autonomy: "assisted",
   builder_model: "",
   inspector_model: "",
   source_ref: "",
@@ -65,7 +64,6 @@ watch(
         title: "",
         objective: "",
         acceptance: "",
-        autonomy: "assisted",
         builder_model: "",
         inspector_model: "",
         source_ref: "",
@@ -308,17 +306,6 @@ async function create() {
           created.
         </p>
       </div>
-      <div class="form-group">
-        <label for="wo-autonomy">Autonomy for this order</label
-        ><select id="wo-autonomy" v-model="form.autonomy">
-          <option value="guided">Guided</option>
-          <option value="assisted">Assisted</option>
-          <option value="delegated">Delegated</option>
-        </select>
-        <p class="help">
-          Backend policy controls execution. PR decisions always stay human.
-        </p>
-      </div>
     </div>
     <div v-else class="stack">
       <div>
@@ -362,10 +349,8 @@ async function create() {
           ><span>cost estimate · not provided by backend</span>
         </div>
         <div>
-          <b style="font-size: 17px; text-transform: capitalize">{{
-            form.autonomy
-          }}</b
-          ><span>autonomy · {{ project?.language || "detected" }} profile</span>
+          <b style="font-size: 17px">{{ project?.language || "Detected" }}</b
+          ><span>profile · PR decisions always stay human</span>
         </div>
       </div>
       <div class="notice">

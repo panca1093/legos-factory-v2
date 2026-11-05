@@ -359,11 +359,32 @@ func TestTrimHunks(t *testing.T) {
 			t.Fatalf("out=%+v trimmed=%v", out, trimmed)
 		}
 	})
-	t.Run("per-file cap is a quarter of the budget, cut at a line boundary", func(t *testing.T) {
+	t.Run("a cut file takes the leftover budget, cut at a line boundary", func(t *testing.T) {
 		line := strings.Repeat("x", 9) + "\n" // 10 bytes
 		big := FileDiff{Path: "big", Added: 50, Hunks: strings.Repeat(line, 50)}
-		out, trimmed := trimHunks([]FileDiff{big}, 100) // cap 25 -> 2 lines
-		if out[0].Hunks != strings.Repeat(line, 2) || out[0].Added != 50 || !reflect.DeepEqual(trimmed, []string{"big"}) {
+		out, trimmed := trimHunks([]FileDiff{big}, 105) // cap 26 first, then the whole budget
+		if out[0].Hunks != strings.Repeat(line, 10) || out[0].Added != 50 || !reflect.DeepEqual(trimmed, []string{"big"}) {
+			t.Fatalf("out=%+v trimmed=%v", out, trimmed)
+		}
+	})
+	t.Run("the leftover goes to cut files in order and stops at the budget", func(t *testing.T) {
+		line := strings.Repeat("x", 9) + "\n"
+		files := []FileDiff{
+			{Path: "big1", Hunks: strings.Repeat(line, 30)},
+			{Path: "tiny", Hunks: "t\n"},
+			{Path: "big2", Hunks: strings.Repeat(line, 30)},
+		}
+		out, trimmed := trimHunks(files, 200) // cap 50: big1 50, tiny 2, big2 50; 98 left
+		if len(out[0].Hunks) != 140 || len(out[2].Hunks) != 50 || out[1].Hunks != "t\n" || !reflect.DeepEqual(trimmed, []string{"big1", "big2"}) {
+			t.Fatalf("lens=%d/%d/%d trimmed=%v", len(out[0].Hunks), len(out[1].Hunks), len(out[2].Hunks), trimmed)
+		}
+		if usedHunks(out) > 200 {
+			t.Fatalf("over budget: %d", usedHunks(out))
+		}
+	})
+	t.Run("a file the leftover fully covers is no longer trimmed", func(t *testing.T) {
+		out, trimmed := trimHunks([]FileDiff{{Path: "a", Hunks: "xxxx\nyyyy\n"}}, 20)
+		if out[0].Hunks != "xxxx\nyyyy\n" || len(trimmed) != 0 {
 			t.Fatalf("out=%+v trimmed=%v", out, trimmed)
 		}
 	})
@@ -382,7 +403,7 @@ func TestTrimHunks(t *testing.T) {
 		}
 		files[3].Hunks = "tiny\n"
 		out, trimmed = trimHunks(files, 400)
-		if out[4].Hunks != "keep me\n" || len(out[0].Hunks) != 100 || !reflect.DeepEqual(trimmed, []string{"big1", "big2", "big3"}) {
+		if out[4].Hunks != "keep me\n" || len(out[0].Hunks) != 180 || len(out[1].Hunks) != 100 || !reflect.DeepEqual(trimmed, []string{"big1", "big2", "big3"}) {
 			t.Fatalf("out=%+v trimmed=%v", out, trimmed)
 		}
 	})
@@ -412,9 +433,9 @@ func TestTrimHunks(t *testing.T) {
 		}
 	})
 	t.Run("keeps counts and does not mutate input", func(t *testing.T) {
-		in := []FileDiff{{Path: "a", Added: 3, Removed: 1, Hunks: "xxxx\nyyyy\n"}}
-		out, _ := trimHunks(in, 20) // cap 5
-		if out[0].Added != 3 || out[0].Removed != 1 || out[0].Hunks != "xxxx\n" || in[0].Hunks != "xxxx\nyyyy\n" {
+		in := []FileDiff{{Path: "a", Added: 3, Removed: 1, Hunks: "xxxx\nyyyy\nzzzz\n"}}
+		out, _ := trimHunks(in, 8) // cap 2 keeps nothing; the leftover keeps one line
+		if out[0].Added != 3 || out[0].Removed != 1 || out[0].Hunks != "xxxx\n" || in[0].Hunks != "xxxx\nyyyy\nzzzz\n" {
 			t.Fatalf("out=%+v in=%+v", out, in)
 		}
 	})
@@ -430,8 +451,8 @@ func TestTrimHunks(t *testing.T) {
 		if tr := state["diff_trimmed"].([]string); len(tr) != 1 || tr[0] != "big.go" {
 			t.Fatalf("diff_trimmed=%v", tr)
 		}
-		if n := len(state["diff"].([]FileDiff)[0].Hunks); n > diffHunkBudget/4 {
-			t.Fatalf("hunks %d > per-file cap", n)
+		if n := len(state["diff"].([]FileDiff)[0].Hunks); n > diffHunkBudget {
+			t.Fatalf("hunks %d > budget", n)
 		}
 	})
 }
@@ -514,5 +535,20 @@ func TestNoulJSONShape(t *testing.T) {
 	raw, _ := json.Marshal(map[string]Noul{"a": {Instructions: "q", Criteria: &NoulCriteria{True: "t", False: "f"}}, "b": {Instructions: "q"}})
 	if string(raw) != `{"a":{"instructions":"q","criteria":{"true":"t","false":"f"}},"b":{"instructions":"q"}}` {
 		t.Fatalf("shape: %s", raw)
+	}
+}
+
+func TestArchitectStatusIsCaseInsensitive(t *testing.T) {
+	for in, want := range map[string]string{"MET": "met", " Not_Met ": "not_met", "Unclear": "unclear", "bogus": "unclear"} {
+		if got, given := architectStatus([]ArchitectVerdict{{CriterionID: "c1", Status: in}}, "c1"); got != want || !given {
+			t.Errorf("%q: got %q given=%v want %q", in, got, given, want)
+		}
+	}
+}
+
+func TestUsageJSONTags(t *testing.T) {
+	raw, _ := json.Marshal(Usage{InputTokens: 3, OutputTokens: 4})
+	if string(raw) != `{"input_tokens":3,"output_tokens":4}` {
+		t.Fatalf("usage json: %s", raw)
 	}
 }

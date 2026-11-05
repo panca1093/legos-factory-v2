@@ -24,6 +24,7 @@ const (
 	KnowledgeImplementation     = "implementation"
 	KnowledgeVerification       = "verification"
 	KnowledgeFindings           = "findings"
+	KnowledgeArchitectVerified  = "architect_verification"
 	KnowledgeReadiness          = "readiness"
 	KnowledgePRDecision         = "pr_decision"
 	KnowledgePROpened           = "pr_opened"

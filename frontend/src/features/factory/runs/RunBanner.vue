@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { Pause, Play, SkipForward } from "lucide-vue-next";
+import { Pause, Play } from "lucide-vue-next";
 import type { Run, Task, WorkOrder } from "../../../types/api";
 import { stateInfo, taskState } from "../../../composables/presentation";
 import BrickBot from "../../../components/agents/BrickBot.vue";
@@ -21,9 +21,6 @@ const finished = computed(() =>
   ["READY", "CANCELLED", "BLOCKED"].includes(props.order.state),
 );
 const paused = computed(() => !!props.order.paused_at);
-const guidedStep = computed(
-  () => paused.value && props.order.pause_reason?.startsWith("Guided"),
-);
 </script>
 <template>
   <div>
@@ -37,8 +34,7 @@ const guidedStep = computed(
           ></strong
         >
         <p class="help">
-          {{ completed }} of {{ tasks.length }} tasks completed ·
-          {{ order.autonomy }} autonomy
+          {{ completed }} of {{ tasks.length }} tasks completed
         </p>
       </div>
       <div class="run-controls">
@@ -57,9 +53,7 @@ const guidedStep = computed(
           :disabled="!canWrite || busy"
           @click="emit('resume')"
         >
-          <component :is="guidedStep ? SkipForward : Play" class="icon" />{{
-            guidedStep ? "Next step" : "Resume"
-          }}
+          <Play class="icon" />Resume
         </button>
       </div>
     </div>

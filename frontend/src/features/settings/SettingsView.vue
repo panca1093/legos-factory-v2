@@ -29,6 +29,7 @@ const config = ref<Settings>({
   inspector_model: "",
   allowed_models: null,
   cataloger_summaries: false,
+  jev_enabled: false,
 });
 const tabs = [
   { id: "governance", name: "Governance", icon: ShieldCheck },
@@ -214,38 +215,8 @@ async function save() {
                   :disabled="
                     !session.isAdmin || busy || !initialized
                   " /><span></span></span
-            ></label>
-          </section>
-          <section class="settings-section">
-            <h2>Progressive autonomy</h2>
-            <p>
-              Orders can request guided, assisted or delegated execution.
-              Workspace ceiling editing is unavailable.
-            </p>
-            <div class="autonomy-levels">
-              <div
-                v-for="(name, i) in ['Guided', 'Assisted', 'Delegated']"
-                :key="name"
-                class="level"
-              >
-                <b>{{ i + 1 }}. {{ name }}</b>
-                <p>
-                  {{
-                    [
-                      "Human approval before execution.",
-                      "Execution after plan approval.",
-                      "Execution under backend policy.",
-                    ][i]
-                  }}
-                </p>
-              </div>
-            </div>
-            <div class="notice section-gap">
-              All modes retain backend state transitions, verification gates and
-              a human PR disposition.
-            </div>
-          </section></template
-        >
+            ></label></section
+        ></template>
         <template v-else-if="tab === 'preferences'"
           ><section class="settings-section">
             <h2>Make yourself at home.</h2>
@@ -295,7 +266,34 @@ async function save() {
           </section></template
         >
         <template v-else-if="tab === 'integrations'"
-          ><IntegrationsPanel
+          ><section class="settings-section" data-test="jev-status">
+            <div class="row between">
+              <div>
+                <h2>Jev judgments</h2>
+                <p class="help">
+                  Plan approval and the final done check are decided in code
+                  from Jev's typed answers (TypeSafe).
+                </p>
+              </div>
+              <span
+                class="pill"
+                :class="config.jev_enabled ? 'green' : ''"
+                data-test="jev-state"
+                >{{ config.jev_enabled ? "On" : "Off" }}</span
+              >
+            </div>
+            <p class="help">
+              <template v-if="config.jev_enabled"
+                >Plans that pass the checks start building without a click; you
+                are asked only when the rules escalate.</template
+              ><template v-else
+                >Set TYPESAFE_API_KEY on the backend to turn Jev on. Until then
+                every plan waits for your approval and the final done check is
+                skipped.</template
+              >
+            </p>
+          </section>
+          <IntegrationsPanel
         /></template>
         <template v-else
           ><section class="settings-section">

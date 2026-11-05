@@ -282,7 +282,7 @@ onMounted(load);
               <BrickBot persona="builder" class="compact" /><BrickBot
                 persona="inspector"
                 class="compact"
-              /><span>{{ w.autonomy }}</span>
+              />
             </div>
             <span>rev {{ w.revision }}</span>
           </div></RouterLink
@@ -302,7 +302,6 @@ onMounted(load);
             <th>Work order</th>
             <th>Status</th>
             <th>Project</th>
-            <th>Autonomy</th>
             <th></th>
           </tr>
         </thead>
@@ -318,7 +317,6 @@ onMounted(load);
             <td>
               {{ factory.projects.find((p) => p.id === w.project_id)?.name }}
             </td>
-            <td>{{ w.autonomy }}</td>
             <td>
               <RouterLink
                 :to="`/factory/${w.id}`"

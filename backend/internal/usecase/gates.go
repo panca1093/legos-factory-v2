@@ -9,7 +9,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"unicode/utf8"
+
+	"legos-factory/backend/internal/model"
 )
 
 // Gate wording, thresholds and truth tables for the Jev plan and done gates
@@ -81,12 +82,7 @@ type PlanGateInput struct {
 	PlanRevisions int
 }
 
-type FileDiff struct {
-	Path    string `json:"path"`
-	Added   int    `json:"added"`
-	Removed int    `json:"removed"`
-	Hunks   string `json:"hunks"`
-}
+type FileDiff = model.FileDiff
 
 type GateCheck struct {
 	Name   string `json:"name"`
@@ -355,42 +351,62 @@ func isGenerated(p string) bool {
 }
 
 // trimHunks keeps hunk text up to budget bytes across all files, in order.
-// Lock and generated files lose their hunks entirely, and one file keeps at
-// most budget/4 so it cannot starve the rest. Cuts land on a line boundary;
-// paths whose hunks were cut are returned.
+// Lock and generated files lose their hunks entirely. A first pass lets one
+// file keep at most budget/4 so it cannot starve the rest; a second pass hands
+// whatever is left to the files that were cut, in order. Cuts land on a line
+// boundary; paths whose hunks were cut are returned.
 func trimHunks(files []FileDiff, budget int) ([]FileDiff, []string) {
 	out := make([]FileDiff, len(files))
-	trimmed := []string{}
 	left := budget
 	perFile := budget / 4
 	for i, f := range files {
 		out[i] = f
 		if isGenerated(f.Path) {
-			if f.Hunks != "" {
-				out[i].Hunks = ""
-				trimmed = append(trimmed, f.Path)
-			}
+			out[i].Hunks = ""
 			continue
 		}
-		allowed := min(left, perFile)
-		if len(f.Hunks) <= allowed {
-			left -= len(f.Hunks)
+		out[i].Hunks = cutAtLine(f.Hunks, min(left, perFile))
+		left -= len(out[i].Hunks)
+	}
+	for i, f := range files {
+		if left <= 0 {
+			break
+		}
+		if isGenerated(f.Path) || len(out[i].Hunks) == len(f.Hunks) {
 			continue
 		}
-		cut := f.Hunks[:allowed]
-		if j := strings.LastIndexByte(cut, '\n'); j >= 0 {
-			cut = cut[:j+1]
-		} else {
-			cut = ""
+		out[i].Hunks = cutAtLine(f.Hunks, len(out[i].Hunks)+left)
+		left = budget - usedHunks(out)
+	}
+	trimmed := []string{}
+	for i, f := range files {
+		if len(out[i].Hunks) < len(f.Hunks) {
+			trimmed = append(trimmed, f.Path)
 		}
-		for !utf8.ValidString(cut) {
-			cut = cut[:len(cut)-1]
-		}
-		out[i].Hunks = cut
-		trimmed = append(trimmed, f.Path)
-		left -= len(cut)
 	}
 	return out, trimmed
+}
+
+func usedHunks(files []FileDiff) int {
+	n := 0
+	for _, f := range files {
+		n += len(f.Hunks)
+	}
+	return n
+}
+
+// cutAtLine returns s when it fits in n bytes, else the longest prefix of
+// whole lines (valid UTF-8) within n.
+func cutAtLine(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := s[:max(n, 0)]
+	j := strings.LastIndexByte(cut, '\n')
+	if j < 0 {
+		return ""
+	}
+	return cut[:j+1]
 }
 
 // estimateTokens is len/4 of the unescaped JSON: HTML escaping would inflate
@@ -546,7 +562,7 @@ func architectStatus(verdicts []ArchitectVerdict, id string) (status string, giv
 			continue
 		}
 		given = true
-		s := v.Status
+		s := strings.ToLower(strings.TrimSpace(v.Status))
 		if _, ok := rank[s]; !ok {
 			s = "unclear"
 		}

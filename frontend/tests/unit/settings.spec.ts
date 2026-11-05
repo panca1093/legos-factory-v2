@@ -119,3 +119,38 @@ it("round-trips the Cataloger summaries toggle", async () => {
   );
   w.unmount();
 });
+it("shows whether Jev is on under Integrations", async () => {
+  const f = useFactory();
+  vi.spyOn(f, "loadSettings").mockResolvedValue({
+    ...structuredClone(settings),
+    jev_enabled: false,
+  });
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: "/settings", component: SettingsView }],
+  });
+  await router.push("/settings?tab=integrations");
+  await router.isReady();
+  const stubs = { IntegrationsPanel: true };
+  const w = mount(SettingsView, { global: { plugins: [router], stubs } });
+  await flushPromises();
+  expect(w.find('[data-test="jev-state"]').text()).toBe("Off");
+  expect(w.find('[data-test="jev-status"]').text()).toContain(
+    "TYPESAFE_API_KEY",
+  );
+  w.unmount();
+
+  vi.spyOn(f, "loadSettings").mockResolvedValue({
+    ...structuredClone(settings),
+    jev_enabled: true,
+  });
+  const on = mount(SettingsView, { global: { plugins: [router], stubs } });
+  await flushPromises();
+  expect(on.find('[data-test="jev-state"]').text()).toBe("On");
+  on.unmount();
+});
+it("no longer offers autonomy levels", async () => {
+  const { w } = await render();
+  expect(w.text()).not.toContain("Progressive autonomy");
+  w.unmount();
+});

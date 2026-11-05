@@ -88,6 +88,34 @@ export function groupActivity(events: WOEvent[]): ActivityItem[] {
   return items;
 }
 
+export interface GateSummary {
+  gate: string;
+  outcome: string;
+  row: number;
+  note: string;
+  tone: string;
+}
+const gateTones: Record<string, string> = {
+  approve: "green",
+  done: "green",
+  revise: "orange",
+  fix: "orange",
+  escalate: "red",
+  loop: "",
+};
+// A Jev gate event's outcome, truth-table row and code-built note; null for any other event.
+export function gateSummary(e: WOEvent): GateSummary | null {
+  if (e.kind !== "plan_gate" && e.kind !== "done_gate") return null;
+  const outcome = String(e.payload?.outcome ?? "");
+  return {
+    gate: e.kind === "plan_gate" ? "Plan gate" : "Done gate",
+    outcome,
+    row: Number(e.payload?.row) || 0,
+    note: String(e.payload?.note ?? e.payload?.error ?? ""),
+    tone: gateTones[outcome] ?? "",
+  };
+}
+
 // Parallel plan tasks run at once, so more than one run can be live.
 export function liveRuns(items: ActivityItem[]): AgentRunGroup[] {
   return items.filter(

@@ -70,11 +70,17 @@ func TestIntakeAnswerAndSpecSchemas(t *testing.T) {
 
 func TestReviewAndFindingsSchemas(t *testing.T) {
 	var r reviewReply
-	if err := decodeReply(`{"decision":"REVISE"}`, &r); err == nil || !strings.Contains(err.Error(), "notes") {
-		t.Fatalf("REVISE without notes must fail: %v", err)
+	if err := decodeReply(`{"decision":"APPROVE"}`, &r); err == nil || !strings.Contains(err.Error(), "notes") {
+		t.Fatalf("a review without notes must fail: %v", err)
 	}
-	if err := decodeReply(`{"decision":"CLARIFY","question_text":"Which window?"}`, &r); err != nil {
+	if err := decodeReply(`{"notes":"ok","coverage":[{"criterion":"c1"}]}`, &r); err == nil || !strings.Contains(err.Error(), "coverage") {
+		t.Fatalf("a coverage remark needs a criterion and a remark: %v", err)
+	}
+	if err := decodeReply(`{"notes":"Missing the failure path","coverage":[{"criterion":"c1","remark":"task t1"}]}`, &r); err != nil {
 		t.Fatal(err)
+	}
+	if want := "Missing the failure path\n\nCoverage:\n- c1: task t1"; r.text() != want {
+		t.Fatalf("text = %q", r.text())
 	}
 	var f findingsReply
 	if err := decodeReply(`{"findings":[{"severity":"critical","title":"x"}]}`, &f); err == nil {
@@ -85,5 +91,52 @@ func TestReviewAndFindingsSchemas(t *testing.T) {
 	}
 	if err := decodeReply(`{"findings":[]}`, &f); err != nil {
 		t.Fatalf("empty findings are valid: %v", err)
+	}
+}
+
+func TestVerifyReplySchema(t *testing.T) {
+	var v verifyReply
+	for name, text := range map[string]string{
+		"no verdicts key":    `{"deviations":[]}`,
+		"unknown status":     `{"verdicts":[{"criterion_id":"c1","status":"done"}]}`,
+		"missing criterion":  `{"verdicts":[{"status":"met"}]}`,
+		"missing status":     `{"verdicts":[{"criterion_id":"c1"}]}`,
+		"verdicts not array": `{"verdicts":"met"}`,
+	} {
+		if err := decodeReply(text, &v); err == nil {
+			t.Errorf("%s: expected rejection", name)
+		}
+	}
+	if err := decodeReply(`{"verdicts":[],"deviations":null}`, &v); err != nil {
+		t.Fatalf("an empty verdict list is valid (the gate then asks for a fix): %v", err)
+	}
+	err := decodeReply(`{"verdicts":[
+		{"criterion_id":" c1 ","status":"MET","evidence":"a.go"},
+		{"criterion_id":"c2","status":"Not-Met","evidence":"b.go"},
+		{"criterion_id":"c3","status":"not met"},
+		{"criterion_id":"c4","status":"Unclear"}],
+		"deviations":["extra endpoint","  ",""]}`, &v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, x := range v.Verdicts {
+		got = append(got, x.CriterionID+"="+x.Status)
+	}
+	if strings.Join(got, ",") != "c1=met,c2=not_met,c3=not_met,c4=unclear" {
+		t.Fatalf("statuses must be normalised: %v", got)
+	}
+	if len(v.Deviations) != 1 || v.Deviations[0] != "extra endpoint" {
+		t.Fatalf("deviations: %q", v.Deviations)
+	}
+}
+
+func TestValidationReplySchema(t *testing.T) {
+	var v validationReply
+	if err := decodeReply(`{"notes":" "}`, &v); err == nil {
+		t.Fatal("blank notes must fail")
+	}
+	if err := decodeReply(`{"notes":"Criterion c2 is not met"}`, &v); err != nil || v.Notes != "Criterion c2 is not met" {
+		t.Fatalf("%v %+v", err, v)
 	}
 }

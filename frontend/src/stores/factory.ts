@@ -169,7 +169,6 @@ export const useFactory = defineStore("factory", {
       title: string;
       objective: string;
       acceptance: string;
-      autonomy: string;
       builder_model: string;
       inspector_model: string;
       source_ref?: string;

@@ -41,7 +41,7 @@ func (ta *testApp) createProject(t *testing.T, name, repo string) string {
 func (ta *testApp) createWO(t *testing.T, projectID, title, objective string) string {
 	t.Helper()
 	status, body := ta.do(t, "POST", "/api/v1/work-orders", fmt.Sprintf(
-		`{"project_id":%q,"title":%q,"objective":%q,"acceptance":"TestGreet passes with go test ./...","autonomy":"assisted"}`,
+		`{"project_id":%q,"title":%q,"objective":%q,"acceptance":"TestGreet passes with go test ./..."}`,
 		projectID, title, objective))
 	if status != 201 {
 		t.Fatalf("create work order: %d %s", status, body)

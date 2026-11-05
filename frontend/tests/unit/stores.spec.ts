@@ -96,7 +96,6 @@ it("keeps a successfully created order when its list refresh fails", async () =>
     title: "Saved",
     objective: "Outcome",
     acceptance: "Contract",
-    autonomy: "assisted",
     builder_model: "",
     inspector_model: "",
   };

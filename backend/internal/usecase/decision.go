@@ -11,7 +11,7 @@ import (
 
 // Human decisions: plan approval/revision, clarification, PR disposition, cancel.
 
-// ApprovePlan is the human authorization to execute a Foreman-reviewed plan.
+// ApprovePlan is the human authorization to execute a reviewed plan the gate escalated.
 func (f *Factory) ApprovePlan(ctx context.Context, woID string) error {
 	wo, err := f.WO.Get(ctx, woID)
 	if err != nil {
@@ -24,9 +24,20 @@ func (f *Factory) ApprovePlan(ctx context.Context, woID string) error {
 }
 
 // approvePlan moves ARCHITECT_REVIEW → QUEUED and enqueues root tasks; actor
-// is "human" or "policy" (delegated autonomy).
+// is "human" or "factory" (the plan gate approved).
 func (f *Factory) approvePlan(ctx context.Context, wo *model.WorkOrder, actor, msg string) error {
 	woID := wo.ID
+	mu := lockFor(&f.approveMu, woID)
+	mu.Lock()
+	defer mu.Unlock()
+	cur, err := f.WO.Get(ctx, woID)
+	if err != nil {
+		return err
+	}
+	if cur.State != model.StateArchitectReview {
+		return stateConflict("WO %s is %s; the plan was already approved or changed", woID, cur.State)
+	}
+	wo.State = cur.State
 	tasks, err := f.WO.Plan(ctx, woID)
 	if err != nil {
 		return err
@@ -59,7 +70,7 @@ func (f *Factory) RevisePlan(ctx context.Context, woID, notes string) error {
 	if err != nil {
 		return err
 	}
-	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"plan_review": "", "clarif_rounds": 0}); err != nil {
+	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"plan_review": "", "clarif_rounds": 0, "plan_revisions": 0}); err != nil {
 		return err
 	}
 	if err := f.step(ctx, wo, model.StateArchitectReview, model.StatePlanning, "human", "Revision requested: "+notes); err != nil {
@@ -81,7 +92,7 @@ func (f *Factory) AnswerClarification(ctx context.Context, woID, answer string) 
 	if wo.State != model.StateWaitingForHuman || wo.ClarifQuestion == "" || wo.ClarifAnswer != "" {
 		return stateConflict("WO %s is not waiting for clarification (state %s)", woID, wo.State)
 	}
-	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"clarif_answer": answer, "review_rounds": 0, "clarif_rounds": 0}); err != nil {
+	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"clarif_answer": answer, "review_rounds": 0, "clarif_rounds": 0, "plan_revisions": 0}); err != nil {
 		return err
 	}
 	wo.ClarifAnswer = answer
