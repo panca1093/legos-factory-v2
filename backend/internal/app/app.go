@@ -141,6 +141,10 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		Log:         log,
 	}
 
+	if cfg.TypeSafeKey != "" {
+		factory.Judge = jevJudge{integration.NewTypeSafe(cfg.TypeSafeKey, cfg.TypeSafeModel, "")}
+	}
+
 	sched := scheduler.New(jobRepo, log, cfg.MaxConcurrentRuns)
 	factory.Sched = sched
 	for kind, h := range factory.Handlers() {
@@ -285,4 +289,22 @@ func secretBox(cfg *model.Config, log *slog.Logger) (*store.SecretBox, error) {
 		return nil, fmt.Errorf("FACTORY_SECRET_KEY must be base64: %w", err)
 	}
 	return store.NewSecretBox(key)
+}
+
+type jevJudge struct{ c *integration.TypeSafe }
+
+func (j jevJudge) Ask(ctx context.Context, state any, questions map[string]usecase.Noul) (usecase.JudgeResult, error) {
+	qs := make(map[string]integration.Noul, len(questions))
+	for id, q := range questions {
+		n := integration.Noul{Instructions: q.Instructions}
+		if q.Criteria != nil {
+			n.Criteria = &integration.NoulCriteria{True: q.Criteria.True, False: q.Criteria.False}
+		}
+		qs[id] = n
+	}
+	r, err := j.c.Noul(ctx, state, qs)
+	if err != nil {
+		return usecase.JudgeResult{}, err
+	}
+	return usecase.JudgeResult{Answers: r.Answers, Model: r.Model}, nil
 }

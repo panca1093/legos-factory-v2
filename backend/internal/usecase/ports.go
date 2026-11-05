@@ -164,3 +164,21 @@ type Budget interface {
 	Reserve(estMicros int64) (release func(actual int64), ok bool)
 	Record(ctx context.Context, r model.UsageRecord) error
 }
+
+// Judge asks Jev typed yes/no questions about a state. Answers are
+// probabilities keyed by question id.
+type Judge interface {
+	Ask(ctx context.Context, state any, questions map[string]Noul) (JudgeResult, error)
+}
+
+type Noul struct {
+	Instructions string
+	Criteria     *NoulCriteria
+}
+
+type NoulCriteria struct{ True, False string }
+
+type JudgeResult struct {
+	Answers map[string]float64
+	Model   string
+}
