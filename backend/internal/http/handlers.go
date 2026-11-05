@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
@@ -450,4 +452,28 @@ func (s *Server) handleFindingDecision(c echo.Context) error {
 		return mapDomainError(c, err)
 	}
 	return c.JSON(http.StatusOK, fd)
+}
+
+func (s *Server) handleUsageSummary(c echo.Context) error {
+	days := 0
+	if v := c.QueryParam("days"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 {
+			return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "days must be a positive integer")
+		}
+		days = n
+	}
+	loc := time.UTC
+	if tz := c.QueryParam("tz"); tz != "" {
+		l, err := time.LoadLocation(tz)
+		if err != nil {
+			return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "tz must be an IANA time zone such as Asia/Jakarta")
+		}
+		loc = l
+	}
+	sum, err := s.Usage.UserSummary(c.Request().Context(), currentUser(c).ID, days, time.Now(), loc)
+	if err != nil {
+		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load usage summary")
+	}
+	return c.JSON(http.StatusOK, sum)
 }

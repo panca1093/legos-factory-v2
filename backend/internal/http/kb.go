@@ -72,3 +72,14 @@ func (s *Server) handleKBReset(c echo.Context) error {
 	}
 	return c.JSON(http.StatusOK, map[string]any{"doc": d})
 }
+
+func (s *Server) handleKBDelete(c echo.Context) error {
+	err := s.KBDocs.Delete(c.Request().Context(), currentUser(c), c.QueryParam("id"))
+	if errors.Is(err, usecase.ErrForbidden) {
+		return errorJSON(c, http.StatusForbidden, "FORBIDDEN", "only admins delete factory-wide documents")
+	}
+	if err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}

@@ -221,12 +221,14 @@ func (s *Server) routes() {
 	api.GET("/kb/docs", s.handleKBList)
 	api.GET("/kb/doc", s.handleKBGet)
 	api.PUT("/kb/doc", s.requireRole(model.RoleEngineer, s.handleKBPut))
+	api.DELETE("/kb/doc", s.requireRole(model.RoleEngineer, s.handleKBDelete))
 	api.POST("/kb/doc/approve", s.requireRole(model.RoleEngineer, s.handleKBApprove))
 	api.POST("/kb/doc/discard", s.requireRole(model.RoleEngineer, s.handleKBDiscard))
 	api.POST("/kb/doc/reset", s.requireRole(model.RoleEngineer, s.handleKBReset))
 
 	api.GET("/models", s.handleModels)
 	api.GET("/usage", s.handleUsage)
+	api.GET("/usage/summary", s.handleUsageSummary)
 	api.GET("/overview", s.handleOverview)
 
 	settings := api.Group("/settings")

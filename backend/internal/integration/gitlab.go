@@ -57,3 +57,25 @@ func (g *GitLab) OpenPullRequest(ctx context.Context, pr model.PRRequest) (model
 	}
 	return model.PullRequest{Number: mr.IID, URL: mr.WebURL, Ref: fmt.Sprintf("gitlab:%s!%d", pr.Repo, mr.IID)}, nil
 }
+
+func (g *GitLab) PullRequestStatus(ctx context.Context, ref string) (model.PRStatus, error) {
+	repo, iid, err := splitPRRef(ref, "gitlab", "!")
+	if err != nil {
+		return model.PRStatus{}, err
+	}
+	var mr struct {
+		State    string `json:"state"`
+		MergedAt string `json:"merged_at"`
+		ClosedAt string `json:"closed_at"`
+	}
+	if err := g.api.do(ctx, http.MethodGet, fmt.Sprintf("/projects/%s/merge_requests/%d", url.PathEscape(repo), iid), nil, &mr); err != nil {
+		return model.PRStatus{}, err
+	}
+	switch mr.State {
+	case "merged":
+		return model.PRStatus{State: model.PRStateMerged, At: parseTime(mr.MergedAt)}, nil
+	case "closed":
+		return model.PRStatus{State: model.PRStateClosed, At: parseTime(mr.ClosedAt)}, nil
+	}
+	return model.PRStatus{State: model.PRStateOpen}, nil
+}

@@ -295,3 +295,18 @@ func (s *KBDocs) Reset(ctx context.Context, u *model.User, id string) (*model.KB
 	}
 	return s.KB.Idx.Get(ctx, id)
 }
+
+// Delete removes a factory doc from bundle and index; seeded defaults are refused since the next start would re-seed them.
+func (s *KBDocs) Delete(ctx context.Context, u *model.User, id string) error {
+	d, err := s.factoryDoc(ctx, u, id)
+	if err != nil {
+		return err
+	}
+	if d.ProjectID == "" && !u.Role.IsAdmin() {
+		return ErrForbidden
+	}
+	if s.KB.Bundle.HasDefault(d.Path) {
+		return stateConflict("%s is a default playbook and would be restored on restart; reset it instead", d.Path)
+	}
+	return s.KB.RemoveFactory(ctx, d.Path, "Delete "+d.Path)
+}
