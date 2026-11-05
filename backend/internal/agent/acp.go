@@ -203,15 +203,53 @@ func (h *ACPHarness) spawn(role model.AgentRole, dir string) (*acpConn, error) {
 		return nil, fmt.Errorf("acp: start %s: %w", strings.Join(h.Command, " "), err)
 	}
 	go c.readLoop(stdout)
-	if _, err := c.call(context.Background(), "initialize", map[string]any{
+	raw, err := c.call(context.Background(), "initialize", map[string]any{
 		"protocolVersion":    1,
 		"clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false},
 		"clientInfo":         map[string]any{"name": "legos-factory", "version": "1"},
-	}); err != nil {
+	})
+	if err != nil {
 		c.close()
 		return nil, err
 	}
+	var init struct {
+		Meta struct {
+			Steering struct {
+				Supported bool `json:"supported"`
+			} `json:"steering"`
+		} `json:"_meta"`
+	}
+	_ = json.Unmarshal(raw, &init)
+	c.steering = init.Meta.Steering.Supported
 	return c, nil
+}
+
+// Steer injects a message into the run's in-flight turn; the agent reads it
+// before its next step and the turn ends only after it has acted on it.
+func (h *ACPHarness) Steer(ctx context.Context, sessionID, text string) error {
+	run, ok := h.run(sessionID)
+	if !ok {
+		return model.ErrAgentSessionNotFound
+	}
+	if !run.conn.steering {
+		return model.ErrSteeringUnsupported
+	}
+	raw, err := run.conn.call(ctx, "_session/steering", map[string]any{
+		"sessionId": sessionID,
+		"prompt":    []any{map[string]any{"type": "text", "text": text}},
+		// the default starts a fresh turn when idle, which nobody would wait for
+		"_meta": map[string]any{"steering": map[string]any{"idleBehavior": "promptRequired"}},
+	})
+	if err != nil {
+		return err
+	}
+	var res struct {
+		Outcome string `json:"outcome"`
+	}
+	if json.Unmarshal(raw, &res) == nil && res.Outcome == "promptRequired" {
+		return model.ErrAgentSessionNotFound
+	}
+	return nil
 }
 
 func (r *acpRun) finish(wait func(context.Context) (json.RawMessage, error)) {
@@ -269,6 +307,8 @@ type acpConn struct {
 	stderr  *tailBuffer
 	exited  chan struct{}
 	once    sync.Once
+
+	steering bool // the agent accepts _session/steering
 
 	role      model.AgentRole
 	workspace string

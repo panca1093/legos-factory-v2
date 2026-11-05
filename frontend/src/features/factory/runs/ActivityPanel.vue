@@ -2,24 +2,51 @@
 import { computed } from "vue";
 import { persona, money } from "../../../composables/presentation";
 import BrickBot from "../../../components/agents/BrickBot.vue";
-import type { WOEvent, Run } from "../../../types/api";
+import type { WOEvent, Run, Task } from "../../../types/api";
 import AgentLiveCard from "./AgentLiveCard.vue";
 import AgentRunCard from "./AgentRunCard.vue";
-import { groupActivity, liveRun } from "./agentActivity";
-const props = defineProps<{ events: WOEvent[]; runs: Run[] }>();
+import PlanProgress from "./PlanProgress.vue";
+import { groupActivity, liveRuns } from "./agentActivity";
+const props = withDefaults(
+  defineProps<{
+    events: WOEvent[];
+    runs: Run[];
+    tasks?: Task[];
+    canRetry?: boolean;
+    steer?: (runID: string, message: string) => Promise<unknown>;
+  }>(),
+  { tasks: () => [], canRetry: false, steer: undefined },
+);
+const emit = defineEmits<{ retry: [taskID: string] }>();
 const items = computed(() => groupActivity(props.events));
-const live = computed(() => liveRun(items.value));
+const live = computed(() => liveRuns(items.value));
 const history = computed(() =>
-  items.value.filter((it) => it !== live.value).reverse(),
+  items.value.filter((it) => !live.value.includes(it as never)).reverse(),
+);
+const taskTitle = computed(
+  () => new Map(props.tasks.map((t) => [t.id, t.title] as const)),
 );
 </script>
 <template>
   <div>
+    <PlanProgress
+      v-if="tasks.length"
+      :tasks="tasks"
+      :runs="runs"
+      :can-retry="canRetry"
+      @retry="emit('retry', $event)"
+    />
     <div class="section-head">
       <h2>What’s happening</h2>
       <span class="pill">Recorded event stream</span>
     </div>
-    <AgentLiveCard v-if="live" :key="live.id" :run="live" />
+    <AgentLiveCard
+      v-for="r in live"
+      :key="r.id"
+      :run="r"
+      :task="taskTitle.get(r.taskID)"
+      :steer="steer && ((m: string) => steer!(r.id, m))"
+    />
     <TransitionGroup name="view" tag="div" class="timeline"
       ><template v-for="it in history"
         ><article v-if="it.type === 'run'" :key="it.id" class="event">

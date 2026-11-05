@@ -194,6 +194,8 @@ func (s *Server) routes() {
 	wo.POST("/pr-decision", s.requireRole(model.RoleEngineer, s.handlePRDecision))
 	wo.POST("/cancel", s.requireRole(model.RoleEngineer, s.handleCancel))
 	wo.POST("/pause", s.requireRole(model.RoleEngineer, s.handlePause))
+	wo.POST("/tasks/:task_id/retry", s.requireRole(model.RoleEngineer, s.handleRetryTask))
+	wo.POST("/runs/:run_id/steer", s.requireRole(model.RoleEngineer, s.handleSteer))
 	wo.POST("/resume", s.requireRole(model.RoleEngineer, s.handleResume))
 	wo.POST("/findings/:finding_id/decision", s.requireRole(model.RoleEngineer, s.handleFindingDecision))
 	wo.GET("/runs", s.handleListRuns)

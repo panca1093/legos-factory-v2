@@ -48,6 +48,7 @@ type Foreman struct {
 	Sandbox      Sandbox
 	DataDir      string
 	wsMu         sync.Mutex // serializes writes to work order workspaces: task merges, dependency setup
+	live         sync.Map   // run id → liveSession, while the agent runs
 	QualTimeout  time.Duration
 	StallAfter   time.Duration // no new agent step for this long reports a stall; 0 = defaultStallAfter
 	Log          *slog.Logger
@@ -139,7 +140,7 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	if err := f.Runs.Start(ctx, runID, wo.ID, taskID, string(role), h.Name()); err != nil {
 		return model.AgentResult{}, "", err
 	}
-	runRef := map[string]any{"run_id": runID}
+	runRef := map[string]any{"run_id": runID, "task_id": taskID}
 	f.event(wo.ID, string(role), "agent_started",
 		fmt.Sprintf("%s agent started (%s harness, model %s)", role, h.Name(), modelID), runRef)
 
@@ -157,7 +158,9 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 		f.failRun(ctx, wo.ID, role, runID, err)
 		return model.AgentResult{}, runID, err
 	}
+	f.live.Store(runID, liveSession{woID: wo.ID, harness: h, session: ses.ID()})
 	res, err := h.Result(ctx, ses.ID())
+	f.live.Delete(runID)
 	stopWatch()
 	if err != nil {
 		f.failRun(ctx, wo.ID, role, runID, err)

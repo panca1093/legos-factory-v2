@@ -3193,6 +3193,18 @@ a {
 .agent-failed {
   color: var(--red);
 }
+.agent-steer {
+  color: var(--violet);
+}
+.agent-steer-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.agent-steer-form input {
+  flex: 1;
+  min-width: 0;
+}
 .agent-run summary {
   display: flex;
   align-items: center;

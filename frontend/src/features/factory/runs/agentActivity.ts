@@ -9,12 +9,14 @@ export interface AgentStep {
   n: number;
   tools: AgentTool[];
   at: string;
+  message?: string; // a human message steered into the run
 }
 export type AgentRunStatus = "running" | "stalled" | "finished" | "failed";
 export interface AgentRunGroup {
   type: "run";
   id: string;
   actor: string;
+  taskID: string;
   status: AgentRunStatus;
   startedAt: string;
   lastAt: string;
@@ -30,6 +32,7 @@ const runKinds = new Set([
   "agent_stalled",
   "agent_completed",
   "agent_failed",
+  "agent_steered",
 ]);
 
 // Folds agent_* events sharing a run_id into one group, oldest first; other events pass through.
@@ -48,6 +51,7 @@ export function groupActivity(events: WOEvent[]): ActivityItem[] {
         type: "run",
         id: runID,
         actor: e.actor,
+        taskID: String(e.payload?.task_id ?? ""),
         status: "running",
         startedAt: e.created_at,
         lastAt: e.created_at,
@@ -67,7 +71,14 @@ export function groupActivity(events: WOEvent[]): ActivityItem[] {
         at: e.created_at,
       });
       run.tokensOut += Number(e.payload?.tokens_out) || 0;
-    } else if (e.kind === "agent_stalled") run.status = "stalled";
+    } else if (e.kind === "agent_steered")
+      run.steps.push({
+        n: run.steps.length + 1,
+        tools: [],
+        at: e.created_at,
+        message: e.message,
+      });
+    else if (e.kind === "agent_stalled") run.status = "stalled";
     else if (e.kind === "agent_completed") run.status = "finished";
     else if (e.kind === "agent_failed") {
       run.status = "failed";
@@ -77,16 +88,12 @@ export function groupActivity(events: WOEvent[]): ActivityItem[] {
   return items;
 }
 
-export function liveRun(items: ActivityItem[]): AgentRunGroup | undefined {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i];
-    if (
-      it.type === "run" &&
-      (it.status === "running" || it.status === "stalled")
-    )
-      return it;
-  }
-  return undefined;
+// Parallel plan tasks run at once, so more than one run can be live.
+export function liveRuns(items: ActivityItem[]): AgentRunGroup[] {
+  return items.filter(
+    (it): it is AgentRunGroup =>
+      it.type === "run" && (it.status === "running" || it.status === "stalled"),
+  );
 }
 
 const verbs: Record<string, string> = {

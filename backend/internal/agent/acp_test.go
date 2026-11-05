@@ -44,7 +44,31 @@ func fakeAgent(scenario string) {
 		_ = json.Unmarshal(in.Bytes(), &m)
 		switch m.Method {
 		case "initialize":
-			reply(m.ID, map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": "Fake", "version": "0"}})
+			res := map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": "Fake", "version": "0"}}
+			if scenario == "steer" {
+				res["_meta"] = map[string]any{"steering": map[string]any{"supported": true}}
+			}
+			reply(m.ID, res)
+		case "_session/steering":
+			var p struct {
+				Prompt []struct{ Text string } `json:"prompt"`
+				Meta   struct {
+					Steering struct{ IdleBehavior string } `json:"steering"`
+				} `json:"_meta"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			if p.Meta.Steering.IdleBehavior != "promptRequired" {
+				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32602, "message": "want idleBehavior promptRequired"}})
+				continue
+			}
+			if promptID == nil {
+				reply(m.ID, map[string]any{"outcome": "promptRequired", "reason": "noRunningTurn"})
+				continue
+			}
+			reply(m.ID, map[string]any{"outcome": "injected"})
+			update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "steered: " + p.Prompt[0].Text}})
+			reply(promptID, map[string]any{"stopReason": "end_turn"})
+			promptID = nil
 		case "session/new":
 			var p struct{ Cwd string }
 			_ = json.Unmarshal(m.Params, &p)
@@ -288,5 +312,39 @@ func TestACPHarnessName(t *testing.T) {
 	}
 	if n := NewACPHarness([]string{"opencode", "acp"}, "").Name(); n != "opencode-acp" {
 		t.Fatalf("name = %s", n)
+	}
+}
+
+func TestACPSteerInjectsIntoRunningTurn(t *testing.T) {
+	h := fakeHarness(t, "steer")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentBuilder, Prompt: "go", WorkspaceDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Steer(ctx, ses.ID(), "use the helper in util.ts"); err != nil {
+		t.Fatalf("steer: %v", err)
+	}
+	res, err := h.Result(ctx, ses.ID())
+	if err != nil || res.Text != "steered: use the helper in util.ts" {
+		t.Fatalf("result %q, %v", res.Text, err)
+	}
+	if err := h.Steer(ctx, ses.ID(), "late"); !errors.Is(err, model.ErrAgentSessionNotFound) {
+		t.Fatalf("steer after the turn: %v", err)
+	}
+}
+
+func TestACPSteerUnsupported(t *testing.T) {
+	h := fakeHarness(t, "hang")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentBuilder, Prompt: "go", WorkspaceDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Cancel(ctx, ses.ID())
+	if err := h.Steer(ctx, ses.ID(), "hi"); !errors.Is(err, model.ErrSteeringUnsupported) {
+		t.Fatalf("got %v", err)
 	}
 }

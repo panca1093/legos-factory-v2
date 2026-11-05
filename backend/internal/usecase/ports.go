@@ -148,6 +148,11 @@ type Harness interface {
 	Name() string
 }
 
+// Steerer is a Harness that accepts a message into a running turn.
+type Steerer interface {
+	Steer(ctx context.Context, sessionID, text string) error
+}
+
 type Publisher interface {
 	Publish(e model.LiveEvent)
 }
