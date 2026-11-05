@@ -57,8 +57,12 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 		auth = &a
 	}
 	// prepare before persisting: a stored CREATED order without a workspace gets resumed into planning on restart
-	if _, err := w.Sandbox.Prepare(ctx, wo.ID, proj.RepoURL, auth); err != nil {
+	dir, err := w.Sandbox.Prepare(ctx, wo.ID, proj.RepoURL, auth)
+	if err != nil {
 		return nil, fmt.Errorf("%w: could not prepare workspace: %v", ErrWorkspace, err)
+	}
+	if p, err := repoProfile(dir); err == nil && p.Language != "" && p.Language != proj.Language {
+		_ = w.Projects.Store.SetLanguage(ctx, proj.ID, p.Language)
 	}
 	if err := w.Store.Create(ctx, wo); err != nil {
 		return nil, err

@@ -199,7 +199,10 @@ func (f *Foreman) profile(ctx context.Context, wo *model.WorkOrder) (model.Profi
 	if err != nil {
 		return model.Profile{}, err
 	}
-	return model.ParseProfile(proj.QualityProfile, proj.Language)
+	if proj.QualityProfile != "" {
+		return model.ParseProfile(proj.QualityProfile, proj.Language)
+	}
+	return repoProfile(f.workspaceDir(wo.ID))
 }
 
 // runSetup installs dependencies in dir. A failure is reported, not fatal:

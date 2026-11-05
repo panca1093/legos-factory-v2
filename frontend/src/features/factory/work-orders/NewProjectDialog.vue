@@ -12,7 +12,6 @@ const factory = useFactory(),
 const form = reactive({
   name: "",
   repo_url: "",
-  language: "go",
   git_connection_id: "",
   remote_repo: "",
 });
@@ -56,7 +55,6 @@ async function create() {
     const p = await factory.createProject({
       name: form.name.trim(),
       repo_url: form.repo_url.trim(),
-      language: form.language,
     });
     if (form.git_connection_id) {
       try {
@@ -104,15 +102,6 @@ async function create() {
           required
           placeholder="/path/to/repo or https://…"
         />
-      </div>
-      <div class="form-group">
-        <label for="prj-lang">Language / quality profile</label
-        ><select id="prj-lang" v-model="form.language">
-          <option value="go">Go</option>
-          <option value="typescript">TypeScript / Vue</option>
-          <option value="rust">Rust</option>
-          <option value="node">Node</option>
-        </select>
       </div>
       <div class="form-group">
         <label for="prj-conn">Pull requests (optional)</label

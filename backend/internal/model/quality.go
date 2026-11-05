@@ -28,40 +28,7 @@ type Profile struct {
 	Checks   []Check `json:"checks"`
 }
 
-const npmSetup = "npm ci --no-audit --no-fund"
-
-// Preset returns the built-in profile for a language. Repositories refine
-// these during onboarding; the preset is a safe default, not a framework.
-func Preset(language string) Profile {
-	switch language {
-	case "go":
-		return Profile{Language: language, Checks: []Check{
-			{Name: "go-test", Command: "go test ./..."},
-			{Name: "go-vet", Command: "go vet ./..."},
-		}}
-	case "typescript":
-		return Profile{Language: language, Setup: npmSetup, Checks: []Check{
-			{Name: "typecheck", Command: "npm run -s typecheck"},
-			{Name: "test", Command: "npm test -- --run"},
-		}}
-	case "rust":
-		return Profile{Language: language, Checks: []Check{
-			{Name: "cargo-check", Command: "cargo check"},
-			{Name: "cargo-test", Command: "cargo test"},
-		}}
-	case "node":
-		return Profile{Language: language, Setup: npmSetup, Checks: []Check{
-			{Name: "test", Command: "npm test -- --run"},
-		}}
-	default:
-		return Profile{Language: language, Checks: nil}
-	}
-}
-
 func ParseProfile(profileJSON, language string) (Profile, error) {
-	if profileJSON == "" || profileJSON == "{}" || profileJSON == "[]" {
-		return Preset(language), nil
-	}
 	var p Profile
 	if err := json.Unmarshal([]byte(profileJSON), &p); err != nil {
 		return Profile{}, fmt.Errorf("invalid quality profile: %w", err)

@@ -173,7 +173,9 @@ onMounted(load);
     /></span>
     <div class="grow">
       <strong>{{ selected.name }}</strong>
-      <p>{{ selected.repo_url }} · {{ selected.language }}</p>
+      <p>
+        {{ selected.repo_url }} · {{ selected.language || "not detected yet" }}
+      </p>
     </div>
     <button class="btn small" @click="profile = true">
       <Folder class="icon" />Project profile
@@ -364,15 +366,15 @@ onMounted(load);
         <Code class="icon" /><strong>{{ selected.repo_url }}</strong>
       </div>
       <p class="small muted">
-        {{ selected.language }} ·
+        {{ selected.language || "Language not detected yet" }} ·
         {{
           selected.description ||
           "Work orders use this repository and its backend quality profile."
         }}
       </p>
       <div class="notice">
-        Repository profile: {{ selected.language }}. Custom quality-profile
-        editing is unavailable.
+        Checks are detected from the repository (go.mod, package.json,
+        Cargo.toml). Add .legos/checks.json to the repository to override them.
       </div>
     </div></AppDialog
   >

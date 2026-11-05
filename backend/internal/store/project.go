@@ -29,6 +29,12 @@ func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 	return err
 }
 
+// SetLanguage records the toolchains detected in the project's repository.
+func (r *ProjectRepo) SetLanguage(ctx context.Context, id, language string) error {
+	_, err := r.DB.ExecContext(ctx, `UPDATE projects SET language = ? WHERE id = ?`, language, id)
+	return err
+}
+
 // SetBinding points the project at a git connection and provider repo slug;
 // an empty connection id unbinds it.
 func (r *ProjectRepo) SetBinding(ctx context.Context, id, connectionID, remoteRepo string) error {

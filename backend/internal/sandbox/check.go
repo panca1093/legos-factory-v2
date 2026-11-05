@@ -33,6 +33,8 @@ func RunCheck(ctx context.Context, dir string, check model.Check, timeout time.D
 		}
 		env = filtered
 	}
+	// test runners such as vitest and jest stay in watch mode unless CI is set
+	env = append(env, "CI=true")
 
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", check.Command)
 	cmd.Dir = dir

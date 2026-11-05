@@ -220,7 +220,8 @@ async function create() {
             readonly
           />
           <p class="help">
-            Repository profile · {{ project?.language || "not selected" }}
+            Repository profile ·
+            {{ project?.language || "detected from the repository" }}
           </p>
         </div>
       </div>
@@ -364,7 +365,7 @@ async function create() {
           <b style="font-size: 17px; text-transform: capitalize">{{
             form.autonomy
           }}</b
-          ><span>autonomy · {{ project?.language }} profile</span>
+          ><span>autonomy · {{ project?.language || "detected" }} profile</span>
         </div>
       </div>
       <div class="notice">

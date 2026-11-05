@@ -27,6 +27,7 @@ type ProjectStore interface {
 	List(ctx context.Context) ([]model.Project, error)
 	Create(ctx context.Context, p *model.Project) error
 	SetBinding(ctx context.Context, id, connectionID, remoteRepo string) error
+	SetLanguage(ctx context.Context, id, language string) error
 }
 
 type MemberStore interface {

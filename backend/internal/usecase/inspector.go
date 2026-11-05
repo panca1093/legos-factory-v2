@@ -16,11 +16,7 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
-	proj, err := f.Proj.Get(ctx, wo.ProjectID)
-	if err != nil {
-		return err
-	}
-	profile, err := model.ParseProfile(proj.QualityProfile, proj.Language)
+	profile, err := f.profile(ctx, wo)
 	if err != nil {
 		return err
 	}
@@ -60,8 +56,13 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 			}
 			return f.evaluateReadiness(ctx, wo, true)
 		}
+		newRev := wo.Revision + 1
+		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": ""}); err != nil {
+			return err
+		}
+		wo.Revision, wo.CommitSHA = newRev, ""
 		if err := f.step(ctx, wo, model.StateVerifying, model.StateImplementing, "foreman",
-			fmt.Sprintf("Check %q failed; returning to builder", failed)); err != nil {
+			fmt.Sprintf("Check %q failed; returning to builder (revision %d of %d)", failed, newRev, MaxRevisionCycles)); err != nil {
 			return err
 		}
 		_, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, "", map[string]any{"reason": "fix_failed_verification"})
