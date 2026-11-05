@@ -26,6 +26,9 @@ import {
 } from "lucide-vue-next";
 import { useSession } from "../../stores/session";
 import { useFactory } from "../../stores/factory";
+import { useChats } from "../../stores/chats";
+import { useToast } from "../../composables/useToast";
+import { chatTitle } from "../../features/chats/chatUtils";
 import AppDialog from "../../components/ui/AppDialog.vue";
 import StatusBadge from "../../components/ui/StatusBadge.vue";
 import Button from "../../components/ui/Button.vue";
@@ -42,6 +45,8 @@ import {
 import { useTheme } from "../../composables/useTheme";
 const session = useSession(),
   factory = useFactory(),
+  chats = useChats(),
+  { toast } = useToast(),
   route = useRoute(),
   router = useRouter();
 const { theme, toggleTheme } = useTheme();
@@ -103,6 +108,14 @@ const budgetPercent = computed(() =>
       )
     : 0,
 );
+const recentChats = computed(() => chats.chats.slice(0, 5));
+async function newChat() {
+  try {
+    await router.push(`/chats/${(await chats.create()).id}`);
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e));
+  }
+}
 const attention = computed(() =>
   factory.workOrders.filter((w) => attentionStates.includes(w.state)),
 );
@@ -154,6 +167,7 @@ onMounted(async () => {
       factory.refreshProjects(),
       factory.refreshWorkOrders(),
       factory.refreshOverview(),
+      chats.refresh().catch(() => undefined),
     ]);
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -182,7 +196,11 @@ async function logout() {
             ><PanelLeftClose class="icon"
           /></IconButton>
         </div>
-        <Button variant="primary" pill @click="router.push('/chats')"
+        <Button
+          variant="primary"
+          pill
+          :disabled="!session.canWrite"
+          @click="newChat"
           ><Plus class="icon" />New chat</Button
         >
         <div class="lg-nav-label">Projects</div>
@@ -199,7 +217,16 @@ async function logout() {
           </p>
         </nav>
         <div class="lg-nav-label">Recent chats</div>
-        <div class="grow"><p class="empty-note">No chats yet.</p></div>
+        <nav class="lg-nav grow" aria-label="Recent chats">
+          <RouterLink
+            v-for="c in recentChats"
+            :key="c.id"
+            :to="`/chats/${c.id}`"
+            active-class="active"
+            ><span class="t">{{ chatTitle(c) }}</span></RouterLink
+          >
+          <p v-if="!recentChats.length" class="empty-note">No chats yet.</p>
+        </nav>
         <RouterLink to="/settings?tab=usage" class="usage-card"
           ><div class="top">
             <span>Workspace budget</span><Gauge class="icon" />
