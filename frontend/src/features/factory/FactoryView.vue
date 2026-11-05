@@ -19,7 +19,7 @@ import AppDialog from "../../components/ui/AppDialog.vue";
 import NewWorkOrderDrawer from "./work-orders/NewWorkOrderDrawer.vue";
 import NewProjectDialog from "./work-orders/NewProjectDialog.vue";
 import {
-  attentionStates,
+  isNeedsYou,
   runningStates,
   projectColor,
 } from "../../composables/presentation";
@@ -82,7 +82,7 @@ const filtered = computed(() =>
       (projectID.value === "all" || w.project_id === projectID.value) &&
       (status.value === "all" ||
         (status.value === "attention"
-          ? attentionStates.includes(w.state)
+          ? isNeedsYou(w)
           : status.value === "running"
             ? runningStates.includes(w.state)
             : status.value === "complete"

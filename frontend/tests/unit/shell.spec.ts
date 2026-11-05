@@ -61,3 +61,35 @@ it("shows navigation, the prototype desktop topbar, search shortcut and theme to
   w.unmount();
   document.body.innerHTML = "";
 });
+it("shows month-to-date usage in the rail card", async () => {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: "/:pathMatch(.*)*", component: { template: "<div />" } }],
+  });
+  await router.push("/");
+  await router.isReady();
+  const f = useFactory();
+  vi.spyOn(f, "refreshProjects").mockResolvedValue();
+  vi.spyOn(f, "refreshWorkOrders").mockResolvedValue();
+  vi.spyOn(f, "refreshOverview").mockResolvedValue();
+  vi.spyOn(f, "refreshUsage").mockResolvedValue();
+  f.usage = {
+    days: 365,
+    from: "",
+    to: "",
+    activity: [],
+    roles: [],
+    month_to_date: {
+      month: "2026-11",
+      tokens_in: 1200,
+      tokens_out: 300,
+      cost_micros: 2500000,
+      runs: 3,
+    },
+  };
+  const w = mount(AppShell, { global: { plugins: [router] } });
+  await flushPromises();
+  expect(w.find(".usage-card").text()).toContain("This month $2.50");
+  expect(w.find(".usage-card").text()).toContain("1.5K tokens");
+  w.unmount();
+});
