@@ -190,22 +190,43 @@ func TestHumanRetryKeepsFailedChecks(t *testing.T) {
 	f, wo, wos := monitorFactory(t, nil)
 	q := &fakeQueue{}
 	f.Sched, f.Quality = q, &store.QualityRepo{DB: wos.DB}
+	for i, c := range []model.QualityCheck{
+		{Name: "go-test", Command: "go test ./...", Outcome: "FAIL", ExitCode: 1, Output: "baseline: missing setQty"},
+		{Name: "go-vet", Command: "go vet ./...", Outcome: "FAIL", ExitCode: 1, Output: "baseline vet"},
+		{Name: "go-test", Command: "go test ./...", Outcome: "FAIL", ExitCode: 1, Output: "--- FAIL: TestX"},
+		{Name: "go-vet", Command: "go vet ./...", Outcome: "PASS", ExitCode: 0},
+	} {
+		c.ID, c.WOID, c.Revision = fmt.Sprintf("qc%d", i), wo.ID, 0
+		if err := f.Quality.Save(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := wos.UpdateFields(ctx, wo.ID, map[string]any{"revision": 1, "verify_failures": 1}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := wos.Get(ctx, wo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := f.retryPayload(ctx, got)
+	section, _ := p["failed_checks"].(string)
+	if p["reason"] != "fix_failed_verification" || !strings.Contains(section, "--- FAIL: TestX") {
+		t.Fatalf("retry payload lost the failing check: %v", p)
+	}
+	if strings.Contains(section, "baseline") || strings.Contains(section, "go-vet") {
+		t.Fatalf("retry payload must hold only each check's latest run: %q", section)
+	}
+
 	if err := wos.ReplacePlan(ctx, wo.ID, []model.Task{{ID: "T1", WOID: wo.ID, Title: "a", Role: "builder"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.Quality.Save(ctx, model.QualityCheck{ID: "qc1", WOID: wo.ID, Name: "go test", Command: "go test ./...",
-		Outcome: "FAIL", ExitCode: 1, Output: "--- FAIL: TestX", Revision: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if err := wos.UpdateFields(ctx, wo.ID, map[string]any{"state": string(model.StateImplementing), "revision": 2, "verify_failures": 1}); err != nil {
+	if err := wos.UpdateState(ctx, wo.ID, model.StateImplementing); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.RetryTask(ctx, wo.ID, "T1", "human"); err != nil {
 		t.Fatal(err)
 	}
-	p := q.payloads[0]
-	got, _ := p["failed_checks"].(string)
-	if p["reason"] != "fix_failed_verification" || !strings.Contains(got, "--- FAIL: TestX") || !strings.Contains(got, "go test ./...") {
-		t.Fatalf("retry payload lost the failing check: %v", p)
+	if q.payloads[0]["reason"] != "human_retry" {
+		t.Fatalf("task retry must keep the plain task prompt: %v", q.payloads[0])
 	}
 }

@@ -38,7 +38,7 @@ func (r *QualityRepo) CountForRevision(ctx context.Context, woID string, revisio
 
 func (r *QualityRepo) ForRevision(ctx context.Context, woID string, revision int) ([]model.QualityCheck, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT id, name, command, outcome, exit_code, output, revision, commit_sha, created_at
-		FROM quality_checks WHERE wo_id = ? AND revision = ? ORDER BY created_at`, woID, revision)
+		FROM quality_checks WHERE wo_id = ? AND revision = ? ORDER BY created_at, rowid`, woID, revision)
 	if err != nil {
 		return nil, err
 	}

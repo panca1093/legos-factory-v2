@@ -133,9 +133,14 @@ func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[str
 	if err != nil {
 		return payload
 	}
+	// the revision also holds the pre-change baseline and re-run duplicates; only each check's latest run counts
+	latest := map[string]int{}
+	for i, c := range stored {
+		latest[c.Name] = i
+	}
 	var failed []model.CheckResult
-	for _, c := range stored {
-		if c.Outcome == string(model.Pass) {
+	for i, c := range stored {
+		if latest[c.Name] != i || c.Outcome == string(model.Pass) {
 			continue
 		}
 		r := model.CheckResult{Name: c.Name, Command: c.Command, Outcome: model.Outcome(c.Outcome), Output: c.Output}
