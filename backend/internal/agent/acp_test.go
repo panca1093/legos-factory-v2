@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -420,6 +421,63 @@ func TestACPSessionWithoutKeepIsNotContinuable(t *testing.T) {
 	}
 	if _, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Prompt: "two"}); !errors.Is(err, model.ErrAgentSessionNotFound) {
 		t.Fatalf("continue without Keep: %v", err)
+	}
+}
+
+func TestACPIdleKeptSessionExpires(t *testing.T) {
+	h := fakeHarness(t, "multi")
+	h.IdleTTL = 100 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentForeman, Prompt: "first", WorkspaceDir: t.TempDir(), Keep: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Result(ctx, ses.ID()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		n := len(h.kept)
+		h.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if _, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Prompt: "late"}); !errors.Is(err, model.ErrAgentSessionNotFound) {
+		t.Fatalf("an idle session must expire: %v", err)
+	}
+}
+
+func TestACPContinueRacingCloseLeavesNothingParked(t *testing.T) {
+	for i := 0; i < 8; i++ {
+		h := fakeHarness(t, "multi")
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentForeman, Prompt: "first", WorkspaceDir: t.TempDir(), Keep: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.Result(ctx, ses.ID()); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		var next model.AgentSession
+		wg.Add(2)
+		go func() { defer wg.Done(); next, _ = h.Continue(ctx, ses.ID(), model.AgentRequest{Prompt: "second"}) }()
+		go func() { defer wg.Done(); h.Close(ses.ID()) }()
+		wg.Wait()
+		if next != nil {
+			_, _ = h.Result(ctx, next.ID())
+		}
+		h.mu.Lock()
+		parked := len(h.kept)
+		h.mu.Unlock()
+		cancel()
+		if parked != 0 {
+			t.Fatalf("iteration %d: a closed session stayed parked", i)
+		}
 	}
 }
 

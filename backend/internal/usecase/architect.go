@@ -12,11 +12,16 @@ import (
 // Architect: drafts the plan (or asks a human for a missing decision). It
 // never approves its own plan; the Foreman reviews it in review.go.
 
-func (f *Factory) handlePlan(ctx context.Context, job model.Job) error {
+func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 	wo, err := f.WO.Get(ctx, job.WOID)
 	if err != nil {
 		return err
 	}
+	defer func() {
+		if err != nil {
+			f.closePlanning(wo.ID) // a failed job must not leave the Foreman's session parked
+		}
+	}()
 	switch wo.State {
 	case model.StateCreated:
 		if err := f.step(ctx, wo, model.StateCreated, model.StateRequirement, "factory", "Analyzing requirements"); err != nil {
@@ -59,24 +64,22 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) error {
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "", woQuery(wo), f.workspaceDir(wo.ID), wo.KBBaseSHA)
 	notes, _ := job.Payload["notes"].(string)
 	var plan planReply
-	var runID string
-	for {
-		plan = planReply{}
-		_, runID, err = f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes, facts)+knowledgePrompt(prior)+kbText,
-			map[string]string{"clarification_answer": wo.ClarifAnswer, "clarification_log": clarificationLog(wo)}, "", &plan, runOpts{Audit: audit})
-		if err != nil {
-			return err
-		}
-		if plan.Decision != "CLARIFY" {
-			break
-		}
+	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes, facts)+knowledgePrompt(prior)+kbText,
+		map[string]string{"clarification_answer": wo.ClarifAnswer, "clarification_log": clarificationLog(wo)}, "", &plan, runOpts{Audit: audit})
+	if err != nil {
+		return err
+	}
+	if plan.Decision == "CLARIFY" {
 		q := plan.QuestionText
 		if q == "" {
 			q = plan.Question
 		}
-		if answered, err := f.foremanAnswers(ctx, wo, q, facts); err != nil || !answered {
+		answered, err := f.foremanAnswers(ctx, wo, q, facts)
+		if err != nil || !answered {
 			return err
 		}
+		// the answer is stored; a fresh job re-drafts, so one job never chains every agent run
+		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"reason": "foreman_answer", "notes": notes})
 	}
 
 	// plan task ids from agents are only unique within one plan; namespace
@@ -134,6 +137,16 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) error {
 	return f.enqueue(ctx, JobReview, wo.ID, "foreman_review")
 }
 
+func findClarification(list []model.Clarification, question string) *model.Clarification {
+	q := strings.ToLower(strings.TrimSpace(question))
+	for i := range list {
+		if strings.ToLower(strings.TrimSpace(list[i].Question)) == q {
+			return &list[i]
+		}
+	}
+	return nil
+}
+
 // maxForemanAnswers is how many Architect questions the Foreman may answer
 // before the next one goes to a human.
 const maxForemanAnswers = 2
@@ -162,6 +175,15 @@ func (f *Factory) intake(ctx context.Context, wo *model.WorkOrder, facts string)
 func (f *Factory) foremanAnswers(ctx context.Context, wo *model.WorkOrder, question, facts string) (bool, error) {
 	if wo.ClarifRounds >= maxForemanAnswers {
 		return false, f.askHuman(ctx, wo, "architect", question)
+	}
+	if c := findClarification(wo.Clarifications, question); c != nil {
+		// a repeated question reuses the stored answer; it still counts as a round so the cap bounds a looping Architect
+		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"clarif_rounds": wo.ClarifRounds + 1}); err != nil {
+			return false, err
+		}
+		wo.ClarifRounds++
+		f.event(wo.ID, "foreman", "clarification_answered", c.Answer, map[string]any{"question": question, "repeated": true})
+		return true, nil
 	}
 	f.event(wo.ID, "architect", "clarification_asked", question, nil)
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+question, f.workspaceDir(wo.ID), wo.KBBaseSHA)

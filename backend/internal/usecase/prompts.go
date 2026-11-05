@@ -33,6 +33,17 @@ func clarificationLog(wo *model.WorkOrder) string {
 	return strings.Join(parts, "\n")
 }
 
+func scopedTaskList(tasks []model.Task) string {
+	var b strings.Builder
+	for i, t := range tasks {
+		fmt.Fprintf(&b, "%d. %s — %s\n", i+1, t.Title, t.Objective)
+		if len(t.Scope) > 0 {
+			fmt.Fprintf(&b, "   Scope: %s\n", strings.Join(t.Scope, ", "))
+		}
+	}
+	return b.String()
+}
+
 func briefSection(wo *model.WorkOrder) string {
 	if wo.Brief == "" {
 		return ""
@@ -147,7 +158,7 @@ Respond with ONLY a JSON object:
  "question_text":"<required for CLARIFY: the single question a human must answer>"}
 
 Use CLARIFY when the plan depends on a product decision nobody has made — never guess it.`,
-		wo.Title, wo.Objective, wo.Acceptance, briefSection(wo)+clarification(wo), wo.Spec, taskList(tasks))
+		wo.Title, wo.Objective, wo.Acceptance, briefSection(wo)+clarification(wo), wo.Spec, scopedTaskList(tasks))
 }
 
 func implementPrompt(wo *model.WorkOrder, job model.Job) string {

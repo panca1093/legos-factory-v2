@@ -22,6 +22,13 @@ func TestPromptsCarryClarificationAnswer(t *testing.T) {
 	}
 }
 
+func TestReviewPromptListsTaskScope(t *testing.T) {
+	p := foremanReviewPrompt(&model.WorkOrder{Title: "t"}, []model.Task{{Title: "a", Objective: "b", Scope: []string{"x/", "y.go"}}})
+	if !strings.Contains(p, "Scope: x/, y.go") {
+		t.Fatalf("review prompt lacks the task scope:\n%s", p)
+	}
+}
+
 func TestInspectPromptHasFocusForCustomSpecialty(t *testing.T) {
 	p := inspectPrompt(&model.WorkOrder{}, SpecialistPick{Specialty: "payments"}, nil)
 	if !strings.Contains(p, "Focus: Correctness, risks and regressions within the payments area.") {

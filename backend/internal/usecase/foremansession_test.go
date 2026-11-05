@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,6 +16,8 @@ const (
 	clarifyJSON  = `{"decision":"CLARIFY","question_text":"Round half up or down?"}`
 	answerJSON   = `{"decision":"ANSWER","answer":"Half up."}`
 	escalateJSON = `{"decision":"ESCALATE","reason":"product call"}`
+	clarify2JSON = `{"decision":"CLARIFY","question_text":"Which currency?"}`
+	clarify3JSON = `{"decision":"CLARIFY","question_text":"Which locale?"}`
 )
 
 type idSession string
@@ -29,6 +32,7 @@ type sessHarness struct {
 	reqs      map[string]model.AgentRequest // last request by session id
 	architect []string                      // replies in order; the last repeats
 	answer    string
+	review    string // overrides the Foreman review reply
 	starts    []model.AgentRequest
 	conts     []string // "session: prompt"
 	closed    []string
@@ -54,6 +58,9 @@ func (h *sessHarness) text(req model.AgentRequest) string {
 			return intakeJSON
 		case "answer":
 			return h.answer
+		}
+		if h.review != "" {
+			return h.review
 		}
 		return reviewJSON
 	}
@@ -119,6 +126,29 @@ func sessionRig(t *testing.T, h Harness) *rig {
 	return r
 }
 
+// plan runs plan jobs until none is enqueued again, as the scheduler would.
+func (r *rig) plan(t *testing.T) {
+	t.Helper()
+	planJobs := func() (n int) {
+		for _, j := range r.q.enqueued {
+			if strings.HasPrefix(j, JobPlan+":") {
+				n++
+			}
+		}
+		return n
+	}
+	for i := 0; i < 6; i++ {
+		before := planJobs()
+		if err := r.f.handlePlan(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+			t.Fatal(err)
+		}
+		if planJobs() == before {
+			return
+		}
+	}
+	t.Fatal("plan jobs keep re-enqueueing")
+}
+
 func (r *rig) reload(t *testing.T) *model.WorkOrder {
 	t.Helper()
 	wo, err := r.wos.Get(context.Background(), r.wo.ID)
@@ -133,9 +163,7 @@ func TestForemanSessionIsReusedFromIntakeToReview(t *testing.T) {
 	h := &sessHarness{architect: []string{clarifyJSON, planJSON}, answer: answerJSON}
 	r := sessionRig(t, h)
 
-	if err := r.f.handlePlan(ctx, model.Job{WOID: r.wo.ID}); err != nil {
-		t.Fatal(err)
-	}
+	r.plan(t)
 	wo := r.reload(t)
 	if wo.State != model.StateArchitectReview || wo.PlanReview != "pending" {
 		t.Fatalf("state %s review %q; the Foreman's answer must let the Architect finish", wo.State, wo.PlanReview)
@@ -188,9 +216,7 @@ func TestForemanFallsBackToPrimedNewSession(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := &sessHarness{architect: []string{clarifyJSON, planJSON}, answer: answerJSON}
 			r := sessionRig(t, mk(h))
-			if err := r.f.handlePlan(ctx, model.Job{WOID: r.wo.ID}); err != nil {
-				t.Fatal(err)
-			}
+			r.plan(t)
 			var answerPrompt string
 			for _, s := range h.starts {
 				if s.Context["stage"] == "answer" {
@@ -222,12 +248,9 @@ func TestForemanFallsBackToPrimedNewSession(t *testing.T) {
 }
 
 func TestEscalationClosesTheForemanSession(t *testing.T) {
-	ctx := context.Background()
 	h := &sessHarness{architect: []string{clarifyJSON}, answer: escalateJSON}
 	r := sessionRig(t, h)
-	if err := r.f.handlePlan(ctx, model.Job{WOID: r.wo.ID}); err != nil {
-		t.Fatal(err)
-	}
+	r.plan(t)
 	wo := r.reload(t)
 	if wo.State != model.StateWaitingForHuman || wo.ClarifQuestion != "Round half up or down?" || wo.ClarifRounds != 0 {
 		t.Fatalf("state %s question %q rounds %d", wo.State, wo.ClarifQuestion, wo.ClarifRounds)
@@ -241,12 +264,9 @@ func TestEscalationClosesTheForemanSession(t *testing.T) {
 }
 
 func TestThirdQuestionGoesStraightToTheHuman(t *testing.T) {
-	ctx := context.Background()
-	h := &sessHarness{architect: []string{clarifyJSON}, answer: answerJSON}
+	h := &sessHarness{architect: []string{clarifyJSON, clarify2JSON, clarify3JSON}, answer: answerJSON}
 	r := sessionRig(t, h)
-	if err := r.f.handlePlan(ctx, model.Job{WOID: r.wo.ID}); err != nil {
-		t.Fatal(err)
-	}
+	r.plan(t)
 	wo := r.reload(t)
 	if wo.State != model.StateWaitingForHuman || wo.ClarifRounds != 2 || len(wo.Clarifications) != 2 {
 		t.Fatalf("state %s rounds %d answers %d; two answers then a human", wo.State, wo.ClarifRounds, len(wo.Clarifications))
@@ -262,15 +282,98 @@ func TestThirdQuestionGoesStraightToTheHuman(t *testing.T) {
 	}
 }
 
+func TestAnswerIsStoredAndLeftToAFreshPlanJob(t *testing.T) {
+	h := &sessHarness{architect: []string{clarifyJSON, planJSON}, answer: answerJSON}
+	r := sessionRig(t, h)
+	if err := r.f.handlePlan(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	wo := r.reload(t)
+	if wo.State != model.StateDecomposition || len(wo.Clarifications) != 1 || len(r.q.enqueued) != 1 || r.q.enqueued[0] != JobPlan+":" {
+		t.Fatalf("state %s answers %d enqueued %v; the first job must stop after the Foreman answer", wo.State, len(wo.Clarifications), r.q.enqueued)
+	}
+	if err := r.f.handlePlan(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	intakes := 0
+	for _, s := range h.starts {
+		if s.Context["stage"] == "intake" {
+			intakes++
+		}
+	}
+	if intakes != 1 || r.reload(t).State != model.StateArchitectReview {
+		t.Fatalf("the resumed job must not repeat intake: %d intakes, state %s", intakes, r.reload(t).State)
+	}
+	if len(h.conts) != 1 {
+		t.Fatalf("the session must carry across jobs: %v", h.conts)
+	}
+}
+
+func TestFailedPlanJobClosesTheForemanSession(t *testing.T) {
+	h := &sessHarness{architect: []string{`not json`}}
+	r := sessionRig(t, h)
+	if err := r.f.handlePlan(context.Background(), model.Job{WOID: r.wo.ID}); err == nil {
+		t.Fatal("an unusable Architect reply must fail the job")
+	}
+	if len(h.closed) != 1 || h.closed[0] != "s1" {
+		t.Fatalf("a failed job must close the parked session: %v", h.closed)
+	}
+	if _, open := r.f.planSes.Load(r.wo.ID); open {
+		t.Fatal("session still tracked after the failure")
+	}
+}
+
+func TestCancelledOrderOpensNoForemanSession(t *testing.T) {
+	h := &sessHarness{answer: answerJSON}
+	r := sessionRig(t, h)
+	wo := r.reload(t)
+	if err := r.wos.UpdateState(context.Background(), r.wo.ID, model.StateCancelled); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.intake(context.Background(), wo, ""); !errors.Is(err, model.ErrPermanent) {
+		t.Fatalf("intake on a cancelled order: %v", err)
+	}
+	if len(h.starts) != 0 {
+		t.Fatalf("a cancelled order must not start a session: %d", len(h.starts))
+	}
+}
+
+func TestRepeatedQuestionReusesTheStoredAnswer(t *testing.T) {
+	h := &sessHarness{architect: []string{clarifyJSON, clarifyJSON, planJSON}, answer: answerJSON}
+	r := sessionRig(t, h)
+	r.plan(t)
+	wo := r.reload(t)
+	if wo.State != model.StateArchitectReview || len(wo.Clarifications) != 1 || wo.ClarifRounds != 2 {
+		t.Fatalf("state %s answers %d rounds %d", wo.State, len(wo.Clarifications), wo.ClarifRounds)
+	}
+	if len(h.conts) != 1 {
+		t.Fatalf("the Foreman must answer a repeated question once: %v", h.conts)
+	}
+}
+
+func TestNewPlanningRoundResetsTheAnswerCap(t *testing.T) {
+	h := &sessHarness{architect: []string{clarifyJSON, planJSON}, answer: answerJSON, review: `{"decision":"REVISE","notes":"cover failures"}`}
+	r := sessionRig(t, h)
+	r.plan(t)
+	if wo := r.reload(t); wo.ClarifRounds != 1 {
+		t.Fatalf("rounds = %d", wo.ClarifRounds)
+	}
+	if err := r.f.handleReview(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	wo := r.reload(t)
+	if wo.ClarifRounds != 0 || len(wo.Clarifications) != 1 {
+		t.Fatalf("a Foreman revision starts a new round and keeps the log: rounds %d answers %d", wo.ClarifRounds, len(wo.Clarifications))
+	}
+}
+
 func TestCancelClosesTheForemanSession(t *testing.T) {
 	ctx := context.Background()
 	h := &sessHarness{answer: answerJSON}
 	r := sessionRig(t, h)
 	r.f.Sched = &fakeQueue{}
 	r.f.Catalog = &Cataloger{Knowledge: &JournalStore{KB: r.know, Proj: r.f.Proj}, Proj: r.f.Proj, Settings: nil, Log: r.f.Log}
-	if err := r.f.handlePlan(ctx, model.Job{WOID: r.wo.ID}); err != nil {
-		t.Fatal(err)
-	}
+	r.plan(t)
 	if err := r.f.Cancel(ctx, r.wo.ID); err != nil {
 		t.Fatal(err)
 	}

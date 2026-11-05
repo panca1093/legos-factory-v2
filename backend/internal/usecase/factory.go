@@ -243,13 +243,27 @@ func (f *Factory) startPlanning(ctx context.Context, woID string, h Harness, req
 		}
 		f.closePlanning(woID)
 	}
+	if f.cancelled(ctx, woID) {
+		return nil, fmt.Errorf("%w: work order %s is cancelled", model.ErrPermanent, woID)
+	}
 	req.Prompt = prime + req.Prompt
 	req.Keep = true
 	ses, err := h.Start(ctx, req)
-	if err == nil {
-		f.planSes.Store(woID, planSession{harness: sh, name: h.Name(), id: ses.ID()})
+	if err != nil {
+		return ses, err
 	}
-	return ses, err
+	f.planSes.Store(woID, planSession{harness: sh, name: h.Name(), id: ses.ID()})
+	// a cancel that landed while the session was starting must not leave it parked
+	if f.cancelled(ctx, woID) {
+		f.closePlanning(woID)
+	}
+	return ses, nil
+}
+
+// cancelled re-reads the order: a running job is not stopped by Cancel.
+func (f *Factory) cancelled(ctx context.Context, woID string) bool {
+	wo, err := f.WO.Get(ctx, woID)
+	return err == nil && wo.State == model.StateCancelled
 }
 
 // closePlanning ends the work order's Foreman planning session, if one is open.

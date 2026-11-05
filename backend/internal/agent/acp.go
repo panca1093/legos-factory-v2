@@ -33,11 +33,20 @@ type ACPHarness struct {
 	probe    string   // directory for model discovery sessions
 	mu       sync.Mutex
 	runs     map[string]*acpRun
-	kept     map[string]*acpConn // idle sessions kept open after a Keep run, by session id
+	kept     map[string]*keptConn // idle sessions kept open after a Keep run, by session id
+	// IdleTTL closes a kept session nobody continued; 0 means defaultIdleTTL.
+	IdleTTL time.Duration
+}
+
+const defaultIdleTTL = 20 * time.Minute
+
+type keptConn struct {
+	conn  *acpConn
+	timer *time.Timer
 }
 
 func NewACPHarness(command []string, probeDir string) *ACPHarness {
-	return &ACPHarness{Command: command, Provider: agentProvider(command), probe: probeDir, runs: map[string]*acpRun{}, kept: map[string]*acpConn{}}
+	return &ACPHarness{Command: command, Provider: agentProvider(command), probe: probeDir, runs: map[string]*acpRun{}, kept: map[string]*keptConn{}}
 }
 
 func agentProvider(command []string) string {
@@ -129,11 +138,15 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 	}
 	run := &acpRun{h: h, conn: conn, sessionID: ns.SessionID, done: make(chan struct{})}
 	run.keep.Store(req.Keep)
-	return h.prompt(run, req.Prompt)
+	h.mu.Lock()
+	h.runs[run.sessionID] = run
+	h.mu.Unlock()
+	return h.launch(run, req.Prompt)
 }
 
-// prompt sends text on run's session and starts collecting the reply.
-func (h *ACPHarness) prompt(run *acpRun, text string) (model.AgentSession, error) {
+// launch sends text on run's session, which is already registered in h.runs,
+// and starts collecting the reply.
+func (h *ACPHarness) launch(run *acpRun, text string) (model.AgentSession, error) {
 	// sent before returning, so a Cancel right after Start always follows the prompt
 	wait, err := run.conn.begin("session/prompt", map[string]any{
 		"sessionId": run.sessionID,
@@ -141,52 +154,92 @@ func (h *ACPHarness) prompt(run *acpRun, text string) (model.AgentSession, error
 	})
 	if err != nil {
 		run.conn.close()
+		h.forgetRun(run)
 		return nil, err
 	}
-	h.mu.Lock()
-	h.runs[run.sessionID] = run
-	h.mu.Unlock()
 	go run.finish(wait)
 	return &sessionHandle{id: run.sessionID}, nil
 }
 
-// Continue sends another prompt into a session kept open by a Keep run.
+// Continue sends another prompt into a session kept open by a Keep run. The
+// model chosen at Start stays; req.ModelID is not applied.
 func (h *ACPHarness) Continue(_ context.Context, sessionID string, req model.AgentRequest) (model.AgentSession, error) {
+	run := &acpRun{h: h, sessionID: sessionID, done: make(chan struct{})}
+	run.keep.Store(true)
+	// taking the session and registering the run are one step, so Close sees either the kept session or the run
 	h.mu.Lock()
-	conn, ok := h.kept[sessionID]
-	delete(h.kept, sessionID)
+	k, ok := h.kept[sessionID]
+	if ok {
+		delete(h.kept, sessionID)
+		k.timer.Stop()
+		run.conn = k.conn
+		h.runs[sessionID] = run
+	}
 	h.mu.Unlock()
 	if !ok {
 		return nil, model.ErrAgentSessionNotFound
 	}
+	conn := k.conn
 	if conn.gone() {
 		conn.close()
+		h.forgetRun(run)
 		return nil, model.ErrAgentSessionNotFound
 	}
 	conn.mu.Lock()
 	conn.text.Reset()
-	conn.costSeen = false
+	conn.steps, conn.tools = 0, nil
+	conn.costSeen = conn.cost != conn.costAttr // cost reported between turns belongs to this run
 	conn.onStep = req.OnStep
-	base := conn.cost
+	run.costBase = conn.costAttr
 	conn.mu.Unlock()
-	run := &acpRun{h: h, conn: conn, sessionID: sessionID, costBase: base, done: make(chan struct{})}
-	run.keep.Store(true)
-	return h.prompt(run, req.Prompt)
+	return h.launch(run, req.Prompt)
 }
 
 // Close ends a kept session; a prompt still running in it is the last one.
 func (h *ACPHarness) Close(sessionID string) {
 	h.mu.Lock()
-	conn, ok := h.kept[sessionID]
+	k, ok := h.kept[sessionID]
 	delete(h.kept, sessionID)
-	run := h.runs[sessionID]
-	h.mu.Unlock()
 	if ok {
-		conn.close()
+		k.timer.Stop()
 	}
-	if run != nil {
+	if run := h.runs[sessionID]; run != nil {
 		run.keep.Store(false)
 	}
+	h.mu.Unlock()
+	if ok {
+		k.conn.close()
+	}
+}
+
+// expire closes a kept session that sat idle; a session continued meanwhile is left alone.
+func (h *ACPHarness) expire(sessionID string, k *keptConn) {
+	h.mu.Lock()
+	cur, ok := h.kept[sessionID]
+	if ok && cur == k {
+		delete(h.kept, sessionID)
+	}
+	h.mu.Unlock()
+	if ok && cur == k {
+		k.conn.close()
+	}
+}
+
+// park keeps run's session for a later Continue unless Close ended it first.
+func (h *ACPHarness) park(run *acpRun) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !run.keep.Load() {
+		return false
+	}
+	ttl := h.IdleTTL
+	if ttl <= 0 {
+		ttl = defaultIdleTTL
+	}
+	k := &keptConn{conn: run.conn}
+	k.timer = time.AfterFunc(ttl, func() { h.expire(run.sessionID, k) })
+	h.kept[run.sessionID] = k
+	return true
 }
 
 func (h *ACPHarness) Result(ctx context.Context, sessionID string) (model.AgentResult, error) {
@@ -194,7 +247,7 @@ func (h *ACPHarness) Result(ctx context.Context, sessionID string) (model.AgentR
 	if !ok {
 		return model.AgentResult{}, model.ErrAgentSessionNotFound
 	}
-	defer h.forget(sessionID)
+	defer h.forgetRun(run)
 	select {
 	case <-run.done:
 		return run.result, run.err
@@ -249,9 +302,12 @@ func (h *ACPHarness) run(id string) (*acpRun, bool) {
 	return r, ok
 }
 
-func (h *ACPHarness) forget(id string) {
+// forgetRun drops run unless a later prompt on the same session replaced it.
+func (h *ACPHarness) forgetRun(run *acpRun) {
 	h.mu.Lock()
-	delete(h.runs, id)
+	if h.runs[run.sessionID] == run {
+		delete(h.runs, run.sessionID)
+	}
 	h.mu.Unlock()
 }
 
@@ -331,15 +387,7 @@ func (h *ACPHarness) Steer(ctx context.Context, sessionID, text string) error {
 func (r *acpRun) finish(wait func(context.Context) (json.RawMessage, error)) {
 	r.collect(wait)
 	// parked before done closes, so the caller's next Continue always finds it
-	if r.err == nil && r.keep.Load() {
-		r.h.mu.Lock()
-		r.h.kept[r.sessionID] = r.conn
-		r.h.mu.Unlock()
-		// Close may have run between the check and the park
-		if !r.keep.Load() {
-			r.h.Close(r.sessionID)
-		}
-	} else {
+	if r.err != nil || !r.h.park(r) {
 		r.conn.close()
 	}
 	close(r.done)
@@ -385,6 +433,7 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 	if c.costSeen {
 		r.result.CostSource = "measured"
 	}
+	c.costAttr = c.cost
 }
 
 // ---- connection ----
@@ -410,6 +459,7 @@ type acpConn struct {
 	text     strings.Builder
 	cost     float64
 	costSeen bool
+	costAttr float64 // cost already attributed to finished runs
 	tools    map[string]*acpTool
 	steps    int
 }
