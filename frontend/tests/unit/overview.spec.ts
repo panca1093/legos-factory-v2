@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, expect, it, vi } from "vitest";
 import OverviewView from "../../src/features/overview/OverviewView.vue";
 import { heatCells } from "../../src/features/overview/heatmap";
-import { needsYou } from "../../src/composables/presentation";
+import { isRunning, needsYou } from "../../src/composables/presentation";
 import { useFactory } from "../../src/stores/factory";
 import { useSession } from "../../src/stores/session";
 import { overview, orders, projects, user } from "../fixtures/workspace";
@@ -77,42 +77,67 @@ it("renders usage by agent, the month-to-date card and heatmap modes", async () 
 });
 it("shows empty states when there is no usage", async () => {
   const f = useFactory();
-  f.usage = null;
+  f.usage = { ...usage, activity: [], roles: [] };
   f.workOrders = [];
   const w = render();
   await flushPromises();
   expect(w.text()).toContain("No agent runs yet");
   expect(w.text()).toContain("No agent usage yet");
   expect(w.text()).toContain("Nothing waits on you");
-  expect(w.find(".kpis").text()).toContain("usage unavailable");
+
   w.unmount();
 });
-it("offers recovery for failed workspaces", async () => {
+it("does not raise a page alert when usage fails", async () => {
   const f = useFactory();
-  vi.mocked(f.refreshOverview).mockRejectedValue(
-    new Error("Workspace unavailable"),
-  );
+  f.usage = null;
   const w = render();
   await flushPromises();
-  expect(w.find('[role="alert"]').text()).toContain("Workspace unavailable");
+  expect(w.find('[role="alert"]').exists()).toBe(false);
+  expect(w.text()).toContain("Usage unavailable");
   w.unmount();
 });
-it("needsYou keeps only plan, clarification and PR decisions", () => {
-  const states = needsYou(
-    [
-      "WAITING_FOR_HUMAN",
-      "ARCHITECT_REVIEW",
-      "NEEDS_HUMAN_REVIEW",
-      "BLOCKED",
-      "IMPLEMENTING",
-      "READY",
-    ].map((state) => ({ ...orders[0], state }) as (typeof orders)[number]),
-  ).map((w) => w.state);
-  expect(states).toEqual([
-    "WAITING_FOR_HUMAN",
-    "ARCHITECT_REVIEW",
-    "NEEDS_HUMAN_REVIEW",
+it("counts shipped orders by merged PR and does not refetch on first visit", async () => {
+  const f = useFactory();
+  f.usage = null;
+  f.workOrders[0].pr_merged_at = "2026-10-24T00:00:00Z";
+  const w = render();
+  await flushPromises();
+  expect(w.find(".kpis").text()).toContain("Shipped");
+  expect(w.findAll(".lg-stat .value")[2].text()).toBe("1");
+  expect(f.refreshUsage).not.toHaveBeenCalled();
+  expect(f.refreshOverview).not.toHaveBeenCalled();
+  w.unmount();
+});
+const withState = (state: string, plan_review?: string) =>
+  ({ ...orders[0], state, plan_review }) as (typeof orders)[number];
+it("needsYou keeps human gates and only escalated plan reviews", () => {
+  const list = [
+    withState("WAITING_FOR_HUMAN"),
+    withState("ARCHITECT_REVIEW", "pending"),
+    withState("ARCHITECT_REVIEW", "approved"),
+    withState("NEEDS_HUMAN_REVIEW"),
+    withState("BLOCKED"),
+    withState("IMPLEMENTING"),
+    withState("READY"),
+  ];
+  expect(needsYou(list).map((w) => [w.state, w.plan_review])).toEqual([
+    ["WAITING_FOR_HUMAN", undefined],
+    ["ARCHITECT_REVIEW", "approved"],
+    ["NEEDS_HUMAN_REVIEW", undefined],
+    ["BLOCKED", undefined],
   ]);
+});
+it("running includes pre-build states and unescalated plan reviews", () => {
+  expect(
+    [
+      withState("CREATED"),
+      withState("PLANNING"),
+      withState("ARCHITECT_REVIEW", "pending"),
+      withState("ARCHITECT_REVIEW", "approved"),
+      withState("BLOCKED"),
+      withState("READY"),
+    ].map(isRunning),
+  ).toEqual([true, true, true, false, false, false]);
 });
 // 2026-11-01 is a Sunday
 const days = Array.from({ length: 10 }, (_, i) => ({

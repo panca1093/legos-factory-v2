@@ -75,6 +75,7 @@
   height: 16px;
 }
 .lg-stat .value {
+  overflow-wrap: anywhere;
   font: 500 34px/38px var(--font-display);
   font-variant-numeric: tabular-nums;
 }
@@ -295,7 +296,7 @@
     padding: 18px;
   }
   .lg-stat .value {
-    font-size: 26px;
+    font-size: clamp(20px, 7vw, 26px);
     line-height: 30px;
   }
   .lg-row {

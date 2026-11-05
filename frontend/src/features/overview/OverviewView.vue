@@ -5,7 +5,7 @@ import {
   Plus,
   ShieldCheck,
   Zap,
-  CircleCheck,
+  Rocket,
   Gauge,
   Factory,
 } from "lucide-vue-next";
@@ -15,25 +15,26 @@ import BrickBot from "../../components/agents/BrickBot.vue";
 import StatusBadge from "../../components/ui/StatusBadge.vue";
 import {
   money,
+  isRunning,
   needsYou,
   persona,
-  runningStates,
 } from "../../composables/presentation";
 import { heatCells, type HeatMode } from "./heatmap";
 import "./overview.css";
 const factory = useFactory(),
   session = useSession();
-const error = ref(""),
-  loading = ref(false),
-  mode = ref<HeatMode>("Daily"),
+const mode = ref<HeatMode>("Daily"),
   heatScroll = ref<HTMLElement>();
+const heatLabel: Record<HeatMode, string> = {
+  Daily: "Agent runs per day",
+  Weekly: "Agent runs per week, each week summed",
+  Cumulative: "Cumulative agent runs per day",
+};
 const modes: HeatMode[] = ["Daily", "Weekly", "Cumulative"];
 const approvals = computed(() => needsYou(factory.workOrders));
-const running = computed(() =>
-  factory.workOrders.filter((w) => runningStates.includes(w.state)),
-);
-const assembled = computed(() =>
-  factory.workOrders.filter((w) => w.state === "READY"),
+const running = computed(() => factory.workOrders.filter(isRunning));
+const shipped = computed(
+  () => factory.workOrders.filter((w) => w.pr_merged_at).length,
 );
 const mtd = computed(() => factory.usage?.month_to_date);
 const activity = computed(() => factory.usage?.activity ?? []);
@@ -51,20 +52,13 @@ const compact = new Intl.NumberFormat("en-US", { notation: "compact" });
 const tokens = (t: { tokens_in: number; tokens_out: number }) =>
   compact.format(t.tokens_in + t.tokens_out);
 const now = new Date();
-const hour = Number(
-  new Intl.DateTimeFormat("en-US", {
-    hour: "numeric",
-    hourCycle: "h23",
-    timeZone: "Asia/Jakarta",
-  }).format(now),
-);
+const hour = now.getHours();
 const greeting =
   hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
 const date = new Intl.DateTimeFormat("en-US", {
   weekday: "long",
   month: "long",
   day: "numeric",
-  timeZone: "Asia/Jakarta",
 }).format(now);
 const name = computed(() => session.user?.name.split(" ").at(-1) ?? "there");
 const projectName = (id: string) =>
@@ -74,37 +68,21 @@ const action = (state: string) =>
     ? "Answer clarification"
     : state === "ARCHITECT_REVIEW"
       ? "Review blueprint"
-      : "Review PR decision";
-async function load() {
-  loading.value = true;
-  error.value = "";
-  try {
-    await Promise.all([
-      factory.refreshOverview(),
-      factory.refreshProjects(),
-      factory.refreshWorkOrders(),
-      factory.refreshUsage(),
-    ]);
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
-  } finally {
-    loading.value = false;
-  }
-}
+      : state === "BLOCKED"
+        ? "Review evidence"
+        : "Review PR decision";
 const scrollToLatest = () =>
   nextTick(() => {
     if (heatScroll.value)
       heatScroll.value.scrollLeft = heatScroll.value.scrollWidth;
   });
 watch(() => heat.value.weeks, scrollToLatest);
-onMounted(load);
+onMounted(() => {
+  if (factory.usage) void factory.refreshUsage();
+});
 </script>
 <template>
-  <div v-if="error" class="error-state" role="alert">
-    {{ error }}
-    <div><button class="btn small" @click="load">Try again</button></div>
-  </div>
-  <div class="hero" :aria-busy="loading">
+  <div class="hero">
     <div>
       <div class="small muted">{{ date }}</div>
       <h1 class="greet">{{ greeting }}, {{ name }}</h1>
@@ -141,9 +119,9 @@ onMounted(load);
       <div class="note">active work orders</div></RouterLink
     >
     <RouterLink class="lg-card lg-stat" to="/factory?status=complete"
-      ><div class="label"><CircleCheck class="icon" />Assembled</div>
-      <div class="value">{{ assembled.length }}</div>
-      <div class="note">completed orders</div></RouterLink
+      ><div class="label"><Rocket class="icon" />Shipped</div>
+      <div class="value">{{ shipped }}</div>
+      <div class="note">merged pull requests</div></RouterLink
     >
     <RouterLink class="lg-card lg-stat" to="/settings?tab=usage"
       ><div class="label"><Gauge class="icon" />This month</div>
@@ -152,7 +130,7 @@ onMounted(load);
       </div>
       <div class="note">
         {{
-          mtd ? `${tokens(mtd)} tokens · ${mtd.runs} runs` : "usage unavailable"
+          mtd ? `${tokens(mtd)} tokens · ${mtd.runs} runs` : "Usage unavailable"
         }}
       </div></RouterLink
     >
@@ -233,10 +211,20 @@ onMounted(load);
           </button>
         </div>
       </div>
-      <p v-if="!totalRuns" class="empty-note">
+      <p v-if="!factory.usage" class="empty-note">
+        Usage unavailable.
+        <button class="lg-btn ghost small" @click="factory.refreshUsage()">
+          Try again
+        </button>
+      </p>
+      <p v-else-if="!totalRuns" class="empty-note">
         No agent runs yet. Activity appears once your crew starts working.
       </p>
       <template v-else>
+        <p class="sr-only">
+          {{ totalRuns }} agent runs in the last year, active on
+          {{ activeDays }} days.
+        </p>
         <div ref="heatScroll" class="heat-scroll">
           <div
             class="heat"
@@ -244,7 +232,7 @@ onMounted(load);
               gridTemplateColumns: `repeat(${heat.weeks}, minmax(10px, 1fr))`,
             }"
             role="img"
-            :aria-label="`Agent runs per day, ${totalRuns} in the last year`"
+            :aria-label="heatLabel[mode]"
           >
             <i
               v-for="c in heat.cells"
@@ -289,7 +277,9 @@ onMounted(load);
           </div>
           <span class="cost">{{ money(r.cost_micros) }}</span>
         </div>
-        <p v-if="!roles.length" class="empty-note">No agent usage yet.</p>
+        <p v-if="!roles.length" class="empty-note">
+          {{ factory.usage ? "No agent usage yet." : "Usage unavailable." }}
+        </p>
       </div>
       <div class="small muted foot">Last 12 months</div>
     </section>

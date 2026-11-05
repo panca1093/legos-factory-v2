@@ -34,11 +34,7 @@ import PillNav from "../../components/ui/PillNav.vue";
 import Popover from "../../components/ui/Popover.vue";
 import SearchField from "../../components/ui/SearchField.vue";
 import Toast from "../../components/ui/Toast.vue";
-import {
-  attentionStates,
-  money,
-  projectColor,
-} from "../../composables/presentation";
+import { needsYou, money, projectColor } from "../../composables/presentation";
 import { useTheme } from "../../composables/useTheme";
 const session = useSession(),
   factory = useFactory(),
@@ -107,9 +103,7 @@ const tokens = (t: { tokens_in: number; tokens_out: number }) =>
   new Intl.NumberFormat("en-US", { notation: "compact" }).format(
     t.tokens_in + t.tokens_out,
   );
-const attention = computed(() =>
-  factory.workOrders.filter((w) => attentionStates.includes(w.state)),
-);
+const attention = computed(() => needsYou(factory.workOrders));
 const results = computed(() =>
   factory.workOrders.filter((w) =>
     (

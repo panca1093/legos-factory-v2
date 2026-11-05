@@ -107,9 +107,14 @@ export const useFactory = defineStore("factory", {
       const tz = encodeURIComponent(
         Intl.DateTimeFormat().resolvedOptions().timeZone,
       );
-      const usage = await api.get<UsageSummary>(
-        `/api/v1/usage/summary?days=365&tz=${tz}`,
-      );
+      let usage: UsageSummary | null = null;
+      try {
+        usage = await api.get<UsageSummary>(
+          `/api/v1/usage/summary?days=365&tz=${tz}`,
+        );
+      } catch {
+        /* Usage is secondary; cards render "Usage unavailable". */
+      }
       if (epoch === this.workspaceEpoch) this.usage = usage;
     },
     async refreshModels() {

@@ -62,10 +62,13 @@ export function heatCells(days: UsageDay[], mode: HeatMode) {
   });
   const months: { col: number; label: string }[] = [];
   let last = "";
+  let lastCol = -4;
   days.forEach((d, i) => {
     const month = d.date.slice(0, 7);
     if (month !== last && (pos[i].row === 0 || i === 0)) {
       last = month;
+      if (pos[i].col - lastCol < 3) return;
+      lastCol = pos[i].col;
       months.push({ col: pos[i].col, label: fmt(d.date, { month: "short" }) });
     }
   });
