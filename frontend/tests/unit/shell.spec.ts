@@ -39,9 +39,16 @@ it("shows navigation, the prototype desktop topbar, search shortcut and theme to
     attachTo: document.body,
   });
   await flushPromises();
-  for (const label of ["Overview", "Factory", "Knowledge", "Settings"])
-    expect(w.find(`a[aria-label="${label}"]`).exists()).toBe(true);
-  expect(w.find(".topbar .search-trigger").exists()).toBe(true);
+  for (const label of ["Home", "Chats", "Factory", "Knowledge"])
+    expect(
+      w
+        .find(
+          `.topnav a[href="${label === "Home" ? "/" : "/" + label.toLowerCase()}"]`,
+        )
+        .text(),
+    ).toContain(label);
+  expect(w.find(".topbar .kbtn").exists()).toBe(true);
+  expect(w.find(".avatar-btn").exists()).toBe(true);
   document.dispatchEvent(
     new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }),
   );

@@ -85,6 +85,18 @@ type PRRequest struct {
 	Body  string
 }
 
+const (
+	PRStateOpen   = "open"
+	PRStateMerged = "merged"
+	PRStateClosed = "closed" // closed without merging
+)
+
+// PRStatus is a pull request's current state; At is set for merged and closed.
+type PRStatus struct {
+	State string
+	At    time.Time
+}
+
 type PullRequest struct {
 	Number int    `json:"number"`
 	URL    string `json:"url"`

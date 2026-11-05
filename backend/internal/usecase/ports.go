@@ -16,6 +16,7 @@ type WorkOrderStore interface {
 	Create(ctx context.Context, wo *model.WorkOrder) error
 	Get(ctx context.Context, id string) (*model.WorkOrder, error)
 	List(ctx context.Context) ([]model.WorkOrder, error)
+	PRTracking(ctx context.Context) ([]model.WorkOrder, error)
 	UpdateState(ctx context.Context, id string, s model.State) error
 	UpdateFields(ctx context.Context, id string, fields map[string]any) error
 	UpdateStateAndFields(ctx context.Context, id string, s model.State, fields map[string]any) error
@@ -59,6 +60,7 @@ type UsageStore interface {
 	Insert(ctx context.Context, u model.UsageRecord) error
 	Totals(ctx context.Context) (model.UsageTotals, error)
 	SpentMicros(ctx context.Context) int64
+	Since(ctx context.Context, userID string, since time.Time) ([]model.UsageRecord, error)
 }
 
 type KnowledgeStore interface {
@@ -122,6 +124,7 @@ type Sealer interface {
 type GitProvider interface {
 	CheckAuth(ctx context.Context) (account string, err error)
 	OpenPullRequest(ctx context.Context, pr model.PRRequest) (model.PullRequest, error)
+	PullRequestStatus(ctx context.Context, ref string) (model.PRStatus, error)
 	GitAuth() model.GitAuth
 }
 

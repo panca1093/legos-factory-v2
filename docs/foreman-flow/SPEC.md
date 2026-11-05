@@ -202,6 +202,20 @@ Truth table:
 
 `fix` bumps the revision and returns to the Builder with reason `fix_done_gate` and the code-built note (rendered in the Builder prompt). It shares the `review_fixes` budget with blocker-finding remediation (`review_fixes < 2`). When the budget is spent, fix becomes escalate. `escalate` and `done` both continue to `PR_PREPARATION → MERGE_READINESS`; an escalation shows up as a `readiness_needs_human_review` event carrying the reason.
 
+### 8. Ship = PR merged
+
+Ship, the work order's last stage in the UI, is complete only when its pull request is **merged**. Human PR approval (`NEEDS_HUMAN_REVIEW → READY`, which opens the PR) is unchanged; state stays `READY` afterwards.
+
+The factory polls at boot and then every 2 minutes (fixed, no config). It checks `READY` orders that have a `pr_ref` and no `pr_merged_at`, asking the provider (`GitProvider.PullRequestStatus`, from the stored `pr_ref`) for the PR state:
+
+- merged → `pr_merged_at` is set, `pr_closed_at` is cleared, and event `pr_merged` is recorded (`actor: factory`);
+- closed without merging → `pr_closed_at` is set once and event `pr_closed` is recorded once (`actor: factory`). Polling continues, because Ship means merged: a PR that is reopened and then merged still ends in `pr_merged`;
+- open → nothing;
+- transient provider error → logged and retried next tick; it never fails the order;
+- permanent error (provider 400/401/403/404/422, a `pr_ref` the provider cannot parse, a project no longer bound to a git connection) → one `pr_track_failed` event (`actor: factory`, with the reason) and `pr_track_failed_at` is set, which stops polling that order.
+
+The timestamp fields are exposed on the work order JSON. The event is appended before the timestamp is written, so a crash can repeat an event but never lose one. Events go through the normal publisher, so SSE clients see them.
+
 ## Jev integration
 
 - Endpoint `POST https://api.typesafe.ai/v1/systemone`, `Authorization: Bearer $TYPESAFE_API_KEY`.
