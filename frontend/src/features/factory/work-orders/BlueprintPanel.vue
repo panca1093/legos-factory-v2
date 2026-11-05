@@ -6,6 +6,14 @@ const emit = defineEmits<{ export: [] }>();
 </script>
 <template>
   <div>
+    <section
+      v-if="order.clarif_answer"
+      class="plan-section"
+      data-test="decision"
+    >
+      <h3>Decision recorded</h3>
+      <p style="white-space: pre-wrap">{{ order.clarif_answer }}</p>
+    </section>
     <section class="plan-section">
       <h3>The outcome</h3>
       <p style="white-space: pre-wrap">{{ order.objective }}</p>

@@ -127,6 +127,13 @@ export function escalationReason(events: WOEvent[]): string {
   return "";
 }
 
+// The latest message of the given kinds, e.g. why a readiness check blocked or an Inspector escalated.
+export function lastMessage(events: WOEvent[], ...kinds: string[]): string {
+  return (
+    [...events].reverse().find((e) => kinds.includes(e.kind))?.message ?? ""
+  );
+}
+
 export interface ArchitectReport {
   revision: number;
   verdicts: { criterion_id: string; status: string; evidence: string }[];

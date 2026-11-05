@@ -53,7 +53,8 @@ watch(
   [order, runs],
   () => {
     if (order.value && !landing.value)
-      landing.value = stageTabs[stageIndex(order.value, runs.value)];
+      landing.value =
+        stageTabs[stageIndex(order.value, runs.value, factory.events)];
   },
   { immediate: true },
 );
@@ -87,6 +88,16 @@ const modalTitle = computed(
       decline: "Close this proposed change?",
       cancel: "Cancel this work order?",
     })[modal.value ?? "approve"],
+);
+const crewModels = computed(
+  () =>
+    ["foreman", "architect", "builder", "inspector"]
+      .map((r) => {
+        const m = order.value?.[`${r}_model` as "builder_model"];
+        return m ? `${r[0].toUpperCase()}${r.slice(1)}: ${m}` : "";
+      })
+      .filter(Boolean)
+      .join(" · ") || "Workspace default models",
 );
 const status = computed(() => order.value && orderStatus(order.value)),
   ship = computed(() => (order.value ? shipState(order.value) : null)),
@@ -223,12 +234,20 @@ function download() {
               project?.repo_url || "Repository not reported"
             }}</span
           ><span>Revision {{ order.revision }}</span
-          ><span>{{ money(cost) }} · {{ runs.length }} runs</span>
+          ><span>{{ money(cost) }} · {{ runs.length }} runs</span
+          ><span data-test="crew-models" :title="crewModels">{{
+            crewModels
+          }}</span>
         </div>
       </div>
       <span class="fx-pill" :class="status?.tone">{{ status?.label }}</span>
     </div>
-    <StageTrack :order="order" :runs="runs" @select="goStage" />
+    <StageTrack
+      :order="order"
+      :runs="runs"
+      :events="factory.events"
+      @select="goStage"
+    />
     <p
       v-if="route.query.planningError && order.state === 'CREATED'"
       class="notice"

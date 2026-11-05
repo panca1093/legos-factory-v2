@@ -112,8 +112,8 @@ describe("work order page ship states", () => {
   });
 
   it.each([
-    [{ pr_url: PR, pr_closed_at: AT }, "PR closed without merge", "cur"],
-    [{ pr_url: PR, pr_track_failed_at: AT }, "PR tracking stopped", "cur"],
+    [{ pr_url: PR, pr_closed_at: AT }, "PR closed without merge", "wait"],
+    [{ pr_url: PR, pr_track_failed_at: AT }, "PR tracking stopped", "wait"],
     [{ pr_url: PR, pr_merged_at: AT }, "Merged", "done"],
   ])("shows %j as %s", async (extra, label, stage) => {
     const w = await render("READY", extra);
@@ -268,7 +268,8 @@ describe("diff", () => {
     expect(w.find(".fx-sl").exists()).toBe(true);
     await w.find('[aria-label="Collapse a.go"]').trigger("click");
     expect(w.findAll(".fx-dtable")).toHaveLength(1);
-    expect(w.text()).not.toContain("Builder output");
+    expect(w.text()).toContain("Builder output");
+    expect(w.find("details.fx-card").attributes("open")).toBeUndefined();
   });
   it("falls back to recorded builder output when no run printed a diff", () => {
     const w = mount(ChangesPanel, {

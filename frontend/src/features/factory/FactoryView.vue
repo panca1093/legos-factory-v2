@@ -19,6 +19,7 @@ import {
   stageStatuses,
   stages,
   isNeedsYou,
+  isRunning,
 } from "../../composables/presentation";
 import type { WorkOrder } from "../../types/api";
 const factory = useFactory(),
@@ -60,7 +61,7 @@ const groups = computed(() =>
     {
       key: "running",
       name: "Running",
-      items: filtered.value.filter((w) => !isFinished(w) && !isNeedsYou(w)),
+      items: filtered.value.filter(isRunning),
     },
     {
       key: "complete",

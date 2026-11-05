@@ -112,7 +112,8 @@ const taskTitle = computed(
       :open="runs.some((r) => r.state.toLowerCase() === 'failed')"
     >
       <summary class="fx-sum">
-        Execution runs <span class="tiny muted">{{ runs.length }}</span>
+        <span>Execution runs</span>
+        <span class="tiny muted">{{ runs.length }}</span>
       </summary>
       <p class="help">
         Harness, output and accounting are reported by the backend.

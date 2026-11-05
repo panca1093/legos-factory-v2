@@ -39,7 +39,7 @@ it("combines project, status and text filters", async () => {
   expect(w.text()).toContain("No work orders match");
   w.unmount();
 });
-it("groups orders by who holds them and counts only merged, closed or blocked as finished", async () => {
+it("groups orders by who holds them and keeps stalled PRs in Needs you and finishes only merged, cancelled or PR-less orders", async () => {
   const f = useFactory();
   f.workOrders.find((o) => o.id === "LF-121")!.pr_url = "https://x/pr/1";
   const w = await render("/factory");
@@ -49,10 +49,18 @@ it("groups orders by who holds them and counts only merged, closed or blocked as
   expect(group("Running").text()).toContain("Validate settlement timestamps");
   expect(group("Running").text()).toContain("PR open · in review");
   expect(group("Finished").findAll('[data-test="order-row"]')).toHaveLength(0);
-  f.workOrders.find((o) => o.id === "LF-121")!.pr_merged_at =
-    "2026-10-25T00:00:00Z";
+  const order = f.workOrders.find((o) => o.id === "LF-121")!;
+  order.pr_closed_at = "2026-10-25T00:00:00Z";
+  await flushPromises();
+  expect(group("Needs you").text()).toContain("PR closed without merge");
+  order.pr_closed_at = null;
+  order.pr_merged_at = "2026-10-25T00:00:00Z";
   await flushPromises();
   expect(group("Finished").text()).toContain("Validate settlement timestamps");
+  order.pr_merged_at = null;
+  order.pr_url = "";
+  await flushPromises();
+  expect(group("Finished").text()).toContain("Approved · no pull request");
   w.unmount();
 });
 it("draws five stage segments per row and explains badges only behind the help popover", async () => {

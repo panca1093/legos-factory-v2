@@ -337,3 +337,20 @@
     display: none;
   }
 }
+
+.graph-toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.fx-sum h3 {
+  margin: 0;
+}
+@media (max-width: 680px) {
+  .graph-toolbar {
+    align-items: start;
+    flex-wrap: wrap;
+  }
+}

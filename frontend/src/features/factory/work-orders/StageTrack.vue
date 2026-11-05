@@ -1,11 +1,17 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { Check } from "lucide-vue-next";
-import type { Run, WorkOrder } from "../../../types/api";
+import type { Run, WOEvent, WorkOrder } from "../../../types/api";
 import { stages, stageStatuses } from "../../../composables/presentation";
-const props = defineProps<{ order: WorkOrder; runs: Run[] }>();
+const props = defineProps<{
+  order: WorkOrder;
+  runs: Run[];
+  events?: WOEvent[];
+}>();
 const emit = defineEmits<{ select: [number] }>();
-const statuses = computed(() => stageStatuses(props.order, props.runs));
+const statuses = computed(() =>
+  stageStatuses(props.order, props.runs, props.events),
+);
 const text = {
   done: "Done",
   cur: "In progress",

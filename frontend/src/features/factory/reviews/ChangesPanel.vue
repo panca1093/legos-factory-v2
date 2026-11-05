@@ -53,10 +53,7 @@ const shipNote: Record<string, string> = {
           >{{ prRef || prUrl }} <ExternalLink class="icon"
         /></a>
         <span class="grow"></span>
-        <div
-          v-if="['NEEDS_HUMAN_REVIEW', 'BLOCKED'].includes(state)"
-          class="fx-actions"
-        >
+        <div v-if="state === 'NEEDS_HUMAN_REVIEW'" class="fx-actions">
           <button
             class="lg-btn primary small"
             data-test="pr-approve"
@@ -74,11 +71,7 @@ const shipNote: Record<string, string> = {
           ><button
             class="lg-btn small"
             data-test="pr-decline"
-            :disabled="
-              !canWrite ||
-              busy ||
-              !['NEEDS_HUMAN_REVIEW', 'BLOCKED'].includes(state)
-            "
+            :disabled="!canDecide"
             @click="emit('decision', 'decline')"
           >
             <X class="icon" />Decline
@@ -102,8 +95,8 @@ const shipNote: Record<string, string> = {
       </p>
     </section>
     <DiffView v-if="files.length" :files="files" />
-    <section v-else class="fx-card">
-      <h3>Builder output</h3>
+    <details class="fx-card" :open="!files.length">
+      <summary class="fx-sum"><h3>Builder output</h3></summary>
       <p class="help">
         Recorded harness output. The backend does not expose a repository diff,
         so file-level changes appear only when a run printed a unified diff.
@@ -126,6 +119,6 @@ const shipNote: Record<string, string> = {
       <p v-if="!builders.length" class="fx-empty">
         No implementation output recorded yet.
       </p>
-    </section>
+    </details>
   </div>
 </template>

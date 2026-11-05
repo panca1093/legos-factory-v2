@@ -4,6 +4,7 @@ import {
   isActive,
   isFinished,
   isNeedsYou,
+  isRunning,
   orderStatus,
   shipState,
   stageIndex,
@@ -26,7 +27,7 @@ it("maps every backend state to one of the five stages", () => {
     SPEC_AND_PLAN_GENERATION: 1,
     PLANNING: 1,
     ARCHITECT_REVIEW: 1,
-    WAITING_FOR_HUMAN: 1,
+    BLOCKED: 3,
     QUEUED: 2,
     IMPLEMENTING: 2,
     VERIFYING: 2,
@@ -40,13 +41,24 @@ it("maps every backend state to one of the five stages", () => {
     expect(stageIndex(wo(state as WorkOrderState)), state).toBe(stage);
 });
 
-it("places a blocked or cancelled order at its furthest run, and nowhere without runs", () => {
-  expect(stageIndex(wo("BLOCKED"), [{ kind: "builder" }])).toBe(2);
+it("places a cancelled order at its furthest run, a declined PR at Ship, and nowhere without runs", () => {
+  expect(stageIndex(wo("CANCELLED"), [{ kind: "builder" }])).toBe(2);
+  expect(
+    stageIndex(
+      wo("CANCELLED"),
+      [{ kind: "builder" }],
+      [{ kind: "pr_declined" }],
+    ),
+  ).toBe(4);
+  expect(stageStatuses(wo("CANCELLED"), [], [{ kind: "pr_declined" }])[4]).toBe(
+    "stop",
+  );
+  expect(stageStatuses(wo("BLOCKED"))[3]).toBe("stop");
   expect(
     stageIndex(wo("CANCELLED"), [{ kind: "architect" }, { kind: "inspector" }]),
   ).toBe(3);
-  expect(stageStatuses(wo("BLOCKED"))).toEqual(Array(5).fill("todo"));
-  expect(stageStatuses(wo("BLOCKED"), [{ kind: "builder" }])).toEqual([
+  expect(stageStatuses(wo("CANCELLED"))).toEqual(Array(5).fill("todo"));
+  expect(stageStatuses(wo("CANCELLED"), [{ kind: "builder" }])).toEqual([
     "done",
     "done",
     "stop",
@@ -67,7 +79,10 @@ it("marks the stage that waits on a human and who holds the order", () => {
     stageStatuses(wo("ARCHITECT_REVIEW", { plan_review }))[1];
   expect(plan("pending")).toBe("cur");
   expect(plan("approved")).toBe("wait");
-  expect(stageStatuses(wo("WAITING_FOR_HUMAN"))[1]).toBe("wait");
+  const asked = wo("WAITING_FOR_HUMAN", { clarif_question: "How long?" });
+  expect(stageStatuses(asked)[1]).toBe("wait");
+  expect(stageIndex({ ...asked, clarif_answer: "a day" })).toBe(3);
+  expect(stageStatuses(wo("WAITING_FOR_HUMAN"))[3]).toBe("wait");
   expect(stageStatuses(wo("NEEDS_HUMAN_REVIEW"))[4]).toBe("wait");
   expect(actorOf(wo("NEEDS_HUMAN_REVIEW"))).toBe("you");
   expect(actorOf(wo("IMPLEMENTING"))).toBe("builder");
@@ -102,6 +117,7 @@ it("reports every Ship sub-state and finishes Ship only when merged", () => {
   expect(stageStatuses(open)[4]).toBe("cur");
   expect(isFinished(open)).toBe(false);
   expect(isActive(open)).toBe(true);
+  expect(stageStatuses(ready({}))).toEqual(Array(5).fill("done"));
   const merged = ready({ pr_url: PR, pr_merged_at: AT });
   expect(stageStatuses(merged)).toEqual(Array(5).fill("done"));
   expect(isFinished(merged)).toBe(true);
@@ -110,8 +126,19 @@ it("reports every Ship sub-state and finishes Ship only when merged", () => {
 it("treats merged and cancelled as finished, blocked as needing you; READY is no longer assembled", () => {
   expect(isFinished(wo("CANCELLED"))).toBe(true);
   expect(isFinished(wo("BLOCKED"))).toBe(false);
+  expect(isFinished(wo("READY", { pr_url: PR }))).toBe(false);
+  expect(isFinished(wo("READY"))).toBe(true);
+  const stalled = [{ pr_closed_at: AT }, { pr_track_failed_at: AT }];
+  for (const extra of stalled) {
+    const w = wo("READY", { pr_url: PR, ...extra });
+    expect(isNeedsYou(w)).toBe(true);
+    expect(isRunning(w)).toBe(false);
+    expect(isFinished(w)).toBe(false);
+    expect(stageStatuses(w)[4]).toBe("wait");
+  }
+  expect(isRunning(wo("IMPLEMENTING"))).toBe(true);
+  expect(isRunning(wo("READY", { pr_url: PR }))).toBe(true);
   expect(isNeedsYou(wo("BLOCKED"))).toBe(true);
-  expect(isFinished(wo("READY"))).toBe(false);
   expect(isFinished(wo("NEEDS_HUMAN_REVIEW"))).toBe(false);
   expect(stateInfo("READY").label).not.toBe("Assembled");
 });

@@ -112,6 +112,7 @@ test("full work order journey: project → plan → graph → build → quality 
   await page.getByRole("button", { name: "Close dialog" }).click();
   await page.getByRole("tab", { name: "Progress", exact: true }).click();
   await expect(page.getByText("Execution runs", { exact: true })).toBeVisible();
+  await page.getByText("Execution runs", { exact: true }).click();
   await expect(page.getByText("mock", { exact: true }).first()).toBeVisible();
   await page.getByRole("tab", { name: "Review", exact: true }).click();
   await expect(page.getByText("blocker", { exact: true })).toBeVisible();
@@ -123,7 +124,7 @@ test("full work order journey: project → plan → graph → build → quality 
     .getByRole("button", { name: "Record approval", exact: true })
     .click();
   await expect(
-    page.getByText(/PR open|Approved · no pull request/).first(),
+    page.getByText("Approved · no pull request").first(),
   ).toBeVisible({
     timeout: 30_000,
   });

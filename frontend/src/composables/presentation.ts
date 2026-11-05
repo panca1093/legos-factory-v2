@@ -33,17 +33,16 @@ export const money = (micros: number = 0) =>
   );
 export const projectColor = (index: number) =>
   ["#8B7AD8", "#5D9FAC", "#C58D66", "#6DA58A"][Math.max(0, index) % 4];
+// A PR that was closed or can no longer be tracked needs a human, since nothing will merge it on its own.
+const prStalled = (w: WorkOrder) =>
+  w.state === "READY" &&
+  !w.pr_merged_at &&
+  !!(w.pr_closed_at || w.pr_track_failed_at);
 export const isNeedsYou = (w: WorkOrder) =>
   ["WAITING_FOR_HUMAN", "NEEDS_HUMAN_REVIEW", "BLOCKED"].includes(w.state) ||
-  (w.state === "ARCHITECT_REVIEW" && w.plan_review === "approved");
+  (w.state === "ARCHITECT_REVIEW" && w.plan_review === "approved") ||
+  prStalled(w);
 export const needsYou = (orders: WorkOrder[]) => orders.filter(isNeedsYou);
-const preBuildStates: WorkOrderState[] = [
-  "CREATED",
-  "REQUIREMENT_ANALYSIS",
-  "TASK_DECOMPOSITION",
-  "SPEC_AND_PLAN_GENERATION",
-  "PLANNING",
-];
 export const runningStates: WorkOrderState[] = [
   "QUEUED",
   "IMPLEMENTING",
@@ -52,12 +51,12 @@ export const runningStates: WorkOrderState[] = [
   "PR_PREPARATION",
   "MERGE_READINESS",
 ];
-export const isRunning = (w: WorkOrder) =>
-  runningStates.includes(w.state) ||
-  preBuildStates.includes(w.state) ||
-  (w.state === "ARCHITECT_REVIEW" && !isNeedsYou(w));
+// Approved with no pull request to track: nothing can merge, so it is done.
+const approvedLocally = (w: WorkOrder) =>
+  w.state === "READY" && !w.pr_url && !w.pr_closed_at && !w.pr_track_failed_at;
 export const isFinished = (w: WorkOrder) =>
-  !!w.pr_merged_at || w.state === "CANCELLED";
+  !!w.pr_merged_at || w.state === "CANCELLED" || approvedLocally(w);
+export const isRunning = (w: WorkOrder) => !isFinished(w) && !isNeedsYou(w);
 export const isActive = (w: WorkOrder) => !isFinished(w);
 
 export const stages = ["Brief", "Plan", "Build", "Review", "Ship"] as const;
@@ -69,13 +68,13 @@ const stageByState: Partial<Record<WorkOrderState, number>> = {
   SPEC_AND_PLAN_GENERATION: 1,
   PLANNING: 1,
   ARCHITECT_REVIEW: 1,
-  WAITING_FOR_HUMAN: 1,
   QUEUED: 2,
   IMPLEMENTING: 2,
   VERIFYING: 2,
   SPECIALIST_REVIEW: 3,
   PR_PREPARATION: 3,
   MERGE_READINESS: 3,
+  BLOCKED: 3,
   NEEDS_HUMAN_REVIEW: 4,
   READY: 4,
 };
@@ -85,8 +84,16 @@ const runStage: Record<string, number> = {
   builder: 2,
   inspector: 3,
 };
-// BLOCKED and CANCELLED carry no stage of their own; the furthest run shows where they stopped.
-export function stageIndex(w: WorkOrder, runs?: { kind: string }[]): number {
+// CANCELLED has no stage of its own: a declined PR stopped at Ship, otherwise the furthest run shows where it stopped.
+export function stageIndex(
+  w: WorkOrder,
+  runs?: { kind: string }[],
+  events?: { kind: string }[],
+): number {
+  if (w.state === "WAITING_FOR_HUMAN")
+    return w.clarif_question && !w.clarif_answer ? 1 : 3;
+  if (w.state === "CANCELLED" && events?.some((e) => e.kind === "pr_declined"))
+    return 4;
   return (
     stageByState[w.state] ??
     (runs ? Math.max(0, ...runs.map((r) => runStage[r.kind] ?? 0)) : -1)
@@ -110,14 +117,15 @@ export type StageStatus = "done" | "cur" | "wait" | "stop" | "todo";
 export function stageStatuses(
   w: WorkOrder,
   runs?: { kind: string }[],
+  events?: { kind: string }[],
 ): StageStatus[] {
-  const at = stageIndex(w, runs);
+  const at = stageIndex(w, runs, events);
   return stages.map((_, i) =>
-    w.pr_merged_at || i < at
+    (isFinished(w) && w.state !== "CANCELLED") || i < at
       ? "done"
       : i > at
         ? "todo"
-        : ["BLOCKED", "CANCELLED"].includes(w.state)
+        : w.state === "CANCELLED" || w.state === "BLOCKED"
           ? "stop"
           : isNeedsYou(w)
             ? "wait"

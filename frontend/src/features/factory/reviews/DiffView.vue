@@ -77,10 +77,15 @@ function jump(i: number) {
               />
             </button>
             <span class="path">{{ f.path }}</span
+            ><span v-if="f.note" class="fx-code">{{ f.note }}</span
             ><span class="fx-add">+{{ f.add }}</span
             ><span class="fx-del">−{{ f.del }}</span>
           </header>
-          <div v-if="!collapsed[f.path]" class="fx-dtable" :class="mode">
+          <div
+            v-if="!collapsed[f.path] && f.hunks.length"
+            class="fx-dtable"
+            :class="mode"
+          >
             <template v-for="(h, hi) in f.hunks" :key="hi">
               <div class="fx-hh">{{ h.header }}</div>
               <template v-if="mode === 'unified'">

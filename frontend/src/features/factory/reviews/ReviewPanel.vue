@@ -159,11 +159,11 @@ function dispose(f: Finding, action: FindingAction) {
         :open="g.revision === revision"
       >
         <summary class="fx-sum">
-          {{
+          <span>{{
             g.revision === revision
               ? "Current revision " + g.revision
               : "Historical evidence · revision " + g.revision
-          }}
+          }}</span>
           <span class="tiny muted">{{ g.checks.length }} checks</span>
         </summary>
         <button

@@ -10,7 +10,7 @@ import {
   taskState,
 } from "../../../composables/presentation";
 import ActorBadge from "../ActorBadge.vue";
-import { escalationReason } from "../runs/agentActivity";
+import { escalationReason, lastMessage } from "../runs/agentActivity";
 const props = defineProps<{
   order: WorkOrder;
   tasks: Task[];
@@ -66,7 +66,7 @@ const headline = computed(() => {
     SPEC_AND_PLAN_GENERATION: "The Architect is drafting the spec and plan",
     PLANNING: "The Architect is drafting the spec and plan",
     ARCHITECT_REVIEW: "The Foreman is reviewing the Architect's plan",
-    WAITING_FOR_HUMAN: "Waiting on an answer",
+    WAITING_FOR_HUMAN: "The Inspector escalated: your decision is needed",
     QUEUED: "Build is queued",
     IMPLEMENTING: "The Builder is building",
     VERIFYING: "Running checks",
@@ -99,7 +99,13 @@ const headline = computed(() => {
           <span v-if="paused" class="fx-pill orange">Paused</span>
         </h2>
       </div>
-      <div v-if="!finished && order.state !== 'READY'" class="fx-actions">
+      <div
+        v-if="
+          !finished &&
+          !['READY', 'BLOCKED', 'NEEDS_HUMAN_REVIEW'].includes(order.state)
+        "
+        class="fx-actions"
+      >
         <button
           v-if="!paused"
           class="lg-btn small"
@@ -160,6 +166,28 @@ const headline = computed(() => {
           The creator or a workspace admin can answer this.
         </p>
       </template>
+      <template v-else-if="order.state === 'WAITING_FOR_HUMAN'">
+        <p class="fx-reason">
+          {{
+            lastMessage(events, "escalated", "clarification_escalated") ||
+            "Review found something it could not settle."
+          }}
+        </p>
+        <button class="lg-btn primary small" @click="emit('goto', 'review')">
+          Open Review
+        </button>
+      </template>
+      <template v-else-if="order.state === 'BLOCKED'">
+        <p class="fx-reason" data-test="blocked-reason">
+          {{
+            lastMessage(events, "readiness_blocked") ||
+            "The factory blocked this order."
+          }}
+        </p>
+        <button class="lg-btn small" @click="emit('goto', 'review')">
+          Open Review
+        </button>
+      </template>
       <template v-else-if="planEscalated">
         <p class="fx-reason">
           <strong>Why you are asked:</strong>
@@ -209,6 +237,13 @@ const headline = computed(() => {
             >{{ order.pr_ref || order.pr_url }} <ExternalLink class="icon"
           /></a>
         </p>
+        <p v-if="order.pr_closed_at && !order.pr_merged_at" class="small muted">
+          Closed without merging. Reopen it, or request a fix.
+        </p>
+        <p v-else-if="order.pr_track_failed_at" class="small muted">
+          The factory can no longer read this pull request; check it on the
+          provider.
+        </p>
         <button class="lg-btn small" @click="emit('goto', 'changes')">
           Changes &amp; PR
         </button>
@@ -220,7 +255,13 @@ const headline = computed(() => {
         {{ done }} of {{ tasks.length }} tasks done.
       </p>
       <p
-        v-if="last && !finished && !planEscalated && !asking"
+        v-if="
+          last &&
+          !finished &&
+          !planEscalated &&
+          !asking &&
+          order.state !== 'BLOCKED'
+        "
         class="tiny muted fx-last"
       >
         Latest: {{ last.message }}

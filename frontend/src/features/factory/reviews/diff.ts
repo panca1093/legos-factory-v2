@@ -15,27 +15,41 @@ export interface DiffFile {
   add: number;
   del: number;
   hunks: DiffHunk[];
+  note?: string;
 }
 
 const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+// diff and git append a tab and timestamp to ---/+++ paths.
+const headerPath = (line: string) => line.slice(4).split("\t")[0];
 
-// Parses unified diff text (git or plain). Hunk line counts decide where a hunk ends, so a deleted "-- x" line is never read as a file header.
+// Parses unified diff text (git or plain). Hunk line counts decide where a hunk ends, but a ---/+++/@@ triple always starts a new file, so overstated counts cannot swallow the next one. Rename-only, binary and mode-only git files stay in the list with a note.
 export function parseUnifiedDiff(text: string): DiffFile[] {
-  const files: DiffFile[] = [];
+  const files: DiffFile[] = [],
+    rows = text.split(/\r?\n/);
   let file: DiffFile | undefined,
     hunk: DiffHunk | undefined,
     o = 0,
     n = 0,
     oLeft = 0,
     nLeft = 0,
-    oldPath = "";
-  const start = (path: string) => {
+    oldPath = "",
+    git = false;
+  const start = (path: string, isGit: boolean) => {
     file = { path, add: 0, del: 0, hunks: [] };
+    git = isGit;
     files.push(file);
     hunk = undefined;
   };
-  for (const line of text.split("\n")) {
-    if (hunk && (oLeft > 0 || nLeft > 0)) {
+  const note = (t: string) => {
+    if (file) file.note = file.note ? file.note + " · " + t : t;
+  };
+  for (let i = 0; i < rows.length; i++) {
+    const line = rows[i];
+    const header =
+      line.startsWith("--- ") &&
+      rows[i + 1]?.startsWith("+++ ") &&
+      rows[i + 2]?.startsWith("@@ ");
+    if (hunk && (oLeft > 0 || nLeft > 0) && !header) {
       const c = line[0];
       if (c === "\\") continue;
       if (c === "+" && nLeft > 0) {
@@ -59,14 +73,24 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
     }
     hunk = undefined;
     if (line.startsWith("diff --git ")) {
-      start(line.split(" b/").at(-1) ?? line);
+      start(line.split(" b/").at(-1) ?? line, true);
       oldPath = "";
     } else if (line.startsWith("--- ")) {
-      oldPath = line.slice(4).replace(/^a\//, "");
-      if (!file || file.hunks.length) start(oldPath);
+      oldPath = headerPath(line).replace(/^a\//, "");
+      if (!file || file.hunks.length || !git) start(oldPath, false);
     } else if (line.startsWith("+++ ") && file) {
-      const p = line.slice(4).replace(/^b\//, "");
+      const p = headerPath(line).replace(/^b\//, "");
       file.path = p === "/dev/null" ? oldPath || file.path : p;
+    } else if (file && git && line.startsWith("rename from ")) {
+      note("renamed from " + line.slice(12));
+    } else if (file && git && line.startsWith("rename to ")) {
+      file.path = line.slice(10);
+    } else if (file && git && /^(Binary files|GIT binary patch)/.test(line)) {
+      note("binary file");
+    } else if (file && git && /^(old|new) mode /.test(line)) {
+      note(line.replace(" mode ", " mode: "));
+    } else if (file && git && /^(new|deleted) file mode /.test(line)) {
+      note(line.startsWith("new") ? "new file" : "deleted file");
     } else {
       const m = HUNK.exec(line);
       if (m && file) {
@@ -79,15 +103,30 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
       }
     }
   }
-  return files.filter((f) => f.hunks.length);
+  return files.filter((f) => f.hunks.length || f.note);
 }
 
-// The backend exposes no diff endpoint, so the only diff text is whatever a builder run printed.
+// The backend exposes no diff endpoint, so the only diff text is whatever a builder run printed. Runs apply in order, so hunks accumulate per path; failed runs are skipped.
 export function diffFromRuns(runs: Run[]): DiffFile[] {
   const byPath = new Map<string, DiffFile>();
-  for (const r of runs)
-    if (r.kind === "builder" && r.output?.includes("@@ "))
-      for (const f of parseUnifiedDiff(r.output)) byPath.set(f.path, f);
+  for (const r of runs) {
+    if (
+      r.kind !== "builder" ||
+      r.state.toLowerCase() === "failed" ||
+      !(r.output?.includes("@@ ") || r.output?.includes("diff --git "))
+    )
+      continue;
+    for (const f of parseUnifiedDiff(r.output)) {
+      const have = byPath.get(f.path);
+      if (!have) byPath.set(f.path, f);
+      else {
+        have.hunks.push(...f.hunks);
+        have.add += f.add;
+        have.del += f.del;
+        if (f.note && !have.note) have.note = f.note;
+      }
+    }
+  }
   return [...byPath.values()];
 }
 
