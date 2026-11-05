@@ -179,20 +179,6 @@ test("settings save, navigation and missing-order recovery against the real back
   await page.selectOption("#set-architect", "mock/mock-local");
   await page.getByRole("button", { name: "Save settings" }).click();
   await expect(page.getByRole("status")).toHaveText("Settings saved");
-  await page.getByRole("link", { name: "Knowledge", exact: true }).click();
-  const decision = page
-    .locator('.memory-card[data-trust="human_decision"]')
-    .first();
-  await expect(decision).toBeVisible();
-  await page.selectOption("#kn-trust", "verified");
-  await expect(page.locator(".memory-card").first()).toHaveAttribute(
-    "data-trust",
-    "verified",
-  );
-  await page.locator(".memory-card").first().click();
-  await expect(page.getByRole("dialog")).toContainText("Verified fact");
-  await expect(page.getByRole("dialog")).toContainText("Commit");
-  await page.keyboard.press("Escape");
   await page.goto("/factory/missing");
   await expect(page.getByRole("alert")).toContainText("work order not found");
   await page
@@ -201,4 +187,27 @@ test("settings save, navigation and missing-order recovery against the real back
   await expect(
     page.getByRole("heading", { name: "The factory floor" }),
   ).toBeVisible();
+});
+test("knowledge notebook: read first, discussion opens on demand", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("link", { name: "Knowledge", exact: true }).click();
+  const items = page.locator(".nb-item");
+  await expect(items.first()).toBeVisible();
+  await expect(page.locator(".nb-read h1")).toBeVisible();
+  await expect(page.locator(".nb-talk")).toHaveCount(0);
+  await page.getByRole("searchbox", { name: "Search notes" }).fill("Inspector");
+  const note = items.filter({ hasText: "Inspector playbook" }).first();
+  await expect(note.locator("mark").first()).toBeVisible();
+  await note.click();
+  await expect(page.locator(".nb-read h1")).toContainText("Inspector playbook");
+  await expect(page.locator("[data-test=kb-sha]")).toBeVisible();
+  await page.getByRole("button", { name: "Ask about this" }).click();
+  await expect(page.locator(".nb-talk")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Open in Chats" }),
+  ).toBeDisabled();
+  await page.getByRole("button", { name: "Close discussion" }).click();
+  await expect(page.locator(".nb-talk")).toHaveCount(0);
 });
