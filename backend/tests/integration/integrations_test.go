@@ -187,7 +187,7 @@ func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
 
 	// work order from the Jira draft, through to human approval
 	status, body = ta.do(t, "POST", "/api/v1/work-orders", fmt.Sprintf(
-		`{"project_id":%q,"title":%q,"objective":%q,"acceptance":%q,"autonomy":"assisted","source_ref":%q}`,
+		`{"project_id":%q,"title":%q,"objective":%q,"acceptance":%q,"source_ref":%q}`,
 		proj, draft.Title, draft.Objective, draft.Acceptance, draft.SourceRef))
 	if status != 201 || !strings.Contains(body, `"source_ref":"jira:PAY-7"`) {
 		t.Fatalf("create work order: %d %s", status, body)

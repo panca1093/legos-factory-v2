@@ -2,9 +2,11 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -59,7 +61,7 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 			if err := f.step(ctx, wo, model.StatePRPreparation, model.StateMergeReadiness, "factory", "Evaluating merge readiness"); err != nil {
 				return err
 			}
-			return f.evaluateReadiness(ctx, wo, true)
+			return f.evaluateReadiness(ctx, wo, true, "")
 		}
 		newRev, failures := wo.Revision+1, wo.VerifyFailures+1
 		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": failures}); err != nil {
@@ -185,6 +187,15 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		fmt.Sprintf("Specialist review by %s (%d changed files)", strings.Join(names, ", "), len(files)),
 		map[string]any{"specialists": picks, "routing": routing})
 
+	// the Architect checks the result against its spec while the specialists review the diff
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		f.architectVerify(ctx, *wo, files)
+	}()
+	defer wg.Wait() // an early return must not leave the verification running
+
 	blockers, total := 0, 0
 	for _, p := range picks {
 		var out findingsReply
@@ -218,6 +229,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		title := fmt.Sprintf("%s inspection of revision %d: %d finding(s), %d blocker(s)", p.Specialty, wo.Revision, len(out.Findings), specBlockers)
 		f.Catalog.Record(ctx, wo, model.KnowledgeFindings, model.TrustAIInterpretation, "inspector", title, summary.String(), "run:"+runID)
 	}
+	wg.Wait()
 	f.event(wo.ID, "inspector", "inspection_finished", fmt.Sprintf("%d finding(s), %d blocker(s)", total, blockers), nil)
 
 	if blockers == 0 {
@@ -264,4 +276,102 @@ func (f *Factory) commitVerified(ctx context.Context, wo *model.WorkOrder) error
 	f.event(wo.ID, "factory", "commit_recorded", fmt.Sprintf("Verified revision %d committed locally as %s (not pushed)", wo.Revision, orUnversioned(sha)),
 		map[string]any{"commit_sha": sha, "revision": wo.Revision})
 	return nil
+}
+
+// architectReport is the Architect's verification of one revision; the done
+// gate only trusts it for the revision it was made on.
+type architectReport struct {
+	Revision   int                `json:"revision"`
+	Verdicts   []ArchitectVerdict `json:"verdicts"`
+	Deviations []string           `json:"deviations"`
+}
+
+// architectVerify has the Architect check the built result against its spec and
+// plan and stores the verdicts for the done gate. A failure is reported, not
+// fatal: the done gate then has no verdicts for this revision.
+func (f *Factory) architectVerify(ctx context.Context, wo model.WorkOrder, files []string) {
+	dir := f.workspaceDir(wo.ID)
+	diff, err := f.Sandbox.Diff(ctx, dir)
+	if err != nil {
+		f.event(wo.ID, "architect", "diff_unavailable", err.Error(), nil)
+	}
+	tasks, err := f.WO.Plan(ctx, wo.ID)
+	if err != nil {
+		f.event(wo.ID, "architect", "architect_verify_failed", err.Error(), nil)
+		return
+	}
+	checks, _ := f.checksText(ctx, &wo)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "",
+		woQuery(&wo)+" "+strings.Join(files, " "), dir, wo.KBBaseSHA)
+	var r verifyReply
+	_, runID, err := f.runStructured(ctx, &wo, model.AgentArchitect, architectVerifyPrompt(&wo, tasks, diff, checks)+kbText,
+		map[string]string{"stage": "verify"}, "", &r, runOpts{Audit: audit})
+	if err != nil {
+		f.event(wo.ID, "architect", "architect_verify_failed", err.Error(), nil)
+		return
+	}
+	report := architectReport{Revision: wo.Revision, Verdicts: r.Verdicts, Deviations: r.Deviations}
+	raw, _ := json.Marshal(report)
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"architect_report": string(raw)}); err != nil {
+		f.event(wo.ID, "architect", "architect_verify_failed", err.Error(), nil)
+		return
+	}
+	text := reportText(report)
+	met := 0
+	for _, v := range report.Verdicts {
+		if v.Status == "met" {
+			met++
+		}
+	}
+	f.event(wo.ID, "architect", "architect_verified",
+		fmt.Sprintf("Architect verification: %d of %d criteria met, %d deviation(s)", met, len(report.Verdicts), len(report.Deviations)),
+		map[string]any{"revision": wo.Revision, "verdicts": report.Verdicts, "deviations": report.Deviations, "run_id": runID})
+	f.Catalog.Record(ctx, &wo, model.KnowledgeArchitectVerified, model.TrustAIInterpretation, "architect",
+		fmt.Sprintf("Architect verification of revision %d: %d of %d criteria met", wo.Revision, met, len(report.Verdicts)), text, "run:"+runID)
+}
+
+func reportText(r architectReport) string {
+	var b strings.Builder
+	for _, v := range r.Verdicts {
+		fmt.Fprintf(&b, "%s: %s — %s\n", v.CriterionID, v.Status, v.Evidence)
+	}
+	for _, d := range r.Deviations {
+		fmt.Fprintf(&b, "Deviation: %s\n", d)
+	}
+	return b.String()
+}
+
+// latestChecks is each check's most recent result for the current revision; the
+// revision also holds the pre-change baseline and re-run duplicates.
+func (f *Factory) latestChecks(ctx context.Context, wo *model.WorkOrder) ([]model.QualityCheck, error) {
+	stored, err := f.Quality.ForRevision(ctx, wo.ID, wo.Revision)
+	if err != nil {
+		return nil, err
+	}
+	latest := map[string]int{}
+	for i, c := range stored {
+		latest[c.Name] = i
+	}
+	var out []model.QualityCheck
+	for i, c := range stored {
+		if latest[c.Name] == i {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+
+// checksText renders the current check results for a prompt and reports whether any failed.
+func (f *Factory) checksText(ctx context.Context, wo *model.WorkOrder) (string, bool) {
+	checks, err := f.latestChecks(ctx, wo)
+	if err != nil || len(checks) == 0 {
+		return "(no checks recorded)", false
+	}
+	var b strings.Builder
+	failed := false
+	for _, c := range checks {
+		fmt.Fprintf(&b, "%s (%s) → %s\n", c.Name, c.Command, c.Outcome)
+		failed = failed || c.Outcome != string(model.Pass)
+	}
+	return b.String(), failed
 }

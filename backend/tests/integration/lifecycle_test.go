@@ -252,7 +252,7 @@ func TestFullLifecycleMockHarnessRealChecks(t *testing.T) {
 
 	// 2. work order (objective has no "?" → architect approves the plan)
 	status, body = ta.do(t, "POST", "/api/v1/work-orders", fmt.Sprintf(
-		`{"project_id":%q,"title":"Greeter fixture","objective":"Make the greeter greeting function available so the fixture contract test passes.","acceptance":"TestGreet passes with go test ./...","autonomy":"assisted"}`, proj.ID))
+		`{"project_id":%q,"title":"Greeter fixture","objective":"Make the greeter greeting function available so the fixture contract test passes.","acceptance":"TestGreet passes with go test ./..."}`, proj.ID))
 	if status != 201 {
 		t.Fatalf("create work order: %d %s", status, body)
 	}
@@ -343,7 +343,7 @@ func TestClarificationPath(t *testing.T) {
 		ID string `json:"id"`
 	}
 	status, body = ta.do(t, "POST", "/api/v1/work-orders", fmt.Sprintf(
-		`{"project_id":%q,"title":"Ambiguous order","objective":"Add retries? Confirm the idempotency window first.","acceptance":"Tests pass","autonomy":"assisted"}`, proj.ID))
+		`{"project_id":%q,"title":"Ambiguous order","objective":"Add retries? Confirm the idempotency window first.","acceptance":"Tests pass"}`, proj.ID))
 	if status != 201 {
 		t.Fatal(body)
 	}
