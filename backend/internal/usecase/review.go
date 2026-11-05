@@ -21,10 +21,15 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 		return err
 	}
 	defer f.closePlanning(wo.ID) // the plan review ends the Foreman's planning session, whatever the gate decides
-	if wo.State == model.StatePlanning && wo.PlanReview == "pending" {
+	if wo.State == model.StatePlanning {
 		// a revision got as far as the state change before a failure: finish it
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": ""}); err != nil {
-			return err
+		if f.Sched.HasActive(ctx, wo.ID, "", JobPlan) {
+			return nil
+		}
+		if wo.PlanReview == "pending" {
+			if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": ""}); err != nil {
+				return err
+			}
 		}
 		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": "Plan gate requested a revision; see the last plan_gate event in the activity trail."})
 	}
@@ -74,18 +79,12 @@ func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []mod
 		}
 		return f.approvePlan(ctx, wo, "factory", "Plan gate approved the plan; build starts")
 	case GateRevise:
-		// plan_review stays "pending" until the state has moved, so a retry can tell a half-done revision
 		revisions := wo.PlanRevisions + 1
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_revisions": revisions, "clarif_rounds": 0}); err != nil {
+		if err := f.stepWith(ctx, wo, model.StateArchitectReview, model.StatePlanning, "factory", "Plan gate requested a plan revision",
+			map[string]any{"plan_revisions": revisions, "plan_review": "", "clarif_rounds": 0}); err != nil {
 			return err
 		}
 		f.event(wo.ID, "factory", "plan_revision_requested", out.Note, map[string]any{"revision": revisions})
-		if err := f.step(ctx, wo, model.StateArchitectReview, model.StatePlanning, "factory", "Plan gate requested a plan revision"); err != nil {
-			return err
-		}
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": ""}); err != nil {
-			return err
-		}
 		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": "Plan gate: " + out.Note + "\n\nForeman review: " + review})
 	default: // escalate: the order stays in ARCHITECT_REVIEW and the human approves or revises
 		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "approved"}); err != nil {

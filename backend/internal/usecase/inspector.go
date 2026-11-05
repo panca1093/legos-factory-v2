@@ -163,22 +163,15 @@ func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[str
 
 // doneGateNote is the note of the done-gate fix that opened the order's current revision, or "".
 func (f *Factory) doneGateNote(ctx context.Context, wo *model.WorkOrder) string {
-	evs, err := f.WO.Events(ctx, wo.ID, 0, 5000)
-	if err != nil {
+	e, err := f.WO.LatestEvent(ctx, wo.ID, "fix_requested")
+	if err != nil || e == nil || e.Payload["reason"] != "fix_done_gate" {
 		return ""
 	}
-	for i := len(evs) - 1; i >= 0; i-- {
-		e := evs[i]
-		if e.Kind != "fix_requested" || e.Payload["reason"] != "fix_done_gate" {
-			continue
-		}
-		if rev, _ := e.Payload["revision"].(float64); int(rev) == wo.Revision {
-			note, _ := e.Payload["note"].(string)
-			return note
-		}
+	if rev, _ := e.Payload["revision"].(float64); int(rev) != wo.Revision {
 		return ""
 	}
-	return ""
+	note, _ := e.Payload["note"].(string)
+	return note
 }
 
 func outputTail(out string) string {
@@ -270,10 +263,11 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		f.Catalog.Record(ctx, wo, model.KnowledgeFindings, model.TrustAIInterpretation, "inspector", title, summary.String(), "run:"+runID)
 	}
 	wg.Wait()
+	if archErr != nil && blockers == 0 {
+		// retry only the verification: requeueing the job would re-run every specialist
+		archErr = f.retryArchitectVerify(ctx, wo, files, archErr)
+	}
 	if archErr != nil {
-		if !lastAttempt(job) {
-			return archErr // transient: the job requeues
-		}
 		f.event(wo.ID, "architect", "architect_verify_failed", archErr.Error(), nil)
 	}
 	f.event(wo.ID, "inspector", "inspection_finished", fmt.Sprintf("%d finding(s), %d blocker(s)", total, blockers), nil)
@@ -323,6 +317,22 @@ func (f *Factory) commitVerified(ctx context.Context, wo *model.WorkOrder) error
 	f.event(wo.ID, "factory", "commit_recorded", fmt.Sprintf("Verified revision %d committed locally as %s (not pushed)", wo.Revision, orUnversioned(sha)),
 		map[string]any{"commit_sha": sha, "revision": wo.Revision})
 	return nil
+}
+
+const architectVerifyAttempts = 3
+
+var architectRetryDelay = 5 * time.Second
+
+func (f *Factory) retryArchitectVerify(ctx context.Context, wo *model.WorkOrder, files []string, err error) error {
+	for i := 1; i < architectVerifyAttempts && err != nil; i++ {
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(architectRetryDelay):
+		}
+		err = f.architectVerify(ctx, *wo, files)
+	}
+	return err
 }
 
 // architectReport is the Architect's verification of one revision; the done

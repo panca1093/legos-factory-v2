@@ -348,13 +348,24 @@ func stepMessage(role model.AgentRole, st model.AgentStep) string {
 // ---- transitions & events ----
 
 func (f *Factory) step(ctx context.Context, wo *model.WorkOrder, from, to model.State, actor, msg string) error {
+	return f.stepWith(ctx, wo, from, to, actor, msg, nil)
+}
+
+// stepWith moves the state and writes fields in the same UPDATE.
+func (f *Factory) stepWith(ctx context.Context, wo *model.WorkOrder, from, to model.State, actor, msg string, fields map[string]any) error {
 	if wo.State != from {
 		return fmt.Errorf("INVALID_STATE_TRANSITION: WO %s is %s, expected %s (→ %s)", wo.ID, wo.State, from, to)
 	}
 	if err := model.MustTransition(from, to); err != nil {
 		return err
 	}
-	if err := f.WO.UpdateState(ctx, wo.ID, to); err != nil {
+	var err error
+	if len(fields) == 0 {
+		err = f.WO.UpdateState(ctx, wo.ID, to)
+	} else {
+		err = f.WO.UpdateStateAndFields(ctx, wo.ID, to, fields)
+	}
+	if err != nil {
 		return err
 	}
 	wo.State = to

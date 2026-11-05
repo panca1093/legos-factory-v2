@@ -107,8 +107,22 @@ func (r *WorkOrderRepo) UpdateFields(ctx context.Context, id string, fields map[
 	if len(fields) == 0 {
 		return nil
 	}
+	return r.updateFields(ctx, id, "", fields)
+}
+
+// UpdateStateAndFields moves the state and applies fields in one UPDATE, so a
+// crash cannot leave one without the other.
+func (r *WorkOrderRepo) UpdateStateAndFields(ctx context.Context, id string, s model.State, fields map[string]any) error {
+	return r.updateFields(ctx, id, s, fields)
+}
+
+func (r *WorkOrderRepo) updateFields(ctx context.Context, id string, s model.State, fields map[string]any) error {
 	set := ""
 	args := []any{}
+	if s != "" {
+		set = "state = ?"
+		args = append(args, string(s))
+	}
 	for k, v := range fields {
 		if set != "" {
 			set += ", "
@@ -118,7 +132,11 @@ func (r *WorkOrderRepo) UpdateFields(ctx context.Context, id string, fields map[
 	}
 	set += ", updated_at = ?"
 	args = append(args, time.Now().Unix(), id)
-	res, err := r.DB.ExecContext(ctx, `UPDATE work_orders SET `+set+` WHERE id = ?`, args...)
+	where := ""
+	if s != "" {
+		where = " AND state NOT IN ('READY','CANCELLED','BLOCKED')"
+	}
+	res, err := r.DB.ExecContext(ctx, `UPDATE work_orders SET `+set+` WHERE id = ?`+where, args...)
 	if err != nil {
 		return err
 	}
@@ -220,6 +238,25 @@ func (r *WorkOrderRepo) AppendEvent(ctx context.Context, woID, actor, kind, mess
 	}
 	id, _ := res.LastInsertId()
 	return &model.Event{ID: id, WOID: woID, Actor: actor, Kind: kind, Message: message, Payload: payload, CreatedAt: now}, nil
+}
+
+// LatestEvent is the newest event of the kind for the work order, or nil.
+func (r *WorkOrderRepo) LatestEvent(ctx context.Context, woID, kind string) (*model.Event, error) {
+	var e model.Event
+	var payload string
+	var createdAt int64
+	err := r.DB.QueryRowContext(ctx, `SELECT id, wo_id, actor, kind, message, payload, created_at
+		FROM wof_events WHERE wo_id = ? AND kind = ? ORDER BY id DESC LIMIT 1`, woID, kind).
+		Scan(&e.ID, &e.WOID, &e.Actor, &e.Kind, &e.Message, &payload, &createdAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(payload), &e.Payload)
+	e.CreatedAt = time.Unix(createdAt, 0)
+	return &e, nil
 }
 
 func (r *WorkOrderRepo) Events(ctx context.Context, woID string, afterID int64, limit int) ([]model.Event, error) {

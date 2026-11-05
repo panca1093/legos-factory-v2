@@ -121,12 +121,10 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry boo
 
 	switch out.Outcome {
 	case GateFix:
-		// the state moves first: a retry that finds IMPLEMENTING completes the fix (resumeDoneGateFix)
-		if err := f.step(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "factory", "Done gate requested a fix; returning to builder"); err != nil {
-			return false, "", err
-		}
+		// state and revision bump land in one UPDATE: a retry that finds IMPLEMENTING completes the fix (resumeDoneGateFix)
 		newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "review_fixes": fixes}); err != nil {
+		if err := f.stepWith(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "factory", "Done gate requested a fix; returning to builder",
+			map[string]any{"revision": newRev, "commit_sha": "", "review_fixes": fixes}); err != nil {
 			return false, "", err
 		}
 		wo.Revision, wo.CommitSHA, wo.ReviewFixes = newRev, "", fixes
@@ -140,20 +138,17 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry boo
 }
 
 // resumeDoneGateFix finishes a fix whose evaluate job failed after the order
-// had already returned to IMPLEMENTING: it applies the revision bump if that
-// was lost and queues the Builder unless one is already queued.
+// had already returned to IMPLEMENTING: it queues the Builder unless one is
+// already queued.
 func (f *Factory) resumeDoneGateFix(ctx context.Context, wo *model.WorkOrder) error {
 	if f.Sched.HasActive(ctx, wo.ID, "", JobImplement) {
 		return nil
 	}
-	if wo.CommitSHA != "" { // the bump is cleared with commit_sha; still set means it never landed
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": wo.Revision + 1, "commit_sha": "", "review_fixes": wo.ReviewFixes + 1}); err != nil {
-			return err
-		}
+	note := f.doneGateNote(ctx, wo)
+	if note == "" {
+		note = "The done gate asked for a fix; its reasons are in the last done_gate event of the activity trail."
 	}
-	return f.enqueuePayload(ctx, JobImplement, wo.ID, map[string]any{
-		"reason": "fix_done_gate", "note": "The done gate asked for a fix; its reasons are in the last done_gate event of the activity trail.",
-	})
+	return f.enqueuePayload(ctx, JobImplement, wo.ID, map[string]any{"reason": "fix_done_gate", "note": note})
 }
 
 // currentArchitectReport is the stored Architect verification when it was made on the order's current revision.

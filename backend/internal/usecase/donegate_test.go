@@ -262,21 +262,44 @@ func TestNoArchitectVerificationWithoutJev(t *testing.T) {
 	}
 }
 
-func TestArchitectVerificationErrorsRequeueUntilTheLastAttempt(t *testing.T) {
+func TestTransientArchitectErrorRetriesOnlyTheVerification(t *testing.T) {
+	delay := architectRetryDelay
+	architectRetryDelay = 0
+	t.Cleanup(func() { architectRetryDelay = delay })
 	h := &replyHarness{archErr: errors.New("model offline")}
 	r := inspectRig(t, h)
-	err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID, MaxAttempts: 3, Attempts: 0})
-	if err == nil || !strings.Contains(err.Error(), "model offline") {
-		t.Fatalf("a transient error must requeue the job: %v", err)
+	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID, MaxAttempts: 3, Attempts: 0}); err != nil {
+		t.Fatalf("the inspection must not be requeued: %v", err)
 	}
-	if len(r.events(t, "architect_verify_failed")) != 0 {
-		t.Fatal("not reported as failed while a retry is coming")
+	if got := len(h.prompts["architect"]); got != architectVerifyAttempts {
+		t.Fatalf("verification attempts %d, want %d", got, architectVerifyAttempts)
 	}
-	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID, MaxAttempts: 3, Attempts: 2}); err != nil {
-		t.Fatalf("the last attempt must carry on: %v", err)
+	if got := len(h.prompts["inspector"]); got != len(h.specials) || got != len(r.events(t, "inspection_specialists")[0].Payload["specialists"].([]any)) {
+		t.Fatalf("each specialist runs once, got %d prompts for %v", got, h.specials)
+	}
+	if len(r.events(t, "architect_verify_failed")) != 1 || r.q.enqueued[len(r.q.enqueued)-1] != "evaluate:" {
+		t.Fatalf("failure is reported once and evaluation follows: %v", r.q.enqueued)
+	}
+}
+
+func TestArchitectErrorIsIgnoredWhenBlockersSendTheOrderBack(t *testing.T) {
+	delay := architectRetryDelay
+	architectRetryDelay = 0
+	t.Cleanup(func() { architectRetryDelay = delay })
+	h := &replyHarness{archErr: errors.New("model offline"),
+		inspect: `{"findings":[{"severity":"blocker","title":"Float money","detail":"d","location":"round.go:1"}]}`}
+	r := inspectRig(t, h)
+	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got := len(h.prompts["architect"]); got != 1 {
+		t.Fatalf("no verification retry when the Builder is next anyway, got %d", got)
+	}
+	if wo := r.reload(t); wo.State != model.StateImplementing || wo.Revision != 1 {
+		t.Fatalf("state %s revision %d", wo.State, wo.Revision)
 	}
 	if len(r.events(t, "architect_verify_failed")) != 1 {
-		t.Fatal("the last attempt reports the failure")
+		t.Fatal("the failure is still recorded")
 	}
 }
 
@@ -359,19 +382,63 @@ func TestEvaluateIsIdempotentAndResumesAHalfDoneFix(t *testing.T) {
 	if err := r.f.handleEvaluate(ctx, model.Job{WOID: r.wo.ID}); err != nil || len(r.q.enqueued) != 0 {
 		t.Fatalf("a superseded evaluate job is a no-op: %v %v", err, r.q.enqueued)
 	}
-	// the state moved to IMPLEMENTING but the revision bump and the Builder job were lost
-	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateImplementing); err != nil {
+	// the state and revision moved to IMPLEMENTING but the Builder job was lost; a non-git workspace has no commit sha
+	if err := r.wos.UpdateStateAndFields(ctx, r.wo.ID, model.StateImplementing, map[string]any{"revision": 1, "commit_sha": "", "review_fixes": 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.wos.UpdateFields(ctx, r.wo.ID, map[string]any{"commit_sha": "abc"}); err != nil {
-		t.Fatal(err)
-	}
+	r.f.event(r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": 1, "reason": "fix_done_gate", "note": "criterion c1 is not met"})
 	if err := r.f.handleEvaluate(ctx, model.Job{WOID: r.wo.ID}); err != nil {
 		t.Fatal(err)
 	}
 	wo := r.reload(t)
-	if wo.Revision != 1 || wo.ReviewFixes != 1 || wo.CommitSHA != "" || r.q.enqueued[len(r.q.enqueued)-1] != "implement:" || r.q.payloads[len(r.q.payloads)-1]["reason"] != "fix_done_gate" {
-		t.Fatalf("revision %d fixes %d sha %q enqueued %v", wo.Revision, wo.ReviewFixes, wo.CommitSHA, r.q.enqueued)
+	last := r.q.payloads[len(r.q.payloads)-1]
+	if wo.Revision != 1 || wo.ReviewFixes != 1 || r.q.enqueued[len(r.q.enqueued)-1] != "implement:" || last["reason"] != "fix_done_gate" || last["note"] != "criterion c1 is not met" {
+		t.Fatalf("revision %d fixes %d enqueued %v payload %v", wo.Revision, wo.ReviewFixes, r.q.enqueued, last)
+	}
+}
+
+type failStateStore struct {
+	WorkOrderStore
+	fail bool
+}
+
+func (s *failStateStore) UpdateStateAndFields(ctx context.Context, id string, st model.State, fields map[string]any) error {
+	if s.fail {
+		s.fail = false
+		return errors.New("db busy")
+	}
+	return s.WorkOrderStore.UpdateStateAndFields(ctx, id, st, fields)
+}
+
+func TestDoneGateFixBumpsTheRevisionOnceAcrossARetry(t *testing.T) {
+	ctx := context.Background()
+	r := doneRig(t, &fakeJudge{over: map[string]float64{"met_c1": 0.1}}, metReport)
+	r.f.WO = &failStateStore{WorkOrderStore: r.f.WO, fail: true}
+	if err := r.f.handleEvaluate(ctx, model.Job{WOID: r.wo.ID}); err == nil {
+		t.Fatal("the failed write must fail the job")
+	}
+	if wo := r.reload(t); wo.State != model.StateSpecialistReview || wo.Revision != 0 || wo.ReviewFixes != 0 {
+		t.Fatalf("nothing half-applied: %s rev %d fixes %d", wo.State, wo.Revision, wo.ReviewFixes)
+	}
+	wo := r.evaluate(t)
+	if wo.State != model.StateImplementing || wo.Revision != 1 || wo.ReviewFixes != 1 || r.q.enqueued[len(r.q.enqueued)-1] != "implement:" {
+		t.Fatalf("state %s rev %d fixes %d enqueued %v", wo.State, wo.Revision, wo.ReviewFixes, r.q.enqueued)
+	}
+}
+
+func TestDoneGateNoteFindsTheLatestFixEventOnEventHeavyOrders(t *testing.T) {
+	ctx := context.Background()
+	r := doneRig(t, nil, "")
+	for i := 0; i < 5001; i++ {
+		if _, err := r.wos.AppendEvent(ctx, r.wo.ID, "factory", "noise", "n", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.wos.AppendEvent(ctx, r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": 0, "reason": "fix_done_gate", "note": "late note"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.f.doneGateNote(ctx, r.reload(t)); got != "late note" {
+		t.Fatalf("note %q", got)
 	}
 }
 
