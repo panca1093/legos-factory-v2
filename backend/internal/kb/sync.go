@@ -93,7 +93,7 @@ func syncFiles(ctx context.Context, idx Index, emb Embedder, source, projectID s
 }
 
 func collect(root string, factory bool) ([]file, error) {
-	paths, err := listMD(root)
+	paths, err := listMD(root, factory)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func collect(root string, factory bool) ([]file, error) {
 			continue
 		}
 		abs := filepath.Join(root, filepath.FromSlash(rel))
-		if info, err := os.Stat(abs); err != nil || !info.Mode().IsRegular() || info.Size() > maxDocBytes {
+		if info, err := os.Lstat(abs); err != nil || !info.Mode().IsRegular() || info.Size() > maxDocBytes {
 			continue
 		}
 		data, err := os.ReadFile(abs)
@@ -130,8 +130,14 @@ func skipped(rel string, factory bool) bool {
 	return !strings.HasSuffix(base, ".md") || (factory && (base == "index.md" || base == "log.md"))
 }
 
-func listMD(root string) ([]string, error) {
-	cmd := exec.Command("git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "*.md")
+// listMD lists markdown files; a repository source indexes tracked files only,
+// so nothing an agent wrote into the workspace reaches the index.
+func listMD(root string, factory bool) ([]string, error) {
+	args := []string{"-C", root, "ls-files", "-z", "*.md"}
+	if factory {
+		args = []string{"-C", root, "ls-files", "-co", "--exclude-standard", "-z", "*.md"}
+	}
+	cmd := exec.Command("git", args...)
 	if out, err := cmd.Output(); err == nil && isWorkTree(root) {
 		seen := map[string]bool{}
 		var paths []string

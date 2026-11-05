@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -36,6 +37,9 @@ func (s *Server) handleKBPut(c echo.Context) error {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
 	d, err := s.KBDocs.Update(c.Request().Context(), currentUser(c), c.QueryParam("id"), req.Frontmatter, req.Body)
+	if errors.Is(err, usecase.ErrForbidden) {
+		return errorJSON(c, http.StatusForbidden, "FORBIDDEN", "only admins edit factory-wide documents")
+	}
 	if err != nil {
 		return mapDomainError(c, err)
 	}

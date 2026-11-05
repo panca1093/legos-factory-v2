@@ -287,7 +287,7 @@ func TestSyncGitFactorySkipsReserved(t *testing.T) {
 	put(t, root, "sub/log.md", "# L\n")
 	put(t, root, "ignored/x.md", "# X\n")
 	put(t, root, ".gitignore", "ignored/\n")
-	gitOut(t, root, "add", "keep.md")
+	gitOut(t, root, "add", "keep.md", "index.md", "sub/log.md")
 	idx := &fakeIndex{docs: map[string]model.KBParsed{}}
 	st, err := Sync(context.Background(), idx, HashEmbedder{}, "factory", "", root, "s")
 	if err != nil || st.Docs != 1 || idx.docs["factory::keep.md"].Title != "Keep" {
@@ -297,5 +297,63 @@ func TestSyncGitFactorySkipsReserved(t *testing.T) {
 	st, _ = Sync(context.Background(), idx, HashEmbedder{}, "repo", "p", root, "s")
 	if st.Docs != 3 {
 		t.Fatalf("repo should index index.md and log.md and skip ignored: %+v", st)
+	}
+}
+
+func TestSyncRepoIndexesTrackedRegularFilesOnly(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "id_ed25519.md")
+	put(t, filepath.Dir(secret), filepath.Base(secret), "PRIVATE KEY\n")
+	root := t.TempDir()
+	gitOut(t, root, "init", "-q")
+	put(t, root, "tracked.md", "# Tracked\n")
+	if err := os.Symlink(secret, filepath.Join(root, "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+	gitOut(t, root, "add", "-A")
+	put(t, root, "untracked.md", "---\ntype: Reviewer Routing\n---\n# Agent written\n")
+	idx := &fakeIndex{docs: map[string]model.KBParsed{}}
+	if _, err := Sync(context.Background(), idx, HashEmbedder{}, "repo", "p", root, "c"); err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.docs) != 1 || idx.docs["repo:p:tracked.md"].Title != "Tracked" {
+		t.Fatalf("indexed %v; want only the tracked regular file", idx.docs)
+	}
+
+	plain := t.TempDir()
+	if err := os.Symlink(secret, filepath.Join(plain, "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+	put(t, plain, "a.md", "# A\n")
+	idx = &fakeIndex{docs: map[string]model.KBParsed{}}
+	if _, err := Sync(context.Background(), idx, HashEmbedder{}, "repo", "p", plain, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.docs) != 1 {
+		t.Fatalf("plain dir indexed %v; a symlink must be skipped", idx.docs)
+	}
+}
+
+func TestReadsDoNotFollowSymlinks(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "secret.md")
+	put(t, filepath.Dir(secret), "secret.md", "PRIVATE KEY\n")
+	root := t.TempDir()
+	gitOut(t, root, "init", "-q")
+	put(t, root, "docs/x.md", "# Committed\n")
+	gitOut(t, root, "add", "-A")
+	gitOut(t, root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x")
+	sha := strings.TrimSpace(gitOut(t, root, "rev-parse", "HEAD"))
+	os.Remove(filepath.Join(root, "docs/x.md"))
+	if err := os.Symlink(secret, filepath.Join(root, "docs/x.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, body, err := ReadMarkdown(root, "docs/x.md"); err == nil {
+		t.Fatalf("ReadMarkdown followed a symlink out of the root: %q", body)
+	}
+	_, body, err := ReadGitMarkdown(root, sha, "docs/x.md")
+	if err != nil || strings.Contains(body, "PRIVATE") || !strings.Contains(body, "Committed") {
+		t.Fatalf("ReadGitMarkdown = %q, %v; want the committed content", body, err)
+	}
+	if _, _, err := ReadGitMarkdown(root, "--output=x", "docs/x.md"); err == nil {
+		t.Fatal("a non-hex commit must be rejected")
 	}
 }

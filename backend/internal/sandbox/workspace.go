@@ -108,7 +108,7 @@ func (Local) Commit(ctx context.Context, dir, message string) (string, error) {
 		return "", fmt.Errorf("git status: %v: %s", err, status)
 	}
 	if strings.TrimSpace(status) != "" {
-		if out, err := git(ctx, dir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost",
+		if out, err := git(ctx, dir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
 			"commit", "--quiet", "--no-verify", "-m", message); err != nil {
 			return "", fmt.Errorf("git commit: %v: %s", err, out)
 		}
@@ -209,7 +209,7 @@ func (Local) TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (b
 // MergeTask merges branch into the work order workspace. A conflicting merge
 // is aborted, leaving the workspace untouched, and reported as conflict.
 func (Local) MergeTask(ctx context.Context, woDir, branch, message string) (conflict bool, err error) {
-	out, err := git(ctx, woDir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost",
+	out, err := git(ctx, woDir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
 		"merge", "--no-ff", "--no-verify", "-m", message, branch)
 	if err == nil {
 		return false, nil
@@ -230,7 +230,7 @@ func (Local) SyncTask(ctx context.Context, woDir, taskDir string) ([]string, err
 	if err != nil {
 		return nil, fmt.Errorf("git rev-parse: %v: %s", err, head)
 	}
-	out, err := git(ctx, taskDir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost",
+	out, err := git(ctx, taskDir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
 		"merge", "--no-edit", "--no-verify", strings.TrimSpace(head))
 	unmerged, uerr := git(ctx, taskDir, "diff", "--name-only", "--diff-filter=U")
 	if uerr != nil {

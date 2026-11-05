@@ -74,6 +74,17 @@ func acpRoleConfig(role model.AgentRole) string {
 	return string(b)
 }
 
+// claudeReadOnlyMeta is session/new `_meta` for read-only roles on claude-agent-acp:
+// `tools` makes the write and exec tools absent (so no allow rule can grant them),
+// "user" settings keep the user's ~/.claude but drop project and local settings,
+// and strictMcpConfig drops MCP servers from .mcp.json and settings.
+var claudeReadOnlyMeta = map[string]any{"claudeCode": map[string]any{"options": map[string]any{
+	"tools":           []string{"Read", "Grep", "Glob"},
+	"disallowedTools": []string{"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent", "Task"},
+	"settingSources":  []string{"user"},
+	"strictMcpConfig": true,
+}}}
+
 type acpRun struct {
 	conn      *acpConn
 	sessionID string
@@ -88,13 +99,24 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 		return nil, err
 	}
 	conn.role, conn.workspace, conn.onStep = req.Role, req.WorkspaceDir, req.OnStep
-	ns, err := conn.newSession(ctx, req.WorkspaceDir)
+	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder
+	var meta map[string]any
+	if claudeReadOnly {
+		meta = claudeReadOnlyMeta
+	}
+	ns, err := conn.newSession(ctx, req.WorkspaceDir, meta)
 	if err != nil {
 		conn.close()
 		return nil, err
 	}
 	if req.ProviderID != "" || req.ModelID != "" {
 		if err := conn.setModel(ctx, ns, req.ProviderID+"/"+req.ModelID, h.Provider); err != nil {
+			conn.close()
+			return nil, err
+		}
+	}
+	if claudeReadOnly {
+		if err := conn.setMode(ctx, ns, "plan"); err != nil {
 			conn.close()
 			return nil, err
 		}
@@ -155,7 +177,7 @@ func (h *ACPHarness) Models(ctx context.Context) ([]Model, error) {
 		return nil, err
 	}
 	defer conn.close()
-	ns, err := conn.newSession(ctx, h.probe)
+	ns, err := conn.newSession(ctx, h.probe, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +263,9 @@ func (h *ACPHarness) Steer(ctx context.Context, sessionID, text string) error {
 		"_meta": map[string]any{"steering": map[string]any{"idleBehavior": "promptRequired"}},
 	})
 	if err != nil {
+		if run.conn.gone() {
+			return model.ErrAgentSessionNotFound
+		}
 		return err
 	}
 	var res struct {
@@ -307,6 +332,7 @@ type acpConn struct {
 	stderr  *tailBuffer
 	exited  chan struct{}
 	once    sync.Once
+	closed  atomic.Bool
 
 	steering bool // the agent accepts _session/steering
 
@@ -361,9 +387,13 @@ func (ns acpNewSession) modelOption() *acpOption {
 	return nil
 }
 
-func (c *acpConn) newSession(ctx context.Context, cwd string) (acpNewSession, error) {
+func (c *acpConn) newSession(ctx context.Context, cwd string, meta map[string]any) (acpNewSession, error) {
 	var ns acpNewSession
-	raw, err := c.call(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": []any{}})
+	params := map[string]any{"cwd": cwd, "mcpServers": []any{}}
+	if meta != nil {
+		params["_meta"] = meta
+	}
+	raw, err := c.call(ctx, "session/new", params)
 	if err != nil {
 		return ns, err
 	}
@@ -387,6 +417,23 @@ func (c *acpConn) setModel(ctx context.Context, ns acpNewSession, ref, provider 
 		}
 	}
 	return fmt.Errorf("%w: model %s is not available to the agent; log in to its provider (e.g. opencode auth login, claude login) or pick another model in settings", model.ErrPermanent, ref)
+}
+
+// setMode selects mode through the agent's mode option. Failing to is permanent:
+// a read-only role must not run in a mode the agent would not confirm.
+func (c *acpConn) setMode(ctx context.Context, ns acpNewSession, mode string) error {
+	for _, opt := range ns.ConfigOptions {
+		if opt.Category != "mode" {
+			continue
+		}
+		for _, o := range opt.Options {
+			if o.Value == mode {
+				_, err := c.call(ctx, "session/set_config_option", map[string]any{"sessionId": ns.SessionID, "configId": opt.ID, "value": mode})
+				return err
+			}
+		}
+	}
+	return fmt.Errorf("%w: agent offers no %q mode, which read-only roles require", model.ErrPermanent, mode)
 }
 
 // qualify gives a model value the agent lists without a provider its harness provider.
@@ -469,8 +516,19 @@ func (c *acpConn) write(v any) error {
 	return err
 }
 
+// gone reports that the agent process was torn down or exited.
+func (c *acpConn) gone() bool {
+	select {
+	case <-c.exited:
+		return true
+	default:
+		return c.closed.Load()
+	}
+}
+
 func (c *acpConn) close() {
 	c.once.Do(func() {
+		c.closed.Store(true)
 		_ = c.w.Close()
 		if c.cmd.Process != nil {
 			_ = c.cmd.Process.Kill()

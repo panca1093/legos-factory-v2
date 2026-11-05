@@ -206,6 +206,34 @@ func contains(list []any, want string) bool {
 	return false
 }
 
+func TestImplementationDoesNotReindexBuilderOutput(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	r.workspace(t, map[string]string{"docs/money.md": moneyDoc})
+	if err := r.f.handlePlan(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	dir := r.f.workspaceDir(r.wo.ID)
+	if err := os.WriteFile(filepath.Join(dir, "routing.md"), []byte(routingBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, dir, "add", "-A")
+	gitRun(t, dir, "commit", "--quiet", "-m", "builder doc")
+	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateQueued); err != nil {
+		t.Fatal(err)
+	}
+	r.f.Quality, r.f.Sandbox = &store.QualityRepo{DB: r.db}, filesSandbox{files: []string{"x.go"}}
+	if err := r.f.handleImplement(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(r.events(t, "knowledge_indexed")); n != 1 {
+		t.Fatalf("knowledge_indexed events = %d; only planning start may index the repository", n)
+	}
+	if d, _ := r.know.Idx.Get(ctx, "repo:p1:routing.md"); d != nil {
+		t.Fatal("a document the builder wrote reached the index")
+	}
+}
+
 func TestRepoSyncFailureNeverFailsTheJob(t *testing.T) {
 	r := newRig(t)
 	r.f.syncRepo(context.Background(), r.wo, true)

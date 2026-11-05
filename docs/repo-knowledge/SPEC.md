@@ -114,7 +114,7 @@ The FTS rowid maps through a `kb_fts_map(doc_id TEXT PRIMARY KEY, fts_rowid INTE
 
 ## Sync
 
-- **`repo`:** after the workspace is prepared and before planning, at the workspace HEAD; again before implementation if HEAD moved. Unchanged hashes are skipped. Emits `knowledge_indexed {source, commit_sha, docs, changed, removed}`.
+- **`repo`:** once per planning start, after the workspace is prepared, at the work order's base commit; never again during implementation, so nothing a builder writes reaches the index or reviewer routing. Only git-tracked regular files are indexed (no untracked files, no symlinks), and bodies are read back with `git show <commit_sha>:<path>`. Unchanged hashes are skipped. Emits `knowledge_indexed {source, commit_sha, docs, changed, removed}`.
 - **`factory`:** synchronously after each write (one file at a time), and in full at startup.
 
 ## Retrieval and delivery

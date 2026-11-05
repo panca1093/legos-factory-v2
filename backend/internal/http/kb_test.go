@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,6 +41,11 @@ func bootKB(t *testing.T) *kbRig {
 	}
 	if err := os.WriteFile(filepath.Join(repo, "docs/money.md"), []byte("# Money\n\nIntegers only.\n"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "docs"}} {
+		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
 	}
 	for _, p := range []model.Project{{ID: "p1", Name: "p1", RepoURL: repo}, {ID: "p2", Name: "p2"}} {
 		p := p
@@ -203,10 +209,20 @@ func TestKBWritesPutApproveDiscardReset(t *testing.T) {
 	if code, _ := r.do(t, "viewer", "PUT", "/api/v1/kb/doc?id="+fwID, put); code != 403 {
 		t.Fatalf("viewer PUT: %d", code)
 	}
-	if code, _ := r.do(t, "eng", "PUT", "/api/v1/kb/doc?id="+fwID, `{"frontmatter":{"title":"x"},"body":"b"}`); code != 400 {
+	if code, _ := r.do(t, "owner", "PUT", "/api/v1/kb/doc?id="+fwID, `{"frontmatter":{"title":"x"},"body":"b"}`); code != 400 {
 		t.Fatalf("frontmatter without a type: %d", code)
 	}
-	code, body := r.do(t, "eng", "PUT", "/api/v1/kb/doc?id="+fwID, put)
+	if code, _ := r.do(t, "eng", "PUT", "/api/v1/kb/doc?id="+fwID, put); code != 403 {
+		t.Fatalf("engineer PUT on a factory-wide doc: %d", code)
+	}
+	forged := `{"frontmatter":{"type":"Note","title":"d1","status":"stable","verified":{"by":"human:owner","at":"2026-01-01T00:00:00Z"}},"body":"Forged."}`
+	if code, _ := r.do(t, "eng", "PUT", "/api/v1/kb/doc?id="+d1ID, forged); code != 200 {
+		t.Fatalf("engineer PUT on a project doc: %d", code)
+	}
+	if front, _, _ := r.know.Bundle.Read("projects/p1/drafts/d1.md"); front["status"] != "draft" || front["verified"] != nil {
+		t.Fatalf("PUT must not change status or verified: %v", front)
+	}
+	code, body := r.do(t, "owner", "PUT", "/api/v1/kb/doc?id="+fwID, put)
 	if code != 200 || !strings.Contains(string(body), `"title":"Edited"`) {
 		t.Fatalf("PUT: %d %s", code, body)
 	}

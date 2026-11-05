@@ -97,3 +97,10 @@ var specialtyFocus = map[string]string{
 	SpecialtyUIUX:         "Usability, accessibility (labels, focus, contrast), responsive layout and copy clarity.",
 	SpecialtyArchitecture: "Module boundaries, dependency direction, migrations and long-term maintainability.",
 }
+
+func focusOf(specialty string) string {
+	if f, ok := specialtyFocus[specialty]; ok {
+		return f
+	}
+	return "Correctness, risks and regressions within the " + specialty + " area."
+}

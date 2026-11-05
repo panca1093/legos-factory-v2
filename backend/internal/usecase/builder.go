@@ -23,7 +23,6 @@ func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
 			return err
 		}
 	}
-	f.syncRepo(ctx, wo, false)
 	// first transition in: record the failing baseline before any change,
 	// so verification evidence is revision-specific from the start
 	if err := f.recordBaseline(ctx, wo); err != nil {
@@ -80,20 +79,26 @@ func (f *Foreman) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 	if err != nil {
 		return res, runID, err
 	}
-	runIDs := []string{runID}
+	runs := []heldRun{{runID, res}}
 	if err := f.requireChanges(ctx, wo, job, opts.Dir, runID); err != nil {
-		f.failRuns(ctx, wo.ID, runIDs, err)
+		f.failRuns(ctx, wo.ID, runs, err)
 		return res, runID, err
 	}
 	if branch != "" {
 		more, err := f.integrateTask(ctx, wo, job, opts.Dir, branch, provider, modelID)
-		runIDs = append(runIDs, more...)
+		runs = append(runs, more...)
 		if err != nil {
-			f.failRuns(ctx, wo.ID, runIDs, err)
+			f.failRuns(ctx, wo.ID, runs, err)
 			return res, runID, err
 		}
 	}
-	return res, runID, f.completeRuns(ctx, wo.ID, runIDs, res)
+	return res, runID, f.completeRuns(ctx, wo.ID, runs)
+}
+
+// heldRun is a run kept open by runOpts.Hold together with its own result.
+type heldRun struct {
+	id  string
+	res model.AgentResult
 }
 
 func (f *Foreman) requireChanges(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, runID string) error {
@@ -116,13 +121,13 @@ func (f *Foreman) requireChanges(ctx context.Context, wo *model.WorkOrder, job m
 // integrateTask commits the task worktree and merges it into the work order
 // workspace. On a conflict the builder resolves it once in its worktree
 // against the latest workspace HEAD; it returns the runs that resolution used.
-func (f *Foreman) integrateTask(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, branch, provider, modelID string) ([]string, error) {
+func (f *Foreman) integrateTask(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, branch, provider, modelID string) ([]heldRun, error) {
 	woDir := f.workspaceDir(wo.ID)
 	msg := fmt.Sprintf("legos-factory: %s task %s", wo.ID, job.TaskID)
 	if _, err := f.Sandbox.Commit(ctx, dir, msg); err != nil {
 		return nil, err
 	}
-	conflict, err := f.mergeTask(ctx, woDir, branch, msg)
+	conflict, err := f.mergeTask(ctx, wo.ID, woDir, branch, msg)
 	if err != nil || !conflict {
 		return nil, f.afterMerge(ctx, wo, job, woDir, dir, branch, err)
 	}
@@ -132,27 +137,28 @@ func (f *Foreman) integrateTask(ctx context.Context, wo *model.WorkOrder, job mo
 	}
 	f.event(wo.ID, "builder", "task_conflict",
 		fmt.Sprintf("Task %s conflicts with merged work in %s; builder resolving", job.TaskID, strings.Join(files, ", ")), nil)
-	_, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, resolvePrompt(wo, job, files), nil, job.TaskID, runOpts{Dir: dir, Hold: true})
+	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, resolvePrompt(wo, job, files), nil, job.TaskID, runOpts{Dir: dir, Hold: true})
 	if err != nil {
 		return nil, err
 	}
-	runs := []string{runID}
+	runs := []heldRun{{runID, res}}
 	if left := withConflictMarkers(dir, files); len(left) > 0 {
 		return runs, fmt.Errorf("%w: task %s still has conflict markers in %s", model.ErrPermanent, job.TaskID, strings.Join(left, ", "))
 	}
 	if _, err := f.Sandbox.Commit(ctx, dir, msg+" (conflicts resolved)"); err != nil {
 		return runs, err
 	}
-	conflict, err = f.mergeTask(ctx, woDir, branch, msg)
+	conflict, err = f.mergeTask(ctx, wo.ID, woDir, branch, msg)
 	if err == nil && conflict {
 		err = fmt.Errorf("%w: task %s still conflicts after the builder resolved it", model.ErrPermanent, job.TaskID)
 	}
 	return runs, f.afterMerge(ctx, wo, job, woDir, dir, branch, err)
 }
 
-func (f *Foreman) mergeTask(ctx context.Context, woDir, branch, msg string) (bool, error) {
-	f.wsMu.Lock()
-	defer f.wsMu.Unlock()
+func (f *Foreman) mergeTask(ctx context.Context, woID, woDir, branch, msg string) (bool, error) {
+	mu := f.wsLock(woID)
+	mu.Lock()
+	defer mu.Unlock()
 	return f.Sandbox.MergeTask(ctx, woDir, branch, msg)
 }
 
@@ -168,19 +174,19 @@ func (f *Foreman) afterMerge(ctx context.Context, wo *model.WorkOrder, job model
 	return nil
 }
 
-func (f *Foreman) completeRuns(ctx context.Context, woID string, runIDs []string, res model.AgentResult) error {
-	for _, id := range runIDs {
-		if err := f.Runs.Complete(ctx, id, res); err != nil {
+func (f *Foreman) completeRuns(ctx context.Context, woID string, runs []heldRun) error {
+	for _, r := range runs {
+		if err := f.Runs.Complete(context.WithoutCancel(ctx), r.id, r.res); err != nil {
 			return err
 		}
-		f.event(woID, "builder", "agent_completed", "builder agent finished", map[string]any{"run_id": id})
+		f.event(woID, "builder", "agent_completed", "builder agent finished", map[string]any{"run_id": r.id})
 	}
 	return nil
 }
 
-func (f *Foreman) failRuns(ctx context.Context, woID string, runIDs []string, err error) {
-	for _, id := range runIDs {
-		f.failRun(ctx, woID, model.AgentBuilder, id, err)
+func (f *Foreman) failRuns(ctx context.Context, woID string, runs []heldRun, err error) {
+	for _, r := range runs {
+		f.failRun(ctx, woID, model.AgentBuilder, r.id, err)
 	}
 }
 
@@ -227,9 +233,10 @@ func withConflictMarkers(dir string, files []string) []string {
 // when no verification evidence exists yet. A passing baseline is recorded
 // as PASS — it still counts as evidence for the original revision.
 func (f *Foreman) recordBaseline(ctx context.Context, wo *model.WorkOrder) error {
-	// parallel tasks arrive together; one records the baseline
-	f.wsMu.Lock()
-	defer f.wsMu.Unlock()
+	// parallel tasks arrive together; one records the baseline, apart from the merge lock so merges are not held up
+	mu := f.baselineLock(wo.ID)
+	mu.Lock()
+	defer mu.Unlock()
 	existing, err := f.Quality.Count(ctx, wo.ID)
 	if err != nil {
 		return err

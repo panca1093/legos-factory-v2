@@ -48,8 +48,9 @@ type Foreman struct {
 	Integrations *Integrations
 	Sandbox      Sandbox
 	DataDir      string
-	wsMu         sync.Mutex // serializes writes to work order workspaces: task merges, dependency setup
-	live         sync.Map   // run id → liveSession, while the agent runs
+	wsMu         sync.Map // work order id → *sync.Mutex serializing writes to its workspace: task merges, dependency setup
+	baselineMu   sync.Map // work order id → *sync.Mutex so one task records the baseline
+	live         sync.Map // run id → liveSession, while the agent runs
 	QualTimeout  time.Duration
 	StallAfter   time.Duration // no new agent step for this long reports a stall; 0 = defaultStallAfter
 	Log          *slog.Logger
@@ -177,7 +178,7 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 		return model.AgentResult{}, runID, err
 	}
 	if !opts.Hold {
-		if err := f.Runs.Complete(ctx, runID, res); err != nil {
+		if err := f.Runs.Complete(context.WithoutCancel(ctx), runID, res); err != nil {
 			return model.AgentResult{}, runID, err
 		}
 	}
@@ -195,12 +196,20 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	return res, runID, nil
 }
 
+func (f *Foreman) wsLock(woID string) *sync.Mutex       { return lockFor(&f.wsMu, woID) }
+func (f *Foreman) baselineLock(woID string) *sync.Mutex { return lockFor(&f.baselineMu, woID) }
+
+func lockFor(m *sync.Map, id string) *sync.Mutex {
+	mu, _ := m.LoadOrStore(id, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
 func (f *Foreman) release(release func(actual int64)) {
 	release(0)
 }
 
 func (f *Foreman) failRun(ctx context.Context, woID string, role model.AgentRole, runID string, err error) {
-	_ = f.Runs.Fail(ctx, runID, err.Error())
+	_ = f.Runs.Fail(context.WithoutCancel(ctx), runID, err.Error())
 	f.event(woID, string(role), "agent_failed", fmt.Sprintf("%s agent failed: %v", role, err), map[string]any{"run_id": runID})
 }
 

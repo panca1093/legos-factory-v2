@@ -160,3 +160,78 @@ func TestRemediationWithoutChangesFailsItsRun(t *testing.T) {
 		t.Fatalf("agent_failed = %d, agent_completed = %d; want 1 and 0", failed, completed)
 	}
 }
+
+func TestCompleteRunsRecordsEachRunsOwnResult(t *testing.T) {
+	f, wo, _ := monitorForeman(t, writingHarness{})
+	ctx := context.Background()
+	runs := []heldRun{{"r1", model.AgentResult{Text: "task", TokensOut: 10}}, {"r2", model.AgentResult{Text: "resolve", TokensOut: 20}}}
+	for _, r := range runs {
+		if err := f.Runs.Start(ctx, r.id, wo.ID, "", "builder", "fake"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.completeRuns(ctx, wo.ID, runs); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.Runs.(*store.RunRepo).List(ctx, wo.ID)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("runs = %v, err = %v", got, err)
+	}
+	for _, r := range got {
+		want := map[string]model.AgentResult{"r1": runs[0].res, "r2": runs[1].res}[r.ID]
+		if r.Output == nil || *r.Output != want.Text || r.TokensOut != want.TokensOut {
+			t.Fatalf("run %s = %v/%d; want %q/%d", r.ID, r.Output, r.TokensOut, want.Text, want.TokensOut)
+		}
+	}
+}
+
+func TestRunStateWritesSurviveExpiredJobContext(t *testing.T) {
+	f, wo, _ := monitorForeman(t, writingHarness{})
+	ctx, cancel := context.WithCancel(context.Background())
+	for _, id := range []string{"r1", "r2"} {
+		if err := f.Runs.Start(ctx, id, wo.ID, "", "builder", "fake"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancel()
+	f.failRun(ctx, wo.ID, model.AgentBuilder, "r1", errors.New("deadline exceeded"))
+	if err := f.completeRuns(ctx, wo.ID, []heldRun{{"r2", model.AgentResult{Text: "ok"}}}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := f.Runs.(*store.RunRepo).List(context.Background(), wo.ID)
+	states := map[string]string{}
+	for _, r := range got {
+		states[r.ID] = r.State
+	}
+	if states["r1"] != "failed" || states["r2"] != "completed" {
+		t.Fatalf("states = %v; want r1 failed, r2 completed", states)
+	}
+}
+
+func TestWorkspaceLocksArePerWorkOrder(t *testing.T) {
+	f, _, _ := monitorForeman(t, writingHarness{})
+	f.Sandbox = dirSandbox{}
+	held := f.wsLock("woA")
+	held.Lock()
+	defer held.Unlock()
+	f.baselineLock("woB").Lock()
+	defer f.baselineLock("woB").Unlock()
+	merged := func(woID string) chan struct{} {
+		c := make(chan struct{})
+		go func() {
+			_, _ = f.mergeTask(context.Background(), woID, "dir", "b", "m")
+			close(c)
+		}()
+		return c
+	}
+	select {
+	case <-merged("woB"):
+	case <-time.After(2 * time.Second):
+		t.Fatal("a merge of woB waited on woA's lock or on woB's baseline")
+	}
+	select {
+	case <-merged("woA"):
+		t.Fatal("two merges of the same work order ran together")
+	case <-time.After(100 * time.Millisecond):
+	}
+}

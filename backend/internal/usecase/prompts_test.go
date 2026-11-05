@@ -21,3 +21,10 @@ func TestPromptsCarryClarificationAnswer(t *testing.T) {
 		}
 	}
 }
+
+func TestInspectPromptHasFocusForCustomSpecialty(t *testing.T) {
+	p := inspectPrompt(&model.WorkOrder{}, SpecialistPick{Specialty: "payments"}, nil)
+	if !strings.Contains(p, "Focus: Correctness, risks and regressions within the payments area.") {
+		t.Fatalf("custom specialty has no focus:\n%s", p)
+	}
+}

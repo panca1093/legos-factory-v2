@@ -175,3 +175,35 @@ func TestJournalExportOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestJournalExportResumesAfterPartialWrite(t *testing.T) {
+	j, db := newJournal(t)
+	ctx := context.Background()
+	legacy := &store.KnowledgeRepo{DB: db}
+	var ids []string
+	for _, title := range []string{"first", "second"} {
+		k := &model.KnowledgeRecord{WorkspaceID: model.DefaultWorkspaceID, ProjectID: "p1", Kind: "plan_approved", Trust: model.TrustHumanDecision, Actor: "human", Title: title, Body: "body " + title}
+		if err := legacy.Insert(ctx, k); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, k.ID)
+	}
+	dir := filepath.Join(j.KB.Bundle.Root(), "projects", "p1", "journal")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ids[0]+".md"), []byte("---\ntype: Jour"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := j.Export(ctx, legacy); err != nil || n != 2 {
+		t.Fatalf("export after a partial write: %d %v; want both records", n, err)
+	}
+	for i, id := range ids {
+		if r, err := j.Get(ctx, id); err != nil || r.Body != "body "+[]string{"first", "second"}[i] {
+			t.Fatalf("record %s: %+v %v", id, r, err)
+		}
+	}
+	if n, err := j.Export(ctx, legacy); err != nil || n != 0 {
+		t.Fatalf("export after completion must be a no-op: %d %v", n, err)
+	}
+}

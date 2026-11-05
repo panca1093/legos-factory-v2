@@ -32,7 +32,8 @@ func fakeAgent(scenario string) {
 		send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "fake-ses", "update": u}})
 	}
 	reply := func(id any, result any) { send(map[string]any{"id": id, "result": result}) }
-	var cwd, chosenModel string
+	var cwd, chosenModel, sessionMeta string
+	var setCalls []string
 	var promptID any
 	for in.Scan() {
 		var m struct {
@@ -45,7 +46,7 @@ func fakeAgent(scenario string) {
 		switch m.Method {
 		case "initialize":
 			res := map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": "Fake", "version": "0"}}
-			if scenario == "steer" {
+			if scenario == "steer" || scenario == "steer-exit" {
 				res["_meta"] = map[string]any{"steering": map[string]any{"supported": true}}
 			}
 			reply(m.ID, res)
@@ -61,6 +62,9 @@ func fakeAgent(scenario string) {
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32602, "message": "want idleBehavior promptRequired"}})
 				continue
 			}
+			if scenario == "steer-exit" {
+				os.Exit(3)
+			}
 			if promptID == nil {
 				reply(m.ID, map[string]any{"outcome": "promptRequired", "reason": "noRunningTurn"})
 				continue
@@ -70,11 +74,14 @@ func fakeAgent(scenario string) {
 			reply(promptID, map[string]any{"stopReason": "end_turn"})
 			promptID = nil
 		case "session/new":
-			var p struct{ Cwd string }
+			var p struct {
+				Cwd  string
+				Meta json.RawMessage `json:"_meta"`
+			}
 			_ = json.Unmarshal(m.Params, &p)
-			cwd = p.Cwd
+			cwd, sessionMeta = p.Cwd, string(p.Meta)
 			reply(m.ID, map[string]any{"sessionId": "fake-ses", "configOptions": []any{
-				map[string]any{"id": "mode", "category": "mode", "currentValue": "build", "options": []any{map[string]any{"value": "build", "name": "Build"}}},
+				map[string]any{"id": "mode", "category": "mode", "currentValue": "build", "options": []any{map[string]any{"value": "build", "name": "Build"}, map[string]any{"value": "plan", "name": "Plan"}}},
 				map[string]any{"id": "model", "category": "model", "currentValue": "opencode/free-a", "options": []any{
 					map[string]any{"value": "opencode/free-a", "name": "opencode/Free A"},
 					map[string]any{"value": "opencode-go/kimi", "name": "opencode-go/Kimi"},
@@ -84,7 +91,10 @@ func fakeAgent(scenario string) {
 		case "session/set_config_option":
 			var p struct{ ConfigID, Value string }
 			_ = json.Unmarshal(m.Params, &p)
-			chosenModel = p.ConfigID + "=" + p.Value
+			setCalls = append(setCalls, p.ConfigID+"="+p.Value)
+			if p.ConfigID == "model" {
+				chosenModel = p.ConfigID + "=" + p.Value
+			}
 			reply(m.ID, map[string]any{"configOptions": []any{}})
 		case "session/cancel":
 			if promptID != nil {
@@ -103,7 +113,7 @@ func fakeAgent(scenario string) {
 				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "failed"})
 				update(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "thinking"}})
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": `{"cwd":"` + cwd + `",`}})
-				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": `"model":"` + chosenModel + `","config":` + fmt.Sprintf("%q", os.Getenv("OPENCODE_CONFIG_CONTENT")) + `}`}})
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": `"model":"` + chosenModel + `","config":` + fmt.Sprintf("%q", os.Getenv("OPENCODE_CONFIG_CONTENT")) + `,"meta":` + fmt.Sprintf("%q", sessionMeta) + `,"set":` + fmt.Sprintf("%q", strings.Join(setCalls, ",")) + `}`}})
 				update(map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.0123, "currency": "USD"}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 100, "outputTokens": 20}})
 			case "permission":
@@ -189,6 +199,50 @@ func TestACPRunReportsStepsTextAndUsage(t *testing.T) {
 	}
 	if res.TokensIn != 100 || res.TokensOut != 20 || res.CostMicros != 12300 || res.CostSource != "measured" || res.SessionRef != "fake-ses" {
 		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestACPClaudeReadOnlyRolesStartInPlanModeWithoutWriteTools(t *testing.T) {
+	type sent struct{ Meta, Set string }
+	run := func(role model.AgentRole) sent {
+		h := fakeHarness(t, "ok")
+		h.Provider = "claude"
+		res, err := runFake(t, h, model.AgentRequest{Role: role, ProviderID: "claude", ModelID: "sonnet", Prompt: "go"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var s sent
+		if err := json.Unmarshal([]byte(res.Text), &s); err != nil {
+			t.Fatalf("reply %q: %v", res.Text, err)
+		}
+		return s
+	}
+	for _, r := range []model.AgentRole{model.AgentArchitect, model.AgentForeman, model.AgentInspector, model.AgentCataloger} {
+		s := run(r)
+		var meta struct {
+			ClaudeCode struct {
+				Options struct {
+					Tools           []string
+					DisallowedTools []string
+					SettingSources  []string
+					StrictMcpConfig bool
+				}
+			}
+		}
+		if err := json.Unmarshal([]byte(s.Meta), &meta); err != nil {
+			t.Fatalf("%s: meta %q: %v", r, s.Meta, err)
+		}
+		o := meta.ClaudeCode.Options
+		if strings.Join(o.Tools, ",") != "Read,Grep,Glob" || strings.Join(o.SettingSources, ",") != "user" || !o.StrictMcpConfig ||
+			!strings.Contains(strings.Join(o.DisallowedTools, ","), "Bash") || !strings.Contains(strings.Join(o.DisallowedTools, ","), "Write") {
+			t.Fatalf("%s: options = %+v", r, o)
+		}
+		if s.Set != "model=sonnet,mode=plan" {
+			t.Fatalf("%s: config calls = %q; want the model, then plan mode", r, s.Set)
+		}
+	}
+	if b := run(model.AgentBuilder); b.Meta != "" || b.Set != "model=sonnet" {
+		t.Fatalf("builder must keep the default session: meta %q, set %q", b.Meta, b.Set)
 	}
 }
 
@@ -332,6 +386,19 @@ func TestACPSteerInjectsIntoRunningTurn(t *testing.T) {
 	}
 	if err := h.Steer(ctx, ses.ID(), "late"); !errors.Is(err, model.ErrAgentSessionNotFound) {
 		t.Fatalf("steer after the turn: %v", err)
+	}
+}
+
+func TestACPSteerRacingTeardownIsSessionGone(t *testing.T) {
+	h := fakeHarness(t, "steer-exit")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentBuilder, Prompt: "go", WorkspaceDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Steer(ctx, ses.ID(), "hi"); !errors.Is(err, model.ErrAgentSessionNotFound) {
+		t.Fatalf("steer while the agent exits: %v; want ErrAgentSessionNotFound (a 409, not a 500)", err)
 	}
 }
 

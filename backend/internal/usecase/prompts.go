@@ -134,5 +134,5 @@ Respond with ONLY:
 {"findings":[{"severity":"blocker"|"major"|"minor"|"info","title":"...","detail":"...","location":"file:line"}]}
 
 Report only findings within your focus that are supported by evidence in the workspace. If there are none, report an empty findings list.`,
-		pick.Specialty, wo.Title, pick.Reason, specialtyFocus[pick.Specialty], wo.Objective, wo.Acceptance, clarification(wo), changed)
+		pick.Specialty, wo.Title, pick.Reason, focusOf(pick.Specialty), wo.Objective, wo.Acceptance, clarification(wo), changed)
 }

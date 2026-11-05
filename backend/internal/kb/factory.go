@@ -2,7 +2,6 @@ package kb
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
@@ -60,7 +59,7 @@ func IndexFactoryFile(ctx context.Context, idx Index, emb Embedder, b *Bundle, r
 	if base := path.Base(rel); base == "index.md" || base == "log.md" {
 		return nil
 	}
-	data, err := os.ReadFile(filepath.Join(b.root, filepath.FromSlash(rel)))
+	data, err := readInRoot(b.root, rel)
 	if err != nil {
 		return err
 	}

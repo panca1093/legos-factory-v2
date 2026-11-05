@@ -179,8 +179,10 @@ func (s *KBDocs) Detail(ctx context.Context, u *model.User, id string) (*KBDetai
 	return det, nil
 }
 
-// readRepoDoc reads a repo document from the project's newest work order
-// workspace that has it, else from the project's local repository.
+// readRepoDoc reads a repo document as committed at the commit it was indexed
+// from, in the project's newest work order workspace that has it, else in the
+// project's local repository. A document indexed without a commit is read from
+// the working tree, never through a symlink.
 func (s *KBDocs) readRepoDoc(ctx context.Context, d *model.KBDoc) (map[string]any, string, string, error) {
 	var roots []string
 	if wos, err := s.WO.List(ctx); err == nil {
@@ -197,7 +199,11 @@ func (s *KBDocs) readRepoDoc(ctx context.Context, d *model.KBDoc) (map[string]an
 		}
 	}
 	for _, root := range roots {
-		if front, body, err := kb.ReadMarkdown(root, d.Path); err == nil {
+		read := func() (map[string]any, string, error) { return kb.ReadMarkdown(root, d.Path) }
+		if d.CommitSHA != "" {
+			read = func() (map[string]any, string, error) { return kb.ReadGitMarkdown(root, d.CommitSHA, d.Path) }
+		}
+		if front, body, err := read(); err == nil {
 			return front, body, "", nil
 		}
 	}
@@ -209,8 +215,21 @@ func (s *KBDocs) Update(ctx context.Context, u *model.User, id string, front map
 	if err != nil {
 		return nil, err
 	}
+	if d.ProjectID == "" && !u.Role.IsAdmin() {
+		return nil, ErrForbidden
+	}
 	if t, _ := front["type"].(string); strings.TrimSpace(t) == "" {
 		return nil, fmt.Errorf("%w: frontmatter needs a type", ErrInvalid)
+	}
+	cur, _, err := s.KB.Bundle.Read(d.Path)
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range []string{"status", "verified", "generated"} {
+		delete(front, k)
+		if v, ok := cur[k]; ok {
+			front[k] = v
+		}
 	}
 	if err := s.KB.WriteFactory(ctx, d.Path, front, body, "Edit "+d.Path); err != nil {
 		return nil, err

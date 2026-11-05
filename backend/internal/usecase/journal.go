@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -209,10 +210,15 @@ type LegacyRecords interface {
 	All(ctx context.Context) ([]model.KnowledgeRecord, error)
 }
 
+// exportDone is written last, so a crash mid-export leaves the export to be
+// redone; rewriting a record with the same content is harmless.
+const exportDone = "journal-export.done"
+
 // Export writes the legacy rows into the bundle in one commit and indexes
-// them, but only while the bundle holds no journal yet.
+// them, until the exportDone marker says it completed.
 func (j *JournalStore) Export(ctx context.Context, src LegacyRecords) (int, error) {
-	if existing, _ := filepath.Glob(filepath.Join(j.KB.Bundle.Root(), "projects", "*", "journal", "*.md")); len(existing) > 0 {
+	marker := filepath.Join(j.KB.Bundle.Root(), exportDone)
+	if _, err := os.Stat(marker); err == nil {
 		return 0, nil
 	}
 	rows, err := src.All(ctx)
@@ -227,6 +233,8 @@ func (j *JournalStore) Export(ctx context.Context, src LegacyRecords) (int, erro
 	if _, err := j.KB.Bundle.WriteMany(files, fmt.Sprintf("Export %d knowledge records", len(rows))); err != nil {
 		return 0, err
 	}
-	_, err = j.KB.SyncFactory(ctx)
-	return len(rows), err
+	if _, err := j.KB.SyncFactory(ctx); err != nil {
+		return len(rows), err
+	}
+	return len(rows), os.WriteFile(marker, []byte("done\n"), 0o644)
 }

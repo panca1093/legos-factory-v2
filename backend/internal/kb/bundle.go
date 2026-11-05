@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -128,14 +129,50 @@ func (b *Bundle) Read(p string) (map[string]any, string, error) {
 
 // ReadMarkdown reads one markdown file under root, splitting frontmatter from the body.
 func ReadMarkdown(root, rel string) (map[string]any, string, error) {
-	rel = path.Clean(filepath.ToSlash(rel))
-	if rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
-		return nil, "", fmt.Errorf("path %q escapes the root", rel)
-	}
-	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	data, err := readInRoot(root, rel)
 	if err != nil {
 		return nil, "", err
 	}
+	return parseMarkdown(data)
+}
+
+// readInRoot reads rel under root, refusing paths that escape it, symlinks included.
+func readInRoot(root, rel string) ([]byte, error) {
+	rel = path.Clean(filepath.ToSlash(rel))
+	if rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
+		return nil, fmt.Errorf("path %q escapes the root", rel)
+	}
+	real, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		return nil, err
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, err
+	}
+	if r, err := filepath.Rel(realRoot, real); err != nil || r == ".." || strings.HasPrefix(r, "../") {
+		return nil, fmt.Errorf("path %q escapes the root", rel)
+	}
+	return os.ReadFile(real)
+}
+
+var commitRef = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+
+// ReadGitMarkdown reads rel as committed at sha in the repository at root.
+// Reading from the object store never follows a working-tree symlink.
+func ReadGitMarkdown(root, sha, rel string) (map[string]any, string, error) {
+	rel = path.Clean(filepath.ToSlash(rel))
+	if !commitRef.MatchString(sha) || rel == ".." || strings.HasPrefix(rel, "../") || path.IsAbs(rel) {
+		return nil, "", fmt.Errorf("invalid commit or path %q", rel)
+	}
+	out, err := exec.Command("git", "-C", root, "show", sha+":"+rel).Output()
+	if err != nil {
+		return nil, "", err
+	}
+	return parseMarkdown(out)
+}
+
+func parseMarkdown(data []byte) (map[string]any, string, error) {
 	fr, body := splitFront(data)
 	front := map[string]any{}
 	if len(fr) > 0 {
@@ -385,7 +422,7 @@ func (b *Bundle) commit(message string) (string, error) {
 	if out, err := b.git("add", "-A"); err != nil {
 		return "", fmt.Errorf("git add: %v: %s", err, out)
 	}
-	if out, err := b.git("-c", "user.name=legos-factory", "-c", "user.email=factory@legos.local", "commit", "-q", "-m", message); err != nil {
+	if out, err := b.git("-c", "user.name=legos-factory", "-c", "user.email=factory@legos.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", message); err != nil {
 		return "", fmt.Errorf("git commit: %v: %s", err, out)
 	}
 	b.head = b.revParse()
