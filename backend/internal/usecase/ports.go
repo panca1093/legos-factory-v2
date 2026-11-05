@@ -156,6 +156,15 @@ type Steerer interface {
 	Steer(ctx context.Context, sessionID, text string) error
 }
 
+// SessionHarness is a Harness that can keep a session open after a run (a
+// request with Keep set) and take further prompts in it, so an agent keeps its
+// own context across prompts. Continue returns model.ErrAgentSessionNotFound
+// when the session is gone; callers then start over.
+type SessionHarness interface {
+	Continue(ctx context.Context, sessionID string, req model.AgentRequest) (model.AgentSession, error)
+	Close(sessionID string)
+}
+
 type Publisher interface {
 	Publish(e model.LiveEvent)
 }

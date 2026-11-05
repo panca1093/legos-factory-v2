@@ -22,6 +22,7 @@ type AgentRequest struct {
 	WorkspaceDir string // directory the agent may operate on (builder/inspector)
 	Context      map[string]string
 	OnStep       func(AgentStep) // optional; called once per finished tool-calling step
+	Keep         bool            // keep the session open after the run, for harnesses that can continue it
 }
 
 // AgentStep is one finished tool-calling step of a running agent.

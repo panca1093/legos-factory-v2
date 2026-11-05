@@ -35,6 +35,7 @@ func fakeAgent(scenario string) {
 	var cwd, chosenModel, sessionMeta string
 	var setCalls []string
 	var promptID any
+	turns := 0
 	for in.Scan() {
 		var m struct {
 			ID     any             `json:"id"`
@@ -134,6 +135,13 @@ func fakeAgent(scenario string) {
 				_ = json.Unmarshal(in.Bytes(), &r)
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": r.Result.Outcome.OptionID}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "multi":
+				var p struct{ Prompt []struct{ Text string } }
+				_ = json.Unmarshal(m.Params, &p)
+				turns++
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": fmt.Sprintf("turn %d: %s", turns, p.Prompt[0].Text)}})
+				update(map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01 * float64(turns), "currency": "USD"}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 10, "outputTokens": 2}})
 			case "quota":
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Go usage limit exceeded"}})
 			case "funds":
@@ -369,6 +377,49 @@ func TestACPHarnessName(t *testing.T) {
 	}
 	if n := NewACPHarness([]string{"opencode", "acp"}, "").Name(); n != "opencode-acp" {
 		t.Fatalf("name = %s", n)
+	}
+}
+
+func TestACPKeptSessionTakesFurtherPrompts(t *testing.T) {
+	h := fakeHarness(t, "multi")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ws := t.TempDir()
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentForeman, Prompt: "first", WorkspaceDir: ws, Keep: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := h.Result(ctx, ses.ID())
+	if err != nil || res.Text != "turn 1: first" || res.CostMicros != 10000 {
+		t.Fatalf("first turn: %+v, %v", res, err)
+	}
+	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentForeman, Prompt: "second", WorkspaceDir: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = h.Result(ctx, next.ID())
+	if err != nil || res.Text != "turn 2: second" || res.CostMicros != 10000 || res.TokensOut != 2 {
+		t.Fatalf("a continued turn reports its own text and cost: %+v, %v", res, err)
+	}
+	h.Close(ses.ID())
+	if _, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Prompt: "third"}); !errors.Is(err, model.ErrAgentSessionNotFound) {
+		t.Fatalf("continue after Close: %v", err)
+	}
+}
+
+func TestACPSessionWithoutKeepIsNotContinuable(t *testing.T) {
+	h := fakeHarness(t, "multi")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentArchitect, Prompt: "one", WorkspaceDir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Result(ctx, ses.ID()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Prompt: "two"}); !errors.Is(err, model.ErrAgentSessionNotFound) {
+		t.Fatalf("continue without Keep: %v", err)
 	}
 }
 

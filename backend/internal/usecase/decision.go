@@ -153,6 +153,7 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 
 // Cancel stops pending jobs and transitions the WO to CANCELLED.
 func (f *Factory) Cancel(ctx context.Context, woID string) error {
+	f.closePlanning(woID)
 	if err := f.Sched.CancelWO(ctx, woID); err != nil {
 		return err
 	}

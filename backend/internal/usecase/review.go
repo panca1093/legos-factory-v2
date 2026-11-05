@@ -19,6 +19,7 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
+	defer f.closePlanning(wo.ID) // the plan review ends the Foreman's planning session, whatever it decides
 	if wo.State != model.StateArchitectReview || wo.PlanReview != "pending" {
 		return nil // superseded: the plan was revised, approved or escalated meanwhile
 	}
@@ -30,7 +31,8 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	var r reviewReply
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+taskList(tasks), f.workspaceDir(wo.ID), wo.KBBaseSHA)
 	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanReviewPrompt(wo, tasks)+kbText,
-		map[string]string{"review_round": fmt.Sprint(wo.ReviewRounds), "clarification_answer": wo.ClarifAnswer}, "", &r, runOpts{Audit: audit})
+		map[string]string{"stage": "review", "review_round": fmt.Sprint(wo.ReviewRounds), "clarification_answer": wo.ClarifAnswer},
+		"", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})
 	if err != nil {
 		return err
 	}

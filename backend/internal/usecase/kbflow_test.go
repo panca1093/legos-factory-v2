@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	planJSON    = `{"decision":"APPROVE","summary":"s","tasks":[{"id":"t1","title":"Round money","objective":"o","role":"builder"}]}`
+	planJSON    = `{"decision":"APPROVE","summary":"s","spec":"sp","tasks":[{"id":"t1","title":"Round money","objective":"o","role":"builder"}]}`
 	reviewJSON  = `{"decision":"APPROVE","notes":"ok"}`
 	noFindings  = `{"findings":[]}`
 	moneyDoc    = "# Money\n\nMoney is integer rupiah; never use floats for rounding.\n"

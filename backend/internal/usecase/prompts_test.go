@@ -10,7 +10,7 @@ import (
 func TestPromptsCarryClarificationAnswer(t *testing.T) {
 	wo := &model.WorkOrder{Title: "t", ClarifQuestion: "round what?", ClarifAnswer: "the discount"}
 	for name, p := range map[string]string{
-		"plan":        planPrompt(wo, ""),
+		"plan":        planPrompt(wo, "", ""),
 		"review":      foremanReviewPrompt(wo, nil),
 		"implement":   implementPrompt(wo, model.Job{TaskID: "task-1"}),
 		"remediation": implementPrompt(wo, model.Job{Payload: map[string]any{"reason": "fix"}}),

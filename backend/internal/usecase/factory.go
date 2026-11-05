@@ -51,6 +51,7 @@ type Factory struct {
 	wsMu         sync.Map // work order id → *sync.Mutex serializing writes to its workspace: task merges, dependency setup
 	baselineMu   sync.Map // work order id → *sync.Mutex so one task records the baseline
 	live         sync.Map // run id → liveSession, while the agent runs
+	planSes      sync.Map // work order id → planSession: the Foreman's open planning session
 	QualTimeout  time.Duration
 	StallAfter   time.Duration // no new agent step for this long reports a stall; 0 = defaultStallAfter
 	Log          *slog.Logger
@@ -113,6 +114,11 @@ type runOpts struct {
 	Dir   string
 	Hold  bool
 	Audit map[string]any // knowledge commits and document ids, recorded on agent_started
+
+	// Planning runs the prompt in the work order's Foreman planning session; Prime
+	// is prepended only when that starts a new session, restoring earlier decisions.
+	Planning bool
+	Prime    string
 }
 
 func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID, prompt string, extra map[string]string, taskID string, opts runOpts) (model.AgentResult, string, error) {
@@ -163,7 +169,13 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 			map[string]any{"run_id": runID, "step": st.N, "tools": st.Tools, "tokens_out": st.TokensOut})
 	}
 	stopWatch := f.watchStall(wo.ID, role, runID, &lastStep)
-	ses, err := h.Start(ctx, req)
+	var ses model.AgentSession
+	var err error
+	if opts.Planning {
+		ses, err = f.startPlanning(ctx, wo.ID, h, req, opts.Prime)
+	} else {
+		ses, err = h.Start(ctx, req)
+	}
 	if err != nil {
 		stopWatch()
 		f.failRun(ctx, wo.ID, role, runID, err)
@@ -174,6 +186,9 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	f.live.Delete(runID)
 	stopWatch()
 	if err != nil {
+		if opts.Planning {
+			f.closePlanning(wo.ID)
+		}
 		f.failRun(ctx, wo.ID, role, runID, err)
 		return model.AgentResult{}, runID, err
 	}
@@ -202,6 +217,49 @@ func (f *Factory) baselineLock(woID string) *sync.Mutex { return lockFor(&f.base
 func lockFor(m *sync.Map, id string) *sync.Mutex {
 	mu, _ := m.LoadOrStore(id, &sync.Mutex{})
 	return mu.(*sync.Mutex)
+}
+
+type planSession struct {
+	harness SessionHarness
+	name    string
+	id      string
+}
+
+// startPlanning sends req into the work order's open Foreman session, or opens
+// a new one primed with prime when there is none or the harness cannot continue it.
+func (f *Factory) startPlanning(ctx context.Context, woID string, h Harness, req model.AgentRequest, prime string) (model.AgentSession, error) {
+	sh, ok := h.(SessionHarness)
+	if !ok {
+		req.Prompt = prime + req.Prompt
+		return h.Start(ctx, req)
+	}
+	if v, ok := f.planSes.Load(woID); ok {
+		cur := v.(planSession)
+		if cur.name == h.Name() {
+			ses, err := sh.Continue(ctx, cur.id, req)
+			if err == nil {
+				return ses, nil
+			}
+		}
+		f.closePlanning(woID)
+	}
+	req.Prompt = prime + req.Prompt
+	req.Keep = true
+	ses, err := h.Start(ctx, req)
+	if err == nil {
+		f.planSes.Store(woID, planSession{harness: sh, name: h.Name(), id: ses.ID()})
+	}
+	return ses, err
+}
+
+// closePlanning ends the work order's Foreman planning session, if one is open.
+func (f *Factory) closePlanning(woID string) {
+	v, ok := f.planSes.LoadAndDelete(woID)
+	if !ok {
+		return
+	}
+	cur := v.(planSession)
+	cur.harness.Close(cur.id)
 }
 
 func (f *Factory) release(release func(actual int64)) {

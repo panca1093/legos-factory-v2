@@ -33,10 +33,11 @@ type ACPHarness struct {
 	probe    string   // directory for model discovery sessions
 	mu       sync.Mutex
 	runs     map[string]*acpRun
+	kept     map[string]*acpConn // idle sessions kept open after a Keep run, by session id
 }
 
 func NewACPHarness(command []string, probeDir string) *ACPHarness {
-	return &ACPHarness{Command: command, Provider: agentProvider(command), probe: probeDir, runs: map[string]*acpRun{}}
+	return &ACPHarness{Command: command, Provider: agentProvider(command), probe: probeDir, runs: map[string]*acpRun{}, kept: map[string]*acpConn{}}
 }
 
 func agentProvider(command []string) string {
@@ -88,8 +89,11 @@ var claudeReadOnlyMeta = map[string]any{"claudeCode": map[string]any{"options": 
 }}}
 
 type acpRun struct {
+	h         *ACPHarness
 	conn      *acpConn
 	sessionID string
+	keep      atomic.Bool // the session stays open for another prompt once this run succeeds
+	costBase  float64     // session cost before this prompt; the agent reports it cumulatively
 	done      chan struct{}
 	result    model.AgentResult
 	err       error
@@ -123,21 +127,66 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 			return nil, err
 		}
 	}
-	run := &acpRun{conn: conn, sessionID: ns.SessionID, done: make(chan struct{})}
+	run := &acpRun{h: h, conn: conn, sessionID: ns.SessionID, done: make(chan struct{})}
+	run.keep.Store(req.Keep)
+	return h.prompt(run, req.Prompt)
+}
+
+// prompt sends text on run's session and starts collecting the reply.
+func (h *ACPHarness) prompt(run *acpRun, text string) (model.AgentSession, error) {
 	// sent before returning, so a Cancel right after Start always follows the prompt
-	wait, err := conn.begin("session/prompt", map[string]any{
-		"sessionId": ns.SessionID,
-		"prompt":    []any{map[string]any{"type": "text", "text": req.Prompt}},
+	wait, err := run.conn.begin("session/prompt", map[string]any{
+		"sessionId": run.sessionID,
+		"prompt":    []any{map[string]any{"type": "text", "text": text}},
 	})
 	if err != nil {
-		conn.close()
+		run.conn.close()
 		return nil, err
 	}
 	h.mu.Lock()
-	h.runs[ns.SessionID] = run
+	h.runs[run.sessionID] = run
 	h.mu.Unlock()
 	go run.finish(wait)
-	return &sessionHandle{id: ns.SessionID}, nil
+	return &sessionHandle{id: run.sessionID}, nil
+}
+
+// Continue sends another prompt into a session kept open by a Keep run.
+func (h *ACPHarness) Continue(_ context.Context, sessionID string, req model.AgentRequest) (model.AgentSession, error) {
+	h.mu.Lock()
+	conn, ok := h.kept[sessionID]
+	delete(h.kept, sessionID)
+	h.mu.Unlock()
+	if !ok {
+		return nil, model.ErrAgentSessionNotFound
+	}
+	if conn.gone() {
+		conn.close()
+		return nil, model.ErrAgentSessionNotFound
+	}
+	conn.mu.Lock()
+	conn.text.Reset()
+	conn.costSeen = false
+	conn.onStep = req.OnStep
+	base := conn.cost
+	conn.mu.Unlock()
+	run := &acpRun{h: h, conn: conn, sessionID: sessionID, costBase: base, done: make(chan struct{})}
+	run.keep.Store(true)
+	return h.prompt(run, req.Prompt)
+}
+
+// Close ends a kept session; a prompt still running in it is the last one.
+func (h *ACPHarness) Close(sessionID string) {
+	h.mu.Lock()
+	conn, ok := h.kept[sessionID]
+	delete(h.kept, sessionID)
+	run := h.runs[sessionID]
+	h.mu.Unlock()
+	if ok {
+		conn.close()
+	}
+	if run != nil {
+		run.keep.Store(false)
+	}
 }
 
 func (h *ACPHarness) Result(ctx context.Context, sessionID string) (model.AgentResult, error) {
@@ -280,8 +329,23 @@ func (h *ACPHarness) Steer(ctx context.Context, sessionID, text string) error {
 }
 
 func (r *acpRun) finish(wait func(context.Context) (json.RawMessage, error)) {
-	defer close(r.done)
-	defer r.conn.close()
+	r.collect(wait)
+	// parked before done closes, so the caller's next Continue always finds it
+	if r.err == nil && r.keep.Load() {
+		r.h.mu.Lock()
+		r.h.kept[r.sessionID] = r.conn
+		r.h.mu.Unlock()
+		// Close may have run between the check and the park
+		if !r.keep.Load() {
+			r.h.Close(r.sessionID)
+		}
+	} else {
+		r.conn.close()
+	}
+	close(r.done)
+}
+
+func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 	raw, err := wait(context.Background())
 	if err != nil {
 		r.err = err
@@ -316,7 +380,7 @@ func (r *acpRun) finish(wait func(context.Context) (json.RawMessage, error)) {
 	r.result = model.AgentResult{
 		Text: c.text.String(), SessionRef: r.sessionID,
 		TokensIn: res.Usage.InputTokens, TokensOut: res.Usage.OutputTokens,
-		CostMicros: int64(c.cost * 1_000_000), CostSource: "unknown",
+		CostMicros: int64((c.cost - r.costBase) * 1_000_000), CostSource: "unknown",
 	}
 	if c.costSeen {
 		r.result.CostSource = "measured"
@@ -616,9 +680,10 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 			step = &model.AgentStep{N: c.steps, Tools: []model.AgentTool{{Name: t.name, Target: toolTarget(t.input), Failed: u.Status == "failed"}}}
 		}
 	}
+	onStep := c.onStep // Continue swaps it between prompts
 	c.mu.Unlock()
-	if step != nil && c.onStep != nil {
-		c.onStep(*step)
+	if step != nil && onStep != nil {
+		onStep(*step)
 	}
 }
 

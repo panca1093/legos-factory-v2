@@ -18,7 +18,7 @@ type WorkOrderRepo struct{ DB *sql.DB }
 const woCols = `id, project_id, title, objective, acceptance, state, autonomy,
 	builder_model, inspector_model, clarif_question, clarif_answer, revision,
 	commit_sha, source_ref, pr_url, pr_ref, foreman_model, architect_model, plan_review, review_rounds,
-	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, created_by, created_at, updated_at`
+	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, brief, spec, clarif_rounds, clarif_log, created_by, created_at, updated_at`
 
 func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	if wo.ID == "" {
@@ -62,11 +62,12 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	var wo model.WorkOrder
 	var state string
 	var pausedAt sql.NullInt64
+	var clarifLog string
 	var createdAt, updatedAt int64
 	err := scan(&wo.ID, &wo.ProjectID, &wo.Title, &wo.Objective, &wo.Acceptance, &state, &wo.Autonomy,
 		&wo.BuilderModel, &wo.InspectorModel, &wo.ClarifQuestion, &wo.ClarifAnswer, &wo.Revision,
 		&wo.CommitSHA, &wo.SourceRef, &wo.PRURL, &wo.PRRef, &wo.ForemanModel, &wo.ArchitectModel, &wo.PlanReview,
-		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.CreatedBy, &createdAt, &updatedAt)
+		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.Brief, &wo.Spec, &wo.ClarifRounds, &clarifLog, &wo.CreatedBy, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrWorkOrderNotFound
 	}
@@ -74,6 +75,9 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 		return nil, err
 	}
 	wo.State = model.State(state)
+	if clarifLog != "" {
+		_ = json.Unmarshal([]byte(clarifLog), &wo.Clarifications)
+	}
 	if pausedAt.Valid {
 		t := time.Unix(pausedAt.Int64, 0)
 		wo.PausedAt = &t
@@ -140,8 +144,13 @@ func (r *WorkOrderRepo) ReplacePlan(ctx context.Context, woID string, tasks []mo
 		if t.ID == "" {
 			t.ID = fmt.Sprintf("task_%s_%d", woID, i+1)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO plan_tasks (id, work_order_id, seq, title, objective, role, created_at)
-			VALUES (?,?,?,?,?,?,?)`, t.ID, woID, i, t.Title, t.Objective, t.Role, now); err != nil {
+		scope := ""
+		if len(t.Scope) > 0 {
+			b, _ := json.Marshal(t.Scope)
+			scope = string(b)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO plan_tasks (id, work_order_id, seq, title, objective, role, scope, created_at)
+			VALUES (?,?,?,?,?,?,?,?)`, t.ID, woID, i, t.Title, t.Objective, t.Role, scope, now); err != nil {
 			return err
 		}
 		for _, d := range t.Deps {
@@ -154,7 +163,7 @@ func (r *WorkOrderRepo) ReplacePlan(ctx context.Context, woID string, tasks []mo
 }
 
 func (r *WorkOrderRepo) Plan(ctx context.Context, woID string) ([]model.Task, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT id, work_order_id, seq, title, objective, role FROM plan_tasks
+	rows, err := r.DB.QueryContext(ctx, `SELECT id, work_order_id, seq, title, objective, role, scope FROM plan_tasks
 		WHERE work_order_id = ? ORDER BY seq`, woID)
 	if err != nil {
 		return nil, err
@@ -164,8 +173,12 @@ func (r *WorkOrderRepo) Plan(ctx context.Context, woID string) ([]model.Task, er
 	byID := map[string]int{} // index, not pointer: append may move the backing array
 	for rows.Next() {
 		var t model.Task
-		if err := rows.Scan(&t.ID, &t.WOID, &t.Seq, &t.Title, &t.Objective, &t.Role); err != nil {
+		var scope string
+		if err := rows.Scan(&t.ID, &t.WOID, &t.Seq, &t.Title, &t.Objective, &t.Role, &scope); err != nil {
 			return nil, err
+		}
+		if scope != "" {
+			_ = json.Unmarshal([]byte(scope), &t.Scope)
 		}
 		t.Deps = []string{}
 		out = append(out, t)

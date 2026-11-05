@@ -11,14 +11,89 @@ import (
 // validated before any state transition; free text never drives control flow.
 
 func clarification(wo *model.WorkOrder) string {
-	if wo.ClarifAnswer == "" {
-		return ""
+	var b strings.Builder
+	if len(wo.Clarifications) > 0 {
+		b.WriteString("\nThe Foreman answered these questions:\n")
+		for _, c := range wo.Clarifications {
+			fmt.Fprintf(&b, "Q: %s\nA: %s\n", c.Question, c.Answer)
+		}
 	}
-	return fmt.Sprintf("\nA human answered a clarification:\nQ: %s\nA: %s\n", wo.ClarifQuestion, wo.ClarifAnswer)
+	if wo.ClarifAnswer != "" {
+		fmt.Fprintf(&b, "\nA human answered a clarification:\nQ: %s\nA: %s\n", wo.ClarifQuestion, wo.ClarifAnswer)
+	}
+	return b.String()
 }
 
-func planPrompt(wo *model.WorkOrder, notes string) string {
-	extra := clarification(wo)
+// clarificationLog is the Foreman's answers as plain text, for scripted harnesses.
+func clarificationLog(wo *model.WorkOrder) string {
+	var parts []string
+	for _, c := range wo.Clarifications {
+		parts = append(parts, c.Question+" -> "+c.Answer)
+	}
+	return strings.Join(parts, "\n")
+}
+
+func briefSection(wo *model.WorkOrder) string {
+	if wo.Brief == "" {
+		return ""
+	}
+	return "\nForeman's brief:\n" + wo.Brief + "\n"
+}
+
+func intakePrompt(wo *model.WorkOrder, facts string) string {
+	return fmt.Sprintf(`You are the Foreman, leading a software engineering team. Brief the Architect before any
+planning starts. You may read the repository to ground the brief.
+
+Work order: %s
+
+Objective:
+%s
+
+Acceptance criteria:
+%s
+
+%s
+Respond with ONLY a JSON object (no prose, no code fences):
+
+{"brief":"<what to build and where, in your words>",
+ "constraints":["<behaviour or interfaces that must not change>"],
+ "risks":["<what could go wrong>"],
+ "suggested_task_shape":"<how to cut the work into tasks>"}`,
+		wo.Title, wo.Objective, wo.Acceptance, facts)
+}
+
+func foremanAnswerPrompt(wo *model.WorkOrder, facts, question string) string {
+	return fmt.Sprintf(`You are the Foreman. The Architect, planning from your brief, asks a question.
+
+Work order: %s
+
+Objective:
+%s
+
+Acceptance criteria:
+%s
+%s%s
+%s
+Architect's question:
+%s
+
+Answer it only if the request, the brief or the repository settles it. If it needs a product
+decision nobody has made, escalate to a human — never guess it.
+Respond with ONLY a JSON object:
+{"decision":"ANSWER"|"ESCALATE","answer":"<required for ANSWER>","reason":"<why, especially for ESCALATE>"}`,
+		wo.Title, wo.Objective, wo.Acceptance, briefSection(wo), clarification(wo), facts, question)
+}
+
+// foremanPrime restores the Foreman's earlier decisions when a prompt starts a new session.
+func foremanPrime(wo *model.WorkOrder) string {
+	if wo.Brief == "" && len(wo.Clarifications) == 0 {
+		return ""
+	}
+	return "You are continuing a work order you already started. Your earlier decisions:" + briefSection(wo) + clarification(wo) + "\n---\n\n"
+}
+
+func planPrompt(wo *model.WorkOrder, notes, facts string) string {
+	extra := briefSection(wo) + clarification(wo)
 	if notes != "" {
 		extra += fmt.Sprintf("\nRevise the previous draft according to: %s\n", notes)
 	}
@@ -32,18 +107,21 @@ Objective:
 Acceptance criteria:
 %s
 %s
+%s
 Decompose this objective into the smallest set of implementation tasks.
 Respond with ONLY a JSON object (no prose, no code fences) matching:
 
 {"decision":"APPROVE"|"CLARIFY",
  "summary":"<one line>",
- "tasks":[{"id":"task-1","title":"...","objective":"...","role":"builder","deps":["task-1"]}],
- "question_text":"<only when decision is CLARIFY: the single question that must be answered by a human>"}
+ "spec":"<behaviour, interfaces and edge cases; required when decision is APPROVE>",
+ "tasks":[{"id":"task-1","title":"...","objective":"...","role":"builder","deps":["task-1"],"scope":["<file or area this task may touch>"]}],
+ "question_text":"<only when decision is CLARIFY: the single question that must be answered>"}
 
 Rules:
-- If a product decision cannot be inferred from the objective, use decision CLARIFY and ask a human — never invent product requirements.
+- If a product decision cannot be inferred from the objective or the brief, use decision CLARIFY and ask — never invent product requirements.
 - "deps" lists ids of tasks that must complete first; the graph must be acyclic and tasks must cover the objective.
-- role is "builder" for implementation tasks.`, wo.Title, wo.Objective, wo.Acceptance, extra)
+- "scope" lists the files or areas each task may touch.
+- role is "builder" for implementation tasks.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts)
 }
 
 func foremanReviewPrompt(wo *model.WorkOrder, tasks []model.Task) string {
@@ -56,6 +134,9 @@ Objective:
 Acceptance criteria:
 %s
 %s
+Architect's spec:
+%s
+
 Plan:
 %s
 Check requirement completeness, task dependencies, scope and assumptions, edge cases,
@@ -66,7 +147,7 @@ Respond with ONLY a JSON object:
  "question_text":"<required for CLARIFY: the single question a human must answer>"}
 
 Use CLARIFY when the plan depends on a product decision nobody has made — never guess it.`,
-		wo.Title, wo.Objective, wo.Acceptance, clarification(wo), taskList(tasks))
+		wo.Title, wo.Objective, wo.Acceptance, briefSection(wo)+clarification(wo), wo.Spec, taskList(tasks))
 }
 
 func implementPrompt(wo *model.WorkOrder, job model.Job) string {
