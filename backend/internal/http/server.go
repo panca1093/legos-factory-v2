@@ -30,6 +30,7 @@ type Server struct {
 	WorkOrders   *usecase.WorkOrders
 	Integrations *usecase.Integrations
 	Catalog      *usecase.Cataloger
+	KBDocs       *usecase.KBDocs
 	Bus          *Bus
 	Auth         *usecase.Identity
 	OIDC         *OIDCClient
@@ -194,6 +195,9 @@ func (s *Server) routes() {
 	wo.POST("/pr-decision", s.requireRole(model.RoleEngineer, s.handlePRDecision))
 	wo.POST("/cancel", s.requireRole(model.RoleEngineer, s.handleCancel))
 	wo.POST("/pause", s.requireRole(model.RoleEngineer, s.handlePause))
+	wo.POST("/tasks/:task_id/retry", s.requireRole(model.RoleEngineer, s.handleRetryTask))
+	wo.POST("/remediation/retry", s.requireRole(model.RoleEngineer, s.handleRetryRemediation))
+	wo.POST("/runs/:run_id/steer", s.requireRole(model.RoleEngineer, s.handleSteer))
 	wo.POST("/resume", s.requireRole(model.RoleEngineer, s.handleResume))
 	wo.POST("/findings/:finding_id/decision", s.requireRole(model.RoleEngineer, s.handleFindingDecision))
 	wo.GET("/runs", s.handleListRuns)
@@ -213,6 +217,13 @@ func (s *Server) routes() {
 
 	api.GET("/knowledge", s.handleListKnowledge)
 	api.GET("/knowledge/:id", s.handleGetKnowledge)
+
+	api.GET("/kb/docs", s.handleKBList)
+	api.GET("/kb/doc", s.handleKBGet)
+	api.PUT("/kb/doc", s.requireRole(model.RoleEngineer, s.handleKBPut))
+	api.POST("/kb/doc/approve", s.requireRole(model.RoleEngineer, s.handleKBApprove))
+	api.POST("/kb/doc/discard", s.requireRole(model.RoleEngineer, s.handleKBDiscard))
+	api.POST("/kb/doc/reset", s.requireRole(model.RoleEngineer, s.handleKBReset))
 
 	api.GET("/models", s.handleModels)
 	api.GET("/usage", s.handleUsage)

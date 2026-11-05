@@ -88,6 +88,7 @@ func (f *Foreman) AnswerClarification(ctx context.Context, woID, answer string) 
 	f.event(woID, "human", "clarification_answered", answer, nil)
 	f.Catalog.Record(ctx, wo, model.KnowledgeClarification, model.TrustHumanDecision, "human",
 		"Clarification: "+wo.ClarifQuestion, fmt.Sprintf("Question: %s\nAnswer: %s", wo.ClarifQuestion, answer))
+	f.draftFromClarification(ctx, wo, wo.ClarifQuestion, answer)
 	if err := f.step(ctx, wo, model.StateWaitingForHuman, model.StatePlanning, "human", "Clarification answered; re-drafting plan"); err != nil {
 		return err
 	}
@@ -277,6 +278,9 @@ func (f *Foreman) DecideFinding(ctx context.Context, woID, findingID, actorID st
 	f.Catalog.Record(ctx, wo, model.KnowledgeFindingDecision, model.TrustHumanDecision, "human",
 		fmt.Sprintf("Finding %s: %s", status, fd.Title), fmt.Sprintf("Severity: %s\nSpecialty: %s\nNote: %s", fd.Severity, fd.Specialty, note),
 		"finding:"+fd.ID)
+	if status == model.FindingDisputed {
+		f.draftFromDispute(ctx, wo, fd, note)
+	}
 	if status == model.FindingEscalated && wo.PausedAt == nil && !wo.State.Terminal() {
 		if err := f.pause(ctx, wo, "human", "Finding escalated: "+fd.Title); err != nil {
 			return nil, err

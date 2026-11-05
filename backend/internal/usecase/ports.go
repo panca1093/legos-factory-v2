@@ -75,6 +75,10 @@ type Sandbox interface {
 	Commit(ctx context.Context, dir, message string) (string, error)
 	PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (base string, err error)
 	ChangedFiles(ctx context.Context, dir string) ([]string, error)
+	TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (ok bool, err error)
+	MergeTask(ctx context.Context, woDir, branch, message string) (conflict bool, err error)
+	SyncTask(ctx context.Context, woDir, taskDir string) (conflicted []string, err error)
+	RemoveTaskWorktree(ctx context.Context, woDir, taskDir, branch string) error
 }
 
 type ConnectionStore interface {
@@ -113,6 +117,7 @@ type RunStore interface {
 	Complete(ctx context.Context, id string, res model.AgentResult) error
 	Fail(ctx context.Context, id, errMsg string) error
 	CompletedBuilderTasks(ctx context.Context, woID string) (map[string]bool, error)
+	LatestRemediationState(ctx context.Context, woID string) (string, error)
 }
 
 type FindingStore interface {
@@ -142,6 +147,11 @@ type Harness interface {
 	Cancel(ctx context.Context, sessionID string) error
 	Result(ctx context.Context, sessionID string) (model.AgentResult, error)
 	Name() string
+}
+
+// Steerer is a Harness that accepts a message into a running turn.
+type Steerer interface {
+	Steer(ctx context.Context, sessionID, text string) error
 }
 
 type Publisher interface {

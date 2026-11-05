@@ -23,6 +23,8 @@ func TestDecodeReplyRejectsSchemaViolations(t *testing.T) {
 		"approve w/o tasks":   `{"decision":"APPROVE","tasks":[]}`,
 		"clarify w/o q":       `{"decision":"CLARIFY"}`,
 		"blank task":          `{"decision":"APPROVE","tasks":[{"title":" ","objective":"b"}]}`,
+		"path-like task id":   `{"decision":"APPROVE","tasks":[{"id":"../a","title":"a","objective":"b"}]}`,
+		"git-ref task id":     `{"decision":"APPROVE","tasks":[{"id":"a b","title":"a","objective":"b"}]}`,
 		"no json":             `I think it is fine.`,
 		"unterminated object": `{"decision":"APPROVE"`,
 	}

@@ -108,7 +108,7 @@ func (Local) Commit(ctx context.Context, dir, message string) (string, error) {
 		return "", fmt.Errorf("git status: %v: %s", err, status)
 	}
 	if strings.TrimSpace(status) != "" {
-		if out, err := git(ctx, dir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost",
+		if out, err := git(ctx, dir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
 			"commit", "--quiet", "--no-verify", "-m", message); err != nil {
 			return "", fmt.Errorf("git commit: %v: %s", err, out)
 		}
@@ -183,4 +183,78 @@ func (Local) ChangedFiles(ctx context.Context, dir string) ([]string, error) {
 		}
 	}
 	return files, nil
+}
+
+// TaskWorktree creates a fresh git worktree at taskDir on branch, starting
+// from the work order workspace HEAD. A retry replaces any earlier attempt.
+// ok is false when woDir is not a git checkout and tasks must share it.
+func (Local) TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (bool, error) {
+	if !isLocalGitRepo(woDir) {
+		return false, nil
+	}
+	_, _ = git(ctx, woDir, "worktree", "remove", "--force", taskDir)
+	if err := os.RemoveAll(taskDir); err != nil {
+		return false, err
+	}
+	_, _ = git(ctx, woDir, "worktree", "prune")
+	if err := os.MkdirAll(filepath.Dir(taskDir), 0o755); err != nil {
+		return false, err
+	}
+	if out, err := git(ctx, woDir, "worktree", "add", "--quiet", "-B", branch, taskDir, "HEAD"); err != nil {
+		return false, fmt.Errorf("git worktree add: %v: %s", err, out)
+	}
+	return true, nil
+}
+
+// MergeTask merges branch into the work order workspace. A conflicting merge
+// is aborted, leaving the workspace untouched, and reported as conflict.
+func (Local) MergeTask(ctx context.Context, woDir, branch, message string) (conflict bool, err error) {
+	out, err := git(ctx, woDir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+		"merge", "--no-ff", "--no-verify", "-m", message, branch)
+	if err == nil {
+		return false, nil
+	}
+	if unmerged, _ := git(ctx, woDir, "diff", "--name-only", "--diff-filter=U"); strings.TrimSpace(unmerged) != "" {
+		if aout, aerr := git(ctx, woDir, "merge", "--abort"); aerr != nil {
+			return true, fmt.Errorf("git merge --abort: %v: %s", aerr, aout)
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("git merge %s: %v: %s", branch, err, out)
+}
+
+// SyncTask merges the work order workspace HEAD into the task worktree and
+// leaves conflict markers in place; it returns the conflicted files.
+func (Local) SyncTask(ctx context.Context, woDir, taskDir string) ([]string, error) {
+	head, err := git(ctx, woDir, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("git rev-parse: %v: %s", err, head)
+	}
+	out, err := git(ctx, taskDir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
+		"merge", "--no-edit", "--no-verify", strings.TrimSpace(head))
+	unmerged, uerr := git(ctx, taskDir, "diff", "--name-only", "--diff-filter=U")
+	if uerr != nil {
+		return nil, fmt.Errorf("git diff: %v: %s", uerr, unmerged)
+	}
+	var files []string
+	for _, f := range strings.Split(strings.TrimSpace(unmerged), "\n") {
+		if f != "" {
+			files = append(files, f)
+		}
+	}
+	if err != nil && len(files) == 0 {
+		return nil, fmt.Errorf("git merge: %v: %s", err, out)
+	}
+	return files, nil
+}
+
+// RemoveTaskWorktree deletes a merged task's worktree and branch.
+func (Local) RemoveTaskWorktree(ctx context.Context, woDir, taskDir, branch string) error {
+	if out, err := git(ctx, woDir, "worktree", "remove", "--force", taskDir); err != nil {
+		return fmt.Errorf("git worktree remove: %v: %s", err, out)
+	}
+	if out, err := git(ctx, woDir, "branch", "-D", branch); err != nil {
+		return fmt.Errorf("git branch -D: %v: %s", err, out)
+	}
+	return nil
 }

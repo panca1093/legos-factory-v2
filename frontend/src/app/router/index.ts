@@ -27,7 +27,7 @@ export const router = createRouter({
         {
           path: "knowledge",
           name: "knowledge",
-          component: () => import("../../features/knowledge/CatalogerView.vue"),
+          component: () => import("../../features/knowledge/KnowledgeView.vue"),
         },
         {
           path: "settings",

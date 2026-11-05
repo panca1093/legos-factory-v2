@@ -174,7 +174,7 @@ func (f *Foreman) handleCatalogSummary(ctx context.Context, job model.Job) error
 	}
 	provider, modelID := f.Model(model.AgentCataloger, wo)
 	res, runID, err := f.runAgent(ctx, wo, model.AgentCataloger, provider, modelID, catalogSummaryPrompt(wo, src.String()),
-		map[string]string{"record_count": fmt.Sprintf("%d", len(records))}, "")
+		map[string]string{"record_count": fmt.Sprintf("%d", len(records))}, "", runOpts{})
 	if err != nil {
 		return err
 	}

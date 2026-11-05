@@ -6,7 +6,7 @@ const props = defineProps<{ run: AgentRunGroup }>();
 const name = computed(
   () => props.run.actor.charAt(0).toUpperCase() + props.run.actor.slice(1),
 );
-const steps = computed(() => props.run.steps.length);
+const steps = computed(() => props.run.steps.filter((s) => !s.message).length);
 </script>
 <template>
   <details class="agent-run" data-test="agent-run">
@@ -28,8 +28,9 @@ const steps = computed(() => props.run.steps.length);
       }}</span>
     </summary>
     <div class="agent-transcript">
-      <template v-for="s in run.steps" :key="s.n"
-        ><p v-for="(t, i) in s.tools" :key="`${s.n}-${i}`">
+      <template v-for="s in run.steps" :key="`${s.at}-${s.n}`"
+        ><p v-if="s.message" class="agent-steer">You: {{ s.message }}</p>
+        <p v-for="(t, i) in s.tools" :key="`${s.n}-${i}`">
           {{ toolLine(t)
           }}<span v-if="t.failed" class="agent-failed"> · failed</span>
         </p></template

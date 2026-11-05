@@ -8,6 +8,7 @@ var (
 	ErrSessionNotFound   = errors.New("session not found")
 	ErrUserNotFound      = errors.New("user not found")
 	ErrKnowledgeNotFound = errors.New("knowledge record not found")
+	ErrKBDocNotFound     = errors.New("knowledge document not found")
 )
 
 // ErrStateConflict marks domain rejections that indicate an invalid

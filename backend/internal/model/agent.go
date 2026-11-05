@@ -55,3 +55,6 @@ type AgentSession interface {
 
 // ErrAgentSessionNotFound is returned when a session handle is unknown or expired.
 var ErrAgentSessionNotFound = errors.New("agent session not found")
+
+// ErrSteeringUnsupported is returned when the agent cannot take a message mid-turn.
+var ErrSteeringUnsupported = errors.New("agent does not support steering")

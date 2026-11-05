@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 )
 
@@ -86,6 +87,8 @@ func oneOf(field, got string, allowed ...string) error {
 	return fmt.Errorf("%s must be one of %s, got %q", field, strings.Join(allowed, "|"), got)
 }
 
+var taskIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
 type planTask struct {
 	ID        string   `json:"id"`
 	Title     string   `json:"title"`
@@ -123,6 +126,9 @@ func (p *planReply) validate() error {
 		}
 		if t.Role != "" && t.Role != "builder" {
 			return fmt.Errorf("task %d role must be builder, got %q", i+1, t.Role)
+		}
+		if t.ID != "" && !taskIDPattern.MatchString(t.ID) {
+			return fmt.Errorf("task id %q may only contain letters, digits, '-' and '_'", t.ID)
 		}
 		if t.ID != "" && ids[t.ID] {
 			return fmt.Errorf("duplicate task id %q", t.ID)

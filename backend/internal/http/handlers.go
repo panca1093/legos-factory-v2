@@ -417,6 +417,33 @@ func (s *Server) handleResume(c echo.Context) error {
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "resumed"})
 }
 
+func (s *Server) handleRetryTask(c echo.Context) error {
+	if err := s.Foreman.RetryTask(c.Request().Context(), woFrom(c).ID, c.Param("task_id"), "human"); err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.JSON(http.StatusAccepted, map[string]string{"status": "queued"})
+}
+
+func (s *Server) handleRetryRemediation(c echo.Context) error {
+	if err := s.Foreman.RetryRemediation(c.Request().Context(), woFrom(c).ID, "human"); err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.JSON(http.StatusAccepted, map[string]string{"status": "queued"})
+}
+
+func (s *Server) handleSteer(c echo.Context) error {
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
+	}
+	if err := s.Foreman.Steer(c.Request().Context(), woFrom(c).ID, c.Param("run_id"), req.Message, "human"); err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.JSON(http.StatusAccepted, map[string]string{"status": "sent"})
+}
+
 func (s *Server) handleFindingDecision(c echo.Context) error {
 	var req model.FindingDecisionRequest
 	if err := c.Bind(&req); err != nil {

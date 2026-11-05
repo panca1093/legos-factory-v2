@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -46,6 +47,18 @@ func (r *RunRepo) CompletedBuilderTasks(ctx context.Context, woID string) (map[s
 		done[id] = true
 	}
 	return done, rows.Err()
+}
+
+// LatestRemediationState is the state of the newest builder run without a plan task, or "" when there is none.
+func (r *RunRepo) LatestRemediationState(ctx context.Context, woID string) (string, error) {
+	var state string
+	err := r.DB.QueryRowContext(ctx, `SELECT state FROM runs
+		WHERE work_order_id = ? AND kind = 'builder' AND task_id IS NULL
+		ORDER BY created_at DESC, id DESC LIMIT 1`, woID).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return state, err
 }
 
 func (r *RunRepo) List(ctx context.Context, woID string) ([]model.Run, error) {

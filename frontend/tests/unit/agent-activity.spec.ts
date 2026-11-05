@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { mount } from "@vue/test-utils";
+import { describe, expect, it, vi } from "vitest";
+import { flushPromises, mount } from "@vue/test-utils";
 import ActivityPanel from "../../src/features/factory/runs/ActivityPanel.vue";
 import {
   duration,
   groupActivity,
-  liveRun,
+  liveRuns,
   liveVerb,
   toolLine,
 } from "../../src/features/factory/runs/agentActivity";
@@ -52,7 +52,7 @@ describe("groupActivity", () => {
     expect(run.status).toBe("finished");
     expect(run.steps.map((s) => s.n)).toEqual([1, 2]);
     expect(run.tokensOut).toBe(100);
-    expect(liveRun(items)).toBeUndefined();
+    expect(liveRuns(items)).toEqual([]);
   });
 
   it("tracks stall, recovery and failure", () => {
@@ -60,14 +60,14 @@ describe("groupActivity", () => {
       ev("agent_started", { run_id: "r2" }),
       ev("agent_stalled", { run_id: "r2" }),
     ]);
-    expect(liveRun(stalled)?.status).toBe("stalled");
+    expect(liveRuns(stalled)[0]?.status).toBe("stalled");
 
     const recovered = groupActivity([
       ev("agent_started", { run_id: "r2" }),
       ev("agent_stalled", { run_id: "r2" }),
       ev("agent_step", { run_id: "r2", step: 1, tools: [] }),
     ]);
-    expect(liveRun(recovered)?.status).toBe("running");
+    expect(liveRuns(recovered)[0]?.status).toBe("running");
 
     const failed = groupActivity([
       ev("agent_started", { run_id: "r3" }),
@@ -82,7 +82,7 @@ describe("groupActivity", () => {
     expect(run.type === "run" && run.outcome).toBe(
       "foreman agent failed: timeout",
     );
-    expect(liveRun(failed)).toBeUndefined();
+    expect(liveRuns(failed)).toEqual([]);
   });
 
   it("leaves agent events without a run_id as plain events", () => {
@@ -173,6 +173,156 @@ describe("ActivityPanel agent runs", () => {
     expect(w.find('[data-test="agent-run"]').text()).toContain(
       "architect agent failed: timeout",
     );
+    w.unmount();
+  });
+});
+
+describe("steering and plan progress", () => {
+  it("records a steered message in its run and shows every live run", async () => {
+    const steer = vi.fn().mockResolvedValue(undefined);
+    const w = mount(ActivityPanel, {
+      props: {
+        runs: [],
+        tasks: [
+          {
+            id: "T1",
+            work_order_id: "wo1",
+            seq: 1,
+            title: "Tax",
+            objective: "",
+            role: "builder",
+            deps: [],
+          },
+          {
+            id: "T2",
+            work_order_id: "wo1",
+            seq: 2,
+            title: "Notes",
+            objective: "",
+            role: "builder",
+            deps: [],
+          },
+        ],
+        steer,
+        events: [
+          ev("agent_started", { run_id: "b1", task_id: "T1" }, "builder"),
+          ev("agent_started", { run_id: "b2", task_id: "T2" }, "builder"),
+          ev("agent_steered", { run_id: "b1" }, "human", "use util.ts"),
+        ],
+      },
+    });
+    const cards = w.findAll('[data-test="agent-live"]');
+    expect(cards).toHaveLength(2);
+    expect(cards[0].text()).toContain("Tax");
+    expect(cards[0].text()).toContain("You: use util.ts");
+    expect(cards[1].text()).toContain("Notes");
+    await cards[1].find('[data-test="steer-input"]').setValue("keep it small");
+    await cards[1].find("form").trigger("submit");
+    await flushPromises();
+    expect(steer).toHaveBeenCalledWith("b2", "keep it small");
+    w.unmount();
+  });
+
+  it("offers a retry only on a failed task when retrying is allowed", async () => {
+    const tasks = [
+      {
+        id: "T1",
+        work_order_id: "wo1",
+        seq: 1,
+        title: "Tax",
+        objective: "",
+        role: "builder",
+        deps: [],
+      },
+      {
+        id: "T2",
+        work_order_id: "wo1",
+        seq: 2,
+        title: "Notes",
+        objective: "",
+        role: "builder",
+        deps: [],
+      },
+    ];
+    const run = (task_id: string, state: string, error = "") => ({
+      id: task_id,
+      task_id,
+      kind: "builder",
+      state,
+      harness: "claude-acp",
+      error,
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_micros: 0,
+      created_at: "",
+    });
+    const runs = [
+      run("T1", "completed"),
+      run("T2", "failed", "conflict markers left"),
+    ];
+    const w = mount(ActivityPanel, {
+      props: { events: [], runs, tasks, canRetry: true },
+    });
+    expect(w.find('[data-test="plan-progress"]').text()).toContain(
+      "1 / 2 merged",
+    );
+    expect(w.find('[data-task="T2"]').text()).toContain(
+      "conflict markers left",
+    );
+    const retry = w.findAll('[data-test="retry-task"]');
+    expect(retry).toHaveLength(1);
+    await retry[0].trigger("click");
+    expect(w.emitted("retry")).toEqual([["T2"]]);
+    await w.setProps({ canRetry: false });
+    expect(w.find('[data-test="retry-task"]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it("shows the remediation run and retries it when it failed", async () => {
+    const run = (task_id: string | null, state: string, error = "") => ({
+      id: `${task_id}-${state}`,
+      task_id,
+      kind: "builder",
+      state,
+      harness: "claude-acp",
+      error,
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_micros: 0,
+      created_at: "",
+    });
+    const tasks = [
+      {
+        id: "T1",
+        work_order_id: "wo1",
+        seq: 1,
+        title: "Tax",
+        objective: "",
+        role: "builder",
+        deps: [],
+      },
+    ];
+    const runs = [
+      run("T1", "completed"),
+      run(
+        null,
+        "failed",
+        "Builder finished remediation without changing any files",
+      ),
+    ];
+    const w = mount(ActivityPanel, {
+      props: { events: [], runs, tasks, canRetry: true, revision: 2 },
+    });
+    const row = w.find('[data-test="remediation"]');
+    expect(row.text()).toContain("Remediation (revision 2)");
+    expect(row.text()).toContain("Failed");
+    expect(row.text()).toContain("without changing any files");
+    await row.find('[data-test="retry-remediation"]').trigger("click");
+    expect(w.emitted("retryRemediation")).toHaveLength(1);
+    await w.setProps({ canRetry: false });
+    expect(w.find('[data-test="retry-remediation"]').exists()).toBe(false);
+    await w.setProps({ runs: [run("T1", "completed")] });
+    expect(w.find('[data-test="remediation"]').exists()).toBe(false);
     w.unmount();
   });
 });

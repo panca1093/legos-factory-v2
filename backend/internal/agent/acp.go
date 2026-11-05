@@ -1,7 +1,8 @@
 package agent
 
-// ACPHarness drives an Agent Client Protocol agent (e.g. `opencode acp`) over
-// stdio JSON-RPC, one subprocess per run. Verified against OpenCode 2.1.3:
+// ACPHarness drives an Agent Client Protocol agent (e.g. `opencode acp`,
+// `claude-agent-acp`) over stdio JSON-RPC, one subprocess per run. Verified
+// against OpenCode 2.1.3 and claude-agent-acp 0.100.0:
 //
 //	initialize → session/new {cwd} → session/set_config_option (category model)
 //	→ session/prompt; session/update streams tool calls, text and usage;
@@ -26,18 +27,37 @@ import (
 )
 
 type ACPHarness struct {
-	Command []string // agent command, e.g. ["opencode", "acp"]
-	Env     []string // extra environment for the agent process
-	probe   string   // directory for model discovery sessions
-	mu      sync.Mutex
-	runs    map[string]*acpRun
+	Command  []string // agent command, e.g. ["opencode", "acp"]
+	Env      []string // extra environment for the agent process
+	Provider string   // provider for model values the agent lists without one, e.g. claude's "opus"
+	probe    string   // directory for model discovery sessions
+	mu       sync.Mutex
+	runs     map[string]*acpRun
 }
 
 func NewACPHarness(command []string, probeDir string) *ACPHarness {
-	return &ACPHarness{Command: command, probe: probeDir, runs: map[string]*acpRun{}}
+	return &ACPHarness{Command: command, Provider: agentProvider(command), probe: probeDir, runs: map[string]*acpRun{}}
 }
 
-func (h *ACPHarness) Name() string { return "opencode-acp" }
+func agentProvider(command []string) string {
+	if len(command) == 0 {
+		return "acp"
+	}
+	// wrappers like `npx @agentclientprotocol/claude-agent-acp` must still get claude's read-only lockdown
+	for _, arg := range command {
+		if strings.HasPrefix(filepath.Base(arg), "claude") {
+			return "claude"
+		}
+	}
+	return filepath.Base(command[0])
+}
+
+func (h *ACPHarness) Name() string {
+	if h.Provider == "claude" {
+		return "claude-acp"
+	}
+	return "opencode-acp"
+}
 
 // readOnly roles review and plan; they never change the workspace.
 var acpReadOnlyDeny = []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute"}
@@ -56,6 +76,17 @@ func acpRoleConfig(role model.AgentRole) string {
 	return string(b)
 }
 
+// claudeReadOnlyMeta is session/new `_meta` for read-only roles on claude-agent-acp:
+// `tools` makes the write and exec tools absent (so no allow rule can grant them),
+// "user" settings keep the user's ~/.claude but drop project and local settings,
+// and strictMcpConfig drops MCP servers from .mcp.json and settings.
+var claudeReadOnlyMeta = map[string]any{"claudeCode": map[string]any{"options": map[string]any{
+	"tools":           []string{"Read", "Grep", "Glob"},
+	"disallowedTools": []string{"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent", "Task"},
+	"settingSources":  []string{"user"},
+	"strictMcpConfig": true,
+}}}
+
 type acpRun struct {
 	conn      *acpConn
 	sessionID string
@@ -70,13 +101,24 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 		return nil, err
 	}
 	conn.role, conn.workspace, conn.onStep = req.Role, req.WorkspaceDir, req.OnStep
-	ns, err := conn.newSession(ctx, req.WorkspaceDir)
+	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder
+	var meta map[string]any
+	if claudeReadOnly {
+		meta = claudeReadOnlyMeta
+	}
+	ns, err := conn.newSession(ctx, req.WorkspaceDir, meta)
 	if err != nil {
 		conn.close()
 		return nil, err
 	}
 	if req.ProviderID != "" || req.ModelID != "" {
-		if err := conn.setModel(ctx, ns, req.ProviderID+"/"+req.ModelID); err != nil {
+		if err := conn.setModel(ctx, ns, req.ProviderID+"/"+req.ModelID, h.Provider); err != nil {
+			conn.close()
+			return nil, err
+		}
+	}
+	if claudeReadOnly {
+		if err := conn.setMode(ctx, ns, "plan"); err != nil {
 			conn.close()
 			return nil, err
 		}
@@ -137,14 +179,14 @@ func (h *ACPHarness) Models(ctx context.Context) ([]Model, error) {
 		return nil, err
 	}
 	defer conn.close()
-	ns, err := conn.newSession(ctx, h.probe)
+	ns, err := conn.newSession(ctx, h.probe, nil)
 	if err != nil {
 		return nil, err
 	}
 	out := []Model{}
 	if opt := ns.modelOption(); opt != nil {
 		for _, o := range opt.Options {
-			provider, id, _ := strings.Cut(o.Value, "/")
+			provider, id, _ := strings.Cut(qualify(o.Value, h.Provider), "/")
 			out = append(out, Model{ProviderID: provider, ModelID: id, Name: o.Name})
 		}
 	}
@@ -185,15 +227,56 @@ func (h *ACPHarness) spawn(role model.AgentRole, dir string) (*acpConn, error) {
 		return nil, fmt.Errorf("acp: start %s: %w", strings.Join(h.Command, " "), err)
 	}
 	go c.readLoop(stdout)
-	if _, err := c.call(context.Background(), "initialize", map[string]any{
+	raw, err := c.call(context.Background(), "initialize", map[string]any{
 		"protocolVersion":    1,
 		"clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false},
 		"clientInfo":         map[string]any{"name": "legos-factory", "version": "1"},
-	}); err != nil {
+	})
+	if err != nil {
 		c.close()
 		return nil, err
 	}
+	var init struct {
+		Meta struct {
+			Steering struct {
+				Supported bool `json:"supported"`
+			} `json:"steering"`
+		} `json:"_meta"`
+	}
+	_ = json.Unmarshal(raw, &init)
+	c.steering = init.Meta.Steering.Supported
 	return c, nil
+}
+
+// Steer injects a message into the run's in-flight turn; the agent reads it
+// before its next step and the turn ends only after it has acted on it.
+func (h *ACPHarness) Steer(ctx context.Context, sessionID, text string) error {
+	run, ok := h.run(sessionID)
+	if !ok {
+		return model.ErrAgentSessionNotFound
+	}
+	if !run.conn.steering {
+		return model.ErrSteeringUnsupported
+	}
+	raw, err := run.conn.call(ctx, "_session/steering", map[string]any{
+		"sessionId": sessionID,
+		"prompt":    []any{map[string]any{"type": "text", "text": text}},
+		// the default starts a fresh turn when idle, which nobody would wait for
+		"_meta": map[string]any{"steering": map[string]any{"idleBehavior": "promptRequired"}},
+	})
+	if err != nil {
+		if run.conn.gone() {
+			return model.ErrAgentSessionNotFound
+		}
+		return err
+	}
+	var res struct {
+		Outcome string `json:"outcome"`
+	}
+	if json.Unmarshal(raw, &res) == nil && res.Outcome == "promptRequired" {
+		return model.ErrAgentSessionNotFound
+	}
+	return nil
 }
 
 func (r *acpRun) finish(wait func(context.Context) (json.RawMessage, error)) {
@@ -251,6 +334,9 @@ type acpConn struct {
 	stderr  *tailBuffer
 	exited  chan struct{}
 	once    sync.Once
+	closed  atomic.Bool
+
+	steering bool // the agent accepts _session/steering
 
 	role      model.AgentRole
 	workspace string
@@ -303,9 +389,13 @@ func (ns acpNewSession) modelOption() *acpOption {
 	return nil
 }
 
-func (c *acpConn) newSession(ctx context.Context, cwd string) (acpNewSession, error) {
+func (c *acpConn) newSession(ctx context.Context, cwd string, meta map[string]any) (acpNewSession, error) {
 	var ns acpNewSession
-	raw, err := c.call(ctx, "session/new", map[string]any{"cwd": cwd, "mcpServers": []any{}})
+	params := map[string]any{"cwd": cwd, "mcpServers": []any{}}
+	if meta != nil {
+		params["_meta"] = meta
+	}
+	raw, err := c.call(ctx, "session/new", params)
 	if err != nil {
 		return ns, err
 	}
@@ -317,18 +407,43 @@ func (c *acpConn) newSession(ctx context.Context, cwd string) (acpNewSession, er
 
 // setModel selects ref through the agent's model option. An unknown model is
 // permanent: retrying cannot help until a provider is logged in or settings change.
-func (c *acpConn) setModel(ctx context.Context, ns acpNewSession, ref string) error {
+func (c *acpConn) setModel(ctx context.Context, ns acpNewSession, ref, provider string) error {
 	opt := ns.modelOption()
 	if opt == nil {
 		return fmt.Errorf("%w: agent offers no model selection", model.ErrPermanent)
 	}
 	for _, o := range opt.Options {
-		if o.Value == ref {
-			_, err := c.call(ctx, "session/set_config_option", map[string]any{"sessionId": ns.SessionID, "configId": opt.ID, "value": ref})
+		if qualify(o.Value, provider) == ref {
+			_, err := c.call(ctx, "session/set_config_option", map[string]any{"sessionId": ns.SessionID, "configId": opt.ID, "value": o.Value})
 			return err
 		}
 	}
-	return fmt.Errorf("%w: model %s is not available to the agent; log in to its provider (opencode auth login) or pick another model in settings", model.ErrPermanent, ref)
+	return fmt.Errorf("%w: model %s is not available to the agent; log in to its provider (e.g. opencode auth login, claude login) or pick another model in settings", model.ErrPermanent, ref)
+}
+
+// setMode selects mode through the agent's mode option. Failing to is permanent:
+// a read-only role must not run in a mode the agent would not confirm.
+func (c *acpConn) setMode(ctx context.Context, ns acpNewSession, mode string) error {
+	for _, opt := range ns.ConfigOptions {
+		if opt.Category != "mode" {
+			continue
+		}
+		for _, o := range opt.Options {
+			if o.Value == mode {
+				_, err := c.call(ctx, "session/set_config_option", map[string]any{"sessionId": ns.SessionID, "configId": opt.ID, "value": mode})
+				return err
+			}
+		}
+	}
+	return fmt.Errorf("%w: agent offers no %q mode, which read-only roles require", model.ErrPermanent, mode)
+}
+
+// qualify gives a model value the agent lists without a provider its harness provider.
+func qualify(value, provider string) string {
+	if strings.Contains(value, "/") {
+		return value
+	}
+	return provider + "/" + value
 }
 
 func (c *acpConn) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
@@ -403,8 +518,19 @@ func (c *acpConn) write(v any) error {
 	return err
 }
 
+// gone reports that the agent process was torn down or exited.
+func (c *acpConn) gone() bool {
+	select {
+	case <-c.exited:
+		return true
+	default:
+		return c.closed.Load()
+	}
+}
+
 func (c *acpConn) close() {
 	c.once.Do(func() {
+		c.closed.Store(true)
 		_ = c.w.Close()
 		if c.cmd.Process != nil {
 			_ = c.cmd.Process.Kill()
