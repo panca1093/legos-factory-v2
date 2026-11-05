@@ -11,6 +11,7 @@ const (
 	AgentBuilder   AgentRole = "builder"
 	AgentInspector AgentRole = "inspector"
 	AgentCataloger AgentRole = "cataloger"
+	AgentChat      AgentRole = "chat"
 )
 
 // AgentRequest is one logical agent invocation.
@@ -22,6 +23,7 @@ type AgentRequest struct {
 	WorkspaceDir string // directory the agent may operate on (builder/inspector)
 	Context      map[string]string
 	OnStep       func(AgentStep) // optional; called once per finished tool-calling step
+	OnText       func(string)    // optional; called with each chunk of the reply as it streams, by harnesses that stream
 	Keep         bool            // keep the session open after the run, for harnesses that can continue it
 }
 

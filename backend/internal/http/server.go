@@ -31,6 +31,7 @@ type Server struct {
 	Integrations *usecase.Integrations
 	Catalog      *usecase.Cataloger
 	KBDocs       *usecase.KBDocs
+	Chat         *usecase.Chat
 	Bus          *Bus
 	Auth         *usecase.Identity
 	OIDC         *OIDCClient
@@ -225,6 +226,15 @@ func (s *Server) routes() {
 	api.POST("/kb/doc/approve", s.requireRole(model.RoleEngineer, s.handleKBApprove))
 	api.POST("/kb/doc/discard", s.requireRole(model.RoleEngineer, s.handleKBDiscard))
 	api.POST("/kb/doc/reset", s.requireRole(model.RoleEngineer, s.handleKBReset))
+
+	api.GET("/chats", s.handleListChats)
+	api.POST("/chats", s.requireRole(model.RoleEngineer, s.handleCreateChat))
+	api.GET("/chats/:id", s.handleGetChat)
+	api.PATCH("/chats/:id", s.requireRole(model.RoleEngineer, s.handleUpdateChat))
+	api.DELETE("/chats/:id", s.requireRole(model.RoleEngineer, s.handleDeleteChat))
+	api.GET("/chats/:id/messages", s.handleChatMessages)
+	api.POST("/chats/:id/messages", s.requireRole(model.RoleEngineer, s.handleChatSend))
+	api.GET("/chat/models", s.handleChatModels)
 
 	api.GET("/models", s.handleModels)
 	api.GET("/usage", s.handleUsage)

@@ -181,10 +181,12 @@ func runFake(t *testing.T, h *ACPHarness, req model.AgentRequest) (model.AgentRe
 
 func TestACPRunReportsStepsTextAndUsage(t *testing.T) {
 	var steps []model.AgentStep
+	var streamed strings.Builder
 	ws := t.TempDir()
 	res, err := runFake(t, fakeHarness(t, "ok"), model.AgentRequest{
 		Role: model.AgentInspector, ProviderID: "opencode-go", ModelID: "kimi", WorkspaceDir: ws, Prompt: "go",
 		OnStep: func(s model.AgentStep) { steps = append(steps, s) },
+		OnText: func(s string) { streamed.WriteString(s) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -205,6 +207,9 @@ func TestACPRunReportsStepsTextAndUsage(t *testing.T) {
 	}
 	if fmt.Sprint(steps) != fmt.Sprint(want) {
 		t.Fatalf("steps = %+v\nwant   %+v", steps, want)
+	}
+	if streamed.String() != res.Text {
+		t.Fatalf("OnText streamed %q, result text %q", streamed.String(), res.Text)
 	}
 	if res.TokensIn != 100 || res.TokensOut != 20 || res.CostMicros != 12300 || res.CostSource != "measured" || res.SessionRef != "fake-ses" {
 		t.Fatalf("result = %+v", res)
@@ -250,12 +255,26 @@ func TestACPClaudeReadOnlyRolesStartInPlanModeWithoutWriteTools(t *testing.T) {
 			t.Fatalf("%s: config calls = %q; want the model, then plan mode", r, s.Set)
 		}
 	}
+	chat := run(model.AgentChat)
+	if !strings.Contains(chat.Meta, `"tools":[]`) || !strings.Contains(chat.Meta, `"Read"`) || !strings.Contains(chat.Meta, `"WebFetch"`) || chat.Set != "model=sonnet,mode=plan" {
+		t.Fatalf("chat must get no tools: meta %q, set %q", chat.Meta, chat.Set)
+	}
 	if b := run(model.AgentBuilder); b.Meta != "" || b.Set != "model=sonnet" {
 		t.Fatalf("builder must keep the default session: meta %q, set %q", b.Meta, b.Set)
 	}
 }
 
 func TestACPRoleConfig(t *testing.T) {
+	chatCfg := acpRoleConfig(model.AgentChat)
+	for _, tool := range []string{"read", "webfetch", "bash", "edit"} {
+		if !strings.Contains(chatCfg, `"`+tool+`":"deny"`) {
+			t.Fatalf("chat config must deny %s: %s", tool, chatCfg)
+		}
+	}
+	if strings.Contains(acpRoleConfig(model.AgentInspector), `"read":"deny"`) {
+		t.Fatal("reviewers keep read access")
+	}
+
 	builder := acpRoleConfig(model.AgentBuilder)
 	if !strings.Contains(builder, `"external_directory":"deny"`) || strings.Contains(builder, `"edit":"deny"`) {
 		t.Fatalf("builder config = %s", builder)
@@ -290,6 +309,7 @@ func TestACPPermissionPolicy(t *testing.T) {
 		{model.AgentInspector, "read", ws + "/main.go", "yes"},
 		{model.AgentInspector, "edit", ws + "/main.go", "no"},
 		{model.AgentInspector, "execute", ws, "no"},
+		{model.AgentChat, "read", ws + "/main.go", "no"},
 	}
 	for _, c := range cases {
 		res, err := runFake(t, fakeHarness(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_PATH="+c.path),
@@ -394,13 +414,17 @@ func TestACPKeptSessionTakesFurtherPrompts(t *testing.T) {
 	if err != nil || res.Text != "turn 1: first" || res.CostMicros != 10000 {
 		t.Fatalf("first turn: %+v, %v", res, err)
 	}
-	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentForeman, Prompt: "second", WorkspaceDir: ws})
+	var streamed string
+	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentForeman, Prompt: "second", WorkspaceDir: ws, OnText: func(s string) { streamed += s }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res, err = h.Result(ctx, next.ID())
 	if err != nil || res.Text != "turn 2: second" || res.CostMicros != 10000 || res.TokensOut != 2 {
 		t.Fatalf("a continued turn reports its own text and cost: %+v, %v", res, err)
+	}
+	if streamed != "turn 2: second" {
+		t.Fatalf("a continued turn streams to its own OnText: %q", streamed)
 	}
 	h.Close(ses.ID())
 	if _, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Prompt: "third"}); !errors.Is(err, model.ErrAgentSessionNotFound) {

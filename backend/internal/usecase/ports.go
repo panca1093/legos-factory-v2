@@ -69,6 +69,18 @@ type KnowledgeStore interface {
 	Search(ctx context.Context, q model.KnowledgeQuery) ([]model.KnowledgeRecord, error)
 }
 
+type ChatStore interface {
+	Create(ctx context.Context, c *model.Chat) error
+	Get(ctx context.Context, id string) (*model.Chat, error)
+	List(ctx context.Context, userID string) ([]model.Chat, error)
+	Update(ctx context.Context, id, title, modelRef string) error
+	Rename(ctx context.Context, id, title string) error
+	Touch(ctx context.Context, id string) error
+	Delete(ctx context.Context, id string) error
+	AddMessage(ctx context.Context, m *model.ChatMessage) error
+	Messages(ctx context.Context, chatID string) ([]model.ChatMessage, error)
+}
+
 type SettingsReader interface {
 	Get(ctx context.Context) (*model.Settings, error)
 }
