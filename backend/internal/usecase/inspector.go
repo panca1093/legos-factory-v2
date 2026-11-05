@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 	f.runSetup(ctx, wo, profile, f.workspaceDir(wo.ID), "inspector")
 	mu.Unlock()
 	failed := ""
+	var failures []model.CheckResult
 	var results strings.Builder
 	for _, c := range profile.Checks {
 		r := f.Sandbox.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
@@ -38,6 +40,9 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 		fmt.Fprintf(&results, "%s (%s) → %s\n", c.Name, c.Command, r.Outcome)
 		if r.Outcome != model.Pass && failed == "" {
 			failed = c.Name
+		}
+		if r.Outcome != model.Pass {
+			failures = append(failures, r)
 		}
 	}
 	if failed != "" {
@@ -65,7 +70,9 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 			fmt.Sprintf("Check %q failed; returning to builder (revision %d of %d)", failed, newRev, MaxRevisionCycles)); err != nil {
 			return err
 		}
-		_, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, "", map[string]any{"reason": "fix_failed_verification"})
+		_, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, "", map[string]any{
+			"reason": "fix_failed_verification", "failed_checks": failedChecksSection(failures),
+		})
 		return err
 	}
 	f.event(wo.ID, "inspector", "verification_passed", "All deterministic checks passed", nil)
@@ -80,6 +87,43 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 		}
 	}
 	return f.enqueue(ctx, JobInspect, wo.ID, "")
+}
+
+const (
+	maxFailedChecks    = 3
+	maxFailedOutputLen = 3000
+)
+
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+// failedChecksSection pre-renders to a string because job payloads round-trip through JSON.
+func failedChecksSection(failures []model.CheckResult) string {
+	var b strings.Builder
+	for i, r := range failures {
+		if i == maxFailedChecks {
+			fmt.Fprintf(&b, "(%d more failing checks omitted)\n", len(failures)-i)
+			break
+		}
+		exit := "n/a"
+		if r.ExitCode != nil {
+			exit = fmt.Sprint(*r.ExitCode)
+		}
+		fmt.Fprintf(&b, "Check %q: %s (exit code %s)\nCommand: %s\nOutput (tail):\n%s\n\n",
+			r.Name, r.Outcome, exit, r.Command, outputTail(r.Output))
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func outputTail(out string) string {
+	out = strings.TrimSpace(ansiEscape.ReplaceAllString(out, ""))
+	if len(out) <= maxFailedOutputLen {
+		return out
+	}
+	out = out[len(out)-maxFailedOutputLen:]
+	if i := strings.IndexByte(out, '\n'); i >= 0 {
+		out = out[i+1:]
+	}
+	return "…\n" + out
 }
 
 func (f *Foreman) handleInspect(ctx context.Context, job model.Job) error {

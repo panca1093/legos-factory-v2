@@ -127,10 +127,12 @@ func (h *blockingHarness) Result(context.Context, string) (model.AgentResult, er
 type fakeQueue struct {
 	active   bool
 	enqueued []string
+	payloads []map[string]any
 }
 
-func (q *fakeQueue) Enqueue(_ context.Context, kind, _, taskID string, _ map[string]any) (string, error) {
+func (q *fakeQueue) Enqueue(_ context.Context, kind, _, taskID string, payload map[string]any) (string, error) {
 	q.enqueued = append(q.enqueued, kind+":"+taskID)
+	q.payloads = append(q.payloads, payload)
 	return "job", nil
 }
 func (*fakeQueue) CancelWO(context.Context, string) error { return nil }
