@@ -159,6 +159,16 @@ for (const viewport of viewports)
     );
     await app.goto("/factory");
     await capture("02-factory-board");
+    if (viewport.width > 720) {
+      await expect(app.locator(".topnav")).toBeVisible();
+      await expect(app.locator(".tabbar")).toBeHidden();
+    } else {
+      await expect(app.locator(".topnav")).toBeHidden();
+      await expect(app.locator(".tabbar")).toBeVisible();
+    }
+    await expect(
+      app.locator(".topnav a.active, .tabbar a.active").first(),
+    ).toHaveText("Factory");
     await reference.evaluate(() =>
       document
         .querySelector<HTMLElement>('[data-action="view"][data-view="list"]')

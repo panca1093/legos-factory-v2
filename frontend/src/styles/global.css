@@ -1743,9 +1743,6 @@ input[type="checkbox"] {
   }
 }
 @media (max-width: 1200px) {
-  :root {
-    --rail: 188px;
-  }
   .detail-layout {
     grid-template-columns: minmax(0, 1fr) 218px;
   }
@@ -1764,9 +1761,6 @@ input[type="checkbox"] {
   }
 }
 @media (max-width: 1000px) {
-  :root {
-    --rail: 75px;
-  }
   .overview-grid {
     gap: 20px;
   }
@@ -1809,9 +1803,6 @@ input[type="checkbox"] {
   }
 }
 @media (max-width: 680px) {
-  :root {
-    --rail: 0px;
-  }
   .page-heading {
     align-items: start;
     gap: 12px;

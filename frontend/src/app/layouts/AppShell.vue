@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import {
   Home,
@@ -62,13 +69,20 @@ const navItems = computed(() =>
     dot: t.label === "Factory" && attention.value.length > 0,
   })),
 );
-function setSide(open: boolean) {
+const toggleBtn = ref<{ $el: HTMLElement }>(),
+  closeBtn = ref<{ $el: HTMLElement }>();
+const overlay = () => window.innerWidth <= 1000;
+async function setSide(open: boolean) {
   sideOpen.value = open;
-  try {
-    localStorage.setItem(railKey, open ? "1" : "0");
-  } catch {
-    /* Browser storage can be disabled. */
+  if (!overlay()) {
+    try {
+      localStorage.setItem(railKey, open ? "1" : "0");
+    } catch {
+      /* Browser storage can be disabled. */
+    }
   }
+  await nextTick();
+  if (overlay()) (open ? closeBtn : toggleBtn).value?.$el.focus();
 }
 const initials = computed(
   () =>
@@ -118,12 +132,12 @@ function shortcut(e: KeyboardEvent) {
     query.value = "";
     dialog.value = "search";
   }
-  if (e.key === "Escape" && window.innerWidth <= 1000) sideOpen.value = false;
+  if (e.key === "Escape" && overlay() && sideOpen.value) void setSide(false);
 }
 watch(
   () => route.fullPath,
   () => {
-    if (window.innerWidth <= 1000) sideOpen.value = false;
+    if (overlay() && sideOpen.value) void setSide(false);
     dialog.value = null;
   },
 );
@@ -157,11 +171,14 @@ async function logout() {
 <template>
   <a class="skip" href="#main">Skip to content</a>
   <div class="app" :class="{ 'side-open': sideOpen }">
-    <aside class="rail" aria-label="Workspace" :inert="!sideOpen">
+    <aside id="rail" class="rail" aria-label="Workspace" :inert="!sideOpen">
       <div class="rail-in">
         <div class="rail-head">
           <span class="lg-kind">Workspace</span>
-          <IconButton label="Hide sidebar" @click="setSide(false)"
+          <IconButton
+            ref="closeBtn"
+            label="Hide sidebar"
+            @click="setSide(false)"
             ><PanelLeftClose class="icon"
           /></IconButton>
         </div>
@@ -200,12 +217,15 @@ async function logout() {
         ></RouterLink>
       </div>
     </aside>
-    <div class="scrim" @click="sideOpen = false"></div>
+    <div class="scrim" @click="setSide(false)"></div>
     <div class="main">
       <header class="topbar">
         <div class="l">
           <IconButton
+            ref="toggleBtn"
             :label="sideOpen ? 'Hide sidebar' : 'Show sidebar'"
+            aria-controls="rail"
+            :aria-expanded="sideOpen"
             @click="setSide(!sideOpen)"
             ><PanelLeft class="icon"
           /></IconButton>
@@ -258,12 +278,10 @@ async function logout() {
                 · {{ session.user?.role.toLowerCase() }}</small
               >
             </div>
-            <RouterLink to="/settings" role="menuitem"
+            <RouterLink to="/settings"
               ><Settings class="icon" />Settings</RouterLink
             >
-            <button role="menuitem" @click="logout">
-              <LogOut class="icon" />Sign out
-            </button>
+            <button @click="logout"><LogOut class="icon" />Sign out</button>
           </Popover>
         </div>
       </header>

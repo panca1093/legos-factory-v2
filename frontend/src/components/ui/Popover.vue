@@ -6,7 +6,13 @@ function outside(e: MouseEvent) {
   if (open.value && !root.value?.contains(e.target as Node)) open.value = false;
 }
 function escape(e: KeyboardEvent) {
-  if (open.value && e.key === "Escape") open.value = false;
+  if (!open.value || e.key !== "Escape") return;
+  open.value = false;
+  (root.value?.firstElementChild as HTMLElement | null)?.focus();
+}
+function focusout(e: FocusEvent) {
+  const to = e.relatedTarget as Node | null;
+  if (to && !root.value?.contains(to)) open.value = false;
 }
 onMounted(() => {
   document.addEventListener("mousedown", outside);
@@ -18,9 +24,9 @@ onBeforeUnmount(() => {
 });
 </script>
 <template>
-  <div ref="root" class="lg-pop">
+  <div ref="root" class="lg-pop" @focusout="focusout">
     <slot name="trigger" :toggle="() => (open = !open)" :open="open" />
-    <div v-if="open" class="lg-menu" role="menu" @click="open = false">
+    <div v-if="open" class="lg-menu" @click="open = false">
       <slot />
     </div>
   </div>

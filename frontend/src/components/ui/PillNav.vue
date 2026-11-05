@@ -18,12 +18,16 @@ watch(
   () => props.active,
   () => nextTick(place),
 );
+let observer: ResizeObserver | undefined;
 onMounted(() => {
   place();
-  window.addEventListener("resize", place);
+  if (typeof ResizeObserver !== "undefined" && root.value) {
+    observer = new ResizeObserver(place);
+    observer.observe(root.value);
+  }
   void document.fonts?.ready.then(place);
 });
-onBeforeUnmount(() => window.removeEventListener("resize", place));
+onBeforeUnmount(() => observer?.disconnect());
 </script>
 <template>
   <nav ref="root" class="lg-seg" aria-label="Main">
