@@ -56,6 +56,8 @@ export interface WorkOrder {
   architect_model?: string;
   plan_review?: "" | "pending" | "approved";
   review_rounds?: number;
+  brief?: string;
+  spec?: string;
   paused_at?: string;
   pause_reason?: string;
   source_ref?: string;
@@ -74,6 +76,7 @@ export interface Task {
   objective: string;
   role: string;
   deps: string[];
+  scope?: string[];
 }
 
 export interface Run {
