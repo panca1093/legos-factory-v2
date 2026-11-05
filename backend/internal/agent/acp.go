@@ -43,11 +43,13 @@ func agentProvider(command []string) string {
 	if len(command) == 0 {
 		return "acp"
 	}
-	base := filepath.Base(command[0])
-	if strings.HasPrefix(base, "claude") {
-		return "claude"
+	// wrappers like `npx @agentclientprotocol/claude-agent-acp` must still get claude's read-only lockdown
+	for _, arg := range command {
+		if strings.HasPrefix(filepath.Base(arg), "claude") {
+			return "claude"
+		}
 	}
-	return base
+	return filepath.Base(command[0])
 }
 
 func (h *ACPHarness) Name() string {

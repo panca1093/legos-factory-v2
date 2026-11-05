@@ -364,6 +364,9 @@ func TestACPHarnessName(t *testing.T) {
 	if n := NewACPHarness([]string{"/opt/homebrew/bin/claude-agent-acp"}, "").Name(); n != "claude-acp" {
 		t.Fatalf("name = %s", n)
 	}
+	if n := NewACPHarness([]string{"npx", "@agentclientprotocol/claude-agent-acp"}, "").Name(); n != "claude-acp" {
+		t.Fatalf("wrapped name = %s", n)
+	}
 	if n := NewACPHarness([]string{"opencode", "acp"}, "").Name(); n != "opencode-acp" {
 		t.Fatalf("name = %s", n)
 	}
