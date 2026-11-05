@@ -4,11 +4,8 @@ import { MessageSquare, Quote, Send, X } from "lucide-vue-next";
 import Button from "../../components/ui/Button.vue";
 import IconButton from "../../components/ui/IconButton.vue";
 import { api, ApiError } from "../../services/api/client";
-import {
-  streamChat,
-  type ChatEvent,
-  type ChatMessage,
-} from "../../services/api/chatStream";
+import { streamChat, type ChatEvent } from "../../services/api/chatStream";
+import type { ChatMessage } from "../../stores/chats";
 import { useSession } from "../../stores/session";
 import { renderMarkdown } from "./notes";
 
@@ -49,10 +46,10 @@ const canSend = computed(
 );
 
 const toTurn = (m: ChatMessage): Turn => ({
-  id: m.id,
+  id: String(m.id),
   role: m.role,
   text: m.content,
-  quote: m.attachments?.find((a) => a.kind === "kb")?.quote,
+  quote: m.attachments?.flatMap((a) => (a.kind === "kb" ? [a.quote] : []))[0],
   error: m.error,
 });
 const scroll = () =>
@@ -123,7 +120,7 @@ async function send(text: string) {
     if (e.event === "delta") r.text += e.data.text;
     else if (e.event === "done") {
       r.text = e.data.message.content;
-      r.id = e.data.message.id;
+      r.id = String(e.data.message.id);
     } else if (e.event === "error") {
       r.error = e.data.error;
     }

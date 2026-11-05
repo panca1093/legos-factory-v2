@@ -1,0 +1,528 @@
+.chats {
+  position: relative;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: var(--gap);
+  height: calc(100dvh - 158px);
+  min-height: 440px;
+}
+.chatlist {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+}
+.chatlist .lg-btn {
+  width: 100%;
+}
+.chatlist .ch-items {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.chatlist .lg-nav-label {
+  margin: var(--space-3) var(--space-3) var(--space-1);
+}
+.chats .empty-note {
+  padding: var(--space-2) var(--space-3);
+  font-size: 12px;
+  color: var(--muted);
+}
+.thread-wrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  transition: padding-right var(--dur-slow) var(--ease-out);
+}
+.thread-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-height);
+  padding-bottom: var(--space-3);
+}
+.thread-head h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font: 600 15px/22px var(--font-sans);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thread-head .lg-icon-btn {
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  flex-shrink: 0;
+}
+.thread-head .lg-icon-btn[aria-pressed="true"] {
+  background: var(--tint);
+  color: var(--accent);
+  border-color: transparent;
+}
+.back-btn {
+  display: none !important;
+}
+.ch-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-1) 2px var(--space-3);
+}
+.ch-welcome {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  padding: 48px var(--space-3) var(--space-4);
+  text-align: center;
+}
+.ch-welcome h3 {
+  margin: 0;
+  font: 500 28px/34px var(--font-display);
+  letter-spacing: -0.01em;
+}
+.ch-welcome p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+.ch-thread,
+.composer {
+  width: 100%;
+  max-width: var(--thread-width);
+  margin: 0 auto;
+}
+.ch-thread {
+  display: grid;
+  gap: var(--space-4);
+}
+.ch-msg {
+  display: flex;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.ch-msg.user {
+  justify-content: flex-end;
+}
+.ch-msg .av {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+}
+.bubble {
+  min-width: 0;
+  max-width: 88%;
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.ch-msg.user .bubble {
+  max-width: 80%;
+  padding: 9px 14px;
+  background: var(--tint);
+  border-radius: var(--radius-xl) var(--radius-xl) var(--radius-xs)
+    var(--radius-xl);
+}
+.ch-msg.assistant .bubble {
+  padding-top: 4px;
+}
+.plain {
+  margin: 0;
+  white-space: pre-wrap;
+}
+.md :where(p, ul, ol, h4, pre) {
+  margin: 0 0 var(--space-2);
+}
+.md > :last-child {
+  margin-bottom: 0;
+}
+.md ul,
+.md ol {
+  padding-left: 20px;
+}
+.md ul {
+  list-style: disc;
+}
+.md ol {
+  list-style: decimal;
+}
+.md h4 {
+  font-size: 14px;
+}
+.md a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-2);
+}
+.md pre {
+  overflow: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.md pre code {
+  padding: 0;
+  background: none;
+  white-space: pre;
+}
+.typing {
+  display: inline-flex;
+  gap: 4px;
+  padding: 8px 0;
+}
+.typing i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: chat-dot 1s ease-in-out infinite;
+}
+.typing i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.typing i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes chat-dot {
+  50% {
+    transform: translateY(-4px);
+    opacity: 0.4;
+  }
+}
+.atts,
+.composer .ch-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--space-2);
+}
+.ch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 550;
+}
+.ch-chip .icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.ch-chip .ch-fn {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ch-chip .ch-fs {
+  color: var(--muted);
+  font-weight: 500;
+}
+.ch-chip.kb {
+  color: var(--accent);
+}
+.ch-chip button {
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+.ch-chip button:hover {
+  color: var(--ink);
+}
+.ch-err {
+  margin-top: var(--space-2);
+  font-size: 12px;
+  color: var(--danger);
+}
+.retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: var(--space-2);
+  padding: 2px 8px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 600;
+}
+.retry .icon {
+  width: 12px;
+  height: 12px;
+}
+.ch-meta {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.composer {
+  flex-shrink: 0;
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast),
+    background var(--dur-fast);
+}
+.composer:focus-within,
+.composer.drop {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.composer.drop {
+  background: var(--tint);
+}
+.composer .ch-chips {
+  margin: 0 0 var(--space-1);
+}
+.composer textarea {
+  width: 100%;
+  min-height: 0;
+  max-height: 200px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.composer textarea:disabled {
+  opacity: 0.6;
+}
+.composer .ch-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.composer .ch-tool {
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  border: 0;
+}
+.composer .ch-tool:disabled {
+  opacity: 0.45;
+}
+.composer .ch-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+.composer .ch-hint.over {
+  color: var(--danger);
+}
+.composer .ch-end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.composer .ch-send {
+  display: grid;
+  place-items: center;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--brand);
+  color: var(--on-brand);
+  transition:
+    opacity var(--dur-fast),
+    transform var(--dur-fast) var(--ease-out);
+}
+.composer .ch-send:disabled {
+  opacity: 0.35;
+}
+.composer .ch-send:not(:disabled):active {
+  transform: scale(0.92);
+}
+.composer .ch-send .icon {
+  width: 18px;
+  height: 18px;
+}
+.composer .lg-menu button[aria-pressed] .icon {
+  width: 16px;
+  height: 16px;
+  color: var(--accent);
+}
+
+.ch-ctx {
+  position: absolute;
+  top: calc(var(--control-height) + var(--space-3));
+  right: 0;
+  z-index: 5;
+  display: none;
+  align-content: start;
+  gap: var(--space-2);
+  width: 300px;
+  max-height: calc(100% - var(--control-height) - var(--space-5));
+  overflow: auto;
+  padding: var(--space-4) var(--space-4) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-pop);
+}
+.chats.ctx-open > .ch-ctx {
+  display: grid;
+  animation: lg-rise var(--dur) var(--ease-out) both;
+}
+.chats.ctx-open > .thread-wrap {
+  padding-right: calc(300px + var(--gap));
+}
+.ch-ctx h4 {
+  margin: var(--space-2) 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.ch-ctx h4:first-child {
+  margin-top: 0;
+}
+.ch-ctx .lg-field {
+  width: 100%;
+  box-sizing: border-box;
+}
+.ch-ctx .ch-usage {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  font-size: 12px;
+}
+.ch-ctx .ch-usage dt {
+  color: var(--muted);
+}
+.ch-ctx .ch-usage dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+.ch-ctx .danger-zone {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.ch-ctx .danger-zone .lg-btn {
+  gap: 6px;
+}
+.ctx-scrim {
+  display: none;
+}
+
+@media (min-width: 721px) {
+  .chats.list-hidden {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chats.list-hidden > .chatlist {
+    display: none;
+  }
+}
+@container main (min-width: 861px) and (max-width: 1180px) {
+  .chats.ctx-open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .chats.ctx-open > .chatlist {
+    display: none;
+  }
+}
+@container main (max-width: 860px) {
+  .chats.ctx-open > .thread-wrap {
+    padding-right: 0;
+  }
+  .ch-ctx {
+    position: fixed;
+    top: auto;
+    right: var(--space-3);
+    bottom: var(--space-3);
+    left: var(--space-3);
+    z-index: 60;
+    width: auto;
+    max-height: 72dvh;
+  }
+  .ctx-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgba(5, 31, 32, 0.35);
+  }
+}
+@media (max-width: 720px) {
+  .chats {
+    grid-template-columns: minmax(0, 1fr);
+    height: calc(100dvh - 170px);
+  }
+  .chats:not(.in-thread) > .thread-wrap,
+  .chats.in-thread > .chatlist,
+  .list-btn {
+    display: none;
+  }
+  .back-btn {
+    display: grid !important;
+  }
+  .bubble,
+  .ch-msg.user .bubble {
+    max-width: 92%;
+  }
+  .composer .ch-hint {
+    display: none;
+  }
+  .composer .ch-end {
+    margin-left: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing i {
+    animation: none;
+  }
+}
+.ch-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

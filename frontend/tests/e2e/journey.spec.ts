@@ -205,9 +205,14 @@ test("knowledge notebook: read first, discussion opens on demand", async ({
   await expect(page.locator("[data-test=kb-sha]")).toBeVisible();
   await page.getByRole("button", { name: "Ask about this" }).click();
   await expect(page.locator(".nb-talk")).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Open in Chats" }),
-  ).toBeDisabled();
-  await page.getByRole("button", { name: "Close discussion" }).click();
+  const toChats = page.getByRole("button", { name: "Open in Chats" });
+  await expect(toChats).toBeDisabled();
+  await page.getByLabel("Ask about this note").fill("Summarize this");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator("[data-test=kb-turn]")).toHaveCount(2);
+  await expect(toChats).toBeEnabled();
+  await toChats.click();
+  await expect(page).toHaveURL(/\/chats\/\d+|\/chats\/[\w-]+/);
+  await page.goBack();
   await expect(page.locator(".nb-talk")).toHaveCount(0);
 });

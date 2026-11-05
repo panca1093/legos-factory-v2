@@ -14,7 +14,7 @@ export const router = createRouter({
           component: () => import("../../features/overview/OverviewView.vue"),
         },
         {
-          path: "chats",
+          path: "chats/:id?",
           name: "chats",
           component: () => import("../../features/chats/ChatsView.vue"),
         },

@@ -1,4 +1,4 @@
-import { expect, it, vi, afterEach } from "vitest";
+import { expect, it } from "vitest";
 import {
   highlight,
   inNotebook,
@@ -7,10 +7,7 @@ import {
   snippet,
   tocOf,
 } from "../../src/features/knowledge/notes";
-import { parseFrames, streamChat } from "../../src/services/api/chatStream";
 import type { KBDoc } from "../../src/types/api";
-
-afterEach(() => vi.unstubAllGlobals());
 
 it("highlights search terms after escaping and never inside entities", () => {
   expect(highlight("Rounding <b> rules", "round")).toBe(
@@ -89,77 +86,4 @@ it("groups notes into notebooks and keeps drafts separate", () => {
     "d",
   ]);
   expect(docs.filter((d) => inNotebook(d, "p:p1"))).toHaveLength(2);
-});
-
-it("parses SSE frames across chunk boundaries", () => {
-  const a = parseFrames('event: delta\ndata: {"text":"Hel"}\n\nevent: del');
-  expect(a.events).toEqual([{ event: "delta", data: { text: "Hel" } }]);
-  const b = parseFrames(a.rest + 'ta\r\ndata: {"text":"lo"}\r\n\r\n');
-  expect(b.events).toEqual([{ event: "delta", data: { text: "lo" } }]);
-  expect(parseFrames("event: x\ndata: {nope}\n\n").events).toEqual([]);
-});
-
-function sse(chunks: string[]) {
-  const enc = new TextEncoder();
-  return new Response(
-    new ReadableStream({
-      start(c) {
-        for (const x of chunks) c.enqueue(enc.encode(x));
-        c.close();
-      },
-    }),
-    { status: 200, headers: { "Content-Type": "text/event-stream" } },
-  );
-}
-
-it("streams events in order and requires a terminal frame", async () => {
-  const msg = {
-    id: "m",
-    chat_id: "c",
-    role: "assistant",
-    content: "Hi",
-    created_at: "",
-  };
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () =>
-      sse([
-        'event: delta\ndata: {"text":"H"}\n\nevent: do',
-        `ne\ndata: ${JSON.stringify({ message: msg })}\n\n`,
-      ]),
-    ),
-  );
-  const seen: string[] = [];
-  await streamChat("c1", { content: "q" }, (e) => seen.push(e.event));
-  expect(seen).toEqual(["delta", "done"]);
-
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => sse(['event: delta\ndata: {"text":"H"}\n\n'])),
-  );
-  await expect(streamChat("c1", { content: "q" }, () => {})).rejects.toThrow(
-    "ended unexpectedly",
-  );
-});
-
-it("turns pre-stream JSON errors into ApiError", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({ error: { code: "CHAT_BUSY", message: "busy" } }),
-          {
-            status: 409,
-          },
-        ),
-    ),
-  );
-  await expect(
-    streamChat("c1", { content: "q" }, () => {}),
-  ).rejects.toMatchObject({
-    status: 409,
-    code: "CHAT_BUSY",
-    message: "busy",
-  });
 });

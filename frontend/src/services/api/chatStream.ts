@@ -1,57 +1,73 @@
 import { ApiError } from "../../types/api";
+import type { ChatMessage } from "../../stores/chats";
 
-export type ChatMessage = {
-  id: string;
-  chat_id: string;
-  role: "user" | "assistant";
+export interface ChatStreamBody {
   content: string;
-  attachments?: {
-    kind: "file" | "kb";
-    name: string;
-    doc_id?: string;
-    quote?: string;
-  }[];
-  error?: string;
-  created_at: string;
-};
+  files?: { name: string; content: string }[];
+  kb?: { id: string; quote?: string };
+}
+export type ChatBody = ChatStreamBody;
+export interface ChatStreamEvent {
+  event: string;
+  data: unknown;
+}
 export type ChatEvent =
   | { event: "user_message"; data: { message: ChatMessage } }
   | { event: "delta"; data: { text: string } }
   | { event: "done"; data: { message: ChatMessage } }
   | { event: "error"; data: { message?: ChatMessage; error: string } };
-export type ChatBody = {
-  content: string;
-  kb?: { id: string; quote?: string };
-};
 
-export function parseFrames(buf: string): {
-  events: ChatEvent[];
-  rest: string;
-} {
-  const parts = buf.replace(/\r\n/g, "\n").split("\n\n");
-  const rest = parts.pop() ?? "";
-  const events: ChatEvent[] = [];
-  for (const part of parts) {
-    let event = "";
+export function parseFrames(buf: string) {
+  const events: ChatStreamEvent[] = [];
+  const p = createFrameParser((e) => events.push(e));
+  p.push(buf);
+  return { events: events as ChatEvent[], rest: p.rest() };
+}
+
+export function createFrameParser(onEvent: (e: ChatStreamEvent) => void) {
+  let buf = "";
+  function frame(raw: string) {
+    let event = "message";
     const data: string[] = [];
-    for (const line of part.split("\n")) {
+    for (const line of raw.split("\n")) {
       if (line.startsWith("event:")) event = line.slice(6).trim();
       else if (line.startsWith("data:"))
         data.push(line.slice(5).replace(/^ /, ""));
     }
-    if (!event || !data.length) continue;
+    if (!data.length) return;
+    const text = data.join("\n");
+    let parsed: unknown = text;
     try {
-      events.push({ event, data: JSON.parse(data.join("\n")) } as ChatEvent);
+      parsed = JSON.parse(text);
     } catch {
-      /* skip a malformed frame */
+      /* non-JSON payload is passed through as text */
     }
+    onEvent({ event, data: parsed });
   }
-  return { events, rest };
+  return {
+    push(chunk: string) {
+      buf += chunk;
+      const hold = buf.endsWith("\r") ? "\r" : "";
+      buf =
+        buf.slice(0, buf.length - hold.length).replace(/\r\n?/g, "\n") + hold;
+      let i: number;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        frame(buf.slice(0, i));
+        buf = buf.slice(i + 2);
+      }
+    },
+    rest: () => buf,
+    flush() {
+      buf = buf.replace(/\r\n?/g, "\n");
+      if (buf.trim()) frame(buf);
+      buf = "";
+    },
+  };
 }
 
 export async function streamChat(
   chatId: string,
-  body: ChatBody,
+  body: ChatStreamBody,
   onEvent: (e: ChatEvent) => void,
 ): Promise<void> {
   const resp = await fetch(
@@ -66,34 +82,40 @@ export async function streamChat(
       credentials: "same-origin",
     },
   );
-  if (!resp.ok || !resp.body) {
-    const text = await resp.text().catch(() => "");
+  if (!resp.ok) {
+    if (resp.status === 401)
+      window.dispatchEvent(new Event("factory:unauthorized"));
+    const text = await resp.text();
     let err: { code?: string; message?: string } | undefined;
     try {
       err = JSON.parse(text)?.error;
     } catch {
-      /* non-JSON error body */
+      /* body was not JSON */
     }
     throw new ApiError(
       resp.status,
       err?.code ?? "HTTP_ERROR",
-      err?.message ?? (text.slice(0, 200) || `HTTP ${resp.status}`),
+      err?.message ?? text.slice(0, 200),
     );
   }
+  if (!resp.body) throw new Error("Streaming is not supported by this browser");
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
-  let buf = "";
   let terminal = false;
-  for (;;) {
-    const { done, value } = await reader.read();
-    buf += decoder.decode(value, { stream: !done });
-    const { events, rest } = parseFrames(done ? buf + "\n\n" : buf);
-    buf = rest;
-    for (const e of events) {
-      if (e.event === "done" || e.event === "error") terminal = true;
-      onEvent(e);
+  const parser = createFrameParser((e) => {
+    if (e.event === "done" || e.event === "error") terminal = true;
+    onEvent(e as ChatEvent);
+  });
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parser.push(decoder.decode(value, { stream: true }));
     }
-    if (done) break;
+    parser.push(decoder.decode());
+    parser.flush();
+    if (!terminal) throw new Error("The reply stream ended unexpectedly");
+  } finally {
+    reader.cancel().catch(() => undefined);
   }
-  if (!terminal) throw new Error("The reply stream ended unexpectedly");
 }
