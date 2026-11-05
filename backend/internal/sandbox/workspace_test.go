@@ -140,3 +140,47 @@ func TestChangedFilesSinceClone(t *testing.T) {
 		t.Fatalf("changed files: %v %v", files, err)
 	}
 }
+
+func TestDiffReportsCountsAndHunksSinceClone(t *testing.T) {
+	origin := t.TempDir()
+	os.WriteFile(filepath.Join(origin, "keep.txt"), []byte("one\ntwo\nthree\n"), 0o644)
+	os.WriteFile(filepath.Join(origin, "my file.txt"), []byte("a\n"), 0o644)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = origin
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s", out)
+		}
+	}
+	l := Local{DataDir: t.TempDir()}
+	dir, err := l.Prepare(context.Background(), "wo_d", origin, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("one\nTWO\nthree\nfour\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "my file.txt"), []byte("b\n"), 0o644)
+	if _, err := l.Commit(context.Background(), dir, "c1"); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(dir, "new.go"), []byte("package n\n"), 0o644)
+	diffs, err := l.Diff(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byPath := map[string]model.FileDiff{}
+	for _, d := range diffs {
+		byPath[d.Path] = d
+	}
+	if k := byPath["keep.txt"]; k.Added != 2 || k.Removed != 1 || !strings.HasPrefix(k.Hunks, "@@") || !strings.Contains(k.Hunks, "+TWO") || strings.Contains(k.Hunks, "diff --git") {
+		t.Fatalf("keep.txt: %+v", k)
+	}
+	if m := byPath["my file.txt"]; m.Added != 1 || m.Removed != 1 || !strings.Contains(m.Hunks, "+b") {
+		t.Fatalf("a path with a space: %+v", m)
+	}
+	if n := byPath["new.go"]; n.Added != 1 || !strings.Contains(n.Hunks, "+package n") {
+		t.Fatalf("untracked file: %+v", n)
+	}
+	if none, err := (Local{}).Diff(context.Background(), t.TempDir()); err != nil || none != nil {
+		t.Fatalf("non-git workspace: %v %v", none, err)
+	}
+}

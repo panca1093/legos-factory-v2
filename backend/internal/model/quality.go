@@ -62,3 +62,12 @@ type QualityCheck struct {
 	CommitSHA string    `json:"commit_sha,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// FileDiff is one changed file against the work order's base commit; Hunks
+// is the unified-diff text from the first @@ on, empty for binary files.
+type FileDiff struct {
+	Path    string `json:"path"`
+	Added   int    `json:"added"`
+	Removed int    `json:"removed"`
+	Hunks   string `json:"hunks"`
+}

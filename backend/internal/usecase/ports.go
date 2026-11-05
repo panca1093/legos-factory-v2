@@ -78,6 +78,7 @@ type Sandbox interface {
 	Commit(ctx context.Context, dir, message string) (string, error)
 	PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (base string, err error)
 	ChangedFiles(ctx context.Context, dir string) ([]string, error)
+	Diff(ctx context.Context, dir string) ([]model.FileDiff, error)
 	TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (ok bool, err error)
 	MergeTask(ctx context.Context, woDir, branch, message string) (conflict bool, err error)
 	SyncTask(ctx context.Context, woDir, taskDir string) (conflicted []string, err error)
@@ -127,6 +128,7 @@ type FindingStore interface {
 	Create(ctx context.Context, f model.Finding) error
 	ResolveOpen(ctx context.Context, woID string) error
 	CountOpenBlockers(ctx context.Context, woID string) (int, error)
+	List(ctx context.Context, woID string) ([]model.Finding, error)
 	Get(ctx context.Context, woID, id string) (*model.Finding, error)
 	SetDisposition(ctx context.Context, id, status, note, by string) error
 }
@@ -192,7 +194,10 @@ type NoulCriteria struct {
 	False string `json:"false"`
 }
 
-type Usage struct{ InputTokens, OutputTokens int }
+type Usage struct {
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
+}
 
 // JudgeResult carries the exact request body that was (or would have been)
 // sent, so the audit event can replay the decision. Request and

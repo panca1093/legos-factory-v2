@@ -3,6 +3,7 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -165,10 +167,7 @@ func (Local) ChangedFiles(ctx context.Context, dir string) ([]string, error) {
 	if !isLocalGitRepo(dir) {
 		return nil, nil
 	}
-	base := "HEAD"
-	if out, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"); err == nil && strings.TrimSpace(out) != "" {
-		base = "refs/remotes/origin/HEAD"
-	}
+	base := diffBase(ctx, dir)
 	seen := map[string]bool{}
 	var files []string
 	for _, args := range [][]string{
@@ -187,6 +186,81 @@ func (Local) ChangedFiles(ctx context.Context, dir string) ([]string, error) {
 		}
 	}
 	return files, nil
+}
+
+func diffBase(ctx context.Context, dir string) string {
+	if out, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"); err == nil && strings.TrimSpace(out) != "" {
+		return "refs/remotes/origin/HEAD"
+	}
+	return "HEAD"
+}
+
+const maxUntrackedDiffBytes = 200_000
+
+// Diff reports every file changed relative to the cloned base (committed or
+// not) with its line counts and unified-diff hunks. Untracked text files
+// count as fully added. A workspace without git history reports none.
+func (Local) Diff(ctx context.Context, dir string) ([]model.FileDiff, error) {
+	if !isLocalGitRepo(dir) {
+		return nil, nil
+	}
+	base := diffBase(ctx, dir)
+	numstat, err := git(ctx, dir, "diff", "--no-renames", "--numstat", base)
+	if err != nil {
+		return nil, fmt.Errorf("git diff --numstat: %v: %s", err, numstat)
+	}
+	patch, err := git(ctx, dir, "diff", "--no-renames", "--no-color", "--no-ext-diff", "-U3", base)
+	if err != nil {
+		return nil, fmt.Errorf("git diff: %v: %s", err, patch)
+	}
+	hunks := splitPatch(patch)
+	var out []model.FileDiff
+	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		added, _ := strconv.Atoi(parts[0]) // "-" for binary files
+		removed, _ := strconv.Atoi(parts[1])
+		out = append(out, model.FileDiff{Path: parts[2], Added: added, Removed: removed, Hunks: hunks[parts[2]]})
+	}
+	untracked, err := git(ctx, dir, "ls-files", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files: %v: %s", err, untracked)
+	}
+	for _, name := range strings.Split(strings.TrimSpace(untracked), "\n") {
+		if name == "" {
+			continue
+		}
+		fd := model.FileDiff{Path: name}
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil && len(b) <= maxUntrackedDiffBytes && !bytes.Contains(b, []byte{0}) {
+			text := strings.TrimSuffix(string(b), "\n")
+			lines := strings.Split(text, "\n")
+			fd.Added = len(lines)
+			fd.Hunks = fmt.Sprintf("@@ -0,0 +1,%d @@\n+%s\n", len(lines), strings.Join(lines, "\n+"))
+		}
+		out = append(out, fd)
+	}
+	return out, nil
+}
+
+// splitPatch maps each file path of a --no-renames unified diff to its text
+// from the first @@ line on.
+func splitPatch(patch string) map[string]string {
+	out := map[string]string{}
+	for _, section := range strings.Split("\n"+patch, "\ndiff --git ")[1:] {
+		head, body, _ := strings.Cut(section, "\n")
+		// head is "a/<p> b/<p>": the path has length (len(head)-5)/2
+		n := (len(head) - 5) / 2
+		if n <= 0 || len(head) < 2+n {
+			continue
+		}
+		p := head[2 : 2+n]
+		if i := strings.Index("\n"+body, "\n@@"); i >= 0 {
+			out[p] = strings.TrimPrefix(("\n" + body)[i:], "\n")
+		}
+	}
+	return out
 }
 
 // TaskWorktree creates a fresh git worktree at taskDir on branch, starting
