@@ -48,20 +48,20 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 		ArchitectModel: architect,
 		CreatedBy:      u.ID,
 	}
-	if err := w.Store.Create(ctx, wo); err != nil {
-		return nil, err
-	}
 	var auth *model.GitAuth
 	if g, bound, err := w.Integrations.GitFor(ctx, proj); bound {
 		if err != nil {
-			return wo, fmt.Errorf("%w: repository connection unavailable: %v", ErrWorkspace, err)
+			return nil, fmt.Errorf("%w: repository connection unavailable: %v", ErrWorkspace, err)
 		}
 		a := g.GitAuth()
 		auth = &a
 	}
-	// isolated workspace: builders never touch the project source dir
+	// prepare before persisting: a stored CREATED order without a workspace gets resumed into planning on restart
 	if _, err := w.Sandbox.Prepare(ctx, wo.ID, proj.RepoURL, auth); err != nil {
-		return wo, fmt.Errorf("%w: could not prepare workspace: %v", ErrWorkspace, err)
+		return nil, fmt.Errorf("%w: could not prepare workspace: %v", ErrWorkspace, err)
+	}
+	if err := w.Store.Create(ctx, wo); err != nil {
+		return nil, err
 	}
 	return wo, nil
 }

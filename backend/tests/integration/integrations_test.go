@@ -245,4 +245,7 @@ func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
 	if status != 500 || !strings.Contains(body, "WORKSPACE_FAILED") || !strings.Contains(body, "disabled") {
 		t.Fatalf("disabled connection must block new work: %d %s", status, body)
 	}
+	if status, body := ta.do(t, "GET", "/api/v1/work-orders", ""); status != 200 || strings.Contains(body, `"title":"next"`) {
+		t.Fatalf("a work order without a workspace must not be persisted: %d %s", status, body)
+	}
 }
