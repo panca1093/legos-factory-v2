@@ -263,7 +263,9 @@ func TestNoArchitectVerificationWithoutJev(t *testing.T) {
 }
 
 func TestTransientArchitectErrorRetriesOnlyTheVerification(t *testing.T) {
+	delay := architectRetryDelay
 	architectRetryDelay = 0
+	t.Cleanup(func() { architectRetryDelay = delay })
 	h := &replyHarness{archErr: errors.New("model offline")}
 	r := inspectRig(t, h)
 	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID, MaxAttempts: 3, Attempts: 0}); err != nil {
@@ -281,7 +283,9 @@ func TestTransientArchitectErrorRetriesOnlyTheVerification(t *testing.T) {
 }
 
 func TestArchitectErrorIsIgnoredWhenBlockersSendTheOrderBack(t *testing.T) {
+	delay := architectRetryDelay
 	architectRetryDelay = 0
+	t.Cleanup(func() { architectRetryDelay = delay })
 	h := &replyHarness{archErr: errors.New("model offline"),
 		inspect: `{"findings":[{"severity":"blocker","title":"Float money","detail":"d","location":"round.go:1"}]}`}
 	r := inspectRig(t, h)
