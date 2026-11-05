@@ -161,7 +161,7 @@ func (r *WorkOrderRepo) Plan(ctx context.Context, woID string) ([]model.Task, er
 	}
 	defer rows.Close()
 	var out []model.Task
-	byID := map[string]*model.Task{}
+	byID := map[string]int{} // index, not pointer: append may move the backing array
 	for rows.Next() {
 		var t model.Task
 		if err := rows.Scan(&t.ID, &t.WOID, &t.Seq, &t.Title, &t.Objective, &t.Role); err != nil {
@@ -169,7 +169,7 @@ func (r *WorkOrderRepo) Plan(ctx context.Context, woID string) ([]model.Task, er
 		}
 		t.Deps = []string{}
 		out = append(out, t)
-		byID[t.ID] = &out[len(out)-1]
+		byID[t.ID] = len(out) - 1
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -185,8 +185,8 @@ func (r *WorkOrderRepo) Plan(ctx context.Context, woID string) ([]model.Task, er
 		if err := depRows.Scan(&taskID, &dep); err != nil {
 			return nil, err
 		}
-		if t, ok := byID[taskID]; ok {
-			t.Deps = append(t.Deps, dep)
+		if i, ok := byID[taskID]; ok {
+			out[i].Deps = append(out[i].Deps, dep)
 		}
 	}
 	return out, depRows.Err()
