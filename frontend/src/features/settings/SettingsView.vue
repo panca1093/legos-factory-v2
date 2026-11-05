@@ -114,13 +114,6 @@ async function save() {
     busy.value = false;
   }
 }
-function toggleAllowed(id: string, checked: boolean) {
-  const list = config.value.allowed_models ?? catalog.value.map((m) => m.id);
-  config.value.allowed_models = checked
-    ? [...new Set([...list, id])]
-    : list.filter((m) => m !== id);
-  saved.value = false;
-}
 </script>
 <template>
   <div class="page-heading">
@@ -200,44 +193,6 @@ function toggleAllowed(id: string, checked: boolean) {
             </div>
           </section>
           <section class="settings-section">
-            <h2>Models your crew can choose.</h2>
-            <p>
-              Choose the catalog offered during work-order creation. Execution
-              policy remains enforced by the backend.
-            </p>
-            <label
-              v-for="m in factory.models"
-              :key="m.provider_id + '/' + m.model_id"
-              class="switch-row"
-              ><span
-                ><strong class="small">{{ m.name }}</strong
-                ><span class="help" style="display: block"
-                  >{{ m.provider_id }}/{{ m.model_id }} · {{ m.harness }}</span
-                ></span
-              ><span class="switch"
-                ><input
-                  type="checkbox"
-                  :data-model="`${m.provider_id}/${m.model_id}`"
-                  :aria-label="`Allow ${m.name}`"
-                  :checked="
-                    !config.allowed_models ||
-                    config.allowed_models.includes(
-                      `${m.provider_id}/${m.model_id}`,
-                    )
-                  "
-                  :disabled="!session.isAdmin || busy || !initialized"
-                  @change="
-                    toggleAllowed(
-                      `${m.provider_id}/${m.model_id}`,
-                      ($event.target as HTMLInputElement).checked,
-                    )
-                  " /><span></span></span
-            ></label>
-            <p v-if="!factory.models.length" class="notice">
-              No models discovered. Existing defaults are preserved.
-            </p>
-          </section>
-          <section class="settings-section">
             <h2>Cataloger summaries</h2>
             <p>
               Knowledge is always recorded deterministically. Optionally, the
@@ -293,27 +248,6 @@ function toggleAllowed(id: string, checked: boolean) {
         >
         <template v-else-if="tab === 'preferences'"
           ><section class="settings-section">
-            <h2>Your crew preferences</h2>
-            <p>
-              Personal model overrides are unavailable. Choose Builder and
-              Inspector models per work order.
-            </p>
-            <div class="form-grid">
-              <div
-                v-for="role in ['Foreman', 'Architect']"
-                :key="role"
-                class="form-group"
-              >
-                <label :for="`pref-${role}`">Preferred {{ role }}</label
-                ><select :id="`pref-${role}`" disabled>
-                  <option>
-                    Workspace default · personal overrides unavailable
-                  </option>
-                </select>
-              </div>
-            </div>
-          </section>
-          <section class="settings-section">
             <h2>Make yourself at home.</h2>
             <div class="switch-row">
               <div>

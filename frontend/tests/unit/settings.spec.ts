@@ -27,19 +27,15 @@ async function render(tab = "governance") {
   await flushPromises();
   return { w, router };
 }
-it("saves model IDs, allowed-model choices and budget in micros", async () => {
+it("saves model IDs and budget in micros", async () => {
   const f = useFactory();
   const save = vi.spyOn(f, "saveSettings").mockResolvedValue();
   const { w, router } = await render();
   await w.find("#set-architect").setValue("test/inspector");
-  await w.find('[data-model="test/builder"]').setValue(false);
   await w.find('[data-test="save-settings"]').trigger("click");
   await flushPromises();
   expect(save).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      architect_model: "test/inspector",
-      allowed_models: ["test/architect", "test/inspector"],
-    }),
+    expect.objectContaining({ architect_model: "test/inspector" }),
   );
   await router.push("/settings?tab=usage");
   await flushPromises();

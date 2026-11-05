@@ -54,13 +54,6 @@ async function importIssue() {
 const project = computed(() =>
   factory.projects.find((p) => p.id === form.project_id),
 );
-const allowed = computed(() =>
-  factory.models.filter(
-    (m) =>
-      !config.value?.allowed_models ||
-      config.value.allowed_models.includes(`${m.provider_id}/${m.model_id}`),
-  ),
-);
 watch(
   () => props.open,
   (open) => {
@@ -293,7 +286,7 @@ async function create() {
               }}
             </option>
             <option
-              v-for="m in allowed"
+              v-for="m in factory.models"
               :key="`${m.provider_id}/${m.model_id}`"
               :value="`${m.provider_id}/${m.model_id}`"
             >
