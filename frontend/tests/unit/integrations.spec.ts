@@ -44,6 +44,7 @@ beforeEach(() => {
   vi.spyOn(f, "refreshConnections").mockImplementation(async () => {
     f.connections = structuredClone(connections);
   });
+  vi.spyOn(f, "refreshProjects").mockResolvedValue();
 });
 
 async function render() {
@@ -110,5 +111,37 @@ it("explains when the server cannot store credentials", async () => {
   const w = await render();
   expect(w.text()).toContain("FACTORY_SECRET_KEY");
   expect(w.find('[data-test="connection-form"]').exists()).toBe(false);
+  w.unmount();
+});
+
+it("links an existing project to a shared git connection", async () => {
+  const f = useFactory();
+  f.projects = [
+    {
+      id: "pos",
+      name: "POS Test",
+      repo_url: "https://github.com/acme/pos.git",
+      language: "go",
+      description: "",
+      created_at: "",
+    },
+  ];
+  const bind = vi.spyOn(f, "bindProject").mockResolvedValue(f.projects[0]);
+  const w = await render();
+  const select = w.find("#link-conn-pos");
+  expect(select.findAll("option").map((o) => o.text())).toEqual([
+    "Local only · no pull requests",
+    "Acme GitHub · github",
+  ]);
+  await select.setValue("c1");
+  expect((w.find("#link-remote-pos").element as HTMLInputElement).value).toBe(
+    "acme/pos",
+  );
+  await w.find('[data-test="link-pos"]').trigger("click");
+  await flushPromises();
+  expect(bind).toHaveBeenCalledWith("pos", {
+    git_connection_id: "c1",
+    remote_repo: "acme/pos",
+  });
   w.unmount();
 });
