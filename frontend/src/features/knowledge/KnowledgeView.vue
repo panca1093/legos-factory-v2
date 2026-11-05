@@ -183,6 +183,7 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
 </script>
 <template>
   <div class="nb-wrap">
+    <h1 class="sr-only">Knowledge</h1>
     <div
       class="nb"
       :class="{ talk: discuss }"
