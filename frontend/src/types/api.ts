@@ -126,6 +126,25 @@ export interface ModelInfo {
   harness: string;
 }
 
+export interface UsageDay {
+  date: string;
+  count: number;
+}
+export interface UsageTotals {
+  tokens_in: number;
+  tokens_out: number;
+  cost_micros: number;
+  runs: number;
+}
+export interface UsageSummary {
+  days: number;
+  from: string;
+  to: string;
+  activity: UsageDay[];
+  roles: (UsageTotals & { role: string })[];
+  month_to_date: UsageTotals & { month: string };
+}
+
 export interface Overview {
   metrics: {
     active_work_orders: number;

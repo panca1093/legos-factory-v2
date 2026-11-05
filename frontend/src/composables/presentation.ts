@@ -39,6 +39,13 @@ export const attentionStates: WorkOrderState[] = [
   "NEEDS_HUMAN_REVIEW",
   "BLOCKED",
 ];
+export const needsYouStates: WorkOrderState[] = [
+  "ARCHITECT_REVIEW",
+  "WAITING_FOR_HUMAN",
+  "NEEDS_HUMAN_REVIEW",
+];
+export const needsYou = (orders: WorkOrder[]) =>
+  orders.filter((w) => needsYouStates.includes(w.state));
 export const runningStates: WorkOrderState[] = [
   "QUEUED",
   "IMPLEMENTING",

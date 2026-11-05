@@ -103,6 +103,10 @@ const budgetPercent = computed(() =>
       )
     : 0,
 );
+const tokens = (t: { tokens_in: number; tokens_out: number }) =>
+  new Intl.NumberFormat("en-US", { notation: "compact" }).format(
+    t.tokens_in + t.tokens_out,
+  );
 const attention = computed(() =>
   factory.workOrders.filter((w) => attentionStates.includes(w.state)),
 );
@@ -154,6 +158,7 @@ onMounted(async () => {
       factory.refreshProjects(),
       factory.refreshWorkOrders(),
       factory.refreshOverview(),
+      factory.refreshUsage(),
     ]);
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -213,8 +218,16 @@ async function logout() {
             }}
           </div>
           <div v-if="budget?.limit_micros" class="bar">
-            <i :style="{ width: budgetPercent + '%' }"></i></div
-        ></RouterLink>
+            <i :style="{ width: budgetPercent + '%' }"></i>
+          </div>
+          <div v-if="factory.usage?.month_to_date" class="num">
+            This month
+            <b class="mtd">{{
+              money(factory.usage.month_to_date.cost_micros)
+            }}</b>
+            · {{ tokens(factory.usage.month_to_date) }} tokens
+          </div></RouterLink
+        >
       </div>
     </aside>
     <div class="scrim" @click="setSide(false)"></div>
