@@ -119,3 +119,41 @@ func (f *Foreman) RetryTask(ctx context.Context, woID, taskID, actor string) err
 	f.event(woID, actor, "task_retry", fmt.Sprintf("Task %s retried", taskID), map[string]any{"task_id": taskID})
 	return nil
 }
+
+// RetryRemediation re-runs the remediation build of a work order whose last
+// remediation run failed after every plan task was done.
+func (f *Foreman) RetryRemediation(ctx context.Context, woID, actor string) error {
+	wo, err := f.WO.Get(ctx, woID)
+	if err != nil {
+		return err
+	}
+	if wo.State != model.StateImplementing {
+		return stateConflict("WO %s is %s; remediation is retried while implementing", woID, wo.State)
+	}
+	tasks, err := f.WO.Plan(ctx, woID)
+	if err != nil {
+		return err
+	}
+	done, err := f.Runs.CompletedBuilderTasks(ctx, woID)
+	if err != nil {
+		return err
+	}
+	if len(model.ReadyTasks(tasks, done)) > 0 {
+		return stateConflict("WO %s still has plan tasks to build", woID)
+	}
+	state, err := f.Runs.LatestRemediationState(ctx, woID)
+	if err != nil {
+		return err
+	}
+	if state != "failed" {
+		return stateConflict("WO %s has no failed remediation to retry", woID)
+	}
+	if f.Sched.HasActive(ctx, woID, "", JobImplement) {
+		return stateConflict("remediation is already queued or running")
+	}
+	if _, err := f.Sched.Enqueue(ctx, JobImplement, woID, "", map[string]any{"reason": "human_retry"}); err != nil {
+		return err
+	}
+	f.event(woID, actor, "remediation_retry", "Remediation retried", nil)
+	return nil
+}

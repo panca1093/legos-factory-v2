@@ -13,11 +13,12 @@ const props = withDefaults(
     runs: Run[];
     tasks?: Task[];
     canRetry?: boolean;
+    revision?: number;
     steer?: (runID: string, message: string) => Promise<unknown>;
   }>(),
   { tasks: () => [], canRetry: false, steer: undefined },
 );
-const emit = defineEmits<{ retry: [taskID: string] }>();
+const emit = defineEmits<{ retry: [taskID: string]; retryRemediation: [] }>();
 const items = computed(() => groupActivity(props.events));
 const live = computed(() => liveRuns(items.value));
 const history = computed(() =>
@@ -34,7 +35,9 @@ const taskTitle = computed(
       :tasks="tasks"
       :runs="runs"
       :can-retry="canRetry"
+      :revision="revision"
       @retry="emit('retry', $event)"
+      @retry-remediation="emit('retryRemediation')"
     />
     <div class="section-head">
       <h2>What’s happening</h2>

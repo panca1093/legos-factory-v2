@@ -56,6 +56,8 @@ type Foreman struct {
 
 const defaultStallAfter = 3 * time.Minute
 
+var runSeq atomic.Int64
+
 // Handlers maps each job kind to the step that executes it; app registers
 // them with the scheduler.
 func (f *Foreman) Handlers() map[string]func(context.Context, model.Job) error {
@@ -103,7 +105,8 @@ func (f *Foreman) ResumeOnStart(ctx context.Context) error {
 // conservative budget reservation is taken before execution so parallel
 // runs cannot over-commit the remaining budget.
 // runOpts.Dir overrides the work order workspace; with Hold the run stays
-// running on success so the caller completes it once its work is integrated.
+// running on success so the caller completes it (completeRuns) or fails it
+// (failRuns) once its work is integrated; agent_completed is left to the caller.
 type runOpts struct {
 	Dir  string
 	Hold bool
@@ -136,7 +139,8 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 		WorkspaceDir: dir, Context: cctx,
 	}
 	h := f.Resolve(role, wo)
-	runID := fmt.Sprintf("run_%d", time.Now().UnixNano())
+	// the clock can be microsecond-grained, so parallel runs need the sequence to stay unique
+	runID := fmt.Sprintf("run_%d_%d", time.Now().UnixNano(), runSeq.Add(1))
 	if err := f.Runs.Start(ctx, runID, wo.ID, taskID, string(role), h.Name()); err != nil {
 		return model.AgentResult{}, "", err
 	}
@@ -179,7 +183,9 @@ func (f *Foreman) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 			CostMicros: res.CostMicros, Source: res.CostSource,
 		})
 	}
-	f.event(wo.ID, string(role), "agent_completed", fmt.Sprintf("%s agent finished", role), runRef)
+	if !opts.Hold {
+		f.event(wo.ID, string(role), "agent_completed", fmt.Sprintf("%s agent finished", role), runRef)
+	}
 	return res, runID, nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"legos-factory/backend/internal/model"
+	"legos-factory/backend/internal/store"
 )
 
 // dirSandbox reports every file under the workspace as changed.
@@ -126,5 +127,36 @@ func TestRunBuilderRequiresFileChanges(t *testing.T) {
 				t.Fatalf("err = %v, task_no_changes = %v; want success", err, sawNoChanges)
 			}
 		})
+	}
+}
+
+func TestRemediationWithoutChangesFailsItsRun(t *testing.T) {
+	var dir string
+	f, wo, wos := monitorForeman(t, writeOnStart{writingHarness{}, &dir})
+	f.Sandbox = dirSandbox{}
+	f.DataDir = t.TempDir()
+	dir = f.workspaceDir(wo.ID)
+	_, runID, err := f.runBuilder(context.Background(), wo, model.Job{}, "p", "m")
+	if !errors.Is(err, model.ErrPermanent) {
+		t.Fatalf("err = %v; want permanent failure", err)
+	}
+	runs, _ := f.Runs.(*store.RunRepo).List(context.Background(), wo.ID)
+	if len(runs) != 1 || runs[0].ID != runID || runs[0].State != "failed" {
+		t.Fatalf("runs = %+v", runs)
+	}
+	var failed, completed int
+	for _, e := range agentEvents(t, wos) {
+		if e.Payload["run_id"] != runID {
+			continue
+		}
+		switch e.Kind {
+		case "agent_failed":
+			failed++
+		case "agent_completed":
+			completed++
+		}
+	}
+	if failed != 1 || completed != 0 {
+		t.Fatalf("agent_failed = %d, agent_completed = %d; want 1 and 0", failed, completed)
 	}
 }

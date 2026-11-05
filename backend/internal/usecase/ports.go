@@ -117,6 +117,7 @@ type RunStore interface {
 	Complete(ctx context.Context, id string, res model.AgentResult) error
 	Fail(ctx context.Context, id, errMsg string) error
 	CompletedBuilderTasks(ctx context.Context, woID string) (map[string]bool, error)
+	LatestRemediationState(ctx context.Context, woID string) (string, error)
 }
 
 type FindingStore interface {

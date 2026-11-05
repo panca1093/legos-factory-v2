@@ -58,7 +58,7 @@ func (f *Foreman) handleImplement(ctx context.Context, job model.Job) error {
 // only once merged back.
 func (f *Foreman) runBuilder(ctx context.Context, wo *model.WorkOrder, job model.Job, provider, modelID string) (model.AgentResult, string, error) {
 	woDir := f.workspaceDir(wo.ID)
-	opts := runOpts{Dir: woDir}
+	opts := runOpts{Dir: woDir, Hold: true}
 	branch := ""
 	if job.TaskID != "" {
 		taskDir, b := f.taskDir(wo.ID, job.TaskID), "legos/task/"+job.TaskID
@@ -79,24 +79,18 @@ func (f *Foreman) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 	}
 	runIDs := []string{runID}
 	if err := f.requireChanges(ctx, wo, job, opts.Dir, runID); err != nil {
-		f.failRuns(ctx, runIDs, err)
+		f.failRuns(ctx, wo.ID, runIDs, err)
 		return res, runID, err
 	}
-	if branch == "" {
-		return res, runID, nil
-	}
-	more, err := f.integrateTask(ctx, wo, job, opts.Dir, branch, provider, modelID)
-	runIDs = append(runIDs, more...)
-	if err != nil {
-		f.failRuns(ctx, runIDs, err)
-		return res, runID, err
-	}
-	for _, id := range runIDs {
-		if err := f.Runs.Complete(ctx, id, res); err != nil {
+	if branch != "" {
+		more, err := f.integrateTask(ctx, wo, job, opts.Dir, branch, provider, modelID)
+		runIDs = append(runIDs, more...)
+		if err != nil {
+			f.failRuns(ctx, wo.ID, runIDs, err)
 			return res, runID, err
 		}
 	}
-	return res, runID, nil
+	return res, runID, f.completeRuns(ctx, wo.ID, runIDs, res)
 }
 
 func (f *Foreman) requireChanges(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, runID string) error {
@@ -171,9 +165,19 @@ func (f *Foreman) afterMerge(ctx context.Context, wo *model.WorkOrder, job model
 	return nil
 }
 
-func (f *Foreman) failRuns(ctx context.Context, runIDs []string, err error) {
+func (f *Foreman) completeRuns(ctx context.Context, woID string, runIDs []string, res model.AgentResult) error {
 	for _, id := range runIDs {
-		_ = f.Runs.Fail(ctx, id, err.Error())
+		if err := f.Runs.Complete(ctx, id, res); err != nil {
+			return err
+		}
+		f.event(woID, "builder", "agent_completed", "builder agent finished", map[string]any{"run_id": id})
+	}
+	return nil
+}
+
+func (f *Foreman) failRuns(ctx context.Context, woID string, runIDs []string, err error) {
+	for _, id := range runIDs {
+		f.failRun(ctx, woID, model.AgentBuilder, id, err)
 	}
 }
 

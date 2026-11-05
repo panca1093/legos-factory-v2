@@ -277,4 +277,52 @@ describe("steering and plan progress", () => {
     expect(w.find('[data-test="retry-task"]').exists()).toBe(false);
     w.unmount();
   });
+
+  it("shows the remediation run and retries it when it failed", async () => {
+    const run = (task_id: string | null, state: string, error = "") => ({
+      id: `${task_id}-${state}`,
+      task_id,
+      kind: "builder",
+      state,
+      harness: "claude-acp",
+      error,
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_micros: 0,
+      created_at: "",
+    });
+    const tasks = [
+      {
+        id: "T1",
+        work_order_id: "wo1",
+        seq: 1,
+        title: "Tax",
+        objective: "",
+        role: "builder",
+        deps: [],
+      },
+    ];
+    const runs = [
+      run("T1", "completed"),
+      run(
+        null,
+        "failed",
+        "Builder finished remediation without changing any files",
+      ),
+    ];
+    const w = mount(ActivityPanel, {
+      props: { events: [], runs, tasks, canRetry: true, revision: 2 },
+    });
+    const row = w.find('[data-test="remediation"]');
+    expect(row.text()).toContain("Remediation (revision 2)");
+    expect(row.text()).toContain("Failed");
+    expect(row.text()).toContain("without changing any files");
+    await row.find('[data-test="retry-remediation"]').trigger("click");
+    expect(w.emitted("retryRemediation")).toHaveLength(1);
+    await w.setProps({ canRetry: false });
+    expect(w.find('[data-test="retry-remediation"]').exists()).toBe(false);
+    await w.setProps({ runs: [run("T1", "completed")] });
+    expect(w.find('[data-test="remediation"]').exists()).toBe(false);
+    w.unmount();
+  });
 });

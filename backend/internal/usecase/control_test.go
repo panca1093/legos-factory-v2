@@ -173,3 +173,58 @@ func TestRetryTask(t *testing.T) {
 		t.Fatalf("enqueued %v", q.enqueued)
 	}
 }
+
+func TestRetryRemediation(t *testing.T) {
+	ctx := context.Background()
+	f, wo, wos := monitorForeman(t, nil)
+	q := &fakeQueue{}
+	f.Sched = q
+	if err := wos.ReplacePlan(ctx, wo.ID, []model.Task{{ID: "T1", WOID: wo.ID, Title: "a", Role: "builder"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.RetryRemediation(ctx, wo.ID, "human"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("not implementing: %v", err)
+	}
+	if err := wos.UpdateState(ctx, wo.ID, model.StateImplementing); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.RetryRemediation(ctx, wo.ID, "human"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("unfinished tasks: %v", err)
+	}
+	if err := f.Runs.Start(ctx, "run_t1", wo.ID, "T1", "builder", "h"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Runs.Complete(ctx, "run_t1", model.AgentResult{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.RetryRemediation(ctx, wo.ID, "human"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("no remediation run: %v", err)
+	}
+	if err := f.Runs.Start(ctx, "run_fix", wo.ID, "", "builder", "h"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.RetryRemediation(ctx, wo.ID, "human"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("remediation still running: %v", err)
+	}
+	if err := f.Runs.Fail(ctx, "run_fix", "no changes"); err != nil {
+		t.Fatal(err)
+	}
+	q.active = true
+	if err := f.RetryRemediation(ctx, wo.ID, "human"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("already queued: %v", err)
+	}
+	q.active = false
+	if err := f.RetryRemediation(ctx, wo.ID, "human"); err != nil {
+		t.Fatal(err)
+	}
+	if len(q.enqueued) != 1 || q.enqueued[0] != JobImplement+":" {
+		t.Fatalf("enqueued %v", q.enqueued)
+	}
+	var retried bool
+	for _, e := range agentEvents(t, wos) {
+		retried = retried || e.Kind == "remediation_retry"
+	}
+	if !retried {
+		t.Fatal("no remediation_retry event")
+	}
+}

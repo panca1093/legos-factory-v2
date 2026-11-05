@@ -265,6 +265,10 @@ export const useFactory = defineStore("factory", {
       await api.post(`/api/v1/work-orders/${id}/tasks/${taskID}/retry`);
       await this.reloadDetail();
     },
+    async retryRemediation(id: string) {
+      await api.post(`/api/v1/work-orders/${id}/remediation/retry`);
+      await this.reloadDetail();
+    },
     async steer(id: string, runID: string, message: string) {
       await api.post(`/api/v1/work-orders/${id}/runs/${runID}/steer`, {
         message,

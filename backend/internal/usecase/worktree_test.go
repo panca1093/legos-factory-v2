@@ -85,6 +85,21 @@ func worktreeForeman(t *testing.T, h Harness, tasks ...string) (*Foreman, *model
 	return f, wo
 }
 
+func runKinds(t *testing.T, f *Foreman, woID string) map[string][]string {
+	t.Helper()
+	evs, err := f.WO.(*store.WorkOrderRepo).Events(context.Background(), woID, 0, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string][]string{}
+	for _, e := range evs {
+		if id, ok := e.Payload["run_id"].(string); ok && (e.Kind == "agent_completed" || e.Kind == "agent_failed") {
+			out[id] = append(out[id], e.Kind)
+		}
+	}
+	return out
+}
+
 func taskOf(req model.AgentRequest) string { return filepath.Base(req.WorkspaceDir) }
 
 func TestParallelTasksRunInOwnWorktreesAndMerge(t *testing.T) {
@@ -122,6 +137,16 @@ func TestParallelTasksRunInOwnWorktreesAndMerge(t *testing.T) {
 	done, err := f.Runs.CompletedBuilderTasks(context.Background(), wo.ID)
 	if err != nil || !done["T1"] || !done["T2"] {
 		t.Fatalf("done = %v, err = %v", done, err)
+	}
+	runs, err := f.Runs.(*store.RunRepo).List(context.Background(), wo.ID)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("runs = %v, err = %v", runs, err)
+	}
+	kinds := runKinds(t, f, wo.ID)
+	for _, r := range runs {
+		if got := kinds[r.ID]; len(got) != 1 || got[0] != "agent_completed" {
+			t.Fatalf("run %s events = %v; want one agent_completed", r.ID, got)
+		}
 	}
 }
 
@@ -172,6 +197,21 @@ func TestConflictingTaskIsResolvedByBuilder(t *testing.T) {
 				}
 				if _, serr := os.Stat(f.taskDir(wo.ID, "T2")); serr != nil {
 					t.Fatalf("failed worktree should be kept: %v", serr)
+				}
+				runs, _ := f.Runs.(*store.RunRepo).List(ctx, wo.ID)
+				kinds := runKinds(t, f, wo.ID)
+				var failed int
+				for _, r := range runs {
+					if r.State != "failed" {
+						continue
+					}
+					failed++
+					if got := kinds[r.ID]; len(got) != 1 || got[0] != "agent_failed" {
+						t.Fatalf("failed run %s events = %v; want only agent_failed", r.ID, got)
+					}
+				}
+				if failed != 2 {
+					t.Fatalf("failed runs = %d, want 2 (task and conflict resolution)", failed)
 				}
 				return
 			}

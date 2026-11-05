@@ -3,8 +3,13 @@ import { computed } from "vue";
 import { RotateCcw } from "lucide-vue-next";
 import type { Run, Task } from "../../../types/api";
 import { taskState } from "../../../composables/presentation";
-const props = defineProps<{ tasks: Task[]; runs: Run[]; canRetry: boolean }>();
-const emit = defineEmits<{ retry: [taskID: string] }>();
+const props = defineProps<{
+  tasks: Task[];
+  runs: Run[];
+  canRetry: boolean;
+  revision?: number;
+}>();
+const emit = defineEmits<{ retry: [taskID: string]; retryRemediation: [] }>();
 const label: Record<string, string> = {
   waiting: "Waiting",
   running: "Building",
@@ -25,6 +30,14 @@ const rows = computed(() =>
       return { task: t, state, error: state === "failed" ? error : "" };
     }),
 );
+const remediation = computed(() => {
+  const run = props.runs
+    .filter((r) => r.task_id === null && r.kind === "builder")
+    .at(-1);
+  if (!run) return null;
+  const state = run.state.toLowerCase();
+  return { state, error: state === "failed" ? run.error : "" };
+});
 const done = computed(
   () => rows.value.filter((r) => r.state === "completed").length,
 );
@@ -54,6 +67,29 @@ const done = computed(
           >
         </div>
         <p v-if="r.error" class="tiny agent-failed">{{ r.error }}</p>
+      </li>
+      <li v-if="remediation" data-test="remediation">
+        <div class="row between">
+          <strong class="small">{{
+            revision ? `Remediation (revision ${revision})` : "Remediation"
+          }}</strong>
+          <span class="row" style="gap: 8px"
+            ><span class="pill" :class="pill[remediation.state]">{{
+              label[remediation.state] ?? remediation.state
+            }}</span
+            ><button
+              v-if="remediation.state === 'failed' && canRetry"
+              class="btn small"
+              data-test="retry-remediation"
+              @click="emit('retryRemediation')"
+            >
+              <RotateCcw class="icon" />Retry
+            </button></span
+          >
+        </div>
+        <p v-if="remediation.error" class="tiny agent-failed">
+          {{ remediation.error }}
+        </p>
       </li>
     </ol>
   </section>

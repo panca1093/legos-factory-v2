@@ -286,13 +286,15 @@ function download() {
               :runs="runs"
               :tasks="tasks"
               :can-retry="session.canWrite && order.state === 'IMPLEMENTING'"
+              :revision="order.revision"
               :steer="
                 session.canWrite
                   ? (runID: string, m: string) => factory.steer(id, runID, m)
                   : undefined
               "
-              @retry="
-                (taskID) => act(() => factory.retryTask(id, taskID))
+              @retry="(taskID) => act(() => factory.retryTask(id, taskID))"
+              @retry-remediation="
+                act(() => factory.retryRemediation(id))
               " /><QualityPanel
               v-else-if="tab === 'quality'"
               key="quality"

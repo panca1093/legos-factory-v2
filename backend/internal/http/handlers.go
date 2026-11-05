@@ -424,6 +424,13 @@ func (s *Server) handleRetryTask(c echo.Context) error {
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "queued"})
 }
 
+func (s *Server) handleRetryRemediation(c echo.Context) error {
+	if err := s.Foreman.RetryRemediation(c.Request().Context(), woFrom(c).ID, "human"); err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.JSON(http.StatusAccepted, map[string]string{"status": "queued"})
+}
+
 func (s *Server) handleSteer(c echo.Context) error {
 	var req struct {
 		Message string `json:"message"`
