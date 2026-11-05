@@ -103,7 +103,7 @@ func (f *Foreman) handleInspect(ctx context.Context, job model.Job) error {
 	for _, p := range picks {
 		var out findingsReply
 		kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentInspector), p.Specialty,
-			woQuery(wo)+" "+strings.Join(files, " ")+" "+p.Specialty)
+			woQuery(wo)+" "+strings.Join(files, " ")+" "+p.Specialty, f.workspaceDir(wo.ID), wo.KBBaseSHA)
 		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files)+kbText,
 			map[string]string{"specialty": p.Specialty}, "", &out, runOpts{Audit: audit})
 		if err != nil {

@@ -29,7 +29,6 @@ type KB struct {
 	mu     sync.Mutex
 	locks  map[string]*sync.Mutex
 	synced map[string]string // project → repository commit last indexed
-	dirs   map[string]string // project → checkout last indexed, to read repo playbooks at their commit
 }
 
 func (k *KB) projectLock(pid string) *sync.Mutex {
@@ -42,12 +41,6 @@ func (k *KB) projectLock(pid string) *sync.Mutex {
 		k.locks[pid] = &sync.Mutex{}
 	}
 	return k.locks[pid]
-}
-
-func (k *KB) repoCommit(pid string) string {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	return k.synced[pid]
 }
 
 func (k *KB) WriteFactory(ctx context.Context, rel string, front map[string]any, body, message string) error {
@@ -81,12 +74,6 @@ func (k *KB) SyncRepo(ctx context.Context, projectID, dir string, force bool) (s
 	if !force && seen && last == sha {
 		return st, sha, true, nil
 	}
-	k.mu.Lock()
-	if k.dirs == nil {
-		k.dirs = map[string]string{}
-	}
-	k.dirs[projectID] = dir
-	k.mu.Unlock()
 	if st, err = kb.Sync(ctx, k.Idx, k.Emb, model.KBSourceRepo, projectID, dir, sha); err != nil {
 		return st, sha, false, err
 	}
@@ -100,62 +87,62 @@ func (k *KB) SyncRepo(ctx context.Context, projectID, dir string, force bool) (s
 // first since the repo wins, each ordered by path. A playbook without a
 // specialty applies to every specialty of its role.
 func (k *KB) Playbooks(ctx context.Context, projectID, role, specialty string) []model.KBDoc {
-	docs, err := k.Idx.List(ctx, model.KBQuery{
-		ProjectID: projectID, Sources: []string{model.KBSourceRepo, model.KBSourceFactory}, Types: []string{model.KBTypePlaybook}, Limit: 500,
-	})
-	if err != nil {
-		k.Log.Warn("kb: playbook lookup failed", "err", err)
-		return nil
-	}
-	var repo, factory []model.KBDoc
-	for _, d := range docs {
-		if metaStr(d.Meta, "role") != role {
+	var out []model.KBDoc
+	for _, source := range []string{model.KBSourceRepo, model.KBSourceFactory} {
+		docs, err := k.Idx.List(ctx, model.KBQuery{
+			ProjectID: projectID, Sources: []string{source}, Types: []string{model.KBTypePlaybook}, Limit: 500,
+		})
+		if err != nil {
+			k.Log.Warn("kb: playbook lookup failed", "source", source, "err", err)
 			continue
 		}
-		if s := metaStr(d.Meta, "specialty"); s != "" && s != specialty {
-			continue
-		}
-		if d.Source == model.KBSourceRepo {
-			repo = append(repo, d)
-		} else {
-			factory = append(factory, d)
+		for _, d := range docs {
+			if metaStr(d.Meta, "role") != role {
+				continue
+			}
+			if s := metaStr(d.Meta, "specialty"); s != "" && s != specialty {
+				continue
+			}
+			out = append(out, d)
 		}
 	}
-	return append(repo, factory...)
+	return out
 }
 
-func (k *KB) playbookBody(d model.KBDoc) (string, error) {
+// playbookBody reads a repo playbook at the work order's own planning base,
+// never from another work order's checkout. Without a base it falls back to
+// the workspace files only when that is not a git repository.
+func (k *KB) playbookBody(d model.KBDoc, dir, baseSHA string) (string, error) {
 	if d.Source == model.KBSourceFactory {
 		_, body, err := k.Bundle.Read(d.Path)
 		return body, err
 	}
-	k.mu.Lock()
-	dir := k.dirs[d.ProjectID]
-	k.mu.Unlock()
-	if dir == "" {
-		return "", fmt.Errorf("no checkout indexed for project %s", d.ProjectID)
-	}
-	if d.CommitSHA == "" {
-		_, body, err := kb.ReadMarkdown(dir, d.Path)
+	if baseSHA != "" {
+		_, body, err := kb.ReadGitMarkdown(dir, baseSHA, d.Path)
 		return body, err
 	}
-	_, body, err := kb.ReadGitMarkdown(dir, d.CommitSHA, d.Path)
+	if dir == "" || kb.GitHead(dir) != "" {
+		return "", fmt.Errorf("no planning base recorded for %s", d.ID)
+	}
+	_, body, err := kb.ReadMarkdown(dir, d.Path)
 	return body, err
 }
 
 // Context builds the knowledge block appended to an agent prompt: matching
 // playbooks inlined, repository documents as pointers, then the precedence
-// rule. The audit map names the commits and documents the run saw.
-func (k *KB) Context(ctx context.Context, projectID, role, specialty, query string) (string, map[string]any) {
+// rule. dir and baseSHA are the work order's workspace and planning base; they
+// decide which repo playbook text is read. The audit map names the commits and
+// documents the run saw.
+func (k *KB) Context(ctx context.Context, projectID, role, specialty, query, dir, baseSHA string) (string, map[string]any) {
 	if k == nil {
 		return "", nil
 	}
 	var b strings.Builder
 	ids := []string{}
-	pbs := k.Playbooks(ctx, projectID, role, specialty)
+	inlined := map[string]bool{}
 	heading := ""
-	for _, d := range pbs {
-		body, err := k.playbookBody(d)
+	for _, d := range k.Playbooks(ctx, projectID, role, specialty) {
+		body, err := k.playbookBody(d, dir, baseSHA)
 		if err != nil {
 			k.Log.Warn("kb: playbook unreadable", "doc", d.ID, "err", err)
 			continue
@@ -165,6 +152,7 @@ func (k *KB) Context(ctx context.Context, projectID, role, specialty, query stri
 			b.WriteString("\n\n" + h + "\n")
 		}
 		ids = append(ids, d.ID)
+		inlined[d.ID] = true
 		fmt.Fprintf(&b, "\n--- %s ---\n%s\n", d.Title, truncate(strings.TrimSpace(body), maxPlaybookChars))
 	}
 	hits, err := k.Idx.Search(ctx, model.KBQuery{
@@ -173,8 +161,10 @@ func (k *KB) Context(ctx context.Context, projectID, role, specialty, query stri
 	if err != nil {
 		k.Log.Warn("kb: repository lookup failed", "err", err)
 	}
-	// playbooks reach agents by role above; as pointers they would repeat or leak other roles' rules
-	hits = slices.DeleteFunc(hits, func(h model.KBHit) bool { return h.Doc.Type == model.KBTypePlaybook })
+	// a playbook is delivered inline by role; as a pointer it would repeat or leak another role's rules
+	hits = slices.DeleteFunc(hits, func(h model.KBHit) bool {
+		return inlined[h.Doc.ID] || h.Doc.Type == model.KBTypePlaybook && agentRoles[metaStr(h.Doc.Meta, "role")]
+	})
 	if len(hits) > 0 {
 		b.WriteString("\n\nRepository documents that may matter for this work. They are in your workspace; read the ones you need:\n")
 		for _, h := range hits {
@@ -186,12 +176,17 @@ func (k *KB) Context(ctx context.Context, projectID, role, specialty, query stri
 			b.WriteString("\n")
 		}
 	}
-	if len(pbs) > 0 || len(hits) > 0 {
+	if len(inlined) > 0 || len(hits) > 0 {
 		b.WriteString("\n" + kbPrecedence + "\n")
 	}
 	return b.String(), map[string]any{
-		"kb_repo_commit": k.repoCommit(projectID), "kb_factory_commit": k.Bundle.Head(), "kb_docs": ids,
+		"kb_repo_commit": baseSHA, "kb_factory_commit": k.Bundle.Head(), "kb_docs": ids,
 	}
+}
+
+var agentRoles = map[string]bool{
+	string(model.AgentArchitect): true, string(model.AgentForeman): true,
+	string(model.AgentBuilder): true, string(model.AgentInspector): true,
 }
 
 func playbookHeading(source string) string {

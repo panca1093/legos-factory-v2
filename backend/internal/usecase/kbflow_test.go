@@ -96,7 +96,12 @@ func newRig(t *testing.T) *rig {
 
 func (r *rig) workspace(t *testing.T, files map[string]string) string {
 	t.Helper()
-	dir := r.f.workspaceDir(r.wo.ID)
+	return r.workspaceFor(t, r.wo.ID, files)
+}
+
+func (r *rig) workspaceFor(t *testing.T, woID string, files map[string]string) string {
+	t.Helper()
+	dir := r.f.workspaceDir(woID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -342,7 +347,7 @@ func TestDisputeDraftIsInertUntilApprovedAndDiscardRemovesIt(t *testing.T) {
 	if !strings.Contains(body, "reported \"Missing nil check f1\" (blocker) and a human disputed it: handled by the caller") || !strings.Contains(body, "Proposed rule: do not report this kind of finding as blocker unless") {
 		t.Fatalf("draft body: %s", body)
 	}
-	if text, _ := r.know.Context(ctx, "p1", "inspector", "backend", "anything"); strings.Contains(text, "Missing nil check") {
+	if text, _ := r.know.Context(ctx, "p1", "inspector", "backend", "anything", "", ""); strings.Contains(text, "Missing nil check") {
 		t.Fatal("a draft must never reach an agent")
 	}
 
@@ -353,11 +358,11 @@ func TestDisputeDraftIsInertUntilApprovedAndDiscardRemovesIt(t *testing.T) {
 	if err != nil || approved.Status != model.KBStatusStable || approved.Trust != model.KBTrustHuman {
 		t.Fatalf("approve: %+v %v", approved, err)
 	}
-	text, audit := r.know.Context(ctx, "p1", "inspector", "backend", "anything")
+	text, audit := r.know.Context(ctx, "p1", "inspector", "backend", "anything", "", "")
 	if !strings.Contains(text, "Missing nil check f1") || !strings.Contains(text, kbPrecedence) || !strings.Contains(fmt.Sprint(audit["kb_docs"]), d.ID) {
 		t.Fatalf("approved playbook must be inlined for the backend inspector:\n%s", text)
 	}
-	if other, _ := r.know.Context(ctx, "p1", "inspector", "frontend", "anything"); strings.Contains(other, "Missing nil check") {
+	if other, _ := r.know.Context(ctx, "p1", "inspector", "frontend", "anything", "", ""); strings.Contains(other, "Missing nil check") {
 		t.Fatal("the playbook is for the backend specialty only")
 	}
 
@@ -400,28 +405,34 @@ func TestSimilarClarificationProposesDraft(t *testing.T) {
 	}
 }
 
+func playbookDoc(title, role, specialty, rule string) string {
+	s := "---\ntype: Playbook\ntitle: " + title + "\nrole: " + role + "\n"
+	if specialty != "" {
+		s += "specialty: " + specialty + "\n"
+	}
+	return s + "---\n\n" + rule + "\n"
+}
+
+func (r *rig) ctxFor(wo *model.WorkOrder, role, specialty, query string) (string, map[string]any) {
+	return r.know.Context(context.Background(), wo.ProjectID, role, specialty, query, r.f.workspaceDir(wo.ID), wo.KBBaseSHA)
+}
+
 func TestRepoPlaybooksAreInlinedBeforeFactoryOnes(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
-	pb := func(title, role, specialty, rule string) string {
-		s := "---\ntype: Playbook\ntitle: " + title + "\nrole: " + role + "\n"
-		if specialty != "" {
-			s += "specialty: " + specialty + "\n"
-		}
-		return s + "---\n\n" + rule + "\n"
-	}
+	pb := playbookDoc
 	r.workspace(t, map[string]string{
 		"docs/review-backend.md": pb("Backend review rules", "inspector", "backend", "Business logic lives in usecase/."),
 		"docs/review-all.md":     pb("Review rules for every inspector", "inspector", "", "Money is int64 rupiah."),
 		"docs/foreman.md":        pb("Foreman rules", "foreman", "", "Never escalate naming."),
+		"docs/odd-role.md":       pb("Odd role rules", "security-bot", "", "Money must be audited."),
 	})
 	r.f.syncRepo(ctx, r.wo, true)
-	// the builder may edit the file after the base commit; the playbook is read at the indexed commit
 	if err := os.WriteFile(filepath.Join(r.f.workspaceDir(r.wo.ID), "docs/review-backend.md"), []byte(pb("Backend review rules", "inspector", "backend", "Anything goes.")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	backend, audit := r.know.Context(ctx, r.wo.ProjectID, string(model.AgentInspector), "backend", "money")
+	backend, audit := r.ctxFor(r.wo, string(model.AgentInspector), "backend", "money")
 	repoAt := strings.Index(backend, "Repository playbooks for your role")
 	factoryAt := strings.Index(backend, "Factory playbooks for your role")
 	if repoAt < 0 || factoryAt < 0 || repoAt > factoryAt {
@@ -435,20 +446,71 @@ func TestRepoPlaybooksAreInlinedBeforeFactoryOnes(t *testing.T) {
 	if strings.Contains(backend, "Anything goes.") {
 		t.Fatal("repo playbooks must be read at the indexed commit, not the working tree")
 	}
-	if !contains(toAny(audit["kb_docs"]), "repo:"+r.wo.ProjectID+":docs/review-backend.md") {
-		t.Fatalf("audit lacks the repo playbook: %v", audit["kb_docs"])
+	if !contains(toAny(audit["kb_docs"]), "repo:"+r.wo.ProjectID+":docs/review-backend.md") || audit["kb_repo_commit"] != r.wo.KBBaseSHA || r.wo.KBBaseSHA == "" {
+		t.Fatalf("audit: %v", audit)
+	}
+	for _, hidden := range []string{"- docs/review-all.md", "- docs/review-backend.md", "- docs/foreman.md"} {
+		if strings.Contains(backend, hidden) {
+			t.Fatalf("role playbook %q must not be listed as a pointer:\n%s", hidden, backend)
+		}
+	}
+	if !strings.Contains(backend, "- docs/odd-role.md") {
+		t.Fatalf("a playbook with an unknown role must stay visible as a pointer:\n%s", backend)
 	}
 
-	tester, _ := r.know.Context(ctx, r.wo.ProjectID, string(model.AgentInspector), "testing", "money")
+	tester, _ := r.ctxFor(r.wo, string(model.AgentInspector), "testing", "money")
 	if !strings.Contains(tester, "Money is int64 rupiah.") || strings.Contains(tester, "Business logic lives in usecase/.") {
 		t.Fatalf("testing inspector must get the generic repo playbook only:\n%s", tester)
 	}
-	if strings.Contains(backend, "- docs/review-backend.md") {
-		t.Fatal("playbooks must not also be listed as pointers")
-	}
-	foreman, _ := r.know.Context(ctx, r.wo.ProjectID, string(model.AgentForeman), "", "money")
-	if !strings.Contains(foreman, "Never escalate naming.") || strings.Contains(foreman, "Money is int64 rupiah.") {
+	foreman, _ := r.ctxFor(r.wo, string(model.AgentForeman), "", "money")
+	if !strings.Contains(foreman, "Never escalate naming.") || strings.Contains(foreman, "Money is int64 rupiah.") || strings.Contains(foreman, "docs/review-backend.md") {
 		t.Fatalf("foreman must get only foreman playbooks:\n%s", foreman)
+	}
+}
+
+func TestRepoPlaybooksSurviveARestart(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	r.workspace(t, map[string]string{"docs/review-all.md": playbookDoc("Review rules", "inspector", "", "Money is int64 rupiah.")})
+	r.f.syncRepo(ctx, r.wo, true)
+
+	fresh := &KB{Bundle: r.know.Bundle, Idx: r.know.Idx, Emb: r.know.Emb, Log: slog.Default()}
+	wo, err := r.wos.Get(ctx, r.wo.ID)
+	if err != nil || wo.KBBaseSHA == "" {
+		t.Fatalf("planning base not persisted: %+v %v", wo, err)
+	}
+	text, audit := fresh.Context(ctx, wo.ProjectID, string(model.AgentInspector), "backend", "money", r.f.workspaceDir(wo.ID), wo.KBBaseSHA)
+	if !strings.Contains(text, "Money is int64 rupiah.") || audit["kb_repo_commit"] != wo.KBBaseSHA {
+		t.Fatalf("repo playbook lost after restart (%v):\n%s", audit, text)
+	}
+}
+
+func TestRepoPlaybooksAreReadAtEachWorkOrdersOwnBase(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	r.workspace(t, map[string]string{"docs/review-all.md": playbookDoc("Review rules", "inspector", "", "Rule from A.")})
+	r.f.syncRepo(ctx, r.wo, true)
+
+	b := *r.wo
+	b.ID = "wo_b"
+	if err := r.wos.Create(ctx, &b); err != nil {
+		t.Fatal(err)
+	}
+	r.workspaceFor(t, b.ID, map[string]string{"docs/review-all.md": playbookDoc("Review rules", "inspector", "", "Rule from B.")})
+	r.f.syncRepo(ctx, &b, true)
+
+	a, _ := r.wos.Get(ctx, r.wo.ID)
+	bb, _ := r.wos.Get(ctx, b.ID)
+	if a.KBBaseSHA == bb.KBBaseSHA {
+		t.Fatal("work orders must record their own base commits")
+	}
+	textA, auditA := r.ctxFor(a, string(model.AgentInspector), "backend", "x")
+	textB, auditB := r.ctxFor(bb, string(model.AgentInspector), "backend", "x")
+	if !strings.Contains(textA, "Rule from A.") || strings.Contains(textA, "Rule from B.") || auditA["kb_repo_commit"] != a.KBBaseSHA {
+		t.Fatalf("work order A read another base:\n%s", textA)
+	}
+	if !strings.Contains(textB, "Rule from B.") || strings.Contains(textB, "Rule from A.") || auditB["kb_repo_commit"] != bb.KBBaseSHA {
+		t.Fatalf("work order B read another base:\n%s", textB)
 	}
 }
 

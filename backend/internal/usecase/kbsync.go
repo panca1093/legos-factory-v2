@@ -35,6 +35,13 @@ func (f *Foreman) syncRepo(ctx context.Context, wo *model.WorkOrder, force bool)
 		return
 	}
 	st, sha, skipped, err := f.KB.SyncRepo(ctx, wo.ProjectID, f.workspaceDir(wo.ID), force)
+	if err == nil && sha != "" && sha != wo.KBBaseSHA {
+		if uerr := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"kb_base_sha": sha}); uerr != nil {
+			f.Log.Warn("knowledge base commit not saved", "wo", wo.ID, "err", uerr)
+		} else {
+			wo.KBBaseSHA = sha
+		}
+	}
 	switch {
 	case skipped:
 	case err != nil:

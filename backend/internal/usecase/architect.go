@@ -47,7 +47,7 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 	}
 
 	f.syncRepo(ctx, wo, true)
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "", woQuery(wo))
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "", woQuery(wo), f.workspaceDir(wo.ID), wo.KBBaseSHA)
 	notes, _ := job.Payload["notes"].(string)
 	var plan planReply
 	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes)+knowledgePrompt(prior)+kbText,
