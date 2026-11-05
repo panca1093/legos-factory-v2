@@ -19,13 +19,23 @@ func (f *Factory) handleEvaluate(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
+	if wo.State == model.StateImplementing {
+		return f.resumeDoneGateFix(ctx, wo) // a retry after a fix got only partway
+	}
+	if wo.State != model.StateSpecialistReview {
+		return nil // superseded or already evaluated
+	}
 	escalation := ""
 	if f.Judge != nil {
-		fixed, note, err := f.doneGate(ctx, wo)
+		fixed, note, err := f.doneGate(ctx, wo, lastAttempt(job))
 		if err != nil || fixed {
 			return err
 		}
 		escalation = note
+	}
+	// this inspection's findings were kept open for the gate; they are settled now
+	if err := f.Findings.ResolveOpen(ctx, wo.ID); err != nil {
+		return err
 	}
 	if err := f.step(ctx, wo, model.StateSpecialistReview, model.StatePRPreparation, "factory", "Preparing change summary"); err != nil {
 		return err
@@ -39,13 +49,17 @@ func (f *Factory) handleEvaluate(ctx context.Context, job model.Job) error {
 // doneGate has the Foreman write validation notes, asks Jev and applies the done
 // truth table. fixed reports that the order went back to the Builder; a
 // non-empty escalation is the reason a human must decide.
-func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder) (fixed bool, escalation string, err error) {
+func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry bool) (fixed bool, escalation string, err error) {
 	criteria := splitCriteria(wo.Acceptance)
 	report := f.currentArchitectReport(wo)
-	if report == nil {
-		out := GateOutcome{GateEscalate, 2, "the Architect's verification is missing for this revision"}
-		f.recordGate(wo.ID, "done", map[string]any{}, nil, JudgeResult{}, out, errors.New(out.Note))
-		return false, out.Note, nil
+	if len(criteria) == 0 || report == nil {
+		note := "the Architect's verification is missing for this revision"
+		if len(criteria) == 0 {
+			note = "no acceptance criteria to judge against"
+		}
+		out := GateOutcome{GateEscalate, 2, note}
+		f.recordGate(wo.ID, "done", map[string]any{}, nil, JudgeResult{}, out, errors.New(note))
+		return false, note, nil
 	}
 	checksTxt, checksFailed := f.checksText(ctx, wo)
 	findings, err := f.Findings.List(ctx, wo.ID)
@@ -71,7 +85,13 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder) (fixed bool
 		foremanValidatePrompt(wo, findingsTxt.String(), reportText(*report), checksTxt)+kbText,
 		map[string]string{"stage": "validate"}, "", &v, runOpts{Audit: audit, Prime: foremanPrime(wo)})
 	if err != nil {
-		return false, "", err
+		if !errors.Is(err, model.ErrPermanent) && !lastTry {
+			return false, "", err // transient: the job requeues
+		}
+		note := "Foreman validation failed: " + err.Error()
+		out := GateOutcome{GateEscalate, 2, note}
+		f.recordGate(wo.ID, "done", map[string]any{}, nil, JudgeResult{}, out, errors.New(note))
+		return false, note, nil
 	}
 	f.Catalog.Record(ctx, wo, model.KnowledgePlanReview, model.TrustAIInterpretation, "foreman",
 		"Foreman validation notes", v.Notes, "run:"+runID)
@@ -101,20 +121,39 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder) (fixed bool
 
 	switch out.Outcome {
 	case GateFix:
+		// the state moves first: a retry that finds IMPLEMENTING completes the fix (resumeDoneGateFix)
+		if err := f.step(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "factory", "Done gate requested a fix; returning to builder"); err != nil {
+			return false, "", err
+		}
 		newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
 		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "review_fixes": fixes}); err != nil {
 			return false, "", err
 		}
 		wo.Revision, wo.CommitSHA, wo.ReviewFixes = newRev, "", fixes
-		f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: done gate requests a fix: %s", newRev, out.Note), nil)
-		if err := f.step(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "factory", "Done gate requested a fix; returning to builder"); err != nil {
-			return false, "", err
-		}
+		f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: done gate requests a fix: %s", newRev, out.Note),
+			map[string]any{"revision": newRev, "reason": "fix_done_gate", "note": out.Note})
 		return true, "", f.enqueuePayload(ctx, JobImplement, wo.ID, map[string]any{"reason": "fix_done_gate", "note": out.Note})
 	case GateEscalate:
 		return false, out.Note, nil
 	}
 	return false, "", nil
+}
+
+// resumeDoneGateFix finishes a fix whose evaluate job failed after the order
+// had already returned to IMPLEMENTING: it applies the revision bump if that
+// was lost and queues the Builder unless one is already queued.
+func (f *Factory) resumeDoneGateFix(ctx context.Context, wo *model.WorkOrder) error {
+	if f.Sched.HasActive(ctx, wo.ID, "", JobImplement) {
+		return nil
+	}
+	if wo.CommitSHA != "" { // the bump is cleared with commit_sha; still set means it never landed
+		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": wo.Revision + 1, "commit_sha": "", "review_fixes": wo.ReviewFixes + 1}); err != nil {
+			return err
+		}
+	}
+	return f.enqueuePayload(ctx, JobImplement, wo.ID, map[string]any{
+		"reason": "fix_done_gate", "note": "The done gate asked for a fix; its reasons are in the last done_gate event of the activity trail.",
+	})
 }
 
 // currentArchitectReport is the stored Architect verification when it was made on the order's current revision.
@@ -145,12 +184,15 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 	case verificationBlocked || openBlockers > 0:
 		decision = "BLOCKED"
 		reason = fmt.Sprintf("Blocked: %d unresolved blocker finding(s) or failed verification.", openBlockers)
-	case checkCount == 0:
-		decision = "NEEDS_VERIFICATION"
-		reason = "No verification evidence recorded for the current revision."
 	case escalation != "":
 		decision = "NEEDS_HUMAN_REVIEW"
 		reason = "The done gate needs a human decision: " + escalation
+		if checkCount == 0 {
+			reason += " (no verification evidence is recorded for the current revision either)"
+		}
+	case checkCount == 0:
+		decision = "NEEDS_VERIFICATION"
+		reason = "No verification evidence recorded for the current revision."
 	}
 	f.event(wo.ID, "factory", "readiness_"+strings.ToLower(decision), reason, map[string]any{"decision": decision})
 	f.Catalog.Record(ctx, wo, model.KnowledgeReadiness, model.TrustVerified, "factory", "Merge readiness: "+decision, reason)

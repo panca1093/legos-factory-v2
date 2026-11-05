@@ -28,6 +28,11 @@ const (
 // MaxRevisionCycles bounds the fix/inspect remediation loop.
 const MaxRevisionCycles = 2
 
+// lastAttempt reports that a failure of job will not be retried, mirroring the scheduler.
+func lastAttempt(job model.Job) bool {
+	return job.MaxAttempts > 0 && job.Attempts+1 >= job.MaxAttempts
+}
+
 func stateConflict(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", model.ErrStateConflict, fmt.Sprintf(format, args...))
 }
@@ -51,6 +56,7 @@ type Factory struct {
 	DataDir      string
 	wsMu         sync.Map // work order id → *sync.Mutex serializing writes to its workspace: task merges, dependency setup
 	baselineMu   sync.Map // work order id → *sync.Mutex so one task records the baseline
+	approveMu    sync.Map // work order id → *sync.Mutex so the plan gate and a human cannot both approve
 	live         sync.Map // run id → liveSession, while the agent runs
 	planSes      sync.Map // work order id → planSession: the Foreman's open planning session
 	QualTimeout  time.Duration

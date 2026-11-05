@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -159,12 +160,14 @@ func (h *MockHarness) foremanReview(req model.AgentRequest, res model.AgentResul
 	})
 }
 
+var bulletLine = regexp.MustCompile(`^\s*(?:[-*]|\d+[.)])\s+`)
+
 // architectVerify marks every acceptance criterion met, numbered c1..cn like
 // the factory numbers them: one per bullet line, or c1 for plain text.
 func (h *MockHarness) architectVerify(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
 	n := 0
 	for _, line := range strings.Split(req.Context["acceptance"], "\n") {
-		if t := strings.TrimSpace(line); strings.HasPrefix(t, "- ") || strings.HasPrefix(t, "* ") {
+		if bulletLine.MatchString(line) {
 			n++
 		}
 	}

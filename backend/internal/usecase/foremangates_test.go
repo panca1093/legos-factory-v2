@@ -263,3 +263,29 @@ func TestPlanGateFailureAndOversizeEscalateWithoutGuessing(t *testing.T) {
 		t.Fatalf("event: %+v", ev.Payload)
 	}
 }
+
+func TestOnlyOneApprovalStartsTheBuild(t *testing.T) {
+	r := reviewRig(t, &fakeJudge{})
+	r.review(t)
+	queued := len(r.q.enqueued)
+	if err := r.f.ApprovePlan(context.Background(), r.wo.ID); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("a human approval after the gate already queued the build must conflict: %v", err)
+	}
+	if len(r.q.enqueued) != queued {
+		t.Fatalf("no second set of jobs: %v", r.q.enqueued)
+	}
+}
+
+func TestInterruptedPlanRevisionIsFinishedOnRetry(t *testing.T) {
+	r := reviewRig(t, &fakeJudge{})
+	// the revision moved the order to PLANNING and then failed before queueing the Architect
+	if err := r.wos.UpdateState(context.Background(), r.wo.ID, model.StatePlanning); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.handleReview(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if r.q.enqueued[len(r.q.enqueued)-1] != "plan:" || r.reload(t).PlanReview != "" {
+		t.Fatalf("enqueued %v review %q", r.q.enqueued, r.reload(t).PlanReview)
+	}
+}

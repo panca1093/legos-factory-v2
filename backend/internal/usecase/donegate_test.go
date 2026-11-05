@@ -188,7 +188,7 @@ func (h *barrierHarness) Result(ctx context.Context, id string) (model.AgentResu
 
 func inspectRig(t *testing.T, h Harness) *rig {
 	t.Helper()
-	r := doneRig(t, nil, "")
+	r := doneRig(t, &fakeJudge{}, "")
 	r.f.Resolve = func(model.AgentRole, *model.WorkOrder) Harness { return h }
 	if err := r.wos.ReplacePlan(context.Background(), r.wo.ID, []model.Task{{ID: "wo1_t1", WOID: r.wo.ID, Title: "Round money", Objective: "o", Role: "builder", Scope: []string{"round.go"}}}); err != nil {
 		t.Fatal(err)
@@ -245,5 +245,142 @@ func TestArchitectVerificationFailureDoesNotFailTheInspection(t *testing.T) {
 	}
 	if len(r.events(t, "architect_verify_failed")) != 1 || r.q.enqueued[len(r.q.enqueued)-1] != "evaluate:" {
 		t.Fatalf("failure must be visible and evaluation still follow: %v", r.q.enqueued)
+	}
+}
+
+func TestNoArchitectVerificationWithoutJev(t *testing.T) {
+	r := inspectRig(t, &replyHarness{})
+	r.f.Judge = nil
+	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.events(t, "architect_verified")) != 0 || len(r.events(t, "architect_verify_failed")) != 0 {
+		t.Fatal("nothing reads the verdicts without Jev, so the Architect must not run")
+	}
+	if r.q.enqueued[len(r.q.enqueued)-1] != "evaluate:" {
+		t.Fatalf("enqueued %v", r.q.enqueued)
+	}
+}
+
+func TestArchitectVerificationErrorsRequeueUntilTheLastAttempt(t *testing.T) {
+	h := &replyHarness{archErr: errors.New("model offline")}
+	r := inspectRig(t, h)
+	err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID, MaxAttempts: 3, Attempts: 0})
+	if err == nil || !strings.Contains(err.Error(), "model offline") {
+		t.Fatalf("a transient error must requeue the job: %v", err)
+	}
+	if len(r.events(t, "architect_verify_failed")) != 0 {
+		t.Fatal("not reported as failed while a retry is coming")
+	}
+	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID, MaxAttempts: 3, Attempts: 2}); err != nil {
+		t.Fatalf("the last attempt must carry on: %v", err)
+	}
+	if len(r.events(t, "architect_verify_failed")) != 1 {
+		t.Fatal("the last attempt reports the failure")
+	}
+}
+
+func TestArchitectVerificationPanicBecomesAFailureEvent(t *testing.T) {
+	r := inspectRig(t, &replyHarness{archBoom: true})
+	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := eventByKind(t, r, "architect_verify_failed"); !strings.Contains(ev.Message, "panicked") {
+		t.Fatalf("event %+v", ev)
+	}
+}
+
+func TestDoneGateSeesTheFindingsOfThisInspection(t *testing.T) {
+	ctx := context.Background()
+	j := &fakeJudge{}
+	h := &replyHarness{inspect: `{"findings":[{"severity":"minor","title":"Unused import","detail":"round.go imports fmt","location":"round.go:3"}]}`}
+	r := inspectRig(t, h)
+	r.f.Judge = j
+	if err := r.f.handleInspect(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview {
+		t.Fatalf("state %s", wo.State)
+	}
+	open := j.calls[0].state.(map[string]any)["open_findings"].([]GateFinding)
+	if len(open) == 0 || !strings.Contains(open[0].Message, "Unused import") {
+		t.Fatalf("the gate must see this inspection's findings: %+v", open)
+	}
+	fds, _ := r.f.Findings.List(ctx, r.wo.ID)
+	for _, fd := range fds {
+		if fd.Status != model.FindingResolved {
+			t.Fatalf("findings are settled once the gate has decided: %+v", fd)
+		}
+	}
+}
+
+func TestFailedForemanValidationEscalatesInsteadOfStrandingTheOrder(t *testing.T) {
+	j := &fakeJudge{}
+	r := doneRig(t, j, metReport)
+	r.h.foreman = "no json at all"
+	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview {
+		t.Fatalf("a failed validation must not strand the order, state %s", wo.State)
+	}
+	ev := eventByKind(t, r, "done_gate")
+	if ev.Payload["outcome"] != GateEscalate || !strings.Contains(ev.Payload["note"].(string), "Foreman validation failed") {
+		t.Fatalf("event %+v", ev.Payload)
+	}
+	if len(j.calls) != 0 {
+		t.Fatal("no Jev request without validation notes")
+	}
+	ready := eventByKind(t, r, "readiness_needs_human_review")
+	if !strings.Contains(ready.Message, "Foreman validation failed") {
+		t.Fatalf("readiness: %+v", ready)
+	}
+}
+
+func TestDoneGateWithoutCriteriaEscalatesWithoutAForemanRun(t *testing.T) {
+	r := doneRig(t, &fakeJudge{}, metReport)
+	if err := r.wos.UpdateFields(context.Background(), r.wo.ID, map[string]any{"acceptance": ""}); err != nil {
+		t.Fatal(err)
+	}
+	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview {
+		t.Fatalf("state %s", wo.State)
+	}
+	if len(r.h.prompts["foreman"]) != 0 {
+		t.Fatal("no Foreman run without criteria")
+	}
+	if ev := eventByKind(t, r, "done_gate"); !strings.Contains(ev.Payload["note"].(string), "no acceptance criteria") {
+		t.Fatalf("event %+v", ev.Payload)
+	}
+}
+
+func TestEvaluateIsIdempotentAndResumesAHalfDoneFix(t *testing.T) {
+	ctx := context.Background()
+	r := doneRig(t, &fakeJudge{}, metReport)
+	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateNeedsHumanReview); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.handleEvaluate(ctx, model.Job{WOID: r.wo.ID}); err != nil || len(r.q.enqueued) != 0 {
+		t.Fatalf("a superseded evaluate job is a no-op: %v %v", err, r.q.enqueued)
+	}
+	// the state moved to IMPLEMENTING but the revision bump and the Builder job were lost
+	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateImplementing); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.wos.UpdateFields(ctx, r.wo.ID, map[string]any{"commit_sha": "abc"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.handleEvaluate(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	wo := r.reload(t)
+	if wo.Revision != 1 || wo.ReviewFixes != 1 || wo.CommitSHA != "" || r.q.enqueued[len(r.q.enqueued)-1] != "implement:" || r.q.payloads[len(r.q.payloads)-1]["reason"] != "fix_done_gate" {
+		t.Fatalf("revision %d fixes %d sha %q enqueued %v", wo.Revision, wo.ReviewFixes, wo.CommitSHA, r.q.enqueued)
+	}
+}
+
+func TestHumanRetryAfterAFailedDoneGateFixKeepsTheNote(t *testing.T) {
+	ctx := context.Background()
+	r := doneRig(t, &fakeJudge{over: map[string]float64{"met_c1": 0.1}}, metReport)
+	r.evaluate(t)
+	p := r.f.retryPayload(ctx, r.reload(t))
+	if p["reason"] != "fix_done_gate" || !strings.Contains(p["note"].(string), "acceptance criterion c1") {
+		t.Fatalf("retry payload %v", p)
 	}
 }

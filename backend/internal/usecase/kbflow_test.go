@@ -31,6 +31,10 @@ type replyHarness struct {
 	specials []string
 	reqs     map[string]model.AgentRequest // by session id
 	verify   string                        // overrides the Architect verification reply
+	inspect  string                        // overrides the Inspector reply
+	foreman  string                        // overrides the Foreman reply
+	archErr  error                         // fails the Architect verification run
+	archBoom bool                          // panics in the Architect verification run
 }
 
 func (*replyHarness) Name() string { return "fake" }
@@ -57,7 +61,19 @@ func (h *replyHarness) Result(_ context.Context, id string) (model.AgentResult, 
 	defer h.mu.Unlock()
 	req := h.reqs[id]
 	text := map[model.AgentRole]string{model.AgentArchitect: planJSON, model.AgentForeman: reviewJSON, model.AgentInspector: noFindings}[req.Role]
+	if h.inspect != "" && req.Role == model.AgentInspector {
+		text = h.inspect
+	}
+	if h.foreman != "" && req.Role == model.AgentForeman {
+		text = h.foreman
+	}
 	if req.Role == model.AgentArchitect && req.Context["stage"] == "verify" {
+		if h.archBoom {
+			panic("scripted verification crash")
+		}
+		if h.archErr != nil {
+			return model.AgentResult{}, h.archErr
+		}
 		text = verifyJSON
 		if h.verify != "" {
 			text = h.verify

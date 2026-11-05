@@ -40,6 +40,7 @@ export function subscribe(
     "validation_started",
     "foreman_validated",
     "done_gate",
+    "diff_unavailable",
     "clarification_asked",
     "clarification_escalated",
     "clarification_requested",

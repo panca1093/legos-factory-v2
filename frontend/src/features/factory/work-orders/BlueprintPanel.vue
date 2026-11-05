@@ -81,7 +81,7 @@ const emit = defineEmits<{
     <section
       v-else-if="order.state === 'ARCHITECT_REVIEW'"
       class="callout"
-      :class="{ green: order.plan_review === 'approved' }"
+      :class="{ orange: order.plan_review === 'approved' }"
     >
       <div class="row">
         <BrickBot persona="foreman" class="compact" /><strong

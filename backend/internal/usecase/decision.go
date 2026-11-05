@@ -27,6 +27,17 @@ func (f *Factory) ApprovePlan(ctx context.Context, woID string) error {
 // is "human" or "factory" (the plan gate approved).
 func (f *Factory) approvePlan(ctx context.Context, wo *model.WorkOrder, actor, msg string) error {
 	woID := wo.ID
+	mu := lockFor(&f.approveMu, woID)
+	mu.Lock()
+	defer mu.Unlock()
+	cur, err := f.WO.Get(ctx, woID)
+	if err != nil {
+		return err
+	}
+	if cur.State != model.StateArchitectReview {
+		return stateConflict("WO %s is %s; the plan was already approved or changed", woID, cur.State)
+	}
+	wo.State = cur.State
 	tasks, err := f.WO.Plan(ctx, woID)
 	if err != nil {
 		return err

@@ -21,6 +21,7 @@ type WorkOrderStore interface {
 	ReplacePlan(ctx context.Context, woID string, tasks []model.Task) error
 	Plan(ctx context.Context, woID string) ([]model.Task, error)
 	AppendEvent(ctx context.Context, woID, actor, kind, message string, payload map[string]any) (*model.Event, error)
+	Events(ctx context.Context, woID string, afterID int64, limit int) ([]model.Event, error)
 }
 
 type ProjectStore interface {
@@ -127,6 +128,7 @@ type RunStore interface {
 type FindingStore interface {
 	Create(ctx context.Context, f model.Finding) error
 	ResolveOpen(ctx context.Context, woID string) error
+	ResolveOpenExcept(ctx context.Context, woID string, runIDs []string) error
 	CountOpenBlockers(ctx context.Context, woID string) (int, error)
 	List(ctx context.Context, woID string) ([]model.Finding, error)
 	Get(ctx context.Context, woID, id string) (*model.Finding, error)

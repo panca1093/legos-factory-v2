@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -128,6 +129,9 @@ func failedChecksSection(failures []model.CheckResult) string {
 // retryPayload keeps the failing checks in front of the Builder when a human retries after a failed verification.
 func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[string]any {
 	payload := map[string]any{"reason": "human_retry"}
+	if note := f.doneGateNote(ctx, wo); note != "" {
+		return map[string]any{"reason": "fix_done_gate", "note": note}
+	}
 	if wo.VerifyFailures == 0 || wo.Revision < 1 {
 		return payload
 	}
@@ -155,6 +159,26 @@ func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[str
 		return payload
 	}
 	return map[string]any{"reason": "fix_failed_verification", "failed_checks": failedChecksSection(failed)}
+}
+
+// doneGateNote is the note of the done-gate fix that opened the order's current revision, or "".
+func (f *Factory) doneGateNote(ctx context.Context, wo *model.WorkOrder) string {
+	evs, err := f.WO.Events(ctx, wo.ID, 0, 5000)
+	if err != nil {
+		return ""
+	}
+	for i := len(evs) - 1; i >= 0; i-- {
+		e := evs[i]
+		if e.Kind != "fix_requested" || e.Payload["reason"] != "fix_done_gate" {
+			continue
+		}
+		if rev, _ := e.Payload["revision"].(float64); int(rev) == wo.Revision {
+			note, _ := e.Payload["note"].(string)
+			return note
+		}
+		return ""
+	}
+	return ""
 }
 
 func outputTail(out string) string {
@@ -187,15 +211,30 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		fmt.Sprintf("Specialist review by %s (%d changed files)", strings.Join(names, ", "), len(files)),
 		map[string]any{"specialists": picks, "routing": routing})
 
-	// the Architect checks the result against its spec while the specialists review the diff
+	// With Jev on, the Architect checks the result against its spec while the
+	// specialists review the diff. Without Jev nothing reads the verdicts.
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		f.architectVerify(ctx, *wo, files)
-	}()
-	defer wg.Wait() // an early return must not leave the verification running
+	var archErr error
+	if f.Judge != nil {
+		actx, cancel := context.WithCancel(ctx)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					f.event(wo.ID, "architect", "architect_verify_failed", fmt.Sprintf("verification panicked: %v", r), nil)
+				}
+			}()
+			archErr = f.architectVerify(actx, *wo, files)
+		}()
+		// an early return must neither leave the verification running nor wait for it to finish
+		defer func() {
+			cancel()
+			wg.Wait()
+		}()
+	}
 
+	var runIDs []string
 	blockers, total := 0, 0
 	for _, p := range picks {
 		var out findingsReply
@@ -206,6 +245,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		if err != nil {
 			return err
 		}
+		runIDs = append(runIDs, runID)
 		var summary strings.Builder
 		specBlockers := 0
 		for _, fd := range out.Findings {
@@ -230,11 +270,18 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		f.Catalog.Record(ctx, wo, model.KnowledgeFindings, model.TrustAIInterpretation, "inspector", title, summary.String(), "run:"+runID)
 	}
 	wg.Wait()
+	if archErr != nil {
+		if !lastAttempt(job) {
+			return archErr // transient: the job requeues
+		}
+		f.event(wo.ID, "architect", "architect_verify_failed", archErr.Error(), nil)
+	}
 	f.event(wo.ID, "inspector", "inspection_finished", fmt.Sprintf("%d finding(s), %d blocker(s)", total, blockers), nil)
 
 	if blockers == 0 {
-		// later clean inspection supersedes earlier findings on this WO
-		if err := f.Findings.ResolveOpen(ctx, wo.ID); err != nil {
+		// a later clean inspection supersedes earlier findings; this inspection's own
+		// stay open for the done gate, which resolves them once it has decided
+		if err := f.Findings.ResolveOpenExcept(ctx, wo.ID, runIDs); err != nil {
 			return err
 		}
 		return f.enqueue(ctx, JobEvaluate, wo.ID, "")
@@ -289,7 +336,7 @@ type architectReport struct {
 // architectVerify has the Architect check the built result against its spec and
 // plan and stores the verdicts for the done gate. A failure is reported, not
 // fatal: the done gate then has no verdicts for this revision.
-func (f *Factory) architectVerify(ctx context.Context, wo model.WorkOrder, files []string) {
+func (f *Factory) architectVerify(ctx context.Context, wo model.WorkOrder, files []string) error {
 	dir := f.workspaceDir(wo.ID)
 	diff, err := f.Sandbox.Diff(ctx, dir)
 	if err != nil {
@@ -297,8 +344,7 @@ func (f *Factory) architectVerify(ctx context.Context, wo model.WorkOrder, files
 	}
 	tasks, err := f.WO.Plan(ctx, wo.ID)
 	if err != nil {
-		f.event(wo.ID, "architect", "architect_verify_failed", err.Error(), nil)
-		return
+		return err
 	}
 	checks, _ := f.checksText(ctx, &wo)
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "",
@@ -307,14 +353,16 @@ func (f *Factory) architectVerify(ctx context.Context, wo model.WorkOrder, files
 	_, runID, err := f.runStructured(ctx, &wo, model.AgentArchitect, architectVerifyPrompt(&wo, tasks, diff, checks)+kbText,
 		map[string]string{"stage": "verify"}, "", &r, runOpts{Audit: audit})
 	if err != nil {
-		f.event(wo.ID, "architect", "architect_verify_failed", err.Error(), nil)
-		return
+		if errors.Is(err, model.ErrPermanent) || ctx.Err() != nil {
+			f.event(wo.ID, "architect", "architect_verify_failed", err.Error(), nil)
+			return nil
+		}
+		return err
 	}
 	report := architectReport{Revision: wo.Revision, Verdicts: r.Verdicts, Deviations: r.Deviations}
 	raw, _ := json.Marshal(report)
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"architect_report": string(raw)}); err != nil {
-		f.event(wo.ID, "architect", "architect_verify_failed", err.Error(), nil)
-		return
+		return err
 	}
 	text := reportText(report)
 	met := 0
@@ -328,6 +376,7 @@ func (f *Factory) architectVerify(ctx context.Context, wo model.WorkOrder, files
 		map[string]any{"revision": wo.Revision, "verdicts": report.Verdicts, "deviations": report.Deviations, "run_id": runID})
 	f.Catalog.Record(ctx, &wo, model.KnowledgeArchitectVerified, model.TrustAIInterpretation, "architect",
 		fmt.Sprintf("Architect verification of revision %d: %d of %d criteria met", wo.Revision, met, len(report.Verdicts)), text, "run:"+runID)
+	return nil
 }
 
 func reportText(r architectReport) string {

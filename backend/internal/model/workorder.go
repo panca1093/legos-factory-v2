@@ -92,7 +92,7 @@ type WorkOrder struct {
 	ForemanModel    string     `json:"foreman_model,omitempty"`
 	ArchitectModel  string     `json:"architect_model,omitempty"`
 	PlanReview      string     `json:"plan_review,omitempty"` // pending|approved
-	ReviewRounds    int        `json:"review_rounds"`
+	ReviewRounds    int        `json:"review_rounds"`         // legacy: no longer written, kept for old rows
 	PausedAt        *time.Time `json:"paused_at,omitempty"`
 	PauseReason     string     `json:"pause_reason,omitempty"`
 	ClarifQuestion  string     `json:"clarif_question,omitempty"`
