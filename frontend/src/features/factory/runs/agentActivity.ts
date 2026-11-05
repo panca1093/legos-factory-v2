@@ -116,6 +116,39 @@ export function gateSummary(e: WOEvent): GateSummary | null {
   };
 }
 
+// Why the flow asked a human: the latest plan escalation or escalating done gate.
+export function escalationReason(events: WOEvent[]): string {
+  for (const e of [...events].reverse()) {
+    if (e.kind === "plan_escalated") return e.message;
+    const g = gateSummary(e);
+    if (g?.outcome === "escalate" && g.gate === "Done gate")
+      return g.note || e.message;
+  }
+  return "";
+}
+
+// The latest message of the given kinds, e.g. why a readiness check blocked or an Inspector escalated.
+export function lastMessage(events: WOEvent[], ...kinds: string[]): string {
+  return (
+    [...events].reverse().find((e) => kinds.includes(e.kind))?.message ?? ""
+  );
+}
+
+export interface ArchitectReport {
+  revision: number;
+  verdicts: { criterion_id: string; status: string; evidence: string }[];
+  deviations: string[];
+}
+export function architectReport(events: WOEvent[]): ArchitectReport | null {
+  const e = [...events].reverse().find((x) => x.kind === "architect_verified");
+  if (!e) return null;
+  return {
+    revision: Number(e.payload?.revision) || 0,
+    verdicts: (e.payload?.verdicts as ArchitectReport["verdicts"]) ?? [],
+    deviations: (e.payload?.deviations as string[]) ?? [],
+  };
+}
+
 // Parallel plan tasks run at once, so more than one run can be live.
 export function liveRuns(items: ActivityItem[]): AgentRunGroup[] {
   return items.filter(

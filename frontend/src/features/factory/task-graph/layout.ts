@@ -282,7 +282,7 @@ function finishLayout(
   const ranks = [...new Set(nodes.map(main))]
     .sort((a, b) => a - b)
     .map((at, i) => ({
-      label: `Stage ${i + 1}`,
+      label: `Wave ${i + 1}`,
       x: direction === "RIGHT" ? at : PADDING,
       y: direction === "RIGHT" ? PADDING + 6 : at + nodes[0].height / 2,
     }));
