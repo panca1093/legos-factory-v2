@@ -295,3 +295,21 @@ func (s *KBDocs) Reset(ctx context.Context, u *model.User, id string) (*model.KB
 	}
 	return s.KB.Idx.Get(ctx, id)
 }
+
+// Delete removes a factory document from the bundle and the index. Factory
+// documents are never synced to a repository, so the bundle commit is the
+// whole change. Seeded defaults are refused: they would be re-seeded on the
+// next start, so Reset is the way to undo an edit.
+func (s *KBDocs) Delete(ctx context.Context, u *model.User, id string) error {
+	d, err := s.factoryDoc(ctx, u, id)
+	if err != nil {
+		return err
+	}
+	if d.ProjectID == "" && !u.Role.IsAdmin() {
+		return ErrForbidden
+	}
+	if s.KB.Bundle.HasDefault(d.Path) {
+		return stateConflict("%s is a default playbook and would be restored on restart; reset it instead", d.Path)
+	}
+	return s.KB.RemoveFactory(ctx, d.Path, "Delete "+d.Path)
+}

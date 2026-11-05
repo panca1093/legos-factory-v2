@@ -202,6 +202,18 @@ Truth table:
 
 `fix` bumps the revision and returns to the Builder with reason `fix_done_gate` and the code-built note (rendered in the Builder prompt). It shares the `review_fixes` budget with blocker-finding remediation (`review_fixes < 2`). When the budget is spent, fix becomes escalate. `escalate` and `done` both continue to `PR_PREPARATION → MERGE_READINESS`; an escalation shows up as a `readiness_needs_human_review` event carrying the reason.
 
+### 8. Ship = PR merged
+
+Ship, the work order's last stage in the UI, is complete only when its pull request is **merged**. Human PR approval (`NEEDS_HUMAN_REVIEW → READY`, which opens the PR) is unchanged; state stays `READY` afterwards.
+
+The factory polls every 2 minutes (fixed, no config). It checks `READY` orders that have a `pr_ref` and neither `pr_merged_at` nor `pr_closed_at`, asking the provider (`GitProvider.PullRequestStatus`, from the stored `pr_ref`) for the PR state:
+
+- merged → `pr_merged_at` is set and event `pr_merged` is recorded (`actor: factory`);
+- closed without merging → `pr_closed_at` is set and event `pr_closed` is recorded (`actor: factory`);
+- open → nothing; a provider error is logged and retried next tick, it never fails the order.
+
+Both fields are exposed on the work order JSON. Events go through the normal publisher, so SSE clients see them. A PR closed unmerged is not reopened or retried by the factory.
+
 ## Jev integration
 
 - Endpoint `POST https://api.typesafe.ai/v1/systemone`, `Authorization: Bearer $TYPESAFE_API_KEY`.

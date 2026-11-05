@@ -108,6 +108,8 @@ type WorkOrder struct {
 	SourceRef       string     `json:"source_ref,omitempty"` // e.g. jira:ABC-12
 	PRURL           string     `json:"pr_url,omitempty"`
 	PRRef           string     `json:"pr_ref,omitempty"`
+	PRMergedAt      *time.Time `json:"pr_merged_at,omitempty"`
+	PRClosedAt      *time.Time `json:"pr_closed_at,omitempty"`
 	CreatedBy       string     `json:"created_by"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`

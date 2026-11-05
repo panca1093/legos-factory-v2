@@ -17,7 +17,7 @@ type WorkOrderRepo struct{ DB *sql.DB }
 
 const woCols = `id, project_id, title, objective, acceptance, state,
 	builder_model, inspector_model, clarif_question, clarif_answer, revision,
-	commit_sha, source_ref, pr_url, pr_ref, foreman_model, architect_model, plan_review, review_rounds,
+	commit_sha, source_ref, pr_url, pr_ref, pr_merged_at, pr_closed_at, foreman_model, architect_model, plan_review, review_rounds,
 	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, brief, spec, clarif_rounds, clarif_log, plan_revisions, architect_report, created_by, created_at, updated_at`
 
 func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
@@ -61,12 +61,12 @@ func (r *WorkOrderRepo) List(ctx context.Context) ([]model.WorkOrder, error) {
 func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	var wo model.WorkOrder
 	var state string
-	var pausedAt sql.NullInt64
+	var pausedAt, mergedAt, closedAt sql.NullInt64
 	var clarifLog string
 	var createdAt, updatedAt int64
 	err := scan(&wo.ID, &wo.ProjectID, &wo.Title, &wo.Objective, &wo.Acceptance, &state,
 		&wo.BuilderModel, &wo.InspectorModel, &wo.ClarifQuestion, &wo.ClarifAnswer, &wo.Revision,
-		&wo.CommitSHA, &wo.SourceRef, &wo.PRURL, &wo.PRRef, &wo.ForemanModel, &wo.ArchitectModel, &wo.PlanReview,
+		&wo.CommitSHA, &wo.SourceRef, &wo.PRURL, &wo.PRRef, &mergedAt, &closedAt, &wo.ForemanModel, &wo.ArchitectModel, &wo.PlanReview,
 		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.Brief, &wo.Spec, &wo.ClarifRounds, &clarifLog, &wo.PlanRevisions, &wo.ArchitectReport, &wo.CreatedBy, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrWorkOrderNotFound
@@ -81,6 +81,14 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	if pausedAt.Valid {
 		t := time.Unix(pausedAt.Int64, 0)
 		wo.PausedAt = &t
+	}
+	if mergedAt.Valid {
+		t := time.Unix(mergedAt.Int64, 0)
+		wo.PRMergedAt = &t
+	}
+	if closedAt.Valid {
+		t := time.Unix(closedAt.Int64, 0)
+		wo.PRClosedAt = &t
 	}
 	wo.CreatedAt = time.Unix(createdAt, 0)
 	wo.UpdatedAt = time.Unix(updatedAt, 0)

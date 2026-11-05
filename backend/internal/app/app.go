@@ -208,6 +208,7 @@ func (a *App) Start(ctx context.Context) error {
 		return err
 	}
 	a.Sched.Start(ctx)
+	a.Server.Factory.WatchPRs(ctx)
 	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {
 		return err
 	}

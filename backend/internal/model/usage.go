@@ -21,3 +21,37 @@ type UsageTotals struct {
 	TokensIn   int64 `json:"tokens_in"`
 	TokensOut  int64 `json:"tokens_out"`
 }
+
+type UsageDay struct {
+	Date  string `json:"date"` // YYYY-MM-DD
+	Count int    `json:"count"`
+}
+
+type UsageRole struct {
+	Role       string `json:"role"`
+	TokensIn   int64  `json:"tokens_in"`
+	TokensOut  int64  `json:"tokens_out"`
+	CostMicros int64  `json:"cost_micros"`
+	Runs       int    `json:"runs"`
+}
+
+type UsagePeriod struct {
+	TokensIn   int64 `json:"tokens_in"`
+	TokensOut  int64 `json:"tokens_out"`
+	CostMicros int64 `json:"cost_micros"`
+	Runs       int   `json:"runs"`
+}
+
+// UsageSummary is one user's agent usage: a dense per-day activity series
+// (oldest first), per-role totals for the period and month-to-date totals.
+type UsageSummary struct {
+	Days        int         `json:"days"`
+	From        string      `json:"from"`
+	To          string      `json:"to"`
+	Activity    []UsageDay  `json:"activity"`
+	Roles       []UsageRole `json:"roles"`
+	MonthToDate struct {
+		Month string `json:"month"` // YYYY-MM
+		UsagePeriod
+	} `json:"month_to_date"`
+}

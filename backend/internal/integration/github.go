@@ -64,3 +64,25 @@ func (g *GitHub) OpenPullRequest(ctx context.Context, pr model.PRRequest) (model
 	}
 	return model.PullRequest{Number: p.Number, URL: p.HTMLURL, Ref: fmt.Sprintf("github:%s#%d", pr.Repo, p.Number)}, nil
 }
+
+func (g *GitHub) PullRequestStatus(ctx context.Context, ref string) (model.PRStatus, error) {
+	repo, n, err := splitPRRef(ref, "github", "#")
+	if err != nil {
+		return model.PRStatus{}, err
+	}
+	var p struct {
+		State    string `json:"state"`
+		MergedAt string `json:"merged_at"`
+		ClosedAt string `json:"closed_at"`
+	}
+	if err := g.api.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls/%d", repo, n), nil, &p); err != nil {
+		return model.PRStatus{}, err
+	}
+	switch {
+	case p.MergedAt != "":
+		return model.PRStatus{State: model.PRStateMerged, At: parseTime(p.MergedAt)}, nil
+	case p.State == "closed":
+		return model.PRStatus{State: model.PRStateClosed, At: parseTime(p.ClosedAt)}, nil
+	}
+	return model.PRStatus{State: model.PRStateOpen}, nil
+}

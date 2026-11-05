@@ -265,3 +265,38 @@ func TestKBWritesPutApproveDiscardReset(t *testing.T) {
 		t.Fatalf("discarded doc must be gone: %d", code)
 	}
 }
+
+func TestKBDelete(t *testing.T) {
+	r := bootKB(t)
+	if code, _ := r.do(t, "viewer", "DELETE", "/api/v1/kb/doc?id="+d1ID, ""); code != 403 {
+		t.Fatalf("viewer DELETE: %d", code)
+	}
+	if code, _ := r.do(t, "outsider", "DELETE", "/api/v1/kb/doc?id="+d1ID, ""); code != 404 {
+		t.Fatalf("DELETE outside the project: %d", code)
+	}
+	if code, _ := r.do(t, "eng", "DELETE", "/api/v1/kb/doc?id="+repoID, ""); code != 409 {
+		t.Fatalf("DELETE of a repo doc: %d", code)
+	}
+	if code, _ := r.do(t, "owner", "DELETE", "/api/v1/kb/doc?id="+fwID, ""); code != 409 {
+		t.Fatalf("DELETE of a default playbook: %d", code)
+	}
+	if code, _ := r.do(t, "eng", "DELETE", "/api/v1/kb/doc?id=factory:p1:nope.md", ""); code != 404 {
+		t.Fatalf("DELETE of a missing doc: %d", code)
+	}
+	if code, _ := r.do(t, "eng", "POST", "/api/v1/kb/doc/approve?id="+d1ID, "{}"); code != 200 {
+		t.Fatalf("approve: %d", code)
+	}
+	before := r.know.Bundle.Head()
+	if code, _ := r.do(t, "eng", "DELETE", "/api/v1/kb/doc?id="+d1ID, ""); code != 204 {
+		t.Fatalf("DELETE of an approved doc: %d", code)
+	}
+	if code, _ := r.do(t, "eng", "GET", "/api/v1/kb/doc?id="+d1ID, ""); code != 404 {
+		t.Fatalf("deleted doc must be gone: %d", code)
+	}
+	if _, _, err := r.know.Bundle.Read("projects/p1/drafts/d1.md"); err == nil {
+		t.Fatal("deleted doc must leave the bundle")
+	}
+	if r.know.Bundle.Head() == before {
+		t.Fatal("the deletion must be committed to the bundle")
+	}
+}
