@@ -113,7 +113,7 @@ func (f *Factory) RetryTask(ctx context.Context, woID, taskID, actor string) err
 	if f.Sched.HasActive(ctx, woID, taskID, JobImplement) {
 		return stateConflict("task %s is already queued or running", taskID)
 	}
-	if _, err := f.Sched.Enqueue(ctx, JobImplement, woID, taskID, map[string]any{"reason": "human_retry"}); err != nil {
+	if _, err := f.Sched.Enqueue(ctx, JobImplement, woID, taskID, f.retryPayload(ctx, wo)); err != nil {
 		return err
 	}
 	f.event(woID, actor, "task_retry", fmt.Sprintf("Task %s retried", taskID), map[string]any{"task_id": taskID})
@@ -151,7 +151,7 @@ func (f *Factory) RetryRemediation(ctx context.Context, woID, actor string) erro
 	if f.Sched.HasActive(ctx, woID, "", JobImplement) {
 		return stateConflict("remediation is already queued or running")
 	}
-	if _, err := f.Sched.Enqueue(ctx, JobImplement, woID, "", map[string]any{"reason": "human_retry"}); err != nil {
+	if _, err := f.Sched.Enqueue(ctx, JobImplement, woID, "", f.retryPayload(ctx, wo)); err != nil {
 		return err
 	}
 	f.event(woID, actor, "remediation_retry", "Remediation retried", nil)
