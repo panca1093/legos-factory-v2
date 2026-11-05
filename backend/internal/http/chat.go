@@ -5,15 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v4"
 
 	"legos-factory/backend/internal/usecase"
 )
 
+const chatFrameTimeout = 10 * time.Second
+
 func chatError(c echo.Context, err error) error {
-	if errors.Is(err, usecase.ErrChatBusy) {
+	switch {
+	case errors.Is(err, usecase.ErrChatBusy):
 		return errorJSON(c, http.StatusConflict, "CHAT_BUSY", err.Error())
+	case errors.Is(err, usecase.ErrChatSaturated):
+		return errorJSON(c, http.StatusTooManyRequests, "CHAT_BUSY", err.Error())
+	case errors.Is(err, usecase.ErrChatBudget):
+		return errorJSON(c, http.StatusConflict, "BUDGET_EXHAUSTED", err.Error())
+	case errors.Is(err, usecase.ErrChatUnavailable):
+		return errorJSON(c, http.StatusServiceUnavailable, "CHAT_UNAVAILABLE", err.Error())
 	}
 	return mapDomainError(c, err)
 }
@@ -98,8 +108,14 @@ func (s *Server) handleChatSend(c echo.Context) error {
 	}
 	res := c.Response()
 	flusher, _ := res.Writer.(http.Flusher)
-	started := false
+	rc := http.NewResponseController(res.Writer)
+	started, dead := false, false
 	emit := func(ev usecase.ChatEvent) {
+		if dead {
+			return
+		}
+		// a stalled client must not hold the agent's reader or the chat's busy flag
+		_ = rc.SetWriteDeadline(time.Now().Add(chatFrameTimeout))
 		if !started {
 			started = true
 			res.Header().Set(echo.HeaderContentType, "text/event-stream")
@@ -117,7 +133,10 @@ func (s *Server) handleChatSend(c echo.Context) error {
 			payload["message"] = ev.Message
 		}
 		b, _ := json.Marshal(payload)
-		fmt.Fprintf(res.Writer, "event: %s\ndata: %s\n\n", ev.Kind, b)
+		if _, err := fmt.Fprintf(res.Writer, "event: %s\ndata: %s\n\n", ev.Kind, b); err != nil {
+			dead = true
+			return
+		}
 		if flusher != nil {
 			flusher.Flush()
 		}

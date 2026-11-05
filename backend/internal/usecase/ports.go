@@ -72,6 +72,7 @@ type ChatStore interface {
 	Get(ctx context.Context, id string) (*model.Chat, error)
 	List(ctx context.Context, userID string) ([]model.Chat, error)
 	Update(ctx context.Context, id, title, modelRef string) error
+	Rename(ctx context.Context, id, title string) error
 	Touch(ctx context.Context, id string) error
 	Delete(ctx context.Context, id string) error
 	AddMessage(ctx context.Context, m *model.ChatMessage) error

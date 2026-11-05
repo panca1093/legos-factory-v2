@@ -32,7 +32,7 @@ type Server struct {
 	Catalog      *usecase.Cataloger
 	KBDocs       *usecase.KBDocs
 	Chat         *usecase.Chat
-	Bus         *Bus
+	Bus          *Bus
 	Auth         *usecase.Identity
 	OIDC         *OIDCClient
 	Usage        *usecase.UsageTracker
@@ -227,12 +227,12 @@ func (s *Server) routes() {
 	api.POST("/kb/doc/reset", s.requireRole(model.RoleEngineer, s.handleKBReset))
 
 	api.GET("/chats", s.handleListChats)
-	api.POST("/chats", s.handleCreateChat)
+	api.POST("/chats", s.requireRole(model.RoleEngineer, s.handleCreateChat))
 	api.GET("/chats/:id", s.handleGetChat)
-	api.PATCH("/chats/:id", s.handleUpdateChat)
-	api.DELETE("/chats/:id", s.handleDeleteChat)
+	api.PATCH("/chats/:id", s.requireRole(model.RoleEngineer, s.handleUpdateChat))
+	api.DELETE("/chats/:id", s.requireRole(model.RoleEngineer, s.handleDeleteChat))
 	api.GET("/chats/:id/messages", s.handleChatMessages)
-	api.POST("/chats/:id/messages", s.handleChatSend)
+	api.POST("/chats/:id/messages", s.requireRole(model.RoleEngineer, s.handleChatSend))
 	api.GET("/chat/models", s.handleChatModels)
 
 	api.GET("/models", s.handleModels)

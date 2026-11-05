@@ -255,12 +255,26 @@ func TestACPClaudeReadOnlyRolesStartInPlanModeWithoutWriteTools(t *testing.T) {
 			t.Fatalf("%s: config calls = %q; want the model, then plan mode", r, s.Set)
 		}
 	}
+	chat := run(model.AgentChat)
+	if !strings.Contains(chat.Meta, `"tools":[]`) || !strings.Contains(chat.Meta, `"Read"`) || !strings.Contains(chat.Meta, `"WebFetch"`) || chat.Set != "model=sonnet,mode=plan" {
+		t.Fatalf("chat must get no tools: meta %q, set %q", chat.Meta, chat.Set)
+	}
 	if b := run(model.AgentBuilder); b.Meta != "" || b.Set != "model=sonnet" {
 		t.Fatalf("builder must keep the default session: meta %q, set %q", b.Meta, b.Set)
 	}
 }
 
 func TestACPRoleConfig(t *testing.T) {
+	chatCfg := acpRoleConfig(model.AgentChat)
+	for _, tool := range []string{"read", "webfetch", "bash", "edit"} {
+		if !strings.Contains(chatCfg, `"`+tool+`":"deny"`) {
+			t.Fatalf("chat config must deny %s: %s", tool, chatCfg)
+		}
+	}
+	if strings.Contains(acpRoleConfig(model.AgentInspector), `"read":"deny"`) {
+		t.Fatal("reviewers keep read access")
+	}
+
 	builder := acpRoleConfig(model.AgentBuilder)
 	if !strings.Contains(builder, `"external_directory":"deny"`) || strings.Contains(builder, `"edit":"deny"`) {
 		t.Fatalf("builder config = %s", builder)
@@ -295,6 +309,7 @@ func TestACPPermissionPolicy(t *testing.T) {
 		{model.AgentInspector, "read", ws + "/main.go", "yes"},
 		{model.AgentInspector, "edit", ws + "/main.go", "no"},
 		{model.AgentInspector, "execute", ws, "no"},
+		{model.AgentChat, "read", ws + "/main.go", "no"},
 	}
 	for _, c := range cases {
 		res, err := runFake(t, fakeHarness(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_PATH="+c.path),

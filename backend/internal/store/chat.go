@@ -59,6 +59,11 @@ func (r *ChatRepo) Update(ctx context.Context, id, title, modelRef string) error
 	return err
 }
 
+func (r *ChatRepo) Rename(ctx context.Context, id, title string) error {
+	_, err := r.DB.ExecContext(ctx, `UPDATE chats SET title = ? WHERE id = ?`, title, id)
+	return err
+}
+
 func (r *ChatRepo) Touch(ctx context.Context, id string) error {
 	_, err := r.DB.ExecContext(ctx, `UPDATE chats SET updated_at = ? WHERE id = ?`, time.Now().Unix(), id)
 	return err

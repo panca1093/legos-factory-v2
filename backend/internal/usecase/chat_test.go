@@ -17,7 +17,8 @@ type chatPlain struct {
 	mu     sync.Mutex
 	starts []model.AgentRequest
 	reply  string
-	err    error         // Result fails after streaming the reply
+	err    error // Result fails after streaming the reply, reporting errRes
+	errRes model.AgentResult
 	gate   chan struct{} // when set, Result waits for it
 	inRun  chan struct{} // when set, Result signals that it has been reached
 	n      int
@@ -46,7 +47,7 @@ func (h *chatPlain) Result(context.Context, string) (model.AgentResult, error) {
 		<-h.gate
 	}
 	if h.err != nil {
-		return model.AgentResult{}, h.err
+		return h.errRes, h.err
 	}
 	return model.AgentResult{Text: h.reply, TokensIn: 10, TokensOut: 5, CostMicros: 7, CostSource: "measured"}, nil
 }
@@ -69,10 +70,26 @@ func (h *chatKeeper) Continue(_ context.Context, id string, req model.AgentReque
 }
 func (h *chatKeeper) Close(id string) { h.closed = append(h.closed, id) }
 
-type usageSink struct{ recs []model.UsageRecord }
+type usageSink struct {
+	mu       sync.Mutex
+	recs     []model.UsageRecord
+	deny     bool
+	reserved int
+	released int
+}
 
-func (*usageSink) Reserve(int64) (func(int64), bool) { return nil, true }
+func (u *usageSink) Reserve(int64) (func(int64), bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.deny {
+		return nil, false
+	}
+	u.reserved++
+	return func(int64) { u.mu.Lock(); u.released++; u.mu.Unlock() }, true
+}
 func (u *usageSink) Record(_ context.Context, r model.UsageRecord) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
 	u.recs = append(u.recs, r)
 	return nil
 }
@@ -318,7 +335,7 @@ func TestChatFailedReplyIsStoredWithErrorMarker(t *testing.T) {
 
 func TestChatRejectsConcurrentSend(t *testing.T) {
 	ctx := context.Background()
-	h := &chatPlain{reply: "x", gate: make(chan struct{}), inRun: make(chan struct{})}
+	h := &chatPlain{reply: "x", gate: make(chan struct{}), inRun: make(chan struct{}, 16)}
 	r := newChatRig(t, h)
 	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
 	done := make(chan struct{})
@@ -426,10 +443,83 @@ func TestChatModelList(t *testing.T) {
 	}
 }
 
+func TestChatBudgetReservedReleasedAndEnforced(t *testing.T) {
+	ctx := context.Background()
+	h := &chatPlain{reply: "ok"}
+	r := newChatRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "hi"}); err != nil || r.usage.reserved != 1 || r.usage.released != 1 {
+		t.Fatalf("reserve/release: %v %+v", err, r.usage)
+	}
+	r.usage.deny = true
+	evs, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "again"})
+	if !errors.Is(err, ErrChatBudget) || len(evs) != 0 {
+		t.Fatalf("over budget: %v, %d events", err, len(evs))
+	}
+	if msgs, _ := r.chat.Messages(ctx, r.ana, ch.ID); len(msgs) != 2 || len(h.starts) != 1 {
+		t.Fatalf("a refused turn stores and runs nothing: %d msgs, %d runs", len(msgs), len(h.starts))
+	}
+}
+
+func TestChatRecordsUsageOfFailedTurn(t *testing.T) {
+	ctx := context.Background()
+	h := &chatPlain{reply: "part", err: errors.New("boom"), errRes: model.AgentResult{TokensIn: 3, TokensOut: 1}}
+	r := newChatRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	r.send(t, r.ana, ch.ID, ChatSend{Content: "q"})
+	if len(r.usage.recs) != 1 || r.usage.recs[0].TokensIn != 3 || r.usage.released != 1 {
+		t.Fatalf("usage %+v", r.usage)
+	}
+}
+
+func TestChatUpdateWaitsOutATurnAndSendRechecksAllowedModel(t *testing.T) {
+	ctx := context.Background()
+	h := &chatPlain{reply: "x", gate: make(chan struct{}), inRun: make(chan struct{}, 16)}
+	r := newChatRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "anthropic/haiku")
+	done := make(chan struct{})
+	go func() { r.send(t, r.ana, ch.ID, ChatSend{Content: "one"}); close(done) }()
+	<-h.inRun
+	title := "t"
+	if _, err := r.chat.Update(ctx, r.ana, ch.ID, &title, nil); !errors.Is(err, ErrChatBusy) {
+		t.Fatalf("update while answering: %v", err)
+	}
+	close(h.gate)
+	<-done
+	r.chat.Settings.(*store.SettingsRepo).Put(ctx, model.Settings{AllowedModels: []string{"anthropic/opus"}})
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "two"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("model no longer allowed: %v", err)
+	}
+}
+
+func TestChatLimitsConcurrentTurns(t *testing.T) {
+	ctx := context.Background()
+	h := &chatPlain{reply: "x", gate: make(chan struct{}), inRun: make(chan struct{}, 16)}
+	r := newChatRig(t, h)
+	var wg sync.WaitGroup
+	var ids []string
+	for i := 0; i < maxChatTurns; i++ {
+		ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+		ids = append(ids, ch.ID)
+		wg.Add(1)
+		go func() { defer wg.Done(); r.send(t, r.ana, ch.ID, ChatSend{Content: "go"}) }()
+		<-h.inRun
+	}
+	extra, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	if _, err := r.send(t, r.ana, extra.ID, ChatSend{Content: "go"}); !errors.Is(err, ErrChatSaturated) {
+		t.Fatalf("beyond the limit: %v", err)
+	}
+	close(h.gate)
+	wg.Wait()
+	if _, err := r.send(t, r.ana, extra.ID, ChatSend{Content: "go"}); err != nil {
+		t.Fatalf("a slot is free again: %v", err)
+	}
+}
+
 func TestChatUnavailableWithoutHarness(t *testing.T) {
 	r := newChatRig(t, nil)
 	ch, _ := r.chat.Create(context.Background(), r.ana, "", "", "")
-	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "hi"}); !errors.Is(err, ErrInvalid) {
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "hi"}); !errors.Is(err, ErrChatUnavailable) {
 		t.Fatalf("no harness: %v", err)
 	}
 }

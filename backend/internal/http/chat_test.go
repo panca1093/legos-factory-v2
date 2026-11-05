@@ -25,8 +25,12 @@ func bootChat(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { db.Close() })
 	users := &store.UserRepo{DB: db}
-	for _, id := range []string{"ana", "bob"} {
-		if err := users.Create(context.Background(), model.User{ID: id, Email: id + "@t", Name: id, Role: model.RoleEngineer}); err != nil {
+	for _, id := range []string{"ana", "bob", "vic"} {
+		role := model.RoleEngineer
+		if id == "vic" {
+			role = model.RoleViewer
+		}
+		if err := users.Create(context.Background(), model.User{ID: id, Email: id + "@t", Name: id, Role: role}); err != nil {
 			t.Fatal(err)
 		}
 		if err := users.CreateSession(context.Background(), "sess-"+id, id, time.Now().Add(time.Hour)); err != nil {
@@ -64,6 +68,12 @@ func TestChatAPI(t *testing.T) {
 		t.Fatalf("anonymous: %d", code)
 	}
 
+	if code, _ := chatDo(srv, "vic", "POST", "/api/v1/chats", `{}`); code != http.StatusForbidden {
+		t.Fatalf("viewer create: %d", code)
+	}
+	if code, _ := chatDo(srv, "vic", "GET", "/api/v1/chats", ""); code != http.StatusOK {
+		t.Fatalf("viewer list: %d", code)
+	}
 	code, body := chatDo(srv, "ana", "POST", "/api/v1/chats", `{"model":"mock/mock-local"}`)
 	if code != http.StatusCreated {
 		t.Fatalf("create: %d %s", code, body)
@@ -162,4 +172,15 @@ func parseSSE(body string) []sseEvent {
 		out = append(out, e)
 	}
 	return out
+}
+
+func TestChatUnavailableIs503(t *testing.T) {
+	srv := bootChat(t)
+	_, body := chatDo(srv, "ana", "POST", "/api/v1/chats", `{}`)
+	var created struct{ Chat model.Chat }
+	_ = json.Unmarshal([]byte(body), &created)
+	srv.Chat.Harness = nil
+	if code, body := chatDo(srv, "ana", "POST", "/api/v1/chats/"+created.Chat.ID+"/messages", `{"content":"hi"}`); code != http.StatusServiceUnavailable || !strings.Contains(body, "CHAT_UNAVAILABLE") {
+		t.Fatalf("no harness: %d %s", code, body)
+	}
 }

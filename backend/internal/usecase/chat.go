@@ -29,10 +29,21 @@ const (
 	historyRunes     = 24000
 	chatTurnTimeout  = 10 * time.Minute
 	modelListTTL     = 5 * time.Minute
+	maxChatTurns     = 4
+	chatTurnEstimate = 50_000 // micros reserved per turn, as for a factory agent run
 )
 
 // ErrChatBusy means the conversation is already answering a message.
 var ErrChatBusy = errors.New("this chat is already answering a message")
+
+var (
+	// ErrChatSaturated means too many chats are answering at once; retry shortly.
+	ErrChatSaturated = errors.New("too many chats are answering right now; try again shortly")
+	// ErrChatBudget is a policy refusal: the workspace spending cap does not cover another turn.
+	ErrChatBudget = errors.New("budget exhausted; the workspace spending cap does not cover another agent run")
+	// ErrChatUnavailable means no harness can run chats read-only.
+	ErrChatUnavailable = errors.New("chat is unavailable: no agent runtime can run it read-only; use the ACP harness")
+)
 
 // Chat runs general conversations with a read-only agent, outside the
 // work-order flow. A conversation keeps one harness session while the harness
@@ -55,9 +66,12 @@ type Chat struct {
 	// Dir is the empty directory chat agents run in.
 	Dir string
 
-	mu     sync.Mutex
-	busy   map[string]bool
-	ses    map[string]chatSession
+	mu    sync.Mutex // busy, turns and ses
+	busy  map[string]bool
+	turns int
+	ses   map[string]chatSession
+
+	lmu    sync.Mutex // the model-list cache, never held while fetching
 	listed []model.ModelInfo
 	listAt time.Time
 }
@@ -149,6 +163,13 @@ func (c *Chat) Get(ctx context.Context, u *model.User, id string) (*model.Chat, 
 
 // Update renames a chat and/or changes its model; nil leaves a field alone.
 func (c *Chat) Update(ctx context.Context, u *model.User, id string, title, modelRef *string) (*model.Chat, error) {
+	if _, err := c.own(ctx, u, id); err != nil {
+		return nil, err
+	}
+	if !c.lock(id) {
+		return nil, ErrChatBusy
+	}
+	defer c.unlock(id)
 	ch, err := c.own(ctx, u, id)
 	if err != nil {
 		return nil, err
@@ -206,16 +227,7 @@ func (c *Chat) ModelList(ctx context.Context) (*ChatModels, error) {
 	if err != nil {
 		return nil, err
 	}
-	allowed := map[string]bool{}
-	if c.Settings != nil {
-		if s, err := c.Settings.Get(ctx); err == nil {
-			for _, a := range s.AllowedModels {
-				if a = strings.TrimSpace(a); a != "" {
-					allowed[a] = true
-				}
-			}
-		}
-	}
+	allowed := c.allowedModels(ctx)
 	for _, m := range infos {
 		id := m.ProviderID + "/" + m.ModelID
 		if len(allowed) > 0 && !allowed[id] {
@@ -226,17 +238,35 @@ func (c *Chat) ModelList(ctx context.Context) (*ChatModels, error) {
 	return out, nil
 }
 
+// allowedModels is the workspace's allowed list as a set; empty means no restriction.
+func (c *Chat) allowedModels(ctx context.Context) map[string]bool {
+	allowed := map[string]bool{}
+	if c.Settings != nil {
+		if s, err := c.Settings.Get(ctx); err == nil {
+			for _, a := range s.AllowedModels {
+				if a = strings.TrimSpace(a); a != "" {
+					allowed[a] = true
+				}
+			}
+		}
+	}
+	return allowed
+}
+
 func (c *Chat) listModels(ctx context.Context) ([]model.ModelInfo, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.lmu.Lock()
 	if c.listed != nil && time.Since(c.listAt) < modelListTTL {
+		defer c.lmu.Unlock()
 		return c.listed, nil
 	}
+	c.lmu.Unlock()
 	infos, err := c.Models(ctx)
 	if err != nil {
 		return nil, err
 	}
+	c.lmu.Lock()
 	c.listed, c.listAt = infos, time.Now()
+	c.lmu.Unlock()
 	return infos, nil
 }
 
@@ -269,6 +299,23 @@ func (c *Chat) lock(id string) bool {
 	return true
 }
 
+// startTurn claims a slot among the few chat turns allowed to run at once.
+func (c *Chat) startTurn() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.turns >= maxChatTurns {
+		return false
+	}
+	c.turns++
+	return true
+}
+
+func (c *Chat) endTurn() {
+	c.mu.Lock()
+	c.turns--
+	c.mu.Unlock()
+}
+
 func (c *Chat) unlock(id string) {
 	c.mu.Lock()
 	delete(c.busy, id)
@@ -289,14 +336,14 @@ func (c *Chat) forget(id string) {
 // Send validates and stores the user's message, then answers it, reporting
 // progress through emit. It returns an error only before anything is stored;
 // from then on every outcome, including a failed reply, ends in a "done" or
-// "error" event. The turn runs to completion even if the caller goes away.
+// "error" event. The turn runs to completion even if the caller goes away, and
+// emit is never called after the terminal event.
 func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, emit func(ChatEvent)) error {
-	ch, err := c.own(ctx, u, id)
-	if err != nil {
+	if _, err := c.own(ctx, u, id); err != nil {
 		return err
 	}
 	if c.Harness == nil {
-		return fmt.Errorf("%w: no agent runtime can run chats read-only; use the ACP harness", ErrInvalid)
+		return ErrChatUnavailable
 	}
 	prompt, atts, err := c.compose(ctx, u, in)
 	if err != nil {
@@ -306,6 +353,24 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		return ErrChatBusy
 	}
 	defer c.unlock(id)
+	ch, err := c.own(ctx, u, id) // fresh: a model change cannot interleave once the chat is locked
+	if err != nil {
+		return err
+	}
+	if allowed := c.allowedModels(ctx); ch.Model != "" && len(allowed) > 0 && !allowed[ch.Model] {
+		return fmt.Errorf("%w: model %q is no longer allowed; pick another one for this chat", ErrInvalid, ch.Model)
+	}
+	if !c.startTurn() {
+		return ErrChatSaturated
+	}
+	defer c.endTurn()
+	if c.Usage != nil {
+		release, ok := c.Usage.Reserve(chatTurnEstimate)
+		if !ok {
+			return ErrChatBudget
+		}
+		defer release(0)
+	}
 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatTurnTimeout)
 	defer cancel()
@@ -318,40 +383,66 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		return err
 	}
 	if len(history) == 0 && ch.Title == defaultChatTitle {
-		_ = c.Store.Update(ctx, id, titleFrom(um.Content), ch.Model)
+		_ = c.Store.Rename(ctx, id, titleFrom(um.Content))
 	}
-	emit(ChatEvent{Kind: "user_message", Message: um})
 
+	// the harness calls onText from its own goroutine; once finished is set
+	// nothing more reaches emit, so a late chunk cannot race the terminal event
+	var mu sync.Mutex
+	finished := false
 	var streamed strings.Builder
-	res, err := c.answer(ctx, ch, history, prompt, func(s string) {
-		streamed.WriteString(s)
-		emit(ChatEvent{Kind: "delta", Text: s})
+	send := func(ev ChatEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !finished {
+			emit(ev)
+		}
+	}
+	finish := func(ev ChatEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		finished = true
+		emit(ev)
+	}
+	partial := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return streamed.String()
+	}
+	send(ChatEvent{Kind: "user_message", Message: um})
+
+	res, err := c.answer(ctx, ch, history, prompt, func(t string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if finished {
+			return
+		}
+		streamed.WriteString(t)
+		emit(ChatEvent{Kind: "delta", Text: t})
 	})
 	_ = c.Store.Touch(ctx, id)
+	if c.Usage != nil && (res.TokensIn != 0 || res.TokensOut != 0 || res.CostMicros != 0) {
+		provider, modelID := SplitModelRef(c.resolve(ctx, ch))
+		_ = c.Usage.Record(ctx, model.UsageRecord{
+			UserID: u.ID, Role: string(model.AgentChat), Provider: provider, Model: modelID,
+			TokensIn: res.TokensIn, TokensOut: res.TokensOut, CostMicros: res.CostMicros, Source: res.CostSource,
+		})
+	}
 	am := &model.ChatMessage{ChatID: id, Role: "assistant", Attachments: []model.ChatAttachment{}, CreatedAt: time.Now()}
 	if err != nil {
-		am.Content, am.Error = streamed.String(), err.Error()
-		if serr := c.Store.AddMessage(ctx, am); serr != nil {
-			am.ID = 0
-		}
-		emit(ChatEvent{Kind: "error", Message: am, Error: am.Error})
+		am.Content, am.Error = partial(), err.Error()
+		_ = c.Store.AddMessage(ctx, am)
+		finish(ChatEvent{Kind: "error", Message: am, Error: am.Error})
 		return nil
 	}
 	am.Content = res.Text
 	am.Usage = &model.ChatUsage{Model: c.resolve(ctx, ch), TokensIn: res.TokensIn, TokensOut: res.TokensOut, CostMicros: res.CostMicros}
 	if err := c.Store.AddMessage(ctx, am); err != nil {
 		am.Error = "reply could not be saved: " + err.Error()
-		emit(ChatEvent{Kind: "error", Message: am, Error: am.Error})
+		finish(ChatEvent{Kind: "error", Message: am, Error: am.Error})
 		return nil
 	}
-	if c.Usage != nil {
-		provider, modelID := SplitModelRef(am.Usage.Model)
-		_ = c.Usage.Record(ctx, model.UsageRecord{
-			UserID: u.ID, Role: string(model.AgentChat), Provider: provider, Model: modelID,
-			TokensIn: res.TokensIn, TokensOut: res.TokensOut, CostMicros: res.CostMicros, Source: res.CostSource,
-		})
-	}
-	emit(ChatEvent{Kind: "done", Message: am})
+	finish(ChatEvent{Kind: "done", Message: am})
 	return nil
 }
 
@@ -399,7 +490,7 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 	res, err := c.Harness.Result(ctx, ses.ID())
 	if err != nil {
 		c.forget(ch.ID)
-		return model.AgentResult{}, err
+		return res, err
 	}
 	if canKeep {
 		c.mu.Lock()
