@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
@@ -28,6 +29,7 @@ type KB struct {
 	mu     sync.Mutex
 	locks  map[string]*sync.Mutex
 	synced map[string]string // project → repository commit last indexed
+	dirs   map[string]string // project → checkout last indexed, to read repo playbooks at their commit
 }
 
 func (k *KB) projectLock(pid string) *sync.Mutex {
@@ -79,6 +81,12 @@ func (k *KB) SyncRepo(ctx context.Context, projectID, dir string, force bool) (s
 	if !force && seen && last == sha {
 		return st, sha, true, nil
 	}
+	k.mu.Lock()
+	if k.dirs == nil {
+		k.dirs = map[string]string{}
+	}
+	k.dirs[projectID] = dir
+	k.mu.Unlock()
 	if st, err = kb.Sync(ctx, k.Idx, k.Emb, model.KBSourceRepo, projectID, dir, sha); err != nil {
 		return st, sha, false, err
 	}
@@ -88,27 +96,51 @@ func (k *KB) SyncRepo(ctx context.Context, projectID, dir string, force bool) (s
 	return st, sha, false, nil
 }
 
-// Playbooks returns the stable playbooks written for role (and specialty, for
-// inspectors), factory-wide and the project's own, ordered by path.
+// Playbooks returns the stable playbooks written for role, repository ones
+// first since the repo wins, each ordered by path. A playbook without a
+// specialty applies to every specialty of its role.
 func (k *KB) Playbooks(ctx context.Context, projectID, role, specialty string) []model.KBDoc {
 	docs, err := k.Idx.List(ctx, model.KBQuery{
-		ProjectID: projectID, Sources: []string{model.KBSourceFactory}, Types: []string{model.KBTypePlaybook}, Limit: 500,
+		ProjectID: projectID, Sources: []string{model.KBSourceRepo, model.KBSourceFactory}, Types: []string{model.KBTypePlaybook}, Limit: 500,
 	})
 	if err != nil {
 		k.Log.Warn("kb: playbook lookup failed", "err", err)
 		return nil
 	}
-	var out []model.KBDoc
+	var repo, factory []model.KBDoc
 	for _, d := range docs {
 		if metaStr(d.Meta, "role") != role {
 			continue
 		}
-		if specialty != "" && metaStr(d.Meta, "specialty") != specialty {
+		if s := metaStr(d.Meta, "specialty"); s != "" && s != specialty {
 			continue
 		}
-		out = append(out, d)
+		if d.Source == model.KBSourceRepo {
+			repo = append(repo, d)
+		} else {
+			factory = append(factory, d)
+		}
 	}
-	return out
+	return append(repo, factory...)
+}
+
+func (k *KB) playbookBody(d model.KBDoc) (string, error) {
+	if d.Source == model.KBSourceFactory {
+		_, body, err := k.Bundle.Read(d.Path)
+		return body, err
+	}
+	k.mu.Lock()
+	dir := k.dirs[d.ProjectID]
+	k.mu.Unlock()
+	if dir == "" {
+		return "", fmt.Errorf("no checkout indexed for project %s", d.ProjectID)
+	}
+	if d.CommitSHA == "" {
+		_, body, err := kb.ReadMarkdown(dir, d.Path)
+		return body, err
+	}
+	_, body, err := kb.ReadGitMarkdown(dir, d.CommitSHA, d.Path)
+	return body, err
 }
 
 // Context builds the knowledge block appended to an agent prompt: matching
@@ -121,16 +153,19 @@ func (k *KB) Context(ctx context.Context, projectID, role, specialty, query stri
 	var b strings.Builder
 	ids := []string{}
 	pbs := k.Playbooks(ctx, projectID, role, specialty)
-	if len(pbs) > 0 {
-		b.WriteString("\n\nFactory playbooks for your role:\n")
-		for _, d := range pbs {
-			_, body, err := k.Bundle.Read(d.Path)
-			if err != nil {
-				continue
-			}
-			ids = append(ids, d.ID)
-			fmt.Fprintf(&b, "\n--- %s ---\n%s\n", d.Title, truncate(strings.TrimSpace(body), maxPlaybookChars))
+	heading := ""
+	for _, d := range pbs {
+		body, err := k.playbookBody(d)
+		if err != nil {
+			k.Log.Warn("kb: playbook unreadable", "doc", d.ID, "err", err)
+			continue
 		}
+		if h := playbookHeading(d.Source); h != heading {
+			heading = h
+			b.WriteString("\n\n" + h + "\n")
+		}
+		ids = append(ids, d.ID)
+		fmt.Fprintf(&b, "\n--- %s ---\n%s\n", d.Title, truncate(strings.TrimSpace(body), maxPlaybookChars))
 	}
 	hits, err := k.Idx.Search(ctx, model.KBQuery{
 		ProjectID: projectID, Text: query, Sources: []string{model.KBSourceRepo}, Limit: kbPointerLimit,
@@ -138,6 +173,8 @@ func (k *KB) Context(ctx context.Context, projectID, role, specialty, query stri
 	if err != nil {
 		k.Log.Warn("kb: repository lookup failed", "err", err)
 	}
+	// playbooks reach agents by role above; as pointers they would repeat or leak other roles' rules
+	hits = slices.DeleteFunc(hits, func(h model.KBHit) bool { return h.Doc.Type == model.KBTypePlaybook })
 	if len(hits) > 0 {
 		b.WriteString("\n\nRepository documents that may matter for this work. They are in your workspace; read the ones you need:\n")
 		for _, h := range hits {
@@ -155,6 +192,13 @@ func (k *KB) Context(ctx context.Context, projectID, role, specialty, query stri
 	return b.String(), map[string]any{
 		"kb_repo_commit": k.repoCommit(projectID), "kb_factory_commit": k.Bundle.Head(), "kb_docs": ids,
 	}
+}
+
+func playbookHeading(source string) string {
+	if source == model.KBSourceRepo {
+		return "Repository playbooks for your role (from this repo; they win over factory playbooks):"
+	}
+	return "Factory playbooks for your role:"
 }
 
 func docPath(id string) string {

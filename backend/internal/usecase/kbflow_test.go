@@ -399,3 +399,69 @@ func TestSimilarClarificationProposesDraft(t *testing.T) {
 		t.Fatalf("body: %s", body)
 	}
 }
+
+func TestRepoPlaybooksAreInlinedBeforeFactoryOnes(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	pb := func(title, role, specialty, rule string) string {
+		s := "---\ntype: Playbook\ntitle: " + title + "\nrole: " + role + "\n"
+		if specialty != "" {
+			s += "specialty: " + specialty + "\n"
+		}
+		return s + "---\n\n" + rule + "\n"
+	}
+	r.workspace(t, map[string]string{
+		"docs/review-backend.md": pb("Backend review rules", "inspector", "backend", "Business logic lives in usecase/."),
+		"docs/review-all.md":     pb("Review rules for every inspector", "inspector", "", "Money is int64 rupiah."),
+		"docs/foreman.md":        pb("Foreman rules", "foreman", "", "Never escalate naming."),
+	})
+	r.f.syncRepo(ctx, r.wo, true)
+	// the builder may edit the file after the base commit; the playbook is read at the indexed commit
+	if err := os.WriteFile(filepath.Join(r.f.workspaceDir(r.wo.ID), "docs/review-backend.md"), []byte(pb("Backend review rules", "inspector", "backend", "Anything goes.")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	backend, audit := r.know.Context(ctx, r.wo.ProjectID, string(model.AgentInspector), "backend", "money")
+	repoAt := strings.Index(backend, "Repository playbooks for your role")
+	factoryAt := strings.Index(backend, "Factory playbooks for your role")
+	if repoAt < 0 || factoryAt < 0 || repoAt > factoryAt {
+		t.Fatalf("repo playbooks must come first:\n%s", backend)
+	}
+	for _, want := range []string{"Business logic lives in usecase/.", "Money is int64 rupiah.", kbPrecedence} {
+		if !strings.Contains(backend, want) {
+			t.Fatalf("backend inspector prompt lacks %q:\n%s", want, backend)
+		}
+	}
+	if strings.Contains(backend, "Anything goes.") {
+		t.Fatal("repo playbooks must be read at the indexed commit, not the working tree")
+	}
+	if !contains(toAny(audit["kb_docs"]), "repo:"+r.wo.ProjectID+":docs/review-backend.md") {
+		t.Fatalf("audit lacks the repo playbook: %v", audit["kb_docs"])
+	}
+
+	tester, _ := r.know.Context(ctx, r.wo.ProjectID, string(model.AgentInspector), "testing", "money")
+	if !strings.Contains(tester, "Money is int64 rupiah.") || strings.Contains(tester, "Business logic lives in usecase/.") {
+		t.Fatalf("testing inspector must get the generic repo playbook only:\n%s", tester)
+	}
+	if strings.Contains(backend, "- docs/review-backend.md") {
+		t.Fatal("playbooks must not also be listed as pointers")
+	}
+	foreman, _ := r.know.Context(ctx, r.wo.ProjectID, string(model.AgentForeman), "", "money")
+	if !strings.Contains(foreman, "Never escalate naming.") || strings.Contains(foreman, "Money is int64 rupiah.") {
+		t.Fatalf("foreman must get only foreman playbooks:\n%s", foreman)
+	}
+}
+
+func toAny(v any) []any {
+	switch s := v.(type) {
+	case []any:
+		return s
+	case []string:
+		out := make([]any, len(s))
+		for i, x := range s {
+			out[i] = x
+		}
+		return out
+	}
+	return nil
+}
