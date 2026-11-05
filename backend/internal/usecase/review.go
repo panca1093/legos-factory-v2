@@ -19,6 +19,7 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
+	defer f.closePlanning(wo.ID) // the plan review ends the Foreman's planning session, whatever it decides
 	if wo.State != model.StateArchitectReview || wo.PlanReview != "pending" {
 		return nil // superseded: the plan was revised, approved or escalated meanwhile
 	}
@@ -30,7 +31,8 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	var r reviewReply
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+taskList(tasks), f.workspaceDir(wo.ID), wo.KBBaseSHA)
 	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanReviewPrompt(wo, tasks)+kbText,
-		map[string]string{"review_round": fmt.Sprint(wo.ReviewRounds), "clarification_answer": wo.ClarifAnswer}, "", &r, runOpts{Audit: audit})
+		map[string]string{"stage": "review", "review_round": fmt.Sprint(wo.ReviewRounds), "clarification_answer": wo.ClarifAnswer},
+		"", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})
 	if err != nil {
 		return err
 	}
@@ -53,7 +55,7 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 			return f.askHuman(ctx, wo, "foreman",
 				"The Foreman still requests changes after a revision: "+r.Notes+" How should the plan proceed?")
 		}
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "", "review_rounds": wo.ReviewRounds + 1}); err != nil {
+		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "", "review_rounds": wo.ReviewRounds + 1, "clarif_rounds": 0}); err != nil {
 			return err
 		}
 		f.event(wo.ID, "foreman", "plan_revision_requested", r.Notes, nil)

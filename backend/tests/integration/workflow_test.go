@@ -56,6 +56,39 @@ func hasEvent(events []string, kind string) bool {
 	return false
 }
 
+func TestForemanBriefsAndAnswersTheArchitect(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	ta := boot(t)
+	proj := ta.createProject(t, "Greeter", fixtureRepo(t))
+	id := ta.createWOWith(t, proj, "[foreman-answer] Which greeting? Make the greeter greeting function available.", "assisted")
+	ta.plan(t, id)
+
+	w := ta.workOrder(t, id)
+	if w["state"] != "ARCHITECT_REVIEW" {
+		t.Fatalf("the Foreman answer must not park the order: %v", w["state"])
+	}
+	if b, _ := w["brief"].(string); !strings.Contains(b, "Scripted brief") {
+		t.Fatalf("brief not stored: %v", w["brief"])
+	}
+	if s, _ := w["spec"].(string); !strings.Contains(s, "Scripted spec") {
+		t.Fatalf("spec not stored: %v", w["spec"])
+	}
+	if w["clarif_rounds"].(float64) != 1 || len(w["clarifications"].([]any)) != 1 {
+		t.Fatalf("Foreman answer not recorded: %v", w)
+	}
+	ev := ta.eventKinds(t, id)
+	for _, kind := range []string{"brief_ready", "clarification_asked", "clarification_answered", "plan_ready"} {
+		if !hasEvent(ev, kind) {
+			t.Fatalf("missing %s event: %v", kind, ev)
+		}
+	}
+	if hasEvent(ev, "clarification_requested") {
+		t.Fatalf("a question the Foreman answered must not reach a human: %v", ev)
+	}
+}
+
 func TestForemanReviewRevisesClarifiesAndRetriesInvalidReplies(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test")

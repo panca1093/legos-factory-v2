@@ -130,12 +130,24 @@ func (h *MockHarness) invalidOnce(req model.AgentRequest) bool {
 	return true
 }
 
-// foremanReview approves by default. "[foreman-revise]" requests one
+// foremanReview writes the intake brief and answers Architect questions ("[foreman-answer]"
+// answers them, otherwise it escalates), then reviews: it approves by default. "[foreman-revise]" requests one
 // revision per review round 0; "[foreman-clarify]" asks a human until a
 // clarification has been answered.
 func (h *MockHarness) foremanReview(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
 	obj := req.Context["objective"]
 	switch {
+	case req.Context["stage"] == "intake":
+		return finishJSON(res, map[string]any{
+			"brief":                "Scripted brief: " + firstSentence(obj),
+			"constraints":          []string{"Keep existing behaviour unchanged."},
+			"risks":                []string{},
+			"suggested_task_shape": "Small tasks, one per acceptance criterion",
+		})
+	case req.Context["stage"] == "answer" && strings.Contains(obj, "[foreman-answer]"):
+		return finishJSON(res, map[string]any{"decision": "ANSWER", "answer": "Use the documented default."})
+	case req.Context["stage"] == "answer":
+		return finishJSON(res, map[string]any{"decision": "ESCALATE", "reason": "A product decision is needed."})
 	case strings.Contains(obj, "[foreman-clarify]") && req.Context["clarification_answer"] == "":
 		return finishJSON(res, map[string]any{"decision": "CLARIFY", "question_text": "Which retry window should apply?"})
 	case strings.Contains(obj, "[foreman-revise]") && req.Context["review_round"] == "0":
@@ -150,17 +162,18 @@ func (h *MockHarness) foremanReview(req model.AgentRequest, res model.AgentResul
 func (h *MockHarness) architectPlan(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
 	obj := req.Context["objective"]
 	acc := req.Context["acceptance"]
-	if hasOpenQuestion(obj) && req.Context["clarification_answer"] == "" {
+	if hasOpenQuestion(obj) && req.Context["clarification_answer"] == "" && req.Context["clarification_log"] == "" {
 		res.Text = fmt.Sprintf(`{"decision":"CLARIFY","question":"Objective contains an unresolved question: %s","question_text":"Please specify the exact expected behavior so the plan can be finalized."}`, jsEscape(firstSentence(obj)))
 		return res, nil
 	}
 	plan := map[string]any{
 		"decision": "APPROVE",
 		"summary":  "Scripted decomposition of: " + firstSentence(obj),
+		"spec":     "Scripted spec: " + firstSentence(acc),
 		"tasks": []map[string]any{
 			{
 				"id": "task-1", "title": "Record failing baseline",
-				"objective": "Reproduce the gap described by the acceptance criteria.", "role": "builder", "deps": []string{},
+				"objective": "Reproduce the gap described by the acceptance criteria.", "role": "builder", "deps": []string{}, "scope": []string{"greeter/"},
 			},
 			{
 				"id": "task-2", "title": "Implement change",

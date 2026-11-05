@@ -10,6 +10,7 @@ type Task struct {
 	Objective string   `json:"objective"`
 	Role      string   `json:"role"`
 	Deps      []string `json:"deps"`
+	Scope     []string `json:"scope,omitempty"` // files or areas the task may touch
 }
 
 type Plan struct {

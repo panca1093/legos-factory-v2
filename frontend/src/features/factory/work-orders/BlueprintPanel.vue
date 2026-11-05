@@ -137,6 +137,10 @@ const emit = defineEmits<{
       <h3>The outcome</h3>
       <p style="white-space: pre-wrap">{{ order.objective }}</p>
     </section>
+    <section v-if="order.brief" class="plan-section" data-test="brief">
+      <h3>Foreman's brief</h3>
+      <p style="white-space: pre-wrap">{{ order.brief }}</p>
+    </section>
     <section class="plan-section">
       <h3>Acceptance contract</h3>
       <ul v-if="order.acceptance" class="check-list">
@@ -150,6 +154,10 @@ const emit = defineEmits<{
         </li>
       </ul>
       <p v-else>No acceptance criteria recorded.</p>
+    </section>
+    <section v-if="order.spec" class="plan-section" data-test="spec">
+      <h3>Architect's spec</h3>
+      <p style="white-space: pre-wrap">{{ order.spec }}</p>
     </section>
     <section class="plan-section">
       <h3>How the crew will build it</h3>
@@ -168,6 +176,9 @@ const emit = defineEmits<{
           <div>
             <strong class="small">{{ t.title }}</strong>
             <p class="help">{{ t.objective }}</p>
+            <p v-if="t.scope?.length" class="help">
+              Scope: {{ t.scope.join(", ") }}
+            </p>
             <p v-if="t.deps?.length" class="help">
               After:
               {{

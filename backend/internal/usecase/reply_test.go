@@ -7,7 +7,7 @@ import (
 
 func TestDecodeReplyPicksTheValidFinalAnswer(t *testing.T) {
 	text := "For example a plan looks like {\"decision\":\"MAYBE\"}.\n" +
-		"Here is mine:\n```json\n{\"decision\":\"APPROVE\",\"summary\":\"s\",\"tasks\":[{\"id\":\"t1\",\"title\":\"Add }{ parser\",\"objective\":\"handle \\\"{\\\" in strings\",\"role\":\"builder\"}]}\n```"
+		"Here is mine:\n```json\n{\"decision\":\"APPROVE\",\"summary\":\"s\",\"spec\":\"sp\",\"tasks\":[{\"id\":\"t1\",\"title\":\"Add }{ parser\",\"objective\":\"handle \\\"{\\\" in strings\",\"role\":\"builder\"}]}\n```"
 	var p planReply
 	if err := decodeReply(text, &p); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -36,6 +36,35 @@ func TestDecodeReplyRejectsSchemaViolations(t *testing.T) {
 		if p.Decision != "" || p.Tasks != nil {
 			t.Errorf("%s: rejected reply must leave no partial values: %+v", name, p)
 		}
+	}
+}
+
+func TestIntakeAnswerAndSpecSchemas(t *testing.T) {
+	var in intakeReply
+	if err := decodeReply(`{"brief":" ","constraints":["a"]}`, &in); err == nil {
+		t.Fatal("a blank brief must fail")
+	}
+	if err := decodeReply(`{"brief":"Build X","constraints":["keep Y"],"risks":["Z"],"suggested_task_shape":"small"}`, &in); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Build X", "Constraints:\n- keep Y", "Risks:\n- Z", "Suggested task shape: small"} {
+		if !strings.Contains(in.text(), want) {
+			t.Fatalf("brief text lacks %q:\n%s", want, in.text())
+		}
+	}
+	var a foremanAnswerReply
+	if err := decodeReply(`{"decision":"ANSWER"}`, &a); err == nil {
+		t.Fatal("ANSWER without an answer must fail")
+	}
+	if err := decodeReply(`{"decision":"ESCALATE","reason":"product call"}`, &a); err != nil {
+		t.Fatal(err)
+	}
+	var p planReply
+	if err := decodeReply(`{"decision":"APPROVE","tasks":[{"title":"a","objective":"b"}]}`, &p); err == nil || !strings.Contains(err.Error(), "spec") {
+		t.Fatalf("APPROVE without spec must fail: %v", err)
+	}
+	if err := decodeReply(`{"decision":"APPROVE","spec":"s","tasks":[{"title":"a","objective":"b","scope":["x.go"]}]}`, &p); err != nil || p.Tasks[0].Scope[0] != "x.go" {
+		t.Fatalf("scope must decode: %v %+v", err, p)
 	}
 }
 

@@ -110,4 +110,15 @@ type WorkOrder struct {
 	CreatedBy      string     `json:"created_by"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
+
+	Brief          string          `json:"brief,omitempty"` // Foreman intake brief
+	Spec           string          `json:"spec,omitempty"`  // Architect spec
+	ClarifRounds   int             `json:"clarif_rounds"`
+	Clarifications []Clarification `json:"clarifications,omitempty"` // Foreman answers to Architect questions
+}
+
+// Clarification is one Architect question the Foreman answered.
+type Clarification struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
 }

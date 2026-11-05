@@ -95,6 +95,7 @@ type planTask struct {
 	Objective string   `json:"objective"`
 	Role      string   `json:"role"`
 	Deps      []string `json:"deps"`
+	Scope     []string `json:"scope"`
 }
 
 // planReply is the Architect's draft.
@@ -103,6 +104,7 @@ type planReply struct {
 	Question     string     `json:"question"`
 	QuestionText string     `json:"question_text"`
 	Summary      string     `json:"summary"`
+	Spec         string     `json:"spec"`
 	Tasks        []planTask `json:"tasks"`
 }
 
@@ -115,6 +117,9 @@ func (p *planReply) validate() error {
 			return errors.New("CLARIFY requires question_text")
 		}
 		return nil
+	}
+	if strings.TrimSpace(p.Spec) == "" {
+		return errors.New("APPROVE requires spec")
 	}
 	if len(p.Tasks) == 0 {
 		return errors.New("APPROVE requires at least one task")
@@ -154,6 +159,60 @@ func (r *reviewReply) validate() error {
 		return errors.New("REVISE requires notes for the Architect")
 	case r.Decision == "CLARIFY" && strings.TrimSpace(r.QuestionText) == "":
 		return errors.New("CLARIFY requires question_text for the human")
+	}
+	return nil
+}
+
+// intakeReply is the Foreman's brief for the Architect.
+type intakeReply struct {
+	Brief              string   `json:"brief"`
+	Constraints        []string `json:"constraints"`
+	Risks              []string `json:"risks"`
+	SuggestedTaskShape string   `json:"suggested_task_shape"`
+}
+
+func (r *intakeReply) validate() error {
+	if strings.TrimSpace(r.Brief) == "" {
+		return errors.New("brief is required")
+	}
+	return nil
+}
+
+// text renders the reply as the stored brief the Architect reads.
+func (r *intakeReply) text() string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(r.Brief))
+	for _, s := range []struct {
+		title string
+		items []string
+	}{{"Constraints", r.Constraints}, {"Risks", r.Risks}} {
+		if len(s.items) == 0 {
+			continue
+		}
+		b.WriteString("\n\n" + s.title + ":")
+		for _, it := range s.items {
+			b.WriteString("\n- " + strings.TrimSpace(it))
+		}
+	}
+	if shape := strings.TrimSpace(r.SuggestedTaskShape); shape != "" {
+		b.WriteString("\n\nSuggested task shape: " + shape)
+	}
+	return b.String()
+}
+
+// foremanAnswerReply is the Foreman's response to an Architect question.
+type foremanAnswerReply struct {
+	Decision string `json:"decision"`
+	Answer   string `json:"answer"`
+	Reason   string `json:"reason"`
+}
+
+func (r *foremanAnswerReply) validate() error {
+	if err := oneOf("decision", r.Decision, "ANSWER", "ESCALATE"); err != nil {
+		return err
+	}
+	if r.Decision == "ANSWER" && strings.TrimSpace(r.Answer) == "" {
+		return errors.New("ANSWER requires answer")
 	}
 	return nil
 }

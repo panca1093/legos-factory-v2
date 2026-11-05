@@ -10,7 +10,7 @@ import (
 func TestPromptsCarryClarificationAnswer(t *testing.T) {
 	wo := &model.WorkOrder{Title: "t", ClarifQuestion: "round what?", ClarifAnswer: "the discount"}
 	for name, p := range map[string]string{
-		"plan":        planPrompt(wo, ""),
+		"plan":        planPrompt(wo, "", ""),
 		"review":      foremanReviewPrompt(wo, nil),
 		"implement":   implementPrompt(wo, model.Job{TaskID: "task-1"}),
 		"remediation": implementPrompt(wo, model.Job{Payload: map[string]any{"reason": "fix"}}),
@@ -19,6 +19,13 @@ func TestPromptsCarryClarificationAnswer(t *testing.T) {
 		if !strings.Contains(p, "Q: round what?\nA: the discount") {
 			t.Errorf("%s prompt lacks the clarification:\n%s", name, p)
 		}
+	}
+}
+
+func TestReviewPromptListsTaskScope(t *testing.T) {
+	p := foremanReviewPrompt(&model.WorkOrder{Title: "t"}, []model.Task{{Title: "a", Objective: "b", Scope: []string{"x/", "y.go"}}})
+	if !strings.Contains(p, "Scope: x/, y.go") {
+		t.Fatalf("review prompt lacks the task scope:\n%s", p)
 	}
 }
 
