@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -197,51 +199,127 @@ func diffBase(ctx context.Context, dir string) string {
 
 const maxUntrackedDiffBytes = 200_000
 
+// gitOut returns stdout only, so warnings on stderr never reach a parser.
+func gitOut(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.quotePath=false"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return string(out), fmt.Errorf("%v: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
+	}
+	return string(out), err
+}
+
+// secretName marks files whose content must never travel in a diff.
+func secretName(p string) bool { return strings.HasPrefix(filepath.Base(p), ".env") }
+
 // Diff reports every file changed relative to the cloned base (committed or
-// not) with its line counts and unified-diff hunks. Untracked text files
-// count as fully added. A workspace without git history reports none.
+// not) with its line counts and unified-diff hunks. Untracked regular text
+// files count as fully added; symlinks, files resolving outside the workspace
+// and .env* files are listed without content. A workspace without git
+// history reports none.
 func (Local) Diff(ctx context.Context, dir string) ([]model.FileDiff, error) {
 	if !isLocalGitRepo(dir) {
 		return nil, nil
 	}
 	base := diffBase(ctx, dir)
-	numstat, err := git(ctx, dir, "diff", "--no-renames", "--numstat", base)
+	numstat, err := gitOut(ctx, dir, "diff", "--no-renames", "--numstat", "-z", base)
 	if err != nil {
-		return nil, fmt.Errorf("git diff --numstat: %v: %s", err, numstat)
+		return nil, fmt.Errorf("git diff --numstat: %v", err)
 	}
-	patch, err := git(ctx, dir, "diff", "--no-renames", "--no-color", "--no-ext-diff", "-U3", base)
+	patch, err := gitOut(ctx, dir, "diff", "--no-renames", "--no-color", "--no-ext-diff", "-U3", base)
 	if err != nil {
-		return nil, fmt.Errorf("git diff: %v: %s", err, patch)
+		return nil, fmt.Errorf("git diff: %v", err)
 	}
 	hunks := splitPatch(patch)
 	var out []model.FileDiff
-	for _, line := range strings.Split(strings.TrimSpace(numstat), "\n") {
-		parts := strings.SplitN(line, "\t", 3)
+	for _, rec := range strings.Split(numstat, "\x00") {
+		parts := strings.SplitN(rec, "\t", 3)
 		if len(parts) != 3 {
 			continue
 		}
 		added, _ := strconv.Atoi(parts[0]) // "-" for binary files
 		removed, _ := strconv.Atoi(parts[1])
-		out = append(out, model.FileDiff{Path: parts[2], Added: added, Removed: removed, Hunks: hunks[parts[2]]})
+		fd := model.FileDiff{Path: parts[2], Added: added, Removed: removed, Hunks: hunks[parts[2]]}
+		if secretName(fd.Path) {
+			fd.Hunks = ""
+		}
+		out = append(out, fd)
 	}
-	untracked, err := git(ctx, dir, "ls-files", "--others", "--exclude-standard")
+	untracked, err := gitOut(ctx, dir, "ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
-		return nil, fmt.Errorf("git ls-files: %v: %s", err, untracked)
+		return nil, fmt.Errorf("git ls-files: %v", err)
 	}
-	for _, name := range strings.Split(strings.TrimSpace(untracked), "\n") {
+	realDir, _ := filepath.EvalSymlinks(dir)
+	for _, name := range strings.Split(untracked, "\x00") {
 		if name == "" {
 			continue
 		}
 		fd := model.FileDiff{Path: name}
-		if b, err := os.ReadFile(filepath.Join(dir, name)); err == nil && len(b) <= maxUntrackedDiffBytes && !bytes.Contains(b, []byte{0}) {
-			text := strings.TrimSuffix(string(b), "\n")
-			lines := strings.Split(text, "\n")
-			fd.Added = len(lines)
-			fd.Hunks = fmt.Sprintf("@@ -0,0 +1,%d @@\n+%s\n", len(lines), strings.Join(lines, "\n+"))
+		full := filepath.Join(dir, name)
+		if secretName(name) || !insideRegular(realDir, full) {
+			out = append(out, fd)
+			continue
 		}
+		fd.Added, fd.Hunks = readAdded(full)
 		out = append(out, fd)
 	}
 	return out, nil
+}
+
+// insideRegular reports whether full is a regular file that really lives in realDir.
+func insideRegular(realDir, full string) bool {
+	if fi, err := os.Lstat(full); err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	real, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(realDir, real)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// readAdded counts the lines of a new file and renders them as one added hunk
+// unless the file is binary or larger than maxUntrackedDiffBytes (count only).
+func readAdded(full string) (int, string) {
+	f, err := os.Open(full)
+	if err != nil {
+		return 0, ""
+	}
+	defer f.Close()
+	head := make([]byte, 8000)
+	n, _ := f.Read(head)
+	if bytes.Contains(head[:n], []byte{0}) {
+		return 0, ""
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return 0, ""
+	}
+	b, err := io.ReadAll(io.LimitReader(f, maxUntrackedDiffBytes+1))
+	if err != nil {
+		return 0, ""
+	}
+	if len(b) <= maxUntrackedDiffBytes {
+		lines := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+		if len(b) == 0 {
+			return 0, ""
+		}
+		return len(lines), fmt.Sprintf("@@ -0,0 +1,%d @@\n+%s\n", len(lines), strings.Join(lines, "\n+"))
+	}
+	lines := bytes.Count(b, []byte{'\n'})
+	buf := make([]byte, 32*1024)
+	for {
+		m, err := f.Read(buf)
+		lines += bytes.Count(buf[:m], []byte{'\n'})
+		if err != nil {
+			break
+		}
+	}
+	return lines, ""
 }
 
 // splitPatch maps each file path of a --no-renames unified diff to its text
