@@ -19,6 +19,7 @@ type dirSandbox struct{}
 func (dirSandbox) Prepare(context.Context, string, string, *model.GitAuth) (string, error) {
 	return "", nil
 }
+func (dirSandbox) Destroy(context.Context, string) error { return nil }
 func (dirSandbox) RunCheck(context.Context, string, model.Check, time.Duration) model.CheckResult {
 	return model.CheckResult{}
 }

@@ -199,9 +199,13 @@ func (f *Foreman) profile(ctx context.Context, wo *model.WorkOrder) (model.Profi
 	if err != nil {
 		return model.Profile{}, err
 	}
-	if proj.QualityProfile != "" {
+	if q := strings.TrimSpace(proj.QualityProfile); q != "" && q != "{}" && q != "[]" {
 		return model.ParseProfile(proj.QualityProfile, proj.Language)
 	}
+	if wo.CheckProfile != "" {
+		return model.ParseProfile(wo.CheckProfile, proj.Language)
+	}
+	// orders created before the profile was stored at creation
 	return repoProfile(f.workspaceDir(wo.ID))
 }
 

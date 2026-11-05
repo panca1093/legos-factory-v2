@@ -47,7 +47,7 @@ func TestRepoProfile(t *testing.T) {
 			"package.json": `{"scripts":{"test":"node --test"}}`,
 		}, model.Profile{
 			Language: "node",
-			Setup:    "npm install --no-audit --no-fund",
+			Setup:    "npm install --no-audit --no-fund --no-package-lock",
 			Checks:   []model.Check{{Name: "test", Command: "npm test"}},
 		}},
 		{"monorepo runs every detected toolchain", map[string]string{

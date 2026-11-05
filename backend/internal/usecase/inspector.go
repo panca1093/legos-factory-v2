@@ -43,7 +43,7 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 	if failed != "" {
 		f.Catalog.Record(ctx, wo, model.KnowledgeVerification, model.TrustVerified, "inspector",
 			fmt.Sprintf("Verification failed on revision %d (uncommitted workspace)", wo.Revision), results.String())
-		if wo.Revision >= MaxRevisionCycles {
+		if wo.VerifyFailures >= MaxRevisionCycles {
 			f.event(wo.ID, "foreman", "escalated", "Verification failed after max revision cycles; blocking", nil)
 			if err := f.step(ctx, wo, model.StateVerifying, model.StateSpecialistReview, "foreman", "Final evaluation after exhausted retries"); err != nil {
 				return err
@@ -56,11 +56,11 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 			}
 			return f.evaluateReadiness(ctx, wo, true)
 		}
-		newRev := wo.Revision + 1
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": ""}); err != nil {
+		newRev, failures := wo.Revision+1, wo.VerifyFailures+1
+		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": failures}); err != nil {
 			return err
 		}
-		wo.Revision, wo.CommitSHA = newRev, ""
+		wo.Revision, wo.CommitSHA, wo.VerifyFailures = newRev, "", failures
 		if err := f.step(ctx, wo, model.StateVerifying, model.StateImplementing, "foreman",
 			fmt.Sprintf("Check %q failed; returning to builder (revision %d of %d)", failed, newRev, MaxRevisionCycles)); err != nil {
 			return err
@@ -68,7 +68,11 @@ func (f *Foreman) handleVerify(ctx context.Context, job model.Job) error {
 		_, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, "", map[string]any{"reason": "fix_failed_verification"})
 		return err
 	}
-	f.event(wo.ID, "inspector", "verification_passed", "All deterministic checks passed", nil)
+	if len(profile.Checks) == 0 {
+		f.event(wo.ID, "inspector", "verification_skipped", "No checks detected in the repository; add .legos/checks.json to define them", nil)
+	} else {
+		f.event(wo.ID, "inspector", "verification_passed", "All deterministic checks passed", nil)
+	}
 	if err := f.commitVerified(ctx, wo); err != nil {
 		return err
 	}

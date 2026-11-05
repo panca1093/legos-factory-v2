@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -61,10 +62,22 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 	if err != nil {
 		return nil, fmt.Errorf("%w: could not prepare workspace: %v", ErrWorkspace, err)
 	}
-	if p, err := repoProfile(dir); err == nil && p.Language != "" && p.Language != proj.Language {
+	p, err := repoProfile(dir)
+	if err != nil {
+		_ = w.Sandbox.Destroy(ctx, wo.ID)
+		return nil, fmt.Errorf("%w: %v", ErrWorkspace, err)
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		_ = w.Sandbox.Destroy(ctx, wo.ID)
+		return nil, err
+	}
+	wo.CheckProfile = string(b)
+	if p.Language != "" && p.Language != proj.Language {
 		_ = w.Projects.Store.SetLanguage(ctx, proj.ID, p.Language)
 	}
 	if err := w.Store.Create(ctx, wo); err != nil {
+		_ = w.Sandbox.Destroy(ctx, wo.ID)
 		return nil, err
 	}
 	return wo, nil

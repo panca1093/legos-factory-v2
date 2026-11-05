@@ -15,7 +15,8 @@ const overrideFile = ".legos/checks.json"
 
 // repoProfile derives the deterministic checks from the repository itself:
 // its override file when present, otherwise the toolchains its manifests
-// reveal. Agents never choose the checks that gate their own work.
+// reveal. Callers resolve it once from the fresh clone: reading it again from
+// a live workspace would let the builder rewrite the checks that gate its work.
 func repoProfile(dir string) (model.Profile, error) {
 	detected := detectProfile(dir)
 	b, err := os.ReadFile(filepath.Join(dir, overrideFile))
@@ -54,7 +55,7 @@ func detectProfile(dir string) model.Profile {
 			lang = "typescript"
 		}
 		langs = append(langs, lang)
-		p.Setup = "npm install --no-audit --no-fund"
+		p.Setup = "npm install --no-audit --no-fund --no-package-lock"
 		if exists("package-lock.json") {
 			p.Setup = "npm ci --no-audit --no-fund"
 		}

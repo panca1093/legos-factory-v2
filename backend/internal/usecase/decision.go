@@ -128,7 +128,7 @@ func (f *Foreman) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		return nil
 	case "request_changes":
 		newRev := wo.Revision + 1
-		if err := f.WO.UpdateFields(ctx, woID, map[string]any{"revision": newRev, "commit_sha": ""}); err != nil {
+		if err := f.WO.UpdateFields(ctx, woID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": 0}); err != nil {
 			return err
 		}
 		f.event(woID, "human", "revision_requested", reason, map[string]any{"revision": newRev})
