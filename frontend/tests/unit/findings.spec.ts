@@ -1,6 +1,6 @@
 import { mount } from "@vue/test-utils";
 import { afterEach, expect, it, vi } from "vitest";
-import ChangesPanel from "../../src/features/factory/reviews/ChangesPanel.vue";
+import ReviewPanel from "../../src/features/factory/reviews/ReviewPanel.vue";
 import type { Finding } from "../../src/types/api";
 
 const finding = (id: string, status: Finding["status"]): Finding => ({
@@ -16,8 +16,15 @@ const finding = (id: string, status: Finding["status"]): Finding => ({
 });
 
 const render = (state = "IMPLEMENTING", findings = [finding("f1", "open")]) =>
-  mount(ChangesPanel, {
-    props: { runs: [], findings, state, canWrite: true, busy: false },
+  mount(ReviewPanel, {
+    props: {
+      checks: [],
+      revision: 1,
+      findings,
+      state,
+      canWrite: true,
+      busy: false,
+    },
   });
 
 afterEach(() => vi.unstubAllGlobals());

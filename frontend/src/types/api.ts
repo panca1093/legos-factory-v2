@@ -62,6 +62,9 @@ export interface WorkOrder {
   source_ref?: string;
   pr_url?: string;
   pr_ref?: string;
+  pr_merged_at?: string;
+  pr_closed_at?: string;
+  pr_track_failed_at?: string;
   created_by: string;
   created_at: string;
   updated_at: string;

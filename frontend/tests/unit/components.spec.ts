@@ -33,6 +33,6 @@ describe("StatusBadge", () => {
     ).toContain("amber");
     expect(
       mount(StatusBadge, { props: { state: "NEEDS_HUMAN_REVIEW" } }).text(),
-    ).toBe("PR decision");
+    ).toBe("Waiting for your approval");
   });
 });

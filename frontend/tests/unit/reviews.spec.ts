@@ -1,6 +1,6 @@
 import { mount, flushPromises } from "@vue/test-utils";
 import { expect, it } from "vitest";
-import QualityPanel from "../../src/features/factory/reviews/QualityPanel.vue";
+import ReviewPanel from "../../src/features/factory/reviews/ReviewPanel.vue";
 import ChangesPanel from "../../src/features/factory/reviews/ChangesPanel.vue";
 import ActivityPanel from "../../src/features/factory/runs/ActivityPanel.vue";
 import { checks, findings, runs, events } from "../fixtures/workspace";
@@ -9,7 +9,7 @@ it("separates historical passing evidence from current failures and opens real e
     { ...checks[0], outcome: "PASS" as const },
     { ...checks[1], outcome: "FAIL" as const, exit_code: 1 },
   ];
-  const w = mount(QualityPanel, {
+  const w = mount(ReviewPanel, {
     props: { checks: evidence, findings, revision: 1 },
     attachTo: document.body,
   });
@@ -29,7 +29,6 @@ it("labels mock output and does not permit viewer PR decisions", () => {
   const w = mount(ChangesPanel, {
     props: {
       runs,
-      findings,
       state: "NEEDS_HUMAN_REVIEW",
       canWrite: false,
       busy: false,
@@ -46,7 +45,6 @@ it("emits all supported dispositions for an authorized reviewer", async () => {
   const w = mount(ChangesPanel, {
     props: {
       runs,
-      findings,
       state: "NEEDS_HUMAN_REVIEW",
       canWrite: true,
       busy: false,

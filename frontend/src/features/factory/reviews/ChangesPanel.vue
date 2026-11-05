@@ -1,204 +1,131 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import {
-  GitPullRequest,
-  Check,
-  ExternalLink,
-  MessageSquare,
-  X,
-} from "lucide-vue-next";
-import type { Run, Finding } from "../../../types/api";
+import { Check, ExternalLink, MessageSquare, X } from "lucide-vue-next";
+import type { Run } from "../../../types/api";
+import type { shipState } from "../../../composables/presentation";
+import DiffView from "./DiffView.vue";
+import { diffFromRuns } from "./diff";
 const props = defineProps<{
   runs: Run[];
-  findings: Finding[];
   state: string;
   canWrite: boolean;
   busy: boolean;
+  ship?: ReturnType<typeof shipState>;
+  reason?: string;
   publishTo?: string;
   prUrl?: string;
   prRef?: string;
   sourceRef?: string;
 }>();
-type FindingAction = "confirm" | "dispute" | "resolve" | "escalate";
 const emit = defineEmits<{
   decision: ["approve" | "request_changes" | "decline"];
-  finding: [string, FindingAction, string];
 }>();
-const canDispose = computed(
-  () =>
-    props.canWrite &&
-    !props.busy &&
-    !["READY", "CANCELLED"].includes(props.state),
-);
-function dispose(f: Finding, action: FindingAction) {
-  let note = "";
-  if (action === "dispute" || action === "escalate") {
-    note =
-      window
-        .prompt(
-          action === "dispute"
-            ? `Why is "${f.title}" not a real problem?`
-            : `What decision does "${f.title}" need? The order pauses until you resume it.`,
-        )
-        ?.trim() ?? "";
-    if (!note) return;
-  }
-  emit("finding", f.id, action, note);
-}
-const statusPill: Record<string, string> = {
-  open: "red",
-  confirmed: "red",
-  escalated: "orange",
-  disputed: "",
-  resolved: "green",
-};
-const builders = computed(() => props.runs.filter((r) => r.kind === "builder"));
+const builders = computed(() => props.runs.filter((r) => r.kind === "builder")),
+  files = computed(() => diffFromRuns(props.runs));
 const canDecide = computed(
   () => props.canWrite && props.state === "NEEDS_HUMAN_REVIEW" && !props.busy,
 );
+const shipNote: Record<string, string> = {
+  open: "Nothing is merged until the provider's review and branch protection pass. This order finishes when the PR is merged.",
+  closed:
+    "The PR was closed without merging. Polling continues: if it is reopened and merged, this order still ships.",
+  tracking_stopped:
+    "The factory can no longer read this pull request, so its merge status will not update. The reason is in Activity.",
+  merged: "The pull request was merged. This work order is done.",
+  local: "The decision was recorded locally. No pull request was opened.",
+};
 </script>
 <template>
-  <div class="stack">
-    <section class="callout">
-      <div class="row">
-        <GitPullRequest class="icon" />
-        <div class="grow">
-          <h3>Your decision closes the loop.</h3>
-          <p class="help">
-            Review the current evidence, changes and unresolved findings before
-            recording a decision.
-          </p>
+  <div class="fx-stack">
+    <section class="fx-card fx-pr" data-test="ship-state">
+      <div class="fx-pr-head">
+        <span v-if="ship" class="fx-pill" :class="ship.tone">{{
+          ship.label
+        }}</span
+        ><span v-else class="fx-pill">Not at Ship yet</span>
+        <a
+          v-if="prUrl"
+          class="fx-link"
+          data-test="pr-link"
+          :href="prUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+          >{{ prRef || prUrl }} <ExternalLink class="icon"
+        /></a>
+        <span class="grow"></span>
+        <div
+          v-if="['NEEDS_HUMAN_REVIEW', 'BLOCKED'].includes(state)"
+          class="fx-actions"
+        >
+          <button
+            class="lg-btn primary small"
+            data-test="pr-approve"
+            :disabled="!canDecide"
+            @click="emit('decision', 'approve')"
+          >
+            <Check class="icon" />Approve</button
+          ><button
+            class="lg-btn small"
+            data-test="pr-changes"
+            :disabled="!canDecide"
+            @click="emit('decision', 'request_changes')"
+          >
+            <MessageSquare class="icon" />Request changes</button
+          ><button
+            class="lg-btn small"
+            data-test="pr-decline"
+            :disabled="
+              !canWrite ||
+              busy ||
+              !['NEEDS_HUMAN_REVIEW', 'BLOCKED'].includes(state)
+            "
+            @click="emit('decision', 'decline')"
+          >
+            <X class="icon" />Decline
+          </button>
         </div>
       </div>
+      <p v-if="reason && ship?.key === 'approval'" class="fx-reason">
+        <strong>Why you are asked:</strong> {{ reason }}
+      </p>
+      <p v-if="ship?.key === 'approval' && publishTo" class="small muted">
+        Approving pushes the verified commit to a work branch and opens a pull
+        request on {{ publishTo }}.
+      </p>
+      <p v-else-if="ship?.key === 'approval'" class="small muted">
+        This records a local decision. No pull request is created for this
+        project.
+      </p>
+      <p v-else-if="ship" class="small muted">{{ shipNote[ship.key] }}</p>
+      <p v-if="sourceRef" class="tiny muted">
+        Source issue: {{ sourceRef.replace("jira:", "") }}
+      </p>
     </section>
-    <section class="panel panel-pad">
-      <h2>Builder output</h2>
+    <DiffView v-if="files.length" :files="files" />
+    <section v-else class="fx-card">
+      <h3>Builder output</h3>
       <p class="help">
-        Recorded harness output. An authoritative repository diff is not exposed
-        by the backend.
+        Recorded harness output. The backend does not expose a repository diff,
+        so file-level changes appear only when a run printed a unified diff.
       </p>
       <details
         v-for="r in builders"
         :key="r.id"
-        class="section-gap"
+        class="fx-run"
         :open="builders.length === 1"
       >
-        <summary class="row wrap" style="cursor: pointer">
-          <span class="pill">{{ r.harness }}</span
+        <summary>
+          <span class="fx-pill">{{ r.harness }}</span
           ><strong class="small">{{ r.task_id || "Remediation run" }}</strong
-          ><span class="pill">{{ r.state }}</span>
+          ><span class="fx-pill">{{ r.state }}</span>
         </summary>
         <pre class="output">{{
           r.error || r.output || "No output recorded."
         }}</pre>
       </details>
-      <div v-if="!builders.length" class="empty">
+      <p v-if="!builders.length" class="fx-empty">
         No implementation output recorded yet.
-      </div>
-    </section>
-    <section class="panel panel-pad">
-      <h2>Review disposition</h2>
-      <article
-        v-for="f in findings"
-        :key="f.id"
-        class="finding"
-        :data-finding="f.status"
-      >
-        <div class="row wrap">
-          <span
-            class="pill"
-            :class="f.severity === 'blocker' ? 'red' : 'orange'"
-            >{{ f.severity }}</span
-          ><span v-if="f.specialty" class="pill purple">{{
-            f.specialty.replace("_", "/")
-          }}</span
-          ><strong class="small grow">{{ f.title }}</strong
-          ><span class="pill" :class="statusPill[f.status]">{{
-            f.status
-          }}</span>
-        </div>
-        <p class="help">{{ f.detail }}</p>
-        <p v-if="f.note" class="help">
-          <strong>Human note:</strong> {{ f.note }}
-        </p>
-        <div
-          v-if="canDispose && f.status !== 'resolved'"
-          class="row wrap"
-          style="margin-top: 8px"
-        >
-          <button
-            v-if="f.status !== 'confirmed'"
-            class="btn small"
-            @click="dispose(f, 'confirm')"
-          >
-            Confirm</button
-          ><button
-            v-if="f.status !== 'disputed'"
-            class="btn small"
-            @click="dispose(f, 'dispute')"
-          >
-            Dispute</button
-          ><button class="btn small" @click="dispose(f, 'resolve')">
-            Resolve</button
-          ><button
-            v-if="f.status !== 'escalated'"
-            class="btn small"
-            @click="dispose(f, 'escalate')"
-          >
-            Escalate
-          </button>
-        </div>
-      </article>
-      <div v-if="!findings.length" class="notice section-gap">
-        No findings recorded. Inspect Quality for the current revision's
-        verification evidence.
-      </div>
-      <div class="form-actions">
-        <button
-          class="btn primary"
-          data-test="pr-approve"
-          :disabled="!canDecide"
-          @click="emit('decision', 'approve')"
-        >
-          <Check class="icon" />Approve</button
-        ><button
-          class="btn"
-          data-test="pr-changes"
-          :disabled="!canDecide"
-          @click="emit('decision', 'request_changes')"
-        >
-          <MessageSquare class="icon" />Request changes</button
-        ><button
-          class="btn"
-          data-test="pr-decline"
-          :disabled="
-            !canWrite ||
-            busy ||
-            !['NEEDS_HUMAN_REVIEW', 'BLOCKED'].includes(state)
-          "
-          @click="emit('decision', 'decline')"
-        >
-          <X class="icon" />Decline
-        </button>
-      </div>
-      <p v-if="sourceRef" class="help section-gap">
-        Source issue: {{ sourceRef.replace("jira:", "") }}
       </p>
-      <div v-if="prUrl" class="notice section-gap" data-test="pr-link">
-        Pull request opened:
-        <a :href="prUrl" target="_blank" rel="noopener noreferrer"
-          >{{ prRef || prUrl }} <ExternalLink class="icon"
-        /></a>
-        Nothing was merged; the provider's review and branch protection apply.
-      </div>
-      <div v-else-if="publishTo" class="notice section-gap">
-        Approving pushes the verified commit to a work branch and opens a pull
-        request on {{ publishTo }}. Nothing is merged.
-      </div>
-      <div v-else class="notice section-gap">
-        This records a local disposition. It does not create, publish or merge a
-        pull request.
-      </div>
     </section>
   </div>
 </template>

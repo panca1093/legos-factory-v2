@@ -19,6 +19,14 @@ const props = withDefaults(
   { tasks: () => [], canRetry: false, steer: undefined },
 );
 const emit = defineEmits<{ retry: [taskID: string]; retryRemediation: [] }>();
+// The graph already shows every task; the list stays only for retry and remediation.
+const retryable = computed(() =>
+  props.runs.some(
+    (r) =>
+      r.kind === "builder" &&
+      (r.state.toLowerCase() === "failed" || r.task_id === null),
+  ),
+);
 const items = computed(() => groupActivity(props.events));
 const live = computed(() => liveRuns(items.value));
 const history = computed(() =>
@@ -29,9 +37,9 @@ const taskTitle = computed(
 );
 </script>
 <template>
-  <div>
+  <div class="fx-card fx-activity">
     <PlanProgress
-      v-if="tasks.length"
+      v-if="tasks.length && retryable"
       :tasks="tasks"
       :runs="runs"
       :can-retry="canRetry"
@@ -99,32 +107,39 @@ const taskTitle = computed(
     <div v-if="!events.length" class="empty">
       The activity trail starts when you draft a blueprint.
     </div>
-    <div class="section-head section-gap"><h2>Execution runs</h2></div>
-    <p class="help">
-      Harness, output and accounting are reported by the backend.
-    </p>
     <details
-      v-for="(r, i) in runs"
-      :key="r.id"
-      :open="i === runs.length - 1"
-      class="section-gap"
+      class="fx-runs"
+      :open="runs.some((r) => r.state.toLowerCase() === 'failed')"
     >
-      <summary class="row wrap" style="cursor: pointer">
-        <span
-          class="pill"
-          :class="r.state.toLowerCase() === 'failed' ? 'red' : 'purple'"
-          >{{ r.state }}</span
-        ><strong class="small">{{ r.kind }}</strong
-        ><span class="pill">{{ r.harness }}</span
-        ><span class="tiny muted"
-          >{{ money(r.cost_micros) }} ·
-          {{ r.tokens_in + r.tokens_out }} tokens</span
-        >
+      <summary class="fx-sum">
+        Execution runs <span class="tiny muted">{{ runs.length }}</span>
       </summary>
-      <pre class="output terminal">{{
-        r.error || r.output || "No output recorded yet."
-      }}</pre>
+      <p class="help">
+        Harness, output and accounting are reported by the backend.
+      </p>
+      <details
+        v-for="(r, i) in runs"
+        :key="r.id"
+        :open="i === runs.length - 1"
+        class="section-gap"
+      >
+        <summary class="row wrap" style="cursor: pointer">
+          <span
+            class="pill"
+            :class="r.state.toLowerCase() === 'failed' ? 'red' : 'purple'"
+            >{{ r.state }}</span
+          ><strong class="small">{{ r.kind }}</strong
+          ><span class="pill">{{ r.harness }}</span
+          ><span class="tiny muted"
+            >{{ money(r.cost_micros) }} ·
+            {{ r.tokens_in + r.tokens_out }} tokens</span
+          >
+        </summary>
+        <pre class="output terminal">{{
+          r.error || r.output || "No output recorded yet."
+        }}</pre>
+      </details>
+      <div v-if="!runs.length" class="empty">No runs yet.</div>
     </details>
-    <div v-if="!runs.length" class="empty">No runs yet.</div>
   </div>
 </template>
