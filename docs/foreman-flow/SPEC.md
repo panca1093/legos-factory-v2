@@ -134,7 +134,10 @@ Questions (all Nouls; ids are not sent to the model):
 | `covers_<c>` | Does a task in `plan` implement `acceptance_criteria.<c>`? | per criterion |
 | `scope_creep` | Does `plan` include work that `request` and `acceptance_criteria` do not ask for? | once |
 | `touches_schema` | Does any task in `plan` change a database schema or migration? | once |
-| `touches_sensitive` | Does any task in `plan` change authentication, payments or secrets handling? | once |
+| `touches_authentication` | Does any task in `plan` change how users or services prove who they are? | once |
+| `touches_authorization` | Does any task in `plan` change who is allowed to do what? | once |
+| `touches_payments` | Does any task in `plan` change payment, billing or money-movement code? | once |
+| `touches_secrets` | Does any task in `plan` change how secrets are stored, read or passed? | once |
 | `task_overlap` | Do two tasks in `plan` implement the same behaviour? | once |
 | `review_unresolved` | Does `foreman_review` report a problem that `plan` does not address? | once |
 
@@ -144,8 +147,8 @@ Truth table, first matching row wins:
 
 | # | Condition | Outcome |
 |---|---|---|
-| 1 | Jev call failed, no API key, or state over the context limit | escalate |
-| 2 | `touches_schema` or `touches_sensitive` is yes | escalate |
+| 1 | no acceptance criteria, Jev call failed, no API key, state over the context limit, or any asked question unanswered | escalate |
+| 2 | `touches_schema` or any `touches_*` is yes | escalate |
 | 3 | any `covers_*` is no, or `scope_creep` / `task_overlap` / `review_unresolved` is yes | revise |
 | 4 | any answer unsettled | revise |
 | 5 | otherwise | approve |
@@ -172,11 +175,11 @@ Unchanged except:
 
 The Foreman agent writes validation notes from the Inspector findings and the Architect report.
 
-The factory sends one Jev request. State: criteria, spec, a diff summary (per file: path, lines changed, the hunks up to a size budget), check results, open findings, the Architect report and the Foreman notes.
+The factory sends one Jev request. State: criteria, spec, a diff summary (per file: path, lines changed, the hunks up to a size budget; lock and generated files keep counts only), check results, open findings, the Architect verdicts (`architect_verdicts`: criterion, `met`/`not_met`/`unclear`, evidence) and `deviations`, and the Foreman notes.
 
 | Id | Question |
 |---|---|
-| `met_<c>` | Does the evidence show `acceptance_criteria.<c>` is satisfied? |
+| `met_<c>` | Does `diff` implement the behaviour `acceptance_criteria.<c>` describes? (diff only; the Architect is judged by code, below) |
 | `deviates` | Does the diff change behaviour that `spec` does not describe? |
 | `notes_unresolved` | Do `foreman_notes` report a problem that is not fixed in the diff? |
 
@@ -185,9 +188,9 @@ Truth table:
 | # | Condition | Outcome |
 |---|---|---|
 | 1 | a check failed or a blocker finding is open | handled by the existing loops; never done |
-| 2 | Jev call failed or state over the limit | escalate |
-| 3 | any `met_*` is no, or `deviates` / `notes_unresolved` is yes | fix |
-| 4 | any answer unsettled | fix |
+| 2 | no acceptance criteria, Jev call failed or not configured, state over the limit, or any asked question unanswered | escalate |
+| 3 | any `met_*` is no, `deviates` / `notes_unresolved` is yes, the Architect marks a criterion `not_met`, or the Architect reports deviations | fix |
+| 4 | any answer unsettled, or the Architect is `unclear` about a criterion or gave no verdict for it | fix |
 | 5 | otherwise | done → READY |
 
 `fix` returns to the Builder with a code-built note and uses the same revision budget as failed checks. When the budget is spent, fix becomes escalate (NEEDS_HUMAN_REVIEW).
@@ -207,7 +210,7 @@ Truth table:
 | File | Content |
 |---|---|
 | `internal/integration/typesafe.go` | HTTP client: request/response types, timeout, error mapping |
-| `internal/usecase/ports.go` | `Judge` interface: `Ask(ctx, state any, questions map[string]Noul) (map[string]float64, error)` |
+| `internal/usecase/ports.go` | `Judge` interface: `Ask(ctx, state any, questions map[string]Noul) (JudgeResult, error)`; `JudgeResult` carries answers, the exact request body, requested and answering model, and token usage |
 | `internal/usecase/gates.go` | All question wording, thresholds and both truth tables in one file |
 | `internal/usecase/foreman.go` → `factory.go` | The renamed `Factory` struct |
 

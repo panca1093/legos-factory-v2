@@ -30,6 +30,8 @@ func LoadConfig() (*model.Config, error) {
 		SandboxMode:       env("FACTORY_SANDBOX_MODE", "local"),
 		SecretKey:         env("FACTORY_SECRET_KEY", ""),
 		FrontendOrigin:    env("FACTORY_FRONTEND_ORIGIN", "http://localhost:5173"),
+		TypeSafeKey:       env("TYPESAFE_API_KEY", ""),
+		TypeSafeModel:     env("TYPESAFE_MODEL", "jev-1.14.0"),
 	}
 	if c.AuthMode != "dev" && c.AuthMode != "oidc" {
 		return nil, fmt.Errorf("FACTORY_AUTH_MODE must be dev or oidc, got %q", c.AuthMode)
@@ -42,6 +44,9 @@ func LoadConfig() (*model.Config, error) {
 	}
 	if c.SandboxMode != "local" && c.SandboxMode != "docker" {
 		return nil, fmt.Errorf("FACTORY_SANDBOX_MODE must be local or docker, got %q", c.SandboxMode)
+	}
+	if strings.EqualFold(strings.TrimSpace(c.TypeSafeModel), "jev-latest") {
+		return nil, fmt.Errorf("TYPESAFE_MODEL must be a pinned version such as jev-1.14.0, not jev-latest")
 	}
 	return c, nil
 }
