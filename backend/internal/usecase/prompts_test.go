@@ -35,3 +35,23 @@ func TestInspectPromptHasFocusForCustomSpecialty(t *testing.T) {
 		t.Fatalf("custom specialty has no focus:\n%s", p)
 	}
 }
+
+func TestImplementPromptRendersFailedChecks(t *testing.T) {
+	wo := &model.WorkOrder{Title: "t"}
+	p := implementPrompt(wo, model.Job{Payload: map[string]any{
+		"reason": "fix_failed_verification", "failed_checks": `Check "go test": FAIL (exit code 1)`,
+	}})
+	for _, want := range []string{"Verification failed on these checks; fix the cause.", "Do not edit .legos/checks.json", `Check "go test"`} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, p)
+		}
+	}
+}
+
+func TestImplementPromptFallsBackWithoutFailedChecks(t *testing.T) {
+	wo := &model.WorkOrder{Title: "t"}
+	p := implementPrompt(wo, model.Job{Payload: map[string]any{"reason": "fix_failed_verification", "failed_checks": ""}})
+	if !strings.Contains(p, "requires remediation") || strings.Contains(p, "Verification failed on these checks") {
+		t.Fatalf("expected the generic remediation prompt:\n%s", p)
+	}
+}

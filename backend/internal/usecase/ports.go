@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -134,6 +135,7 @@ type QualityStore interface {
 	Save(ctx context.Context, c model.QualityCheck) error
 	Count(ctx context.Context, woID string) (int, error)
 	CountForRevision(ctx context.Context, woID string, revision int) (int, error)
+	ForRevision(ctx context.Context, woID string, revision int) ([]model.QualityCheck, error)
 	AttachCommit(ctx context.Context, woID string, revision int, sha string) error
 }
 
@@ -172,4 +174,33 @@ type Publisher interface {
 type Budget interface {
 	Reserve(estMicros int64) (release func(actual int64), ok bool)
 	Record(ctx context.Context, r model.UsageRecord) error
+}
+
+// Judge asks Jev typed yes/no questions about a state. Answers are
+// probabilities keyed by question id.
+type Judge interface {
+	Ask(ctx context.Context, state any, questions map[string]Noul) (JudgeResult, error)
+}
+
+type Noul struct {
+	Instructions string        `json:"instructions"`
+	Criteria     *NoulCriteria `json:"criteria,omitempty"`
+}
+
+type NoulCriteria struct {
+	True  string `json:"true"`
+	False string `json:"false"`
+}
+
+type Usage struct{ InputTokens, OutputTokens int }
+
+// JudgeResult carries the exact request body that was (or would have been)
+// sent, so the audit event can replay the decision. Request and
+// RequestedModel are set even when Ask fails.
+type JudgeResult struct {
+	Answers        map[string]float64
+	Model          string // model that answered
+	RequestedModel string
+	Request        json.RawMessage
+	Usage          Usage
 }

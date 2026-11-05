@@ -163,6 +163,21 @@ Use CLARIFY when the plan depends on a product decision nobody has made — neve
 
 func implementPrompt(wo *model.WorkOrder, job model.Job) string {
 	reason, _ := job.Payload["reason"].(string)
+	if failed, _ := job.Payload["failed_checks"].(string); reason == "fix_failed_verification" && failed != "" {
+		return fmt.Sprintf(`You are the Builder. Work order %q failed deterministic verification.
+
+Verification failed on these checks; fix the cause. Do not edit .legos/checks.json or weaken tests to make them pass.
+
+%s
+
+Objective: %s
+
+Acceptance criteria:
+%s
+%s
+Work only within the assigned workspace. When done, reply with one line describing what changed.`,
+			wo.Title, failed, wo.Objective, wo.Acceptance, clarification(wo))
+	}
 	if reason != "" {
 		return fmt.Sprintf(`You are the Builder. Work order %q requires remediation.
 

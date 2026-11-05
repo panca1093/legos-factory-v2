@@ -28,4 +28,7 @@ type Config struct {
 	SecretKey         string // base64 32-byte key sealing provider credentials
 
 	FrontendOrigin string // allowed CORS origin for the Vite dev server
+
+	TypeSafeKey   string // TypeSafe API key; Jev gates are on exactly when set
+	TypeSafeModel string // pinned Jev model
 }

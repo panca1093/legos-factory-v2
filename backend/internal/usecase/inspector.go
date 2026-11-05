@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 	f.runSetup(ctx, wo, profile, f.workspaceDir(wo.ID), "inspector")
 	mu.Unlock()
 	failed := ""
+	var failedResults []model.CheckResult
 	var results strings.Builder
 	for _, c := range profile.Checks {
 		r := f.Sandbox.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
@@ -38,6 +40,9 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		fmt.Fprintf(&results, "%s (%s) → %s\n", c.Name, c.Command, r.Outcome)
 		if r.Outcome != model.Pass && failed == "" {
 			failed = c.Name
+		}
+		if r.Outcome != model.Pass {
+			failedResults = append(failedResults, r)
 		}
 	}
 	if failed != "" {
@@ -65,7 +70,9 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 			fmt.Sprintf("Check %q failed; returning to builder (attempt %d of %d)", failed, failures, MaxRevisionCycles)); err != nil {
 			return err
 		}
-		_, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, "", map[string]any{"reason": "fix_failed_verification"})
+		_, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, "", map[string]any{
+			"reason": "fix_failed_verification", "failed_checks": failedChecksSection(failedResults),
+		})
 		return err
 	}
 	if len(profile.Checks) == 0 {
@@ -84,6 +91,80 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		}
 	}
 	return f.enqueue(ctx, JobInspect, wo.ID, "")
+}
+
+const (
+	maxFailedChecks    = 3
+	maxFailedOutputLen = 3000
+)
+
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+
+// failedChecksSection pre-renders to a string because job payloads round-trip through JSON.
+func failedChecksSection(failures []model.CheckResult) string {
+	var b strings.Builder
+	for i, r := range failures {
+		if i == maxFailedChecks {
+			fmt.Fprintf(&b, "(%d more failing checks omitted)\n", len(failures)-i)
+			break
+		}
+		exit := "n/a"
+		if r.ExitCode != nil {
+			exit = fmt.Sprint(*r.ExitCode)
+		}
+		note := ""
+		if r.Outcome != model.Fail {
+			// timeouts and exec errors are reported on the first output line, which the tail cut can drop
+			note = " - " + strings.TrimSpace(strings.SplitN(strings.TrimSpace(ansiEscape.ReplaceAllString(r.Output, "")), "\n", 2)[0])
+		}
+		fmt.Fprintf(&b, "Check %q: %s%s (exit code %s)\nCommand: %s\nOutput (tail):\n%s\n\n",
+			r.Name, r.Outcome, note, exit, r.Command, outputTail(r.Output))
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// retryPayload keeps the failing checks in front of the Builder when a human retries after a failed verification.
+func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[string]any {
+	payload := map[string]any{"reason": "human_retry"}
+	if wo.VerifyFailures == 0 || wo.Revision < 1 {
+		return payload
+	}
+	stored, err := f.Quality.ForRevision(ctx, wo.ID, wo.Revision-1)
+	if err != nil {
+		return payload
+	}
+	// the revision also holds the pre-change baseline and re-run duplicates; only each check's latest run counts
+	latest := map[string]int{}
+	for i, c := range stored {
+		latest[c.Name] = i
+	}
+	var failed []model.CheckResult
+	for i, c := range stored {
+		if latest[c.Name] != i || c.Outcome == string(model.Pass) {
+			continue
+		}
+		r := model.CheckResult{Name: c.Name, Command: c.Command, Outcome: model.Outcome(c.Outcome), Output: c.Output}
+		if c.ExitCode >= 0 {
+			r.ExitCode = &c.ExitCode
+		}
+		failed = append(failed, r)
+	}
+	if len(failed) == 0 {
+		return payload
+	}
+	return map[string]any{"reason": "fix_failed_verification", "failed_checks": failedChecksSection(failed)}
+}
+
+func outputTail(out string) string {
+	out = strings.TrimSpace(ansiEscape.ReplaceAllString(out, ""))
+	if len(out) <= maxFailedOutputLen {
+		return out
+	}
+	out = out[len(out)-maxFailedOutputLen:]
+	if i := strings.IndexByte(out, '\n'); i >= 0 {
+		out = out[i+1:]
+	}
+	return "…\n" + out
 }
 
 func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {

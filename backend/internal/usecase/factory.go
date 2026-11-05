@@ -47,6 +47,7 @@ type Factory struct {
 	KB           *KB
 	Integrations *Integrations
 	Sandbox      Sandbox
+	Judge        Judge // nil when TYPESAFE_API_KEY is unset
 	DataDir      string
 	wsMu         sync.Map // work order id → *sync.Mutex serializing writes to its workspace: task merges, dependency setup
 	baselineMu   sync.Map // work order id → *sync.Mutex so one task records the baseline

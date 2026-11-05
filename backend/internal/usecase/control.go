@@ -151,7 +151,7 @@ func (f *Factory) RetryRemediation(ctx context.Context, woID, actor string) erro
 	if f.Sched.HasActive(ctx, woID, "", JobImplement) {
 		return stateConflict("remediation is already queued or running")
 	}
-	if _, err := f.Sched.Enqueue(ctx, JobImplement, woID, "", map[string]any{"reason": "human_retry"}); err != nil {
+	if _, err := f.Sched.Enqueue(ctx, JobImplement, woID, "", f.retryPayload(ctx, wo)); err != nil {
 		return err
 	}
 	f.event(woID, actor, "remediation_retry", "Remediation retried", nil)
