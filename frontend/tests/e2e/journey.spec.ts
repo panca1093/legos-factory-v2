@@ -192,21 +192,50 @@ test("settings save, navigation and missing-order recovery against the real back
     page.getByRole("heading", { name: "The factory floor" }),
   ).toBeVisible();
 });
-// Knowledge phase: the human_decision memory card is no longer seeded by the journey.
-test.fixme("knowledge trust filter and memory detail", async ({ page }) => {
+test("knowledge notebook: read first, discussion opens on demand", async ({
+  page,
+}) => {
   await page.goto("/");
   await page.getByRole("link", { name: "Knowledge", exact: true }).click();
-  const decision = page
-    .locator('.memory-card[data-trust="human_decision"]')
-    .first();
-  await expect(decision).toBeVisible();
-  await page.selectOption("#kn-trust", "verified");
-  await expect(page.locator(".memory-card").first()).toHaveAttribute(
-    "data-trust",
-    "verified",
+  const items = page.locator(".nb-item");
+  await expect(items.first()).toBeVisible();
+  await expect(page.locator(".nb-read .nb-h")).toBeVisible();
+  await expect(page.locator(".nb-talk")).toHaveCount(0);
+  await page.getByRole("searchbox", { name: "Search notes" }).fill("Inspector");
+  const note = items.filter({ hasText: "Inspector playbook" }).first();
+  await expect(note.locator("mark").first()).toBeVisible();
+  await note.click();
+  await expect(page.locator(".nb-read .nb-h")).toContainText(
+    "Inspector playbook",
   );
-  await page.locator(".memory-card").first().click();
-  await expect(page.getByRole("dialog")).toContainText("Verified fact");
-  await expect(page.getByRole("dialog")).toContainText("Commit");
-  await page.keyboard.press("Escape");
+  await expect(page.locator("[data-test=kb-sha]")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Ask about this" }),
+  ).toBeVisible();
+  await page.evaluate(() => {
+    const p = document.querySelector(".prose")!;
+    const r = document.createRange();
+    r.selectNodeContents(p.querySelector("p, li") ?? p);
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(r);
+  });
+  const ask = page.locator(".sel-ask");
+  await expect(ask).toBeVisible();
+  const box = (await ask.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.locator(".quote")).toBeVisible();
+  await expect(page.locator(".nb-talk")).toBeVisible();
+  const toChats = page.getByRole("button", { name: "Open in Chats" });
+  await expect(toChats).toBeDisabled();
+  await page.getByLabel("Ask about this note").fill("Summarize this");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator("[data-test=kb-turn]")).toHaveCount(2);
+  await expect(toChats).toBeEnabled();
+  await toChats.click();
+  await expect(page).toHaveURL(/\/chats\/\d+|\/chats\/[\w-]+/);
+  await page.goBack();
+  await expect(page.locator(".nb-talk")).toHaveCount(0);
 });
