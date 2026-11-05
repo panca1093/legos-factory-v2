@@ -178,7 +178,8 @@ func GitPlaybookPaths(root, sha string) ([]string, error) {
 	if !commitRef.MatchString(sha) {
 		return nil, fmt.Errorf("invalid commit %q", sha)
 	}
-	out, err := exec.Command("git", "-C", root, "grep", "-l", "-I", "-e", "^type: *Playbook", sha, "--", "*.md").Output()
+	// loose pattern: quoted or tab-separated values still count; callers check the parsed type
+	out, err := exec.Command("git", "-C", root, "grep", "-l", "-z", "-I", "-e", "^type:.*Playbook", sha, "--", "*.md").Output()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) && ee.ExitCode() == 1 {
 		return []string{}, nil
@@ -187,8 +188,8 @@ func GitPlaybookPaths(root, sha string) ([]string, error) {
 		return nil, err
 	}
 	paths := []string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if p := strings.TrimPrefix(line, sha+":"); p != "" {
+	for _, entry := range strings.Split(string(out), "\x00") {
+		if p := strings.TrimPrefix(entry, sha+":"); p != "" && !skipped(p, false) {
 			paths = append(paths, p)
 		}
 	}

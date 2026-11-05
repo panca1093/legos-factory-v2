@@ -133,7 +133,7 @@ func (k *KB) gitPlaybooks(projectID, dir, baseSHA string, match func(map[string]
 		if err != nil || metaStr(front, "type") != model.KBTypePlaybook {
 			continue
 		}
-		if st := metaStr(front, "status"); st == model.KBStatusDraft || st == model.KBStatusDeprecated || !match(front) {
+		if st := metaStr(front, "status"); (st != "" && st != model.KBStatusStable) || !match(front) {
 			continue
 		}
 		title := metaStr(front, "title")
