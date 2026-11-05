@@ -97,9 +97,7 @@ const (
 	maxSummaryDays     = 365
 )
 
-// UserSummary aggregates days of a user's usage records ending today in loc.
-// Each record is one agent run on a work order the user created, so the
-// per-day count is how many agent runs that user's work orders caused.
+// UserSummary counts one record per agent run on work orders the user created, bucketed by day in loc.
 func (t *UsageTracker) UserSummary(ctx context.Context, userID string, days int, now time.Time, loc *time.Location) (*model.UsageSummary, error) {
 	if days <= 0 {
 		days = defaultSummaryDays

@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -21,6 +22,7 @@ import (
 
 type kbRig struct {
 	srv    *Server
+	db     *sql.DB
 	know   *usecase.KB
 	repo   string
 	cookie map[string]string
@@ -79,7 +81,8 @@ func bootKB(t *testing.T) *kbRig {
 	srv.Auth = &usecase.Identity{Users: users, Mode: "dev"}
 	srv.Projects = projects
 	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo, WO: &store.WorkOrderRepo{DB: db}, DataDir: t.TempDir()}
-	rig.srv, rig.know = srv, know
+	rig.srv, rig.know, rig.db = srv, know, db
+	srv.Usage = usecase.NewUsageTracker(&store.UsageRepo{DB: db})
 
 	draft := map[string]any{"type": model.KBTypePlaybook, "title": "Draft rule", "status": "draft", "role": "foreman"}
 	if err := know.WriteFactory(ctx, "projects/p1/drafts/d1.md", draft, "Proposed rule about money.", "draft"); err != nil {
@@ -298,5 +301,62 @@ func TestKBDelete(t *testing.T) {
 	}
 	if r.know.Bundle.Head() == before {
 		t.Fatal("the deletion must be committed to the bundle")
+	}
+}
+
+func TestKBDeleteFactoryWideNeedsAdmin(t *testing.T) {
+	r := bootKB(t)
+	note := map[string]any{"type": "Note", "title": "Shared", "status": "draft"}
+	if err := r.know.WriteFactory(context.Background(), "notes/shared.md", note, "Shared note.", "add"); err != nil {
+		t.Fatal(err)
+	}
+	const id = "factory::notes/shared.md"
+	if code, _ := r.do(t, "eng", "DELETE", "/api/v1/kb/doc?id="+id, ""); code != 403 {
+		t.Fatalf("engineer DELETE on a factory-wide doc: %d", code)
+	}
+	if code, _ := r.do(t, "owner", "DELETE", "/api/v1/kb/doc?id="+id, ""); code != 204 {
+		t.Fatalf("admin DELETE: %d", code)
+	}
+	if code, _ := r.do(t, "owner", "GET", "/api/v1/kb/doc?id="+id, ""); code != 404 {
+		t.Fatalf("deleted doc must be gone: %d", code)
+	}
+}
+
+func TestUsageSummaryEndpoint(t *testing.T) {
+	r := bootKB(t)
+	add := func(id, user, role string, cost int64) {
+		err := (&store.UsageRepo{DB: r.db}).Insert(context.Background(), model.UsageRecord{
+			ID: id, UserID: user, Role: role, Provider: "p", Model: "m", TokensIn: 10, TokensOut: 1, CostMicros: cost,
+			Source: "measured", CreatedAt: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("a", "eng", "builder", 100)
+	add("b", "eng", "builder", 200)
+	add("c", "owner", "architect", 999)
+
+	for _, q := range []string{"days=abc", "days=0", "days=-3", "tz=Mars/Base"} {
+		if code, _ := r.do(t, "eng", "GET", "/api/v1/usage/summary?"+q, ""); code != 400 {
+			t.Fatalf("%s: %d", q, code)
+		}
+	}
+	code, body := r.do(t, "eng", "GET", "/api/v1/usage/summary?days=7&tz=Asia/Jakarta", "")
+	if code != 200 {
+		t.Fatalf("summary: %d %s", code, body)
+	}
+	var s model.UsageSummary
+	if err := json.Unmarshal(body, &s); err != nil {
+		t.Fatal(err)
+	}
+	total := 0
+	for _, d := range s.Activity {
+		total += d.Count
+	}
+	if s.Days != 7 || len(s.Activity) != 7 || total != 2 || len(s.Roles) != 1 || s.Roles[0].Role != "builder" || s.Roles[0].CostMicros != 300 {
+		t.Fatalf("the summary must cover only the caller: %+v", s)
+	}
+	if code, body = r.do(t, "eng", "GET", "/api/v1/usage/summary?days=9999", ""); code != 200 || !strings.Contains(string(body), `"days":365`) {
+		t.Fatalf("days must cap at 365: %d %s", code, body)
 	}
 }

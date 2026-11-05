@@ -107,7 +107,7 @@ func basic(user, token string) func(*http.Request) {
 	return func(r *http.Request) { r.SetBasicAuth(user, token) }
 }
 
-// splitPRRef parses "<provider>:<repo><sep><number>", the ref OpenPullRequest stores.
+// splitPRRef parses the "<provider>:<repo><sep><number>" ref OpenPullRequest stores.
 func splitPRRef(ref, provider, sep string) (repo string, number int, err error) {
 	rest, ok := strings.CutPrefix(ref, provider+":")
 	i := strings.LastIndex(rest, sep)
@@ -115,7 +115,7 @@ func splitPRRef(ref, provider, sep string) (repo string, number int, err error) 
 		number, err = strconv.Atoi(rest[i+len(sep):])
 	}
 	if !ok || i <= 0 || err != nil || number < 1 {
-		return "", 0, fmt.Errorf("%q is not a %s pull request ref", ref, provider)
+		return "", 0, fmt.Errorf("%w: %q is not a %s pull request ref", model.ErrPermanent, ref, provider)
 	}
 	return rest[:i], number, nil
 }

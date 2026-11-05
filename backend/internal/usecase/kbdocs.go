@@ -296,10 +296,7 @@ func (s *KBDocs) Reset(ctx context.Context, u *model.User, id string) (*model.KB
 	return s.KB.Idx.Get(ctx, id)
 }
 
-// Delete removes a factory document from the bundle and the index. Factory
-// documents are never synced to a repository, so the bundle commit is the
-// whole change. Seeded defaults are refused: they would be re-seeded on the
-// next start, so Reset is the way to undo an edit.
+// Delete removes a factory doc from bundle and index; seeded defaults are refused since the next start would re-seed them.
 func (s *KBDocs) Delete(ctx context.Context, u *model.User, id string) error {
 	d, err := s.factoryDoc(ctx, u, id)
 	if err != nil {

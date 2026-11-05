@@ -42,8 +42,7 @@ type UsagePeriod struct {
 	Runs       int   `json:"runs"`
 }
 
-// UsageSummary is one user's agent usage: a dense per-day activity series
-// (oldest first), per-role totals for the period and month-to-date totals.
+// UsageSummary is one user's agent usage: daily activity, per-role totals, month-to-date.
 type UsageSummary struct {
 	Days        int         `json:"days"`
 	From        string      `json:"from"`

@@ -73,8 +73,7 @@ func (b *Bitbucket) OpenPullRequest(ctx context.Context, pr model.PRRequest) (mo
 	return model.PullRequest{Number: p.ID, URL: p.Links.HTML.Href, Ref: fmt.Sprintf("bitbucket:%s#%d", pr.Repo, p.ID)}, nil
 }
 
-// PullRequestStatus uses updated_on as the merge/close time: Bitbucket Cloud's
-// pull request object has no dedicated merged_on field.
+// Bitbucket Cloud has no merged_on field, so updated_on stands in for the merge/close time.
 func (b *Bitbucket) PullRequestStatus(ctx context.Context, ref string) (model.PRStatus, error) {
 	repo, id, err := splitPRRef(ref, "bitbucket", "#")
 	if err != nil {
