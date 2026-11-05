@@ -36,6 +36,26 @@ func (r *QualityRepo) CountForRevision(ctx context.Context, woID string, revisio
 	return n, err
 }
 
+func (r *QualityRepo) ForRevision(ctx context.Context, woID string, revision int) ([]model.QualityCheck, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT id, name, command, outcome, exit_code, output, revision, commit_sha, created_at
+		FROM quality_checks WHERE wo_id = ? AND revision = ? ORDER BY created_at, rowid`, woID, revision)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.QualityCheck{}
+	for rows.Next() {
+		c := model.QualityCheck{WOID: woID}
+		var createdAt int64
+		if err := rows.Scan(&c.ID, &c.Name, &c.Command, &c.Outcome, &c.ExitCode, &c.Output, &c.Revision, &c.CommitSHA, &createdAt); err != nil {
+			return nil, err
+		}
+		c.CreatedAt = time.Unix(createdAt, 0)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (r *QualityRepo) List(ctx context.Context, woID string) ([]model.QualityCheck, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT id, name, command, outcome, exit_code, output, revision, commit_sha, created_at
 		FROM quality_checks WHERE wo_id = ? ORDER BY created_at`, woID)
