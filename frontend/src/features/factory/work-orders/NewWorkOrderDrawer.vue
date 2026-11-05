@@ -298,12 +298,13 @@ async function create() {
       <div class="notice">
         <strong>Governance is inherited</strong>
         <p style="margin-top: 7px">
-          Foreman: managed by backend<br />Architect:
-          {{ config?.architect_model || "Workspace default" }}
+          Foreman: {{ config?.foreman_model || "Backend default"
+          }}<br />Architect:
+          {{ config?.architect_model || "Backend default" }}
         </p>
         <p style="margin-top: 7px">
-          Governance snapshot details and personal overrides are not exposed by
-          the API.
+          Set in workspace Governance and snapshotted when this work order is
+          created.
         </p>
       </div>
       <div class="form-group">
