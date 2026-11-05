@@ -2,19 +2,25 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
+
+	"legos-factory/backend/internal/model"
 )
 
 const typeSafeURL = "https://api.typesafe.ai"
 
 // TypeSafe is a client for TypeSafe's System One API (Jev judgments).
 type TypeSafe struct {
-	model string
-	a     api
+	model   string
+	a       api
+	backoff time.Duration
 }
 
 type Noul struct {
@@ -33,9 +39,11 @@ type Usage struct {
 }
 
 type SystemOneResult struct {
-	Model   string
-	Answers map[string]float64
-	Usage   Usage
+	Model          string // model that answered
+	RequestedModel string
+	Request        json.RawMessage // exact request body; set even on error
+	Answers        map[string]float64
+	Usage          Usage
 }
 
 // NewTypeSafe builds a client; baseURL "" means the production API.
@@ -44,19 +52,26 @@ func NewTypeSafe(key, model, baseURL string) *TypeSafe {
 		baseURL = typeSafeURL
 	}
 	hc := &http.Client{Timeout: 30 * time.Second}
-	return &TypeSafe{model: model, a: newAPI("typesafe", baseURL, hc, bearer(key))}
+	return &TypeSafe{model: model, a: newAPI("typesafe", baseURL, hc, bearer(key)), backoff: 2 * time.Second}
 }
 
-// Noul asks every question and returns one probability per id.
+type wireNoul struct {
+	Type string `json:"type"`
+	Noul
+}
+
+// Noul asks every question and returns one probability per id. It retries
+// once on a transient failure (429, 5xx, timeout or network error).
 func (t *TypeSafe) Noul(ctx context.Context, state any, questions map[string]Noul) (SystemOneResult, error) {
-	qs := make(map[string]map[string]any, len(questions))
+	qs := make(map[string]wireNoul, len(questions))
 	for id, q := range questions {
-		m := map[string]any{"type": "noul", "instructions": q.Instructions}
-		if q.Criteria != nil {
-			m["criteria"] = q.Criteria
-		}
-		qs[id] = m
+		qs[id] = wireNoul{Type: "noul", Noul: q}
 	}
+	raw, err := json.Marshal(map[string]any{"model": t.model, "state": state, "questions": qs})
+	if err != nil {
+		return SystemOneResult{}, err
+	}
+	out := SystemOneResult{RequestedModel: t.model, Request: raw}
 	var resp struct {
 		Model   string `json:"model"`
 		Answers map[string]struct {
@@ -65,15 +80,23 @@ func (t *TypeSafe) Noul(ctx context.Context, state any, questions map[string]Nou
 		} `json:"answers"`
 		Usage Usage `json:"usage"`
 	}
-	body := map[string]any{"model": t.model, "state": state, "questions": qs}
-	if err := t.a.do(ctx, http.MethodPost, "/v1/systemone", body, &resp); err != nil {
-		return SystemOneResult{}, err
+	err = t.a.do(ctx, http.MethodPost, "/v1/systemone", json.RawMessage(raw), &resp)
+	if err != nil && transient(ctx, err) {
+		select {
+		case <-time.After(t.backoff):
+			err = t.a.do(ctx, http.MethodPost, "/v1/systemone", json.RawMessage(raw), &resp)
+		case <-ctx.Done():
+		}
 	}
-	out := SystemOneResult{Model: resp.Model, Answers: make(map[string]float64, len(questions)), Usage: resp.Usage}
+	if err != nil {
+		return out, err
+	}
+	out.Model, out.Usage = resp.Model, resp.Usage
+	out.Answers = make(map[string]float64, len(questions))
 	var missing []string
 	for id := range questions {
 		a, ok := resp.Answers[id]
-		if !ok || a.Noul == nil {
+		if !ok || a.Type != "noul" || a.Noul == nil || !(*a.Noul >= 0 && *a.Noul <= 1) {
 			missing = append(missing, id)
 			continue
 		}
@@ -81,7 +104,20 @@ func (t *TypeSafe) Noul(ctx context.Context, state any, questions map[string]Nou
 	}
 	if len(missing) > 0 {
 		sort.Strings(missing)
-		return SystemOneResult{}, fmt.Errorf("typesafe: no answer for %s", strings.Join(missing, ", "))
+		out.Answers = nil
+		return out, fmt.Errorf("typesafe: no answer for %s", strings.Join(missing, ", "))
 	}
 	return out, nil
+}
+
+func transient(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	var pe *model.ProviderError
+	if errors.As(err, &pe) {
+		return pe.Status == http.StatusTooManyRequests || pe.Status >= 500
+	}
+	var ne net.Error
+	return errors.As(err, &ne)
 }

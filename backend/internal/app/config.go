@@ -45,6 +45,9 @@ func LoadConfig() (*model.Config, error) {
 	if c.SandboxMode != "local" && c.SandboxMode != "docker" {
 		return nil, fmt.Errorf("FACTORY_SANDBOX_MODE must be local or docker, got %q", c.SandboxMode)
 	}
+	if strings.EqualFold(strings.TrimSpace(c.TypeSafeModel), "jev-latest") {
+		return nil, fmt.Errorf("TYPESAFE_MODEL must be a pinned version such as jev-1.14.0, not jev-latest")
+	}
 	return c, nil
 }
 

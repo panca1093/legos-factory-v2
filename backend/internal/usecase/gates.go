@@ -1,8 +1,11 @@
 package usecase
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -18,6 +21,7 @@ const (
 
 	maxRequestTokens  = 64000
 	maxQuestionTokens = 32000
+	limitMarginPct    = 90    // the token estimate is rough: stay under 90% of each limit
 	diffHunkBudget    = 48000 // bytes of hunk text per done-gate request
 
 	maxPlanRevisions = 2
@@ -31,6 +35,10 @@ const (
 	GateDone     = "done"
 	GateLoop     = "loop" // checks failed or blockers open: the existing loops own it
 )
+
+// errNoJudge is the judgeErr callers pass when Factory.Judge is nil, so the
+// audit row says why the gate escalated.
+var errNoJudge = errors.New("jev is not configured")
 
 type verdict int
 
@@ -92,13 +100,22 @@ type GateFinding struct {
 }
 
 type DoneGateInput struct {
-	Criteria        []Criterion
-	Spec            string
-	Diff            []FileDiff
-	Checks          []GateCheck
-	OpenFindings    []GateFinding
-	ArchitectReport string
-	ForemanNotes    string
+	Criteria          []Criterion
+	Spec              string
+	Diff              []FileDiff
+	Checks            []GateCheck
+	OpenFindings      []GateFinding
+	ArchitectVerdicts []ArchitectVerdict
+	Deviations        []string // work the Architect found outside the spec or plan
+	ForemanNotes      string
+}
+
+// ArchitectVerdict is the Architect's per-criterion result; Status is
+// "met", "not_met" or "unclear".
+type ArchitectVerdict struct {
+	CriterionID string `json:"criterion_id"`
+	Status      string `json:"status"`
+	Evidence    string `json:"evidence"`
 }
 
 type orderedCriteria []Criterion
@@ -183,6 +200,31 @@ func splitCriteria(acceptance string) []Criterion {
 
 func yn(t, f string) *NoulCriteria { return &NoulCriteria{True: t, False: f} }
 
+// Plan questions that hold one proposition each. The phrase is the note text
+// when the answer is yes; "it is unclear whether <phrase>" when unsettled.
+var planPhrases = map[string]string{
+	"scope_creep":            "the plan includes work the request does not ask for",
+	"task_overlap":           "tasks overlap",
+	"review_unresolved":      "the Foreman review reports a problem the plan does not address",
+	"touches_schema":         "a task changes a database schema or migration",
+	"touches_authentication": "a task changes authentication",
+	"touches_authorization":  "a task changes authorization or permission checks",
+	"touches_payments":       "a task changes payment handling",
+	"touches_secrets":        "a task changes how secrets are stored or read",
+}
+
+var (
+	planHardIDs = []string{"scope_creep", "task_overlap", "review_unresolved"}
+	planRiskIDs = []string{"touches_schema", "touches_authentication", "touches_authorization", "touches_payments", "touches_secrets"}
+)
+
+var doneHardPhrases = map[string]string{
+	"deviates":         "the diff changes behaviour the spec does not describe",
+	"notes_unresolved": "the Foreman notes report a problem the diff does not fix",
+}
+
+var doneFixedIDs = []string{"deviates", "notes_unresolved"}
+
 func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 	state := map[string]any{
 		"request":             in.Request,
@@ -213,11 +255,29 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 			"A task adds, drops or alters a table, column, index or constraint, or adds a migration file.",
 			"No task changes how data is stored; reading or writing existing columns does not count."),
 	}
-	qs["touches_sensitive"] = Noul{
-		Instructions: "Does any task in plan change authentication, authorization, payment handling or how secrets are stored or read?",
+	qs["touches_authentication"] = Noul{
+		Instructions: "Does any task in plan change how users or services prove who they are, such as login, sessions or token verification?",
 		Criteria: yn(
-			"A task changes login, sessions, permission checks, payment or billing code, API keys, tokens or credential storage.",
-			"No task touches login, permissions, payments or secrets, even if it sits in the same file or package as such code."),
+			"A task adds or changes login, sign-up, session handling, or password or token verification.",
+			"No task touches how identity is proven; code that only reads the current user's id does not count."),
+	}
+	qs["touches_authorization"] = Noul{
+		Instructions: "Does any task in plan change who is allowed to do what, such as permission checks, roles or ownership rules?",
+		Criteria: yn(
+			"A task adds, removes or changes a permission check, role, ownership rule or access policy.",
+			"No task changes what any user or service is allowed to do; calling an existing permission check unchanged does not count."),
+	}
+	qs["touches_payments"] = Noul{
+		Instructions: "Does any task in plan change payment, billing or money-movement code?",
+		Criteria: yn(
+			"A task changes charging, refunds, invoices, prices, billing plans or calls to a payment provider.",
+			"No task touches payment or billing code, even if it sits in the same file or package as such code."),
+	}
+	qs["touches_secrets"] = Noul{
+		Instructions: "Does any task in plan change how secrets are stored, read or passed around?",
+		Criteria: yn(
+			"A task changes how API keys, tokens, passwords or encryption keys are stored, loaded, passed or logged.",
+			"No task changes secret handling; using an already configured secret unchanged does not count."),
 	}
 	qs["task_overlap"] = Noul{
 		Instructions: "Do two different tasks in plan implement the same behaviour?",
@@ -243,16 +303,17 @@ func doneGateState(in DoneGateInput) (map[string]any, map[string]Noul) {
 		"diff_trimmed":        trimmed,
 		"checks":              nonNilSlice(in.Checks),
 		"open_findings":       nonNilSlice(in.OpenFindings),
-		"architect_report":    in.ArchitectReport,
+		"architect_verdicts":  nonNilSlice(in.ArchitectVerdicts),
+		"deviations":          nonNilSlice(in.Deviations),
 		"foreman_notes":       in.ForemanNotes,
 	}
 	qs := map[string]Noul{}
 	for _, c := range in.Criteria {
 		qs["met_"+c.ID] = Noul{
-			Instructions: fmt.Sprintf("Does the evidence in diff, checks and architect_report show that acceptance_criteria.%s is satisfied?", c.ID),
+			Instructions: fmt.Sprintf("Does diff implement the behaviour that acceptance_criteria.%s describes?", c.ID),
 			Criteria: yn(
-				fmt.Sprintf("The diff contains code that implements acceptance_criteria.%s, and architect_report does not mark it not_met or unclear.", c.ID),
-				fmt.Sprintf("The diff has no code for acceptance_criteria.%s, or architect_report marks it not_met or unclear.", c.ID)),
+				fmt.Sprintf("The diff contains code that implements the behaviour acceptance_criteria.%s describes.", c.ID),
+				fmt.Sprintf("The diff contains no code for the behaviour acceptance_criteria.%s describes, or only code for something else.", c.ID)),
 		}
 	}
 	qs["deviates"] = Noul{
@@ -277,19 +338,46 @@ func nonNilSlice[T any](s []T) []T {
 	return s
 }
 
-// trimHunks keeps hunk text up to budget bytes across all files, in order,
-// cutting at a line boundary, and returns the paths whose hunks were cut.
+var generatedFiles = map[string]bool{
+	"package-lock.json": true, "yarn.lock": true, "pnpm-lock.yaml": true, "go.sum": true, "Cargo.lock": true,
+}
+
+func isGenerated(p string) bool {
+	if generatedFiles[path.Base(p)] {
+		return true
+	}
+	for _, seg := range strings.Split(path.Dir(p), "/") {
+		if seg == "vendor" || seg == "dist" {
+			return true
+		}
+	}
+	return false
+}
+
+// trimHunks keeps hunk text up to budget bytes across all files, in order.
+// Lock and generated files lose their hunks entirely, and one file keeps at
+// most budget/4 so it cannot starve the rest. Cuts land on a line boundary;
+// paths whose hunks were cut are returned.
 func trimHunks(files []FileDiff, budget int) ([]FileDiff, []string) {
 	out := make([]FileDiff, len(files))
 	trimmed := []string{}
 	left := budget
+	perFile := budget / 4
 	for i, f := range files {
 		out[i] = f
-		if len(f.Hunks) <= left {
+		if isGenerated(f.Path) {
+			if f.Hunks != "" {
+				out[i].Hunks = ""
+				trimmed = append(trimmed, f.Path)
+			}
+			continue
+		}
+		allowed := min(left, perFile)
+		if len(f.Hunks) <= allowed {
 			left -= len(f.Hunks)
 			continue
 		}
-		cut := f.Hunks[:left]
+		cut := f.Hunks[:allowed]
 		if j := strings.LastIndexByte(cut, '\n'); j >= 0 {
 			cut = cut[:j+1]
 		} else {
@@ -300,99 +388,133 @@ func trimHunks(files []FileDiff, budget int) ([]FileDiff, []string) {
 		}
 		out[i].Hunks = cut
 		trimmed = append(trimmed, f.Path)
-		left = 0
+		left -= len(cut)
 	}
 	return out, trimmed
 }
 
+// estimateTokens is len/4 of the unescaped JSON: HTML escaping would inflate
+// code-heavy diffs well past what the model actually counts.
 func estimateTokens(v any) int {
-	raw, _ := json.Marshal(v)
-	return len(raw) / 4
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(v)
+	return (b.Len() - 1) / 4
 }
 
-// overLimit reports whether a request would exceed 64k tokens, or any single
-// question plus the state would exceed 32k.
+// overLimit reports whether a request would exceed 90% of 64k tokens, or any
+// single question plus the state 90% of 32k.
 func overLimit(state any, questions map[string]Noul) bool {
 	s := estimateTokens(state)
-	if s+estimateTokens(questions) > maxRequestTokens {
+	if s+estimateTokens(questions) > maxRequestTokens*limitMarginPct/100 {
 		return true
 	}
 	for _, q := range questions {
-		if s+estimateTokens(q) > maxQuestionTokens {
+		if s+estimateTokens(q) > maxQuestionTokens*limitMarginPct/100 {
 			return true
 		}
 	}
 	return false
 }
 
-func has(answers map[string]float64, ids ...string) bool {
-	for _, id := range ids {
-		if _, ok := answers[id]; !ok {
-			return false
+// missingAnswers lists the required or asked question ids that have no answer.
+// Answers to questions that were not asked are ignored.
+func missingAnswers(required []string, asked map[string]Noul, answers map[string]float64) []string {
+	ids := map[string]bool{}
+	for _, id := range required {
+		if _, ok := asked[id]; !ok {
+			ids[id] = true
 		}
 	}
-	return true
-}
-
-func sortedIDs(answers map[string]float64) []string {
-	ids := make([]string, 0, len(answers))
-	for id := range answers {
-		ids = append(ids, id)
+	for id := range asked {
+		if _, ok := answers[id]; !ok {
+			ids[id] = true
+		}
 	}
-	sort.Strings(ids)
-	return ids
+	var missing []string
+	for id := range ids {
+		missing = append(missing, id)
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 func joinNotes(notes []string) string { return strings.Join(notes, "; ") }
 
-func gateFailure(judgeErr error, overLimit bool, missing bool) (string, bool) {
+func truncateText(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}
+
+func criterionLabels(cs []Criterion) map[string]string {
+	m := make(map[string]string, len(cs))
+	for _, c := range cs {
+		m[c.ID] = fmt.Sprintf("%s (%s)", c.ID, truncateText(c.Text, 80))
+	}
+	return m
+}
+
+func gateFailure(noCriteria bool, judgeErr error, overLimit bool, missing []string) (string, bool) {
 	switch {
+	case noCriteria:
+		return "no acceptance criteria to judge against", true
 	case judgeErr != nil:
 		return "judgment failed: " + judgeErr.Error(), true
 	case overLimit:
 		return "state is over the Jev context limit", true
-	case missing:
-		return "judgment is missing answers", true
+	case len(missing) > 0:
+		return "judgment is missing answers for " + strings.Join(missing, ", "), true
 	}
 	return "", false
 }
 
-func decidePlanGate(answers map[string]float64, judgeErr error, overLimit bool, planRevisions int) GateOutcome {
-	fixed := []string{"scope_creep", "touches_schema", "touches_sensitive", "task_overlap", "review_unresolved"}
-	if note, bad := gateFailure(judgeErr, overLimit, !has(answers, fixed...)); bad {
+// decidePlanGate applies the plan truth table (SPEC section 4), first match wins:
+//
+//	1 escalate: no acceptance criteria, Jev failed or not configured, state over
+//	  the limit, or any asked question has no answer
+//	2 escalate: touches_schema/authentication/authorization/payments/secrets is yes
+//	3 revise:   a covers_* is no, or scope_creep/task_overlap/review_unresolved is yes
+//	4 revise:   any answer is unsettled
+//	5 approve
+//
+// Rows 3 and 4 become escalate once in.PlanRevisions reaches maxPlanRevisions.
+// Only the questions in asked are read; answers to other ids are ignored.
+func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]float64, judgeErr error, overLimit bool) GateOutcome {
+	required := append(append([]string{}, planHardIDs...), planRiskIDs...)
+	for _, c := range in.Criteria {
+		required = append(required, "covers_"+c.ID)
+	}
+	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
 		return GateOutcome{GateEscalate, 1, note}
 	}
-	var hard, soft []string // row 3 triggers, row 4 triggers
-	var risky []string
-	for _, id := range sortedIDs(answers) {
-		v := judge(answers[id])
-		switch {
-		case id == "touches_schema" && v == vYes:
-			risky = append(risky, "a task changes a database schema or migration")
-		case id == "touches_sensitive" && v == vYes:
-			risky = append(risky, "a task changes authentication, payments or secrets handling")
-		case strings.HasPrefix(id, "covers_"):
-			c := strings.TrimPrefix(id, "covers_")
-			switch v {
-			case vNo:
-				hard = append(hard, fmt.Sprintf("acceptance criterion %s is not covered by any task", c))
-			case vUnsettled:
-				soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s is covered", c))
-			}
-		case id == "scope_creep", id == "task_overlap", id == "review_unresolved":
-			phrase := map[string]string{
-				"scope_creep":       "the plan includes work the request does not ask for",
-				"task_overlap":      "tasks overlap",
-				"review_unresolved": "the Foreman review reports a problem the plan does not address",
-			}[id]
-			switch v {
-			case vYes:
-				hard = append(hard, phrase)
-			case vUnsettled:
-				soft = append(soft, "unsettled: "+phrase)
-			}
-		case v == vUnsettled: // touches_schema / touches_sensitive
-			soft = append(soft, "unsettled: "+id)
+	var hard, soft, risky []string
+	labels := criterionLabels(in.Criteria)
+	for _, c := range in.Criteria {
+		switch judge(answers["covers_"+c.ID]) {
+		case vNo:
+			hard = append(hard, fmt.Sprintf("acceptance criterion %s is not covered by any task", labels[c.ID]))
+		case vUnsettled:
+			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s is covered by a task", labels[c.ID]))
+		}
+	}
+	for _, id := range planHardIDs {
+		switch judge(answers[id]) {
+		case vYes:
+			hard = append(hard, planPhrases[id])
+		case vUnsettled:
+			soft = append(soft, "it is unclear whether "+planPhrases[id])
+		}
+	}
+	for _, id := range planRiskIDs {
+		switch judge(answers[id]) {
+		case vYes:
+			risky = append(risky, planPhrases[id])
+		case vUnsettled:
+			soft = append(soft, "it is unclear whether "+planPhrases[id])
 		}
 	}
 	if len(risky) > 0 {
@@ -407,35 +529,90 @@ func decidePlanGate(answers map[string]float64, judgeErr error, overLimit bool, 
 	default:
 		return GateOutcome{GateApprove, 5, ""}
 	}
-	if planRevisions >= maxPlanRevisions {
+	if in.PlanRevisions >= maxPlanRevisions {
 		return GateOutcome{GateEscalate, row, note}
 	}
 	return GateOutcome{GateRevise, row, note}
 }
 
-func decideDoneGate(answers map[string]float64, judgeErr error, overLimit, checksFailed bool, openBlockers int, fixBudgetLeft bool) GateOutcome {
+// architectStatus reduces the Architect's verdicts to one status per
+// criterion: not_met beats unclear beats met; an unknown status or a missing
+// verdict is unclear.
+func architectStatus(verdicts []ArchitectVerdict, id string) (status string, given bool) {
+	rank := map[string]int{"met": 0, "unclear": 1, "not_met": 2}
+	status = "met"
+	for _, v := range verdicts {
+		if v.CriterionID != id {
+			continue
+		}
+		given = true
+		s := v.Status
+		if _, ok := rank[s]; !ok {
+			s = "unclear"
+		}
+		if rank[s] > rank[status] {
+			status = s
+		}
+	}
+	if !given {
+		return "unclear", false
+	}
+	return status, true
+}
+
+// decideDoneGate applies the done truth table (SPEC section 7), first match wins:
+//
+//	1 loop:     a check failed or a blocker finding is open (existing loops own it)
+//	2 escalate: no acceptance criteria, Jev failed or not configured, state over
+//	  the limit, or any asked question has no answer
+//	3 fix:      a met_* is no, deviates/notes_unresolved is yes, the Architect
+//	  marks a criterion not_met, or the Architect reports deviations
+//	4 fix:      any answer is unsettled, or the Architect is unclear about a
+//	  criterion or gave no verdict for it
+//	5 done
+//
+// Rows 3 and 4 become escalate when no fix budget is left. Only the
+// questions in asked are read; answers to other ids are ignored.
+func decideDoneGate(in DoneGateInput, asked map[string]Noul, answers map[string]float64, judgeErr error, overLimit, checksFailed bool, openBlockers int, fixBudgetLeft bool) GateOutcome {
 	if checksFailed || openBlockers > 0 {
 		return GateOutcome{GateLoop, 1, "a check failed or a blocker finding is open"}
 	}
-	if note, bad := gateFailure(judgeErr, overLimit, !has(answers, "deviates", "notes_unresolved")); bad {
+	required := append([]string{}, doneFixedIDs...)
+	for _, c := range in.Criteria {
+		required = append(required, "met_"+c.ID)
+	}
+	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
 		return GateOutcome{GateEscalate, 2, note}
 	}
 	var hard, soft []string
-	for _, id := range sortedIDs(answers) {
-		v := judge(answers[id])
-		if v == vNo && strings.HasPrefix(id, "met_") {
-			hard = append(hard, fmt.Sprintf("acceptance criterion %s is not shown as satisfied", strings.TrimPrefix(id, "met_")))
-			continue
+	labels := criterionLabels(in.Criteria)
+	for _, c := range in.Criteria {
+		switch judge(answers["met_"+c.ID]) {
+		case vNo:
+			hard = append(hard, fmt.Sprintf("the diff does not implement acceptance criterion %s", labels[c.ID]))
+		case vUnsettled:
+			soft = append(soft, fmt.Sprintf("it is unclear whether the diff implements acceptance criterion %s", labels[c.ID]))
 		}
-		if v == vYes && (id == "deviates" || id == "notes_unresolved") {
-			hard = append(hard, map[string]string{
-				"deviates":         "the diff changes behaviour the spec does not describe",
-				"notes_unresolved": "the Foreman notes report a problem the diff does not fix",
-			}[id])
-			continue
+		switch status, given := architectStatus(in.ArchitectVerdicts, c.ID); {
+		case status == "not_met":
+			hard = append(hard, fmt.Sprintf("the Architect reports acceptance criterion %s as not met", labels[c.ID]))
+		case status == "unclear" && given:
+			soft = append(soft, fmt.Sprintf("the Architect is unsure whether acceptance criterion %s is met", labels[c.ID]))
+		case !given:
+			soft = append(soft, fmt.Sprintf("the Architect gave no verdict for acceptance criterion %s", labels[c.ID]))
 		}
-		if v == vUnsettled {
-			soft = append(soft, "unsettled: "+id)
+	}
+	for _, id := range doneFixedIDs {
+		switch judge(answers[id]) {
+		case vYes:
+			hard = append(hard, doneHardPhrases[id])
+		case vUnsettled:
+			soft = append(soft, "it is unclear whether "+doneHardPhrases[id])
+		}
+	}
+	for _, d := range in.Deviations {
+		if strings.TrimSpace(d) != "" {
+			hard = append(hard, fmt.Sprintf("the Architect reports work outside the spec or plan: %s", truncateText(d, 80)))
 		}
 	}
 	row, note := 0, ""
@@ -454,18 +631,26 @@ func decideDoneGate(answers map[string]float64, judgeErr error, overLimit, check
 }
 
 // gateEvent builds the audit payload for an actor "jev" event: the exact
-// request, the answers and the table row, enough to replay the decision.
-func gateEvent(gate string, state any, questions map[string]Noul, answers map[string]float64, model string, out GateOutcome, judgeErr error) map[string]any {
+// request body that went on the wire, the answers and the table row, enough
+// to replay the decision. When nothing was sent (over the limit, no key) the
+// would-be state and questions are recorded as unsent_request.
+func gateEvent(gate string, state any, questions map[string]Noul, res JudgeResult, out GateOutcome, judgeErr error) map[string]any {
 	p := map[string]any{
-		"gate":     gate,
-		"request":  map[string]any{"state": state, "questions": questions},
-		"answers":  answers,
-		"model":    model,
-		"row":      out.Row,
-		"outcome":  out.Outcome,
-		"note":     out.Note,
-		"yes_over": yesAbove,
-		"no_under": noBelow,
+		"gate":            gate,
+		"answers":         res.Answers,
+		"requested_model": res.RequestedModel,
+		"model":           res.Model,
+		"usage":           res.Usage,
+		"row":             out.Row,
+		"outcome":         out.Outcome,
+		"note":            out.Note,
+		"yes_over":        yesAbove,
+		"no_under":        noBelow,
+	}
+	if len(res.Request) > 0 {
+		p["request"] = res.Request
+	} else {
+		p["unsent_request"] = map[string]any{"state": state, "questions": questions}
 	}
 	if judgeErr != nil {
 		p["error"] = judgeErr.Error()

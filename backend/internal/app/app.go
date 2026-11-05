@@ -303,8 +303,8 @@ func (j jevJudge) Ask(ctx context.Context, state any, questions map[string]useca
 		qs[id] = n
 	}
 	r, err := j.c.Noul(ctx, state, qs)
-	if err != nil {
-		return usecase.JudgeResult{}, err
-	}
-	return usecase.JudgeResult{Answers: r.Answers, Model: r.Model}, nil
+	return usecase.JudgeResult{
+		Answers: r.Answers, Model: r.Model, RequestedModel: r.RequestedModel, Request: r.Request,
+		Usage: usecase.Usage{InputTokens: r.Usage.InputTokens, OutputTokens: r.Usage.OutputTokens},
+	}, err
 }

@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -172,13 +173,24 @@ type Judge interface {
 }
 
 type Noul struct {
-	Instructions string
-	Criteria     *NoulCriteria
+	Instructions string        `json:"instructions"`
+	Criteria     *NoulCriteria `json:"criteria,omitempty"`
 }
 
-type NoulCriteria struct{ True, False string }
+type NoulCriteria struct {
+	True  string `json:"true"`
+	False string `json:"false"`
+}
 
+type Usage struct{ InputTokens, OutputTokens int }
+
+// JudgeResult carries the exact request body that was (or would have been)
+// sent, so the audit event can replay the decision. Request and
+// RequestedModel are set even when Ask fails.
 type JudgeResult struct {
-	Answers map[string]float64
-	Model   string
+	Answers        map[string]float64
+	Model          string // model that answered
+	RequestedModel string
+	Request        json.RawMessage
+	Usage          Usage
 }
