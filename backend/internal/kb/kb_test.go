@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -355,5 +356,77 @@ func TestReadsDoNotFollowSymlinks(t *testing.T) {
 	}
 	if _, _, err := ReadGitMarkdown(root, "--output=x", "docs/x.md"); err == nil {
 		t.Fatal("a non-hex commit must be rejected")
+	}
+}
+
+func TestGitPlaybookPathsReadsTheCommitNotTheWorkingTree(t *testing.T) {
+	dir := t.TempDir()
+	gitOut(t, dir, "init", "--quiet")
+	write := func(rel, content string) {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	commit := func() string {
+		gitOut(t, dir, "add", "-A")
+		gitOut(t, dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "c")
+		return strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD"))
+	}
+	write("docs/b.md", "---\ntype: Playbook\nrole: inspector\n---\n\nB\n")
+	write("a.md", "---\ntype: Playbook\nrole: foreman\n---\n\nA\n")
+	write("docs/guide.md", "---\ntype: Guide\n---\n\nG\n")
+	first := commit()
+	write("docs/c.md", "---\ntype: Playbook\nrole: inspector\n---\n\nC\n")
+
+	got, err := GitPlaybookPaths(dir, first)
+	if err != nil || fmt.Sprint(got) != "[a.md docs/b.md]" {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	gitOut(t, dir, "rm", "-q", "-f", "docs/b.md", "a.md")
+	empty := commit()
+	got, err = GitPlaybookPaths(dir, empty)
+	if err != nil || got == nil || len(got) != 1 || got[0] != "docs/c.md" {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	gitOut(t, dir, "rm", "-q", "-f", "docs/c.md")
+	none := commit()
+	got, err = GitPlaybookPaths(dir, none)
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("no matches must be an empty slice, got %#v, %v", got, err)
+	}
+	if _, err := GitPlaybookPaths(dir, "HEAD"); err == nil {
+		t.Fatal("a ref that is not a commit id must be rejected")
+	}
+}
+
+func TestGitPlaybookPathsFindsQuotedTypesAndUnusualPathsButSkipsVendor(t *testing.T) {
+	dir := t.TempDir()
+	gitOut(t, dir, "init", "--quiet")
+	for rel, content := range map[string]string{
+		"docs/café.md":         "---\ntype: \"Playbook\"\nrole: foreman\n---\nx\n",
+		"docs/tab rules.md":    "---\ntype:\tPlaybook\nrole: foreman\n---\nx\n",
+		"vendor/lib/review.md": "---\ntype: Playbook\nrole: inspector\n---\nx\n",
+	} {
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gitOut(t, dir, "add", "-A")
+	gitOut(t, dir, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "c")
+	sha := strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD"))
+	got, err := GitPlaybookPaths(dir, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"docs/café.md", "docs/tab rules.md"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

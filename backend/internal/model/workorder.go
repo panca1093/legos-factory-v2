@@ -100,6 +100,7 @@ type WorkOrder struct {
 	ClarifAnswer   string     `json:"clarif_answer,omitempty"`
 	Revision       int        `json:"revision"`
 	CommitSHA      string     `json:"commit_sha,omitempty"`
+	KBBaseSHA      string     `json:"-"`
 	SourceRef      string     `json:"source_ref,omitempty"` // e.g. jira:ABC-12
 	PRURL          string     `json:"pr_url,omitempty"`
 	PRRef          string     `json:"pr_ref,omitempty"`

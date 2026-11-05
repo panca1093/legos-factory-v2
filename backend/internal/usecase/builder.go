@@ -73,7 +73,7 @@ func (f *Foreman) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 			}
 		}
 	}
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentBuilder), "", woQuery(wo)+" "+f.taskText(ctx, wo.ID, job.TaskID))
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentBuilder), "", woQuery(wo)+" "+f.taskText(ctx, wo.ID, job.TaskID), woDir, wo.KBBaseSHA)
 	opts.Audit = audit
 	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job)+kbText, nil, job.TaskID, opts)
 	if err != nil {
