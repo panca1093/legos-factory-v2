@@ -422,7 +422,7 @@ func (b *Bundle) commit(message string) (string, error) {
 	if out, err := b.git("add", "-A"); err != nil {
 		return "", fmt.Errorf("git add: %v: %s", err, out)
 	}
-	if out, err := b.git("-c", "user.name=legos-factory", "-c", "user.email=factory@legos.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", message); err != nil {
+	if out, err := b.git("-c", "user.name=legos-factory", "-c", "user.email=factory@legos.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "-c", "gc.autoDetach=false", "commit", "-q", "-m", message); err != nil {
 		return "", fmt.Errorf("git commit: %v: %s", err, out)
 	}
 	b.head = b.revParse()
