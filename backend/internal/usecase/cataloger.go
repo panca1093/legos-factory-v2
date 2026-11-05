@@ -157,7 +157,7 @@ func knowledgePrompt(records []model.KnowledgeRecord) string {
 
 // handleCatalogSummary runs the Cataloger model once over a completed work
 // order's records and stores the result as an AI interpretation citing them.
-func (f *Foreman) handleCatalogSummary(ctx context.Context, job model.Job) error {
+func (f *Factory) handleCatalogSummary(ctx context.Context, job model.Job) error {
 	wo, err := f.WO.Get(ctx, job.WOID)
 	if err != nil {
 		return err

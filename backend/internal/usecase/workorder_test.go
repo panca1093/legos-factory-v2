@@ -42,9 +42,9 @@ type fixedSettings struct{}
 
 func (fixedSettings) Get(context.Context) (*model.Settings, error) { return &model.Settings{}, nil }
 
-func createOrder(t *testing.T, files map[string]string) (*Foreman, *cloneSandbox, *model.WorkOrder, error) {
+func createOrder(t *testing.T, files map[string]string) (*Factory, *cloneSandbox, *model.WorkOrder, error) {
 	t.Helper()
-	f, _, wos := monitorForeman(t, nil)
+	f, _, wos := monitorFactory(t, nil)
 	f.DataDir = t.TempDir()
 	f.Proj = &store.ProjectRepo{DB: wos.DB}
 	box := &cloneSandbox{dataDir: f.DataDir, files: files}

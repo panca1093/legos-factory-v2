@@ -11,22 +11,22 @@ import (
 // Architect: drafts the plan (or asks a human for a missing decision). It
 // never approves its own plan; the Foreman reviews it in review.go.
 
-func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
+func (f *Factory) handlePlan(ctx context.Context, job model.Job) error {
 	wo, err := f.WO.Get(ctx, job.WOID)
 	if err != nil {
 		return err
 	}
 	switch wo.State {
 	case model.StateCreated:
-		if err := f.step(ctx, wo, model.StateCreated, model.StateRequirement, "foreman", "Analyzing requirements"); err != nil {
+		if err := f.step(ctx, wo, model.StateCreated, model.StateRequirement, "factory", "Analyzing requirements"); err != nil {
 			return err
 		}
-		if err := f.step(ctx, wo, model.StateRequirement, model.StateDecomposition, "foreman", "Decomposing into tasks"); err != nil {
+		if err := f.step(ctx, wo, model.StateRequirement, model.StateDecomposition, "factory", "Decomposing into tasks"); err != nil {
 			return err
 		}
 	case model.StatePlanning:
 		// re-draft after a clarification, a Foreman REVISE or a human revision request
-		if err := f.step(ctx, wo, model.StatePlanning, model.StatePlanGeneration, "foreman", "Re-drafting plan"); err != nil {
+		if err := f.step(ctx, wo, model.StatePlanning, model.StatePlanGeneration, "factory", "Re-drafting plan"); err != nil {
 			return err
 		}
 	case model.StateRequirement, model.StateDecomposition, model.StatePlanGeneration:
@@ -117,7 +117,7 @@ func (f *Foreman) handlePlan(ctx context.Context, job model.Job) error {
 
 // askHuman records a clarification question and parks the order in
 // WAITING_FOR_HUMAN until AnswerClarification re-drafts the plan.
-func (f *Foreman) askHuman(ctx context.Context, wo *model.WorkOrder, actor, question string) error {
+func (f *Factory) askHuman(ctx context.Context, wo *model.WorkOrder, actor, question string) error {
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"clarif_question": question, "clarif_answer": "", "plan_review": ""}); err != nil {
 		return err
 	}
@@ -128,18 +128,18 @@ func (f *Foreman) askHuman(ctx context.Context, wo *model.WorkOrder, actor, ques
 			return err
 		}
 	}
-	return f.step(ctx, wo, model.StateArchitectReview, model.StateWaitingForHuman, "foreman", "Waiting for human clarification")
+	return f.step(ctx, wo, model.StateArchitectReview, model.StateWaitingForHuman, "factory", "Waiting for human clarification")
 }
 
 // toReview advances whichever pre-review planning state the WO is in to
 // ARCHITECT_REVIEW via SPEC_AND_PLAN_GENERATION.
-func (f *Foreman) toReview(ctx context.Context, wo *model.WorkOrder) error {
+func (f *Factory) toReview(ctx context.Context, wo *model.WorkOrder) error {
 	if wo.State == model.StateDecomposition {
-		if err := f.step(ctx, wo, model.StateDecomposition, model.StatePlanGeneration, "foreman", "Generating specification and plan"); err != nil {
+		if err := f.step(ctx, wo, model.StateDecomposition, model.StatePlanGeneration, "factory", "Generating specification and plan"); err != nil {
 			return err
 		}
 	}
-	return f.step(ctx, wo, model.StatePlanGeneration, model.StateArchitectReview, "foreman", "Plan drafted; architect review")
+	return f.step(ctx, wo, model.StatePlanGeneration, model.StateArchitectReview, "factory", "Plan drafted; architect review")
 }
 
 func taskList(tasks []model.Task) string {

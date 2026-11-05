@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { persona, money } from "../../../composables/presentation";
+import { persona, isCrew, money } from "../../../composables/presentation";
 import BrickBot from "../../../components/agents/BrickBot.vue";
 import type { WOEvent, Run, Task } from "../../../types/api";
 import AgentLiveCard from "./AgentLiveCard.vue";
@@ -57,7 +57,12 @@ const taskTitle = computed(
           <div class="event-body"><AgentRunCard :run="it" /></div>
         </article>
         <article v-else :key="it.event.id" class="event">
-          <BrickBot :persona="persona(it.event.actor)" class="compact" />
+          <BrickBot
+            v-if="isCrew(it.event.actor)"
+            :persona="persona(it.event.actor)"
+            class="compact"
+          />
+          <span v-else class="avatar system" aria-hidden="true">⚙</span>
           <div class="event-body">
             <div class="row between">
               <strong class="small">{{

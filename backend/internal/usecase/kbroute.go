@@ -38,7 +38,7 @@ func routingUsed(d model.KBDoc) map[string]any {
 // Reviewer Routing doc, the project's factory doc, then a draft proposed from
 // the path heuristics (still used until a human replaces it). The second
 // result describes the routing doc used, for the audit event.
-func (f *Foreman) reviewers(ctx context.Context, wo *model.WorkOrder, files []string) ([]SpecialistPick, map[string]any) {
+func (f *Factory) reviewers(ctx context.Context, wo *model.WorkOrder, files []string) ([]SpecialistPick, map[string]any) {
 	k := f.KB
 	if k == nil {
 		return SelectSpecialists(files), nil
@@ -83,7 +83,7 @@ func (f *Foreman) reviewers(ctx context.Context, wo *model.WorkOrder, files []st
 		return MatchReviewers(routes, files), map[string]any{"status": model.KBStatusDraft, "source": "heuristic"}
 	}
 	id := kb.DocID(model.KBSourceFactory, pid, rel)
-	f.event(wo.ID, "foreman", "routing_proposed",
+	f.event(wo.ID, "factory", "routing_proposed",
 		"No reviewer routing exists for this project; a draft was proposed from path heuristics. Review and approve it in Knowledge.",
 		map[string]any{"doc_id": id, "path": rel})
 	return MatchReviewers(routes, files), map[string]any{"id": id, "status": model.KBStatusDraft, "source": model.KBSourceFactory}

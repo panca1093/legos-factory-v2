@@ -131,7 +131,7 @@ func (s *Server) handlePlanGenerate(c echo.Context) error {
 		return errorJSON(c, http.StatusConflict, "INVALID_STATE_TRANSITION",
 			fmt.Sprintf("plan generation requires a pre-execution state, WO is %s", wo.State))
 	}
-	if _, err := s.Foreman.Sched.Enqueue(c.Request().Context(), usecase.JobPlan, wo.ID, "", map[string]any{}); err != nil {
+	if _, err := s.Factory.Sched.Enqueue(c.Request().Context(), usecase.JobPlan, wo.ID, "", map[string]any{}); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not enqueue planning job")
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "queued"})
@@ -154,9 +154,9 @@ func (s *Server) handlePlanDecision(c echo.Context) error {
 	var err error
 	switch strings.ToLower(req.Decision) {
 	case "approve":
-		err = s.Foreman.ApprovePlan(c.Request().Context(), woID)
+		err = s.Factory.ApprovePlan(c.Request().Context(), woID)
 	case "revise":
-		err = s.Foreman.RevisePlan(c.Request().Context(), woID, req.Notes)
+		err = s.Factory.RevisePlan(c.Request().Context(), woID, req.Notes)
 	default:
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", "decision must be approve or revise")
 	}
@@ -181,7 +181,7 @@ func (s *Server) handleClarification(c echo.Context) error {
 	if wo.CreatedBy != u.ID && !u.Role.IsAdmin() {
 		return errorJSON(c, http.StatusForbidden, "FORBIDDEN", "only the work order owner or an admin may clarify")
 	}
-	if err := s.Foreman.AnswerClarification(c.Request().Context(), wo.ID, req.Answer); err != nil {
+	if err := s.Factory.AnswerClarification(c.Request().Context(), wo.ID, req.Answer); err != nil {
 		return mapDomainError(c, err)
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "accepted"})
@@ -197,14 +197,14 @@ func (s *Server) handlePRDecision(c echo.Context) error {
 	default:
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", "decision must be approve, request_changes or decline")
 	}
-	if err := s.Foreman.HumanPRDecision(c.Request().Context(), c.Param("id"), strings.ToLower(req.Decision), req.Reason); err != nil {
+	if err := s.Factory.HumanPRDecision(c.Request().Context(), c.Param("id"), strings.ToLower(req.Decision), req.Reason); err != nil {
 		return mapDomainError(c, err)
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
 func (s *Server) handleCancel(c echo.Context) error {
-	if err := s.Foreman.Cancel(c.Request().Context(), c.Param("id")); err != nil {
+	if err := s.Factory.Cancel(c.Request().Context(), c.Param("id")); err != nil {
 		return mapDomainError(c, err)
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "cancelled"})
@@ -398,28 +398,28 @@ func (s *Server) handlePause(c echo.Context) error {
 	if reason == "" {
 		reason = "Paused by " + currentUser(c).Name
 	}
-	if err := s.Foreman.Pause(c.Request().Context(), woFrom(c).ID, "human", reason); err != nil {
+	if err := s.Factory.Pause(c.Request().Context(), woFrom(c).ID, "human", reason); err != nil {
 		return mapDomainError(c, err)
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "paused"})
 }
 
 func (s *Server) handleResume(c echo.Context) error {
-	if err := s.Foreman.Resume(c.Request().Context(), woFrom(c).ID, "human"); err != nil {
+	if err := s.Factory.Resume(c.Request().Context(), woFrom(c).ID, "human"); err != nil {
 		return mapDomainError(c, err)
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "resumed"})
 }
 
 func (s *Server) handleRetryTask(c echo.Context) error {
-	if err := s.Foreman.RetryTask(c.Request().Context(), woFrom(c).ID, c.Param("task_id"), "human"); err != nil {
+	if err := s.Factory.RetryTask(c.Request().Context(), woFrom(c).ID, c.Param("task_id"), "human"); err != nil {
 		return mapDomainError(c, err)
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "queued"})
 }
 
 func (s *Server) handleRetryRemediation(c echo.Context) error {
-	if err := s.Foreman.RetryRemediation(c.Request().Context(), woFrom(c).ID, "human"); err != nil {
+	if err := s.Factory.RetryRemediation(c.Request().Context(), woFrom(c).ID, "human"); err != nil {
 		return mapDomainError(c, err)
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "queued"})
@@ -432,7 +432,7 @@ func (s *Server) handleSteer(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
-	if err := s.Foreman.Steer(c.Request().Context(), woFrom(c).ID, c.Param("run_id"), req.Message, "human"); err != nil {
+	if err := s.Factory.Steer(c.Request().Context(), woFrom(c).ID, c.Param("run_id"), req.Message, "human"); err != nil {
 		return mapDomainError(c, err)
 	}
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "sent"})
@@ -443,7 +443,7 @@ func (s *Server) handleFindingDecision(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
-	fd, err := s.Foreman.DecideFinding(c.Request().Context(), woFrom(c).ID, c.Param("finding_id"), currentUser(c).ID, req)
+	fd, err := s.Factory.DecideFinding(c.Request().Context(), woFrom(c).ID, c.Param("finding_id"), currentUser(c).ID, req)
 	if err != nil {
 		return mapDomainError(c, err)
 	}

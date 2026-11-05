@@ -25,7 +25,7 @@ type Server struct {
 	Quality      *store.QualityRepo
 	Jobs         *store.JobRepo
 	Settings     *store.SettingsRepo
-	Foreman      *usecase.Foreman
+	Factory      *usecase.Factory
 	Projects     *usecase.Projects
 	WorkOrders   *usecase.WorkOrders
 	Integrations *usecase.Integrations

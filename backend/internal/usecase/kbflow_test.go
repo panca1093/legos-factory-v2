@@ -61,7 +61,7 @@ type filesSandbox struct {
 func (s filesSandbox) ChangedFiles(context.Context, string) ([]string, error) { return s.files, nil }
 
 type rig struct {
-	f    *Foreman
+	f    *Factory
 	wo   *model.WorkOrder
 	wos  *store.WorkOrderRepo
 	db   *sql.DB
@@ -73,7 +73,7 @@ type rig struct {
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	h := &replyHarness{}
-	f, wo, wos := monitorForeman(t, h)
+	f, wo, wos := monitorFactory(t, h)
 	db := f.Runs.(*store.RunRepo).DB
 	bundle, err := kb.OpenBundle(t.TempDir(), true)
 	if err != nil {

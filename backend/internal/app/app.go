@@ -130,7 +130,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		return usecase.SplitModelRef(usecase.ResolveModel(role, wo, s, modelDefaults))
 	}
 
-	foreman := &usecase.Foreman{
+	factory := &usecase.Factory{
 		WO: woRepo, Runs: runRepo, Findings: findingRepo, Quality: qualityRepo,
 		Proj:    projRepo,
 		Resolve: resolve, Model: modelFor,
@@ -142,8 +142,8 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	}
 
 	sched := scheduler.New(jobRepo, log, cfg.MaxConcurrentRuns)
-	foreman.Sched = sched
-	for kind, h := range foreman.Handlers() {
+	factory.Sched = sched
+	for kind, h := range factory.Handlers() {
 		sched.Register(kind, h)
 	}
 
@@ -160,7 +160,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Integrations = integrations
 	srv.Catalog = catalog
 	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo, WO: woRepo, DataDir: cfg.DataDir}
-	srv.Foreman = foreman
+	srv.Factory = factory
 	srv.Bus = bus
 	srv.Auth = auth
 	if cfg.AuthMode == "oidc" {
@@ -204,7 +204,7 @@ func (a *App) Start(ctx context.Context) error {
 		return err
 	}
 	a.Sched.Start(ctx)
-	if err := a.Server.Foreman.ResumeOnStart(ctx); err != nil {
+	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {
 		return err
 	}
 	// apply persisted budget limit to the tracker

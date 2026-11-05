@@ -44,7 +44,7 @@ type fakeSession struct{}
 
 func (fakeSession) ID() string { return "ses" }
 
-func monitorForeman(t *testing.T, h Harness) (*Foreman, *model.WorkOrder, *store.WorkOrderRepo) {
+func monitorFactory(t *testing.T, h Harness) (*Factory, *model.WorkOrder, *store.WorkOrderRepo) {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "factory.db"))
 	if err != nil {
@@ -63,7 +63,7 @@ func monitorForeman(t *testing.T, h Harness) (*Foreman, *model.WorkOrder, *store
 	if err := wos.Create(ctx, wo); err != nil {
 		t.Fatal(err)
 	}
-	f := &Foreman{
+	f := &Factory{
 		WO: wos, Runs: &store.RunRepo{DB: db}, Bus: nopBus{}, Log: slog.Default(),
 		Resolve:    func(model.AgentRole, *model.WorkOrder) Harness { return h },
 		StallAfter: 60 * time.Millisecond,
@@ -88,7 +88,7 @@ func TestRunAgentReportsStepsAndStall(t *testing.T) {
 		},
 		idle: 200 * time.Millisecond,
 	}
-	f, wo, wos := monitorForeman(t, h)
+	f, wo, wos := monitorFactory(t, h)
 	_, runID, err := f.runAgent(context.Background(), wo, model.AgentArchitect, "p", "m", "prompt", nil, "", runOpts{})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestRunAgentReportsStepsAndStall(t *testing.T) {
 
 func TestRunAgentFailureEndsTheRun(t *testing.T) {
 	h := &steppingHarness{err: errors.New("opencode execution timed out")}
-	f, wo, wos := monitorForeman(t, h)
+	f, wo, wos := monitorFactory(t, h)
 	if _, _, err := f.runAgent(context.Background(), wo, model.AgentForeman, "p", "m", "prompt", nil, "", runOpts{}); err == nil {
 		t.Fatal("expected the harness error")
 	}
