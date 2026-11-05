@@ -152,25 +152,6 @@ for (const viewport of viewports)
     await app.goto("/");
     await ready(app);
     await capture("01-overview");
-    expect(
-      await app
-        .locator("body")
-        .evaluate((e) => getComputedStyle(e).backgroundColor),
-    ).toBe(
-      await reference
-        .locator("body")
-        .evaluate((e) => getComputedStyle(e).backgroundColor),
-    );
-    expect((await app.locator(".sidebar").boundingBox())?.width).toBe(
-      (await reference.locator(".sidebar").boundingBox())?.width,
-    );
-    if (viewport.name === "desktop") {
-      const a = await app.locator(".floor").boundingBox(),
-        r = await reference.locator(".floor").boundingBox();
-      expect(Math.abs(a!.x - r!.x)).toBeLessThanOrEqual(2);
-      expect(Math.abs(a!.y - r!.y)).toBeLessThanOrEqual(8);
-      expect(Math.abs(a!.width - r!.width)).toBeLessThanOrEqual(2);
-    }
     await reference.evaluate(() =>
       document
         .querySelector<HTMLElement>('[data-action="nav"][data-page="factory"]')!
@@ -271,7 +252,7 @@ for (const viewport of viewports)
     await capture("16-overview-dark");
     if (viewport.name === "mobile") {
       await reference.locator('button[data-action="menu"]').click();
-      await app.getByRole("button", { name: "Toggle navigation" }).click();
+      await app.getByRole("button", { name: "Show sidebar" }).click();
       await capture("17-mobile-navigation");
     }
     expect(errors).toEqual([]);

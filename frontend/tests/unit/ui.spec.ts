@@ -1,0 +1,20 @@
+import { mount } from "@vue/test-utils";
+import { afterEach, expect, it, vi } from "vitest";
+import Toast from "../../src/components/ui/Toast.vue";
+import { useToast } from "../../src/composables/useToast";
+afterEach(() => vi.useRealTimers());
+it("shows a toast, runs its undo action once and expires on its own", async () => {
+  vi.useFakeTimers();
+  const undo = vi.fn();
+  const w = mount(Toast);
+  useToast().toast("Archived", undo);
+  useToast().toast("Saved");
+  await w.vm.$nextTick();
+  expect(w.findAll(".lg-toast")).toHaveLength(2);
+  await w.find(".lg-toast button").trigger("click");
+  expect(undo).toHaveBeenCalledTimes(1);
+  expect(w.findAll(".lg-toast")).toHaveLength(1);
+  vi.advanceTimersByTime(4000);
+  await w.vm.$nextTick();
+  expect(w.findAll(".lg-toast")).toHaveLength(0);
+});

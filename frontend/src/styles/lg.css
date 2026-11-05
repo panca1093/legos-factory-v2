@@ -1,0 +1,371 @@
+.lg-btn,
+.lg-icon-btn,
+.lg-seg a,
+.lg-field {
+  -webkit-font-smoothing: antialiased;
+}
+.lg-btn:focus-visible,
+.lg-icon-btn:focus-visible,
+.lg-seg a:focus-visible,
+.lg-nav a:focus-visible,
+.lg-menu button:focus-visible,
+.lg-menu a:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
+.lg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--control-height);
+  padding: 9px 15px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 550;
+  white-space: nowrap;
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    background var(--dur-fast),
+    box-shadow var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.lg-btn:hover {
+  background: var(--surface-2);
+  transform: translateY(-1px);
+}
+.lg-btn:active {
+  transform: translateY(0) scale(0.97);
+}
+.lg-btn.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--on-brand);
+}
+.lg-btn.primary:hover {
+  background: var(--brand-hover);
+  box-shadow: 0 6px 16px rgba(5, 31, 32, 0.18);
+}
+.lg-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.lg-btn.ghost:hover {
+  background: var(--surface-2);
+}
+.lg-btn.danger {
+  color: var(--danger);
+}
+.lg-btn.pill {
+  border-radius: var(--radius-full);
+}
+.lg-btn.small {
+  min-height: var(--control-height-sm);
+  padding: 6px 11px;
+  font-size: 12px;
+}
+.lg-btn[disabled] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.lg-icon-btn {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  color: var(--ink);
+  transition:
+    background var(--dur-fast),
+    transform var(--dur-fast) var(--ease-out);
+}
+.lg-icon-btn:hover {
+  background: var(--surface-2);
+}
+.lg-icon-btn:active {
+  transform: scale(0.92);
+}
+.lg-icon-btn .icon {
+  width: 18px;
+  height: 18px;
+}
+.lg-icon-btn .badge {
+  position: absolute;
+  top: 8px;
+  right: 9px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--crew-foreman);
+  border: 2px solid var(--surface);
+  animation: lg-pop var(--dur) var(--ease-spring);
+}
+
+.lg-seg {
+  position: relative;
+  display: inline-flex;
+  padding: 4px;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+}
+.lg-seg .thumb {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 0;
+  border-radius: var(--radius-full);
+  background: var(--brand);
+  transition:
+    transform var(--dur) var(--ease-out),
+    width var(--dur) var(--ease-out);
+}
+.lg-seg a {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  padding: 7px 16px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--muted);
+  transition: color var(--dur);
+}
+.lg-seg a:hover {
+  color: var(--ink);
+}
+.lg-seg a.active {
+  color: var(--on-brand);
+}
+
+.lg-nav {
+  display: grid;
+  gap: 2px;
+}
+.lg-nav-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  margin: var(--space-5) var(--space-3) var(--space-2);
+}
+.lg-nav a {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 9px var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  font-weight: 550;
+  min-width: 0;
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.lg-nav a:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.lg-nav a.active {
+  background: var(--tint);
+  color: var(--accent);
+}
+.lg-nav .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 3px;
+  background: var(--c);
+  flex-shrink: 0;
+}
+.lg-nav .t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lg-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 650;
+  background: var(--tint);
+  color: var(--accent);
+  flex-shrink: 0;
+  border: 0;
+  padding: 0;
+}
+
+.lg-field {
+  width: 100%;
+  min-height: 40px;
+  padding: 10px 12px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  transition:
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast);
+}
+.lg-field::placeholder {
+  color: var(--muted);
+}
+.lg-field:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.lg-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.lg-search .icon {
+  position: absolute;
+  left: 14px;
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.lg-search .lg-field {
+  padding-left: 40px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  border-color: transparent;
+}
+
+.lg-pop {
+  position: relative;
+}
+.lg-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 230px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+  transform-origin: top right;
+  animation: lg-menu var(--dur) var(--ease-out);
+  z-index: 30;
+}
+.lg-menu a,
+.lg-menu button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  text-align: left;
+  border: 0;
+  background: none;
+  padding: 9px 10px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  color: var(--ink);
+}
+.lg-menu a:hover,
+.lg-menu button:hover {
+  background: var(--surface-2);
+}
+.lg-menu .head {
+  display: grid;
+  padding: 8px 10px 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.lg-menu .head small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.lg-toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: grid;
+  gap: var(--space-2);
+  z-index: 90;
+  justify-items: center;
+  max-width: 92vw;
+}
+.lg-toast {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  background: var(--ink);
+  color: var(--canvas);
+  padding: 10px 12px 10px 16px;
+  border-radius: var(--radius-full);
+  font-size: 14px;
+  font-weight: 550;
+  box-shadow: var(--shadow-pop);
+  animation: lg-rise var(--dur) var(--ease-out) both;
+}
+.lg-toast button {
+  border: 0;
+  background: none;
+  color: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  padding: 2px 6px;
+}
+
+@keyframes lg-pop {
+  from {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes lg-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes lg-menu {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lg-btn,
+  .lg-icon-btn,
+  .lg-seg .thumb,
+  .lg-menu,
+  .lg-toast {
+    animation-duration: 1ms !important;
+    transition-duration: 1ms !important;
+  }
+}

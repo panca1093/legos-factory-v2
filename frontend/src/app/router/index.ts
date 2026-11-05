@@ -14,6 +14,11 @@ export const router = createRouter({
           component: () => import("../../features/overview/OverviewView.vue"),
         },
         {
+          path: "chats",
+          name: "chats",
+          component: () => import("../../features/chats/ChatsView.vue"),
+        },
+        {
           path: "factory",
           name: "factory",
           component: () => import("../../features/factory/FactoryView.vue"),
