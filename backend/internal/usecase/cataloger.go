@@ -69,6 +69,9 @@ func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome s
 		note = "summary document: " + rel
 	}
 	f.Catalog.Completed(ctx, wo, outcome, note)
+	if outcome == "READY" {
+		f.portCodeMap(ctx, wo)
+	}
 }
 
 var decisionEventKinds = []string{
@@ -144,7 +147,7 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 	}
 	openSection := fitLines("## Open items and follow-up", open, 450)
 
-	decLines := f.decisionLines(ctx, wo.ID)
+	decLines := append(specDecisions(wo.Spec), f.decisionLines(ctx, wo.ID)...)
 	if len(decLines) == 0 {
 		decLines = []string{"none recorded"}
 	}

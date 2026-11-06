@@ -215,6 +215,10 @@ func (k *KB) Context(ctx context.Context, projectID, role, specialty, query, dir
 			b.WriteString("\n")
 		}
 	}
+	if cm := k.codeMapPointer(ctx, projectID); cm != "" {
+		b.WriteString(cm)
+		ids = append(ids, kb.DocID(model.KBSourceFactory, projectID, codeMapPath(projectID)))
+	}
 	if len(inlined) > 0 || len(hits) > 0 {
 		b.WriteString("\n" + kbPrecedence + "\n")
 	}
