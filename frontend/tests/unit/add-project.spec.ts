@@ -172,7 +172,10 @@ it("lists child repos checked by default and adds only the selected ones", async
     .mockResolvedValue(projects[0]);
   await click("Add 1 project");
   expect(create).toHaveBeenCalledTimes(1);
-  expect(create).toHaveBeenCalledWith({ name: "a", repo_url: "/code/a" });
+  expect(create).toHaveBeenCalledWith(
+    { name: "a", repo_url: "/code/a" },
+    { refresh: false },
+  );
   w.unmount();
 });
 it("explains a plain folder and offers no add button", async () => {
@@ -238,5 +241,134 @@ it("creates a new project via init", async () => {
   await click("Create");
   expect(body()).toContain("/code/fresh");
   expect(body()).toContain("Local only");
+  w.unmount();
+});
+const submitForm = async () => {
+  document
+    .querySelector("#project-form")!
+    .dispatchEvent(new Event("submit", { cancelable: true }));
+  await flushPromises();
+};
+it("wires every form step to a submit button so Enter is the primary action", async () => {
+  const w = await render();
+  await click("Clone from URL");
+  const primary = () =>
+    [
+      ...document.querySelectorAll<HTMLButtonElement>(".modal-footer button"),
+    ].at(-1)!;
+  expect(primary().type).toBe("submit");
+  expect(primary().getAttribute("form")).toBe("project-form");
+  await set("#ap-url", "https://github.com/acme/app.git");
+  await set("#ap-parent", "/code");
+  routes["/api/v1/local/clone"] = () => json(repo());
+  await submitForm();
+  expect(body()).toContain("acme/app");
+  const create = vi
+    .spyOn(useFactory(), "createProject")
+    .mockResolvedValue(projects[0]);
+  expect(primary().getAttribute("form")).toBe("project-form");
+  await submitForm();
+  expect(create).toHaveBeenCalledWith({ name: "app", repo_url: "/code/app" });
+  w.unmount();
+});
+it("keeps the failed repos selected when adding several fails midway, and refreshes once", async () => {
+  const w = await render();
+  const a = repo({ path: "/code/a", name: "a" });
+  const b = repo({ path: "/code/b", name: "b" });
+  await browse(
+    repo({ is_git: false, name: "code", path: "/code", repos: [a, b] }),
+    "/code",
+  );
+  const f = useFactory();
+  const create = vi
+    .spyOn(f, "createProject")
+    .mockResolvedValueOnce(projects[0])
+    .mockRejectedValueOnce(new Error("disk full"));
+  await click("Add 2 projects");
+  expect(create).toHaveBeenCalledTimes(2);
+  expect(body()).toContain("disk full");
+  expect(body()).toContain("Add 1 project");
+  expect(w.emitted("created")).toBeUndefined();
+  expect(f.refreshProjects).toHaveBeenCalledTimes(1);
+  w.unmount();
+});
+it("reports a bind failure, then Close finishes with the created project", async () => {
+  const f = useFactory();
+  f.connections = [
+    {
+      id: "c1",
+      name: "Atlas",
+      provider: "github",
+      scope: "shared",
+      status: "active",
+    },
+  ] as never;
+  const w = await render();
+  await browse(repo());
+  const select = document.querySelector("#prj-conn") as HTMLSelectElement;
+  select.value = "c1";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await flushPromises();
+  expect(body()).toContain("via connection Atlas");
+  expect(body()).not.toContain("via your gh login");
+  await click("Add project");
+  expect(body()).toContain("Remote repository must look like owner/repo");
+  await set("#prj-remote", "acme/app");
+  vi.spyOn(f, "createProject").mockResolvedValue(projects[0]);
+  vi.spyOn(f, "bindProject").mockRejectedValue(new Error("bad token"));
+  await click("Add project");
+  expect(body()).toContain("Project created without a repository connection");
+  expect(w.emitted("created")).toBeUndefined();
+  await click("Close");
+  expect(w.emitted("created")?.[0]).toEqual([projects[0].id]);
+  w.unmount();
+});
+it("shows an inspect error on the current step instead of the paste form", async () => {
+  const w = await render();
+  routes["/api/v1/local/pick-folder"] = () => json({ path: "/root" });
+  routes["/api/v1/local/inspect"] = () => err(403, "PERMISSION_DENIED");
+  await click("Browse folder");
+  expect(body()).toContain("PERMISSION_DENIED");
+  expect(body()).toContain("Browse folder");
+  expect(document.querySelector("#ap-path")).toBeNull();
+  w.unmount();
+});
+it("ignores a picker result that lands after Cancel", async () => {
+  const w = await render();
+  let release!: () => void;
+  routes["/api/v1/local/pick-folder"] = () =>
+    new Promise((res) => {
+      release = () => res(json({ path: "/code/app" }));
+    });
+  routes["/api/v1/local/inspect"] = () => json(repo());
+  void click("Browse folder");
+  await flushPromises();
+  await click("Cancel");
+  release();
+  await flushPromises();
+  expect(body()).toContain("Browse folder");
+  expect(calls.some((c) => c.includes("inspect"))).toBe(false);
+  w.unmount();
+});
+it("lets a slow clone be cancelled", async () => {
+  const w = await render();
+  await click("Clone from URL");
+  await set("#ap-url", "https://github.com/acme/app.git");
+  await set("#ap-parent", "/code");
+  let signal!: AbortSignal;
+  routes["/api/v1/local/clone"] = (_u, init) => {
+    signal = init!.signal!;
+    return new Promise((_r, rej) =>
+      signal.addEventListener("abort", () =>
+        rej(new DOMException("aborted", "AbortError")),
+      ),
+    );
+  };
+  void click("Clone");
+  await flushPromises();
+  expect(body()).toContain("Working on it");
+  await click("Cancel");
+  expect(signal.aborted).toBe(true);
+  expect(document.querySelector("#ap-url")).toBeTruthy();
   w.unmount();
 });

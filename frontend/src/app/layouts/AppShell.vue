@@ -218,11 +218,12 @@ async function logout() {
             :to="{ path: '/factory', query: { project: p.id } }"
             ><i class="dot" :style="{ '--c': projectColor(i) }"></i
             ><span class="t">{{ p.name }}</span
-            ><Laptop
-              class="icon proj-local"
+            ><span
+              class="proj-local"
               :title="publishLabel(p)"
-              aria-label="On this computer"
-          /></RouterLink>
+              aria-hidden="true"
+              ><Laptop class="icon" /></span
+          ></RouterLink>
           <p v-if="!factory.projects.length" class="empty-note">
             Projects appear here.
           </p>

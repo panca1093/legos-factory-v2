@@ -54,9 +54,11 @@ const form = reactive({
 });
 const clone = reactive({ url: "", parent: "" });
 const fresh = reactive({ name: "", parent: "" });
-const browseBtn = ref<HTMLButtonElement>();
+const browseBtn = ref<HTMLButtonElement>(),
+  root = ref<HTMLElement>();
 let controller: AbortController | null = null;
 let intent: Intent = "browse";
+let workBack: Step = "home";
 const gitConnections = computed(() =>
   factory.connections.filter(
     (c) =>
@@ -83,6 +85,16 @@ const needsGh = computed(() =>
 );
 const fixCommand = computed(() =>
   gh.value?.installed ? "gh auth login" : "brew install gh && gh auth login",
+);
+const viaConnection = computed(
+  () =>
+    (kind.value === "repo" || step.value === "manual") &&
+    !!form.git_connection_id,
+);
+const connectionName = computed(
+  () =>
+    gitConnections.value.find((c) => c.id === form.git_connection_id)?.name ??
+    "connection",
 );
 const addable = computed(() =>
   kind.value === "many"
@@ -123,8 +135,6 @@ async function probe() {
   try {
     gh.value = await api.get<LocalGh>("/api/v1/local/gh");
     step.value = "home";
-    await nextTick();
-    setTimeout(() => browseBtn.value?.focus());
   } catch {
     step.value = "manual";
   }
@@ -150,41 +160,62 @@ watch(
   },
   { immediate: true },
 );
+watch(step, async () => {
+  await nextTick();
+  setTimeout(() => {
+    if (step.value === "home") return browseBtn.value?.focus();
+    root.value
+      ?.querySelector<HTMLElement>(
+        '.ap-wait button, input:not([type="checkbox"]), select, .ap-bulk button, summary',
+      )
+      ?.focus();
+  });
+});
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", enter);
   controller?.abort();
 });
+const aborted = (e: unknown) =>
+  e instanceof DOMException && e.name === "AbortError";
 async function choose(target: Intent): Promise<string | null> {
+  if (controller) return null;
   intent = target;
   error.value = "";
   const before = step.value;
   step.value = "waiting";
-  controller = new AbortController();
+  const ctl = (controller = new AbortController());
   try {
     const res = await api.post<{ path?: string; cancelled?: boolean }>(
       "/api/v1/local/pick-folder",
       {},
-      controller.signal,
+      ctl.signal,
     );
+    if (ctl.signal.aborted) return null;
     step.value = before;
     return res.cancelled || !res.path ? null : res.path;
   } catch (e) {
+    if (ctl.signal.aborted || aborted(e)) return null;
     if (e instanceof ApiError && e.status === 501) {
       canPick.value = false;
       step.value = target === "browse" ? "paste" : before;
     } else {
-      if (!(e instanceof DOMException && e.name === "AbortError"))
-        error.value = message(e);
+      error.value = message(e);
       step.value = before;
     }
     return null;
   } finally {
-    controller = null;
+    if (controller === ctl) controller = null;
   }
 }
 function cancelWait() {
   controller?.abort();
+  controller = null;
   step.value = intent === "browse" ? "home" : intent;
+}
+function cancelWork() {
+  controller?.abort();
+  controller = null;
+  step.value = workBack;
 }
 async function browse() {
   if (!canPick.value) {
@@ -202,39 +233,41 @@ function show(result: LocalInspect) {
     .map((r) => r.path);
   step.value = "confirm";
 }
-async function inspect(path: string) {
-  step.value = "working";
+async function work<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  then: (r: T) => void,
+) {
+  if (controller) return;
   error.value = "";
+  workBack = step.value;
+  step.value = "working";
+  const ctl = (controller = new AbortController());
   try {
-    show(
-      await api.get<LocalInspect>(
-        `/api/v1/local/inspect?path=${encodeURIComponent(path)}`,
-      ),
-    );
+    const r = await run(ctl.signal);
+    if (!ctl.signal.aborted) then(r);
   } catch (e) {
+    if (ctl.signal.aborted || aborted(e)) return;
     error.value = message(e);
-    step.value = "paste";
+    step.value = workBack;
+  } finally {
+    if (controller === ctl) controller = null;
   }
 }
+const inspect = (path: string) =>
+  work(
+    (signal) =>
+      api.get<LocalInspect>(
+        `/api/v1/local/inspect?path=${encodeURIComponent(path)}`,
+        signal,
+      ),
+    show,
+  );
 async function pickParent(into: { parent: string }, target: Intent) {
   const path = await choose(target);
   if (path) into.parent = path;
 }
-async function runLocal(path: string, payload: Record<string, string>) {
-  if (busy.value) return;
-  error.value = "";
-  busy.value = true;
-  const before = step.value;
-  step.value = "working";
-  try {
-    show(await api.post<LocalInspect>(path, payload));
-  } catch (e) {
-    error.value = message(e);
-    step.value = before;
-  } finally {
-    busy.value = false;
-  }
-}
+const runLocal = (path: string, payload: Record<string, string>) =>
+  work((signal) => api.post<LocalInspect>(path, payload, signal), show);
 function submitClone() {
   if (!clone.url.trim() || !clone.parent.trim()) {
     error.value = "Repository URL and parent folder are required.";
@@ -277,32 +310,34 @@ async function submit() {
   }
   error.value = "";
   const manual = step.value === "manual";
-  if (manual) {
-    if (!form.name.trim() || !form.repo_url.trim()) {
-      error.value = "Project name and repository are required.";
-      return;
-    }
-    if (
-      form.git_connection_id &&
-      !/^[\w.-]+(\/[\w.-]+)+$/.test(form.remote_repo.trim())
-    ) {
-      error.value = "Remote repository must look like owner/repo.";
-      return;
-    }
+  if (manual && (!form.name.trim() || !form.repo_url.trim())) {
+    error.value = "Project name and repository are required.";
+    return;
+  }
+  if (
+    viaConnection.value &&
+    !/^[\w.-]+(\/[\w.-]+)+$/.test(form.remote_repo.trim())
+  ) {
+    error.value = "Remote repository must look like owner/repo.";
+    return;
   }
   busy.value = true;
   try {
     if (kind.value === "many" && !manual) {
       let first = "";
-      for (const r of info.value!.repos.filter((r) =>
-        selected.value.includes(r.path),
-      )) {
-        const p = await factory.createProject({
-          name: r.name,
-          repo_url: r.path,
-        });
-        first ||= p.id;
-        selected.value = selected.value.filter((s) => s !== r.path);
+      try {
+        for (const r of info.value!.repos.filter((r) =>
+          selected.value.includes(r.path),
+        )) {
+          const p = await factory.createProject(
+            { name: r.name, repo_url: r.path },
+            { refresh: false },
+          );
+          first ||= p.id;
+          selected.value = selected.value.filter((s) => s !== r.path);
+        }
+      } finally {
+        await factory.refreshProjects().catch(() => {});
       }
       emit("created", first);
       return;
@@ -371,7 +406,7 @@ function close() {
 </script>
 <template>
   <AppDialog :open="open" :title="title" @close="close">
-    <div class="ap">
+    <div ref="root" class="ap">
       <div v-if="step === 'probing'" class="ap-wait" aria-busy="true">
         <LoaderCircle class="icon ap-spin" />
       </div>
@@ -444,9 +479,15 @@ function close() {
       <div v-else-if="step === 'working'" class="ap-wait" aria-busy="true">
         <LoaderCircle class="icon ap-spin" />
         <span class="muted">Working on it…</span>
+        <button class="lg-btn" type="button" @click="cancelWork">Cancel</button>
       </div>
 
-      <form v-else-if="step === 'paste'" class="ap" @submit.prevent="primary">
+      <form
+        v-else-if="step === 'paste'"
+        id="project-form"
+        class="ap"
+        @submit.prevent="primary"
+      >
         <div class="form-group">
           <label for="ap-path">Paste a path</label>
           <input
@@ -461,7 +502,12 @@ function close() {
         </div>
       </form>
 
-      <form v-else-if="step === 'clone'" class="ap" @submit.prevent="primary">
+      <form
+        v-else-if="step === 'clone'"
+        id="project-form"
+        class="ap"
+        @submit.prevent="primary"
+      >
         <div class="form-group">
           <label for="ap-url">Repository URL</label>
           <input
@@ -490,7 +536,12 @@ function close() {
         </div>
       </form>
 
-      <form v-else-if="step === 'create'" class="ap" @submit.prevent="primary">
+      <form
+        v-else-if="step === 'create'"
+        id="project-form"
+        class="ap"
+        @submit.prevent="primary"
+      >
         <div class="form-group">
           <label for="ap-new-name">Project name</label>
           <input
@@ -571,7 +622,12 @@ function close() {
         </div>
       </form>
 
-      <template v-else-if="step === 'confirm' && info">
+      <form
+        v-else-if="step === 'confirm' && info"
+        id="project-form"
+        class="ap"
+        @submit.prevent="primary"
+      >
         <div v-if="kind === 'plain'" class="ap-publish warn" role="status">
           <TriangleAlert class="icon" />
           <span
@@ -640,12 +696,17 @@ function close() {
         <div
           v-if="kind === 'repo' || (kind === 'many' && needsGh)"
           class="ap-publish"
-          :class="{ warn: needsGh && !ghReady }"
+          :class="{ warn: needsGh && !ghReady && !viaConnection }"
         >
-          <Check v-if="!needsGh || ghReady" class="icon" />
+          <Check v-if="viaConnection || !needsGh || ghReady" class="icon" />
           <TriangleAlert v-else class="icon" />
           <div>
-            <template v-if="!needsGh"
+            <template v-if="viaConnection"
+              >Publishing
+              <b>{{ form.remote_repo.trim() || "the remote" }}</b> via
+              connection {{ connectionName }}</template
+            >
+            <template v-else-if="!needsGh"
               >Local only — no remote, pull requests are off</template
             >
             <template v-else-if="ghReady"
@@ -717,7 +778,7 @@ function close() {
             </div>
           </div>
         </details>
-      </template>
+      </form>
 
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     </div>
@@ -733,10 +794,9 @@ function close() {
       <button
         v-if="!(step === 'confirm' && kind === 'plain')"
         class="lg-btn primary"
-        :type="step === 'manual' ? 'submit' : 'button'"
-        :form="step === 'manual' ? 'project-form' : undefined"
+        type="submit"
+        form="project-form"
         :disabled="primaryDisabled"
-        @click="step === 'manual' ? undefined : primary()"
       >
         {{ primaryText }}
       </button>

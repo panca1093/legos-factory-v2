@@ -252,7 +252,7 @@ function revoke(c: Connection) {
       <div class="grow">
         <h3>{{ p.name }}</h3>
         <p>
-          <Laptop class="icon proj-local" aria-label="On this computer" />
+          <Laptop class="icon proj-local" aria-hidden="true" />
           {{ p.repo_url }} · {{ publishLabel(p) }}
         </p>
         <div v-if="links[p.id]" class="form-grid" style="margin-top: 8px">

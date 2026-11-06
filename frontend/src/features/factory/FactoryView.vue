@@ -190,7 +190,7 @@ onMounted(load);
           @click="setQuery('project', p.id)"
         >
           <i class="fx-dot" :style="{ '--c': projectColor(i) }"></i>{{ p.name
-          }}<Laptop class="icon proj-local" aria-label="On this computer" />
+          }}<Laptop class="icon proj-local" aria-hidden="true" />
         </button>
         <button
           v-if="status !== 'all'"

@@ -14,7 +14,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 6px 12px;
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-full);
   color: var(--ink);
@@ -63,8 +63,8 @@
   display: grid;
   place-items: center;
   flex: none;
-  width: 40px;
-  height: 40px;
+  width: var(--control-height);
+  height: var(--control-height);
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--accent);
@@ -83,9 +83,9 @@
   color: var(--muted);
 }
 .ap-primary kbd {
-  padding: 3px 8px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-xs);
   font: 600 12px var(--font-sans);
   color: var(--muted);
 }
@@ -160,7 +160,7 @@
   align-items: center;
   gap: var(--space-2);
   margin-top: var(--space-2);
-  padding: 4px 10px;
+  padding: var(--space-1) var(--space-3);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -223,18 +223,15 @@
   justify-content: space-between;
 }
 .ap-head .lg-icon-btn {
-  width: 28px;
-  height: 28px;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
   border: 0;
   background: none;
 }
 .proj-local {
+  display: inline-flex;
   flex: none;
   color: var(--muted);
-}
-.proj-pub {
-  color: var(--muted);
-  font-size: 11px;
 }
 @media (max-width: 720px) {
   .modal-backdrop:has(.ap) {
@@ -248,6 +245,10 @@
   }
   .ap-inline {
     flex-direction: column;
+  }
+  .ap-head .lg-icon-btn {
+    width: 44px;
+    height: 44px;
   }
   .ap-primary kbd {
     display: none;

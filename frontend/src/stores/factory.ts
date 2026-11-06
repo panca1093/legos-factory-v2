@@ -175,10 +175,13 @@ export const useFactory = defineStore("factory", {
         key,
       });
     },
-    async createProject(input: { name: string; repo_url: string }) {
+    async createProject(
+      input: { name: string; repo_url: string },
+      opts: { refresh?: boolean } = {},
+    ) {
       const res = await api.post<Project>("/api/v1/projects", input);
       this.projects = [...this.projects.filter((p) => p.id !== res.id), res];
-      await this.refreshProjects().catch(() => {});
+      if (opts.refresh !== false) await this.refreshProjects().catch(() => {});
       return res;
     },
     async createWorkOrder(input: {

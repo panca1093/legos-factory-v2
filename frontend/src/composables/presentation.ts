@@ -205,7 +205,11 @@ export const publishLabel = (p: {
   remote_repo?: string;
 }) =>
   p.publish_via === "gh"
-    ? `gh · ${p.github_repo}`
+    ? p.github_repo
+      ? `gh · ${p.github_repo}`
+      : "GitHub"
     : p.publish_via === "connection" || (!p.publish_via && p.remote_repo)
-      ? `Connection · ${p.remote_repo ?? p.github_repo}`
+      ? p.remote_repo || p.github_repo
+        ? `Connection · ${p.remote_repo || p.github_repo}`
+        : "Connection"
       : "Local only";

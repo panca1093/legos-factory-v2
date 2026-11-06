@@ -332,7 +332,8 @@ async function request<T>(
 }
 
 export const api = {
-  get: <T>(p: string) => request<T>("GET", p),
+  get: <T>(p: string, signal?: AbortSignal) =>
+    request<T>("GET", p, undefined, signal),
   post: <T>(p: string, b?: unknown, signal?: AbortSignal) =>
     request<T>("POST", p, b ?? {}, signal),
   put: <T>(p: string, b?: unknown) => request<T>("PUT", p, b ?? {}),
