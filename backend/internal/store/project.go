@@ -15,7 +15,7 @@ import (
 
 type ProjectRepo struct{ DB *sql.DB }
 
-const pCols = `id, workspace_id, name, description, repo_url, language, quality_profile, git_connection_id, remote_repo, kb_include, kb_exclude, created_at`
+const pCols = `id, workspace_id, name, description, repo_url, language, quality_profile, git_connection_id, remote_repo, kb_include, kb_exclude, contract_tests, created_at`
 
 func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 	if p.ID == "" {
@@ -56,6 +56,18 @@ func (r *ProjectRepo) SetKBScope(ctx context.Context, id string, include, exclud
 	inc, _ := json.Marshal(nonNil(include))
 	exc, _ := json.Marshal(nonNil(exclude))
 	res, err := r.DB.ExecContext(ctx, `UPDATE projects SET kb_include = ?, kb_exclude = ? WHERE id = ?`, string(inc), string(exc), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return model.ErrProjectNotFound
+	}
+	return nil
+}
+
+// SetContractTests stores the project's contract-tests setting ("off" or "on").
+func (r *ProjectRepo) SetContractTests(ctx context.Context, id, mode string) error {
+	res, err := r.DB.ExecContext(ctx, `UPDATE projects SET contract_tests = ? WHERE id = ?`, mode, id)
 	if err != nil {
 		return err
 	}
@@ -136,7 +148,7 @@ func scanP(scan rowScanner) (*model.Project, error) {
 	var conn sql.NullString
 	var inc, exc string
 	var createdAt int64
-	err := scan(&p.ID, &p.WorkspaceID, &p.Name, &p.Description, &p.RepoURL, &p.Language, &p.QualityProfile, &conn, &p.RemoteRepo, &inc, &exc, &createdAt)
+	err := scan(&p.ID, &p.WorkspaceID, &p.Name, &p.Description, &p.RepoURL, &p.Language, &p.QualityProfile, &conn, &p.RemoteRepo, &inc, &exc, &p.ContractTests, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrProjectNotFound
 	}

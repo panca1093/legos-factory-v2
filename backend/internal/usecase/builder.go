@@ -55,6 +55,11 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 		return err
 	}
 	f.event(wo.ID, "builder", "task_completed", fmt.Sprintf("Task %s implemented", job.TaskID), nil)
+	if job.TaskID == contractTaskID(wo.ID) {
+		if proceed, err := f.contractRedProof(ctx, wo, job); err != nil || !proceed {
+			return err
+		}
+	}
 	return f.maybeAdvanceAfterImplementation(ctx, wo)
 }
 

@@ -285,6 +285,23 @@ function revoke(c: Connection) {
             placeholder="owner/repo"
           />
         </div>
+        <label style="margin-top: 8px; display: block">
+          <input
+            type="checkbox"
+            :data-test="`contract-tests-${p.id}`"
+            :checked="p.contract_tests === 'on'"
+            :disabled="!!busy"
+            @change="
+              run(`contract-${p.id}`, () =>
+                factory.setContractTests(
+                  p.id,
+                  ($event.target as HTMLInputElement).checked ? 'on' : 'off',
+                ),
+              )
+            "
+          />
+          Contract tests: write and lock tests for the acceptance criteria
+        </label>
       </div>
       <button
         class="btn small"

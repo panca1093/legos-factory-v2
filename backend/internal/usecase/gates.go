@@ -111,6 +111,7 @@ type ConvergeGateInput struct {
 	Checks       []GateCheck
 	OpenFindings []GateFinding
 	Gaps         []convergeGap
+	Tested       []string // criteria met by a green, unchanged contract test; met_<c> is not asked for them
 }
 
 var criterionRef = regexp.MustCompile(`\bc\d+\b`)
@@ -321,8 +322,7 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 }
 
 // convergeGateState asks gap_valid_<G> for each blocking gap and met_<c> for
-// every criterion. Contract tests (a later step) will exempt criteria whose
-// test is green; until then no criterion has one.
+// every criterion without a green, unchanged contract test.
 func convergeGateState(in ConvergeGateInput) (map[string]any, map[string]Noul) {
 	diff, trimmed := trimHunks(in.Diff, diffHunkBudget)
 	state := map[string]any{
@@ -345,6 +345,9 @@ func convergeGateState(in ConvergeGateInput) (map[string]any, map[string]Noul) {
 		}
 	}
 	for _, c := range in.Criteria {
+		if slices.Contains(in.Tested, c.ID) {
+			continue
+		}
 		qs["met_"+c.ID] = Noul{
 			Instructions: fmt.Sprintf("Does diff implement the behaviour that acceptance_criteria.%s describes?", c.ID),
 			Criteria: yn(
@@ -658,7 +661,9 @@ func decideConvergeGate(in ConvergeGateInput, asked map[string]Noul, answers map
 		required = append(required, "gap_valid_"+g.ID)
 	}
 	for _, c := range in.Criteria {
-		required = append(required, "met_"+c.ID)
+		if !slices.Contains(in.Tested, c.ID) {
+			required = append(required, "met_"+c.ID)
+		}
 	}
 	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
 		return GateOutcome{Outcome: GateEscalate, Row: 2, Note: note}
@@ -675,6 +680,9 @@ func decideConvergeGate(in ConvergeGateInput, asked map[string]Noul, answers map
 	}
 	labels := criterionLabels(in.Criteria)
 	for _, c := range in.Criteria {
+		if slices.Contains(in.Tested, c.ID) {
+			continue
+		}
 		switch judge(answers["met_"+c.ID]) {
 		case vNo:
 			unmet = append(unmet, c.ID)

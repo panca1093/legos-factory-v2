@@ -185,6 +185,14 @@ export const useFactory = defineStore("factory", {
       this.projects = this.projects.map((p) => (p.id === id ? res : p));
       return res;
     },
+    async setContractTests(id: string, contract_tests: "off" | "on") {
+      const res = await api.put<Project>(
+        `/api/v1/projects/${id}/contract-tests`,
+        { contract_tests },
+      );
+      this.projects = this.projects.map((p) => (p.id === id ? res : p));
+      return res;
+    },
     lookupJiraIssue(connection_id: string, key: string) {
       return api.post<IssueDraft>("/api/v1/integrations/jira/lookup", {
         connection_id,

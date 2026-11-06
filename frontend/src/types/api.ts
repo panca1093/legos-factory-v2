@@ -20,6 +20,7 @@ export interface Project {
   github_repo?: string;
   kb_include?: string[];
   kb_exclude?: string[];
+  contract_tests?: "off" | "on";
   created_at: string;
 }
 

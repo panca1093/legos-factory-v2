@@ -97,12 +97,22 @@ func (f *Factory) convergeGate(ctx context.Context, wo *model.WorkOrder) (handle
 	if err != nil {
 		return false, nil, err
 	}
+	tested, changedTests, err := f.contractStatus(ctx, wo)
+	if err != nil {
+		return false, nil, err
+	}
+	report.Gaps = append(slices.Clone(report.Gaps), changedTests...)
 	in := ConvergeGateInput{
 		Criteria: criteria, Spec: wo.Spec, Tasks: gateTasks(tasks), Diff: diff, Checks: gateChecks,
-		OpenFindings: open, Gaps: append(slices.Clone(report.Gaps), citedFindingGaps(findings, criteria)...),
+		OpenFindings: open, Gaps: append(slices.Clone(report.Gaps), citedFindingGaps(findings, criteria)...), Tested: tested,
 	}
 	state, qs := convergeGateState(in)
-	res, over, jerr := f.askJudge(ctx, state, qs)
+	var res JudgeResult
+	var over bool
+	var jerr error
+	if len(qs) > 0 { // every criterion may be met by its green contract test
+		res, over, jerr = f.askJudge(ctx, state, qs)
+	}
 	out := decideConvergeGate(in, qs, res.Answers, jerr, over, checksFailed, openBlockers, appends < MaxConvergeAppends)
 	f.recordGate(wo.ID, "converge", state, qs, res, out, jerr)
 
