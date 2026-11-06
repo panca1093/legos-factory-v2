@@ -62,6 +62,9 @@ func (f *Factory) approvePlan(ctx context.Context, wo *model.WorkOrder, actor, m
 	if actor != "human" {
 		trust = model.TrustVerified // a deterministic policy decision, not a person's
 	}
+	if actor == "human" { // a gate approval is already recorded as a plan_gate event
+		f.event(woID, actor, "plan_approved", fmt.Sprintf("%s (%d tasks)", msg, len(tasks)), nil)
+	}
 	f.Catalog.Record(ctx, wo, model.KnowledgePlanApproved, trust, actor,
 		fmt.Sprintf("Plan approved for %q (%d tasks) by %s", wo.Title, len(tasks), actor), taskList(tasks))
 	return nil
@@ -79,6 +82,7 @@ func (f *Factory) RevisePlan(ctx context.Context, woID, notes string) error {
 	if err := f.step(ctx, wo, model.StateArchitectReview, model.StatePlanning, "human", "Revision requested: "+notes); err != nil {
 		return err
 	}
+	f.event(woID, "human", "plan_revision_human", notes, nil)
 	f.Catalog.Record(ctx, wo, model.KnowledgePlanRevision, model.TrustHumanDecision, "human",
 		fmt.Sprintf("Plan revision requested for %q", wo.Title), notes)
 	_, err = f.Sched.Enqueue(ctx, JobPlan, woID, "", map[string]any{"notes": notes})
@@ -128,11 +132,6 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		}
 		f.recordPRDecision(ctx, wo, "PR approved", reason)
 		f.completeWO(ctx, wo, "READY")
-		if f.Catalog.summariesEnabled(ctx) {
-			if _, err := f.Sched.Enqueue(ctx, JobCatalogSummary, woID, "", map[string]any{}); err != nil {
-				f.Log.Error("cataloger: summary enqueue failed", "wo", woID, "err", err)
-			}
-		}
 		// approval authorizes publishing; handleOpenPR does the gh auth check, so no network here
 		if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil && f.Integrations.Bound(ctx, proj) {
 			ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second) // a cancelled request must not drop the job after READY

@@ -426,7 +426,27 @@ func countMD(dir string) int {
 }
 
 func (b *Bundle) logEntry(message string) error {
-	file := filepath.Join(b.root, "log.md")
+	return b.appendLog("log.md", "* **Update**: "+strings.Join(strings.Fields(message), " "))
+}
+
+var projectLog = regexp.MustCompile(`^projects/[A-Za-z0-9_-]+/log\.md$`)
+
+// Append adds line to a project log (projects/<pid>/log.md) and commits it, leaving the root log that Write feeds alone.
+func (b *Bundle) Append(rel, line, message string) (string, error) {
+	rel = path.Clean(filepath.ToSlash(rel))
+	if !projectLog.MatchString(rel) {
+		return "", fmt.Errorf("path %q is not a project log", rel)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := b.appendLog(rel, strings.Join(strings.Fields(line), " ")); err != nil {
+		return "", err
+	}
+	return b.commit(message)
+}
+
+func (b *Bundle) appendLog(rel, entry string) error {
+	file := filepath.Join(b.root, filepath.FromSlash(rel))
 	old, err := os.ReadFile(file)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
@@ -434,11 +454,14 @@ func (b *Bundle) logEntry(message string) error {
 	text := strings.TrimPrefix(string(old), "# Log\n")
 	text = strings.TrimLeft(text, "\n")
 	day := "## " + now().In(jakarta).Format("2006-01-02")
-	entry := "* **Update**: " + strings.Join(strings.Fields(message), " ") + "\n"
+	entry += "\n"
 	if strings.HasPrefix(text, day+"\n") {
 		text = day + "\n\n" + entry + strings.TrimPrefix(strings.TrimPrefix(text, day+"\n"), "\n")
 	} else {
 		text = day + "\n\n" + entry + "\n" + text
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
+		return err
 	}
 	return os.WriteFile(file, []byte("# Log\n\n"+strings.TrimRight(text, "\n")+"\n"), 0o644)
 }

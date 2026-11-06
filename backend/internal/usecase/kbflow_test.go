@@ -115,7 +115,7 @@ func newRig(t *testing.T) *rig {
 	projects := &store.ProjectRepo{DB: db}
 	q := &fakeQueue{}
 	f.Proj, f.KB, f.Sched, f.Findings, f.Quality = projects, know, q, &store.FindingRepo{DB: db}, &store.QualityRepo{DB: db}
-	f.Catalog = &Cataloger{Knowledge: &JournalStore{KB: know, Proj: projects}, Proj: projects, Settings: &store.SettingsRepo{DB: db}, Log: slog.Default()}
+	f.Catalog = &Cataloger{Bundle: bundle, Log: slog.Default()}
 	f.Model = func(model.AgentRole, *model.WorkOrder) (string, string) { return "p", "m" }
 	f.DataDir = t.TempDir()
 	f.Sandbox = filesSandbox{}
@@ -413,8 +413,14 @@ func TestSimilarClarificationProposesDraft(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	prev := &model.WorkOrder{ID: "wo_prev", ProjectID: "p1", Title: "Earlier"}
-	r.f.Catalog.Record(ctx, prev, model.KnowledgeClarification, model.TrustHumanDecision, "human",
-		"Clarification: Should discount rounding go up or down?", "Question: Should discount rounding go up or down?\nAnswer: Always round down.")
+	legacy := map[string]any{
+		"type": model.KBTypeJournalEntry, "title": "Clarification: Should discount rounding go up or down?", "status": model.KBStatusStable,
+		"kind": model.KnowledgeClarification, "work_order": prev.ID, "created_at": "2026-11-01T00:00:00Z",
+		"verified": map[string]any{"by": "human:human", "at": "2026-11-01T00:00:00Z"},
+	}
+	if err := r.know.WriteFactory(ctx, "projects/p1/journal/kn_legacy.md", legacy, "Question: Should discount rounding go up or down?\nAnswer: Always round down.", "legacy journal entry"); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateWaitingForHuman); err != nil {
 		t.Fatal(err)
 	}

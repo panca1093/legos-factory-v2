@@ -3,16 +3,18 @@ package usecase
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
+	"legos-factory/backend/internal/kb"
 	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/store"
 )
 
 type fixture struct {
-	cat      *Cataloger
 	projects *Projects
 	users    *store.UserRepo
 }
@@ -33,29 +35,64 @@ func newFixture(t *testing.T) fixture {
 		}
 	}
 	return fixture{
-		cat:      &Cataloger{Knowledge: &store.KnowledgeRepo{DB: db}, Proj: proj, Settings: &store.SettingsRepo{DB: db}, Log: slog.Default()},
 		projects: &Projects{Store: proj, Members: &store.MemberRepo{DB: db}, Users: users},
 		users:    users,
 	}
 }
 
-func TestRelevantStaysInProjectAndSkipsOwnWorkOrder(t *testing.T) {
-	fx := newFixture(t)
-	ctx := context.Background()
-	// prior records carry no WOID (nullable FK) so no work_orders rows are needed
-	prev := &model.WorkOrder{ProjectID: "p1", Title: "Payments retries", CommitSHA: "abc123"}
-	other := &model.WorkOrder{ProjectID: "p2", Title: "Payments elsewhere"}
-	cur := &model.WorkOrder{ID: "wo_cur", ProjectID: "p1", Title: "Payments retries v2", Objective: "extend payments retries"}
-	fx.cat.Record(ctx, prev, model.KnowledgeClarification, model.TrustHumanDecision, "human", "Payments retry window", "24 hours")
-	fx.cat.Record(ctx, other, model.KnowledgeClarification, model.TrustHumanDecision, "human", "Payments in p2", "secret project")
+func newLogCataloger(t *testing.T) (*Cataloger, *kb.Bundle) {
+	t.Helper()
+	bundle, err := kb.OpenBundle(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Cataloger{Bundle: bundle, Log: slog.Default()}, bundle
+}
 
-	got := fx.cat.Relevant(ctx, cur)
-	if len(got) != 1 || got[0].ProjectID != "p1" || got[0].CommitSHA != "abc123" || got[0].RepoURL != "/repos/p1" {
-		t.Fatalf("expected the single p1 record with commit and repo links, got %+v", got)
+func readLog(t *testing.T, root, rel string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(knowledgePrompt(got), "[human_decision] Payments retry window") {
-		t.Fatalf("prompt should label trust: %s", knowledgePrompt(got))
+	return string(data)
+}
+
+func TestRecordAppendsOneLineToProjectLog(t *testing.T) {
+	cat, bundle := newLogCataloger(t)
+	ctx := context.Background()
+	wo := &model.WorkOrder{ID: "wo_c6680cdd-92d", ProjectID: "p1", Title: "t"}
+	long := strings.Repeat("word ", 200)
+
+	if id := cat.Record(ctx, wo, model.KnowledgePRDecision, model.TrustHumanDecision, "human", `PR approved: "t"`, "Reason: ok\nsecond line "+long+" password=hunter2"); id != "" {
+		t.Fatalf("Record returns no id any more, got %q", id)
 	}
+	cat.Record(ctx, wo, model.KnowledgeFindings, model.TrustAIInterpretation, "inspector", "6 finding(s)", "")
+
+	got := readLog(t, bundle.Root(), "projects/p1/log.md")
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	if lines[0] != "# Log" || !regexp.MustCompile(`^## \d{4}-\d{2}-\d{2}$`).MatchString(lines[2]) || len(lines) != 6 {
+		t.Fatalf("log shape:\n%s", got)
+	}
+	if !regexp.MustCompile("^\\* \\d{2}:\\d{2} `wo_c6680cdd-92d` \\*\\*findings\\*\\* \\(inspector\\) — 6 finding\\(s\\)$").MatchString(lines[4]) {
+		t.Fatalf("newest line first: %q", lines[4])
+	}
+	pr := lines[5]
+	if !strings.Contains(pr, "**pr_decision** (human) — PR approved: \"t\" — Reason: ok second line word") || strings.Contains(pr, "hunter2") || strings.Contains(pr, "\n") {
+		t.Fatalf("pr line: %q", pr)
+	}
+	if body := pr[strings.LastIndex(pr, " — ")+len(" — "):]; len(body) > maxLogBody {
+		t.Fatalf("body not clipped: %d bytes", len(body))
+	}
+	entries, _ := os.ReadDir(filepath.Join(bundle.Root(), "projects", "p1"))
+	if len(entries) != 1 {
+		t.Fatalf("no record, kn_ file or index may be written beside log.md: %v", entries)
+	}
+}
+
+func TestRecordFailureIsNotPropagated(t *testing.T) {
+	cat, _ := newLogCataloger(t)
+	cat.Record(context.Background(), &model.WorkOrder{ID: "wo", ProjectID: "../escape"}, "k", model.TrustVerified, "x", "t", "b")
 }
 
 func TestNilCatalogerIsNoop(t *testing.T) {

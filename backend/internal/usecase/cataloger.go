@@ -7,96 +7,53 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
+	"legos-factory/backend/internal/kb"
 	"legos-factory/backend/internal/model"
 )
 
-// Cataloger: durable engineering knowledge. Recording is deterministic and
-// never needs an LLM; the optional summary is one agent run per completed
-// work order and is stored as a non-authoritative interpretation.
+// Cataloger: the work-order journal is one log line per record in the
+// project's log.md. Recording is deterministic and never needs an LLM.
 
 const (
-	JobCatalogSummary = "catalog_summary"
-
 	maxKnowledgeBody = 2000
-	retrievalLimit   = 5
+	maxLogBody       = 300
 )
 
+var logZone = time.FixedZone("WIB", 7*3600)
+
 type Cataloger struct {
-	Knowledge KnowledgeStore
-	Proj      ProjectStore
-	Settings  SettingsReader
-	Log       *slog.Logger
+	Bundle *kb.Bundle
+	Log    *slog.Logger
 }
 
-// Record stores one knowledge entry for wo. Failures are logged, never
-// propagated: knowledge capture must not break the workflow.
+// Record appends one line to wo's project log and returns "". Failures are
+// logged, never propagated: knowledge capture must not break the workflow.
 func (c *Cataloger) Record(ctx context.Context, wo *model.WorkOrder, kind string, trust model.Trust, actor, title, body string, refs ...string) string {
 	if c == nil {
 		return ""
 	}
-	proj, err := c.Proj.Get(ctx, wo.ProjectID)
-	if err != nil {
-		c.Log.Error("cataloger: project lookup failed", "wo", wo.ID, "err", err)
-		return ""
+	line := fmt.Sprintf("* %s `%s` **%s** (%s) — %s", time.Now().In(logZone).Format("15:04"), wo.ID, kind, actor, oneLine(sanitize(title, 200)))
+	if b := clip(oneLine(sanitize(body, maxKnowledgeBody)), maxLogBody); b != "" {
+		line += " — " + b
 	}
-	k := &model.KnowledgeRecord{
-		WorkspaceID: proj.WorkspaceID, ProjectID: proj.ID, WOID: wo.ID,
-		RepoURL: proj.RepoURL, CommitSHA: wo.CommitSHA,
-		Kind: kind, Trust: trust, Actor: actor,
-		Title: sanitize(title, 200), Body: sanitize(body, maxKnowledgeBody), SourceRefs: refs,
+	if _, err := c.Bundle.Append("projects/"+wo.ProjectID+"/log.md", line, "Log: "+oneLine(kind+" "+wo.ID)); err != nil {
+		c.Log.Error("cataloger: log append failed", "wo", wo.ID, "kind", kind, "err", err)
 	}
-	if err := c.Knowledge.Insert(ctx, k); err != nil {
-		c.Log.Error("cataloger: record failed", "wo", wo.ID, "kind", kind, "err", err)
-		return ""
-	}
-	return k.ID
+	return ""
 }
 
-// Relevant returns prior knowledge from wo's own project, never another's.
+// Relevant returns prior knowledge for the Architect; it is empty until retrieval reads documents.
 func (c *Cataloger) Relevant(ctx context.Context, wo *model.WorkOrder) []model.KnowledgeRecord {
-	if c == nil {
-		return nil
-	}
-	found, err := c.Knowledge.Search(ctx, model.KnowledgeQuery{
-		ProjectIDs: []string{wo.ProjectID},
-		Text:       wo.Title + " " + wo.Objective + " " + wo.Acceptance,
-		Limit:      retrievalLimit + 20,
-	})
-	if err != nil {
-		c.Log.Error("cataloger: retrieval failed", "wo", wo.ID, "err", err)
-		return nil
-	}
-	out := make([]model.KnowledgeRecord, 0, retrievalLimit)
-	for _, k := range found {
-		if k.WOID == wo.ID {
-			continue
-		}
-		out = append(out, k)
-		if len(out) == retrievalLimit {
-			break
-		}
-	}
-	return out
+	return nil
 }
 
-// Completed records the task summary as the work order's terminal entry,
-// linking every record of the work order, and returns that record's id.
+// Completed logs the task summary as the work order's terminal line.
 func (c *Cataloger) Completed(ctx context.Context, wo *model.WorkOrder, outcome, body string) string {
-	if c == nil {
-		return ""
-	}
-	prior, err := c.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: wo.ID, Limit: 200})
-	if err != nil {
-		c.Log.Error("cataloger: completion lookup failed", "wo", wo.ID, "err", err)
-	}
-	refs := make([]string, 0, len(prior))
-	for _, k := range prior {
-		refs = append(refs, "knowledge:"+k.ID)
-	}
 	return c.Record(ctx, wo, model.KnowledgeWorkOrderCompleted, model.TrustVerified, "cataloger",
-		fmt.Sprintf("Task summary: %s (%s)", wo.Title, outcome), body, refs...)
+		fmt.Sprintf("Task summary: %s (%s)", wo.Title, outcome), body)
 }
 
 // completeWO records the terminal task summary from the order's current state.
@@ -108,6 +65,13 @@ func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome s
 		wo = cur
 	}
 	f.Catalog.Completed(ctx, wo, outcome, f.taskSummary(ctx, wo, outcome))
+}
+
+var decisionEventKinds = []string{
+	"plan_approved", "plan_revision_requested", "plan_revision_human", "clarification_answered",
+	"revision_requested", "pr_approved", "pr_declined",
+	"finding_" + model.FindingConfirmed, "finding_" + model.FindingDisputed,
+	"finding_" + model.FindingResolved, "finding_" + model.FindingEscalated,
 }
 
 const (
@@ -175,26 +139,7 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 	}
 	openSection := fitLines("Open items / follow-up:", open, 450)
 
-	var decisions []model.KnowledgeRecord
-	if recs, err := f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: wo.ID, Limit: 200}); err == nil {
-		for _, k := range recs {
-			switch k.Kind {
-			case model.KnowledgePlanApproved, model.KnowledgePlanRevision, model.KnowledgeClarification,
-				model.KnowledgeFindingDecision, model.KnowledgePRDecision, model.KnowledgeArchitectReview:
-				decisions = append(decisions, k)
-			}
-		}
-	}
-	sort.SliceStable(decisions, func(i, j int) bool {
-		if !decisions[i].CreatedAt.Equal(decisions[j].CreatedAt) {
-			return decisions[i].CreatedAt.After(decisions[j].CreatedAt)
-		}
-		return decisions[i].ID < decisions[j].ID
-	})
-	decLines := make([]string, 0, len(decisions))
-	for _, k := range decisions {
-		decLines = append(decLines, clip("- "+k.Kind+": "+oneLine(k.Title+" — "+k.Body), 160))
-	}
+	decLines := f.decisionLines(ctx, wo.ID)
 	if len(decLines) == 0 {
 		decLines = []string{"none recorded"}
 	}
@@ -212,6 +157,23 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		body = truncate(body, summaryBudget-len("… [truncated]"))
 	}
 	return body
+}
+
+// decisionLines lists the work order's decision events, newest first.
+func (f *Factory) decisionLines(ctx context.Context, woID string) []string {
+	evs, err := f.WO.EventsByKind(ctx, woID, decisionEventKinds)
+	if err != nil {
+		return nil
+	}
+	lines := make([]string, 0, len(evs))
+	for i := len(evs) - 1; i >= 0; i-- {
+		line := "- " + evs[i].Kind
+		if m := oneLine(evs[i].Message); m != "" {
+			line += ": " + m
+		}
+		lines = append(lines, clip(line, 160))
+	}
+	return lines
 }
 
 // finalVerification walks revisions down from wo.Revision to the newest one
@@ -331,48 +293,6 @@ func clip(s string, max int) string {
 	return s[:cut] + "…"
 }
 
-// Find searches knowledge visible to u. A requested project is checked
-// against the caller's scope; no request means every accessible project.
-func (c *Cataloger) Find(ctx context.Context, p *Projects, u *model.User, projectID string, q model.KnowledgeQuery) ([]model.KnowledgeRecord, error) {
-	if projectID != "" {
-		if err := p.Authorize(ctx, u, projectID); err != nil {
-			return nil, err
-		}
-		q.ProjectIDs = []string{projectID}
-	} else {
-		scope, err := p.Scope(ctx, u)
-		if err != nil {
-			return nil, err
-		}
-		q.ProjectIDs = scope
-	}
-	return c.Knowledge.Search(ctx, q)
-}
-
-// Inspect returns one record, or not-found when it lies outside u's scope.
-func (c *Cataloger) Inspect(ctx context.Context, p *Projects, u *model.User, id string) (*model.KnowledgeRecord, error) {
-	k, err := c.Knowledge.Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	ok, err := p.CanAccess(ctx, u, k.ProjectID)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, model.ErrKnowledgeNotFound
-	}
-	return k, nil
-}
-
-func (c *Cataloger) summariesEnabled(ctx context.Context) bool {
-	if c == nil || c.Settings == nil {
-		return false
-	}
-	s, err := c.Settings.Get(ctx)
-	return err == nil && s.CatalogerSummaries
-}
-
 // knowledgePrompt renders prior records for an agent prompt, labelled by trust.
 func knowledgePrompt(records []model.KnowledgeRecord) string {
 	if len(records) == 0 {
@@ -384,45 +304,6 @@ func knowledgePrompt(records []model.KnowledgeRecord) string {
 		fmt.Fprintf(&b, "- [%s] %s: %s (ref knowledge:%s)\n", k.Trust, k.Title, truncate(oneLine(k.Body), 300), k.ID)
 	}
 	return b.String()
-}
-
-// handleCatalogSummary runs the Cataloger model once over a completed work
-// order's records and stores the result as an AI interpretation citing them.
-func (f *Factory) handleCatalogSummary(ctx context.Context, job model.Job) error {
-	wo, err := f.WO.Get(ctx, job.WOID)
-	if err != nil {
-		return err
-	}
-	records, err := f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: wo.ID, Limit: 200})
-	if err != nil {
-		return err
-	}
-	refs := make([]string, 0, len(records)+1)
-	var src strings.Builder
-	for _, k := range records {
-		refs = append(refs, "knowledge:"+k.ID)
-		fmt.Fprintf(&src, "- [%s] %s: %s\n", k.Trust, k.Title, truncate(oneLine(k.Body), 400))
-	}
-	provider, modelID := f.Model(model.AgentCataloger, wo)
-	res, runID, err := f.runAgent(ctx, wo, model.AgentCataloger, provider, modelID, catalogSummaryPrompt(wo, src.String()),
-		map[string]string{"record_count": fmt.Sprintf("%d", len(records))}, "", runOpts{})
-	if err != nil {
-		return err
-	}
-	refs = append(refs, "run:"+runID)
-	f.Catalog.Record(ctx, wo, model.KnowledgeSummary, model.TrustAIInterpretation, "cataloger",
-		fmt.Sprintf("Summary of %q (AI-generated)", wo.Title), res.Text, refs...)
-	f.event(wo.ID, "cataloger", "knowledge_summarized", "Cataloger summary recorded (AI interpretation)", nil)
-	return nil
-}
-
-func catalogSummaryPrompt(wo *model.WorkOrder, records string) string {
-	return fmt.Sprintf(`You are the Cataloger. Summarize the engineering knowledge produced by work order %q
-for future work in the same project. Use only the records below; do not invent decisions.
-Keep it under 150 words and plain text.
-
-Records:
-%s`, wo.Title, records)
 }
 
 var secretPatterns = []*regexp.Regexp{

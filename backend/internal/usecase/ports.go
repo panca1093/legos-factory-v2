@@ -26,6 +26,7 @@ type WorkOrderStore interface {
 	AppendEvent(ctx context.Context, woID, actor, kind, message string, payload map[string]any) (*model.Event, error)
 	Events(ctx context.Context, woID string, afterID int64, limit int) ([]model.Event, error)
 	LatestEvent(ctx context.Context, woID, kind string) (*model.Event, error)
+	EventsByKind(ctx context.Context, woID string, kinds []string) ([]model.Event, error)
 }
 
 type ProjectStore interface {
@@ -63,12 +64,6 @@ type UsageStore interface {
 	Totals(ctx context.Context) (model.UsageTotals, error)
 	SpentMicros(ctx context.Context) int64
 	Since(ctx context.Context, userID string, since time.Time) ([]model.UsageRecord, error)
-}
-
-type KnowledgeStore interface {
-	Insert(ctx context.Context, k *model.KnowledgeRecord) error
-	Get(ctx context.Context, id string) (*model.KnowledgeRecord, error)
-	Search(ctx context.Context, q model.KnowledgeQuery) ([]model.KnowledgeRecord, error)
 }
 
 type ChatStore interface {

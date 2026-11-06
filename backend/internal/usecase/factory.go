@@ -78,9 +78,7 @@ func (f *Factory) Handlers() map[string]func(context.Context, model.Job) error {
 		JobVerify:    f.handleVerify,
 		JobInspect:   f.handleInspect,
 		JobEvaluate:  f.handleEvaluate,
-
-		JobCatalogSummary: f.handleCatalogSummary,
-		JobOpenPR:         f.handleOpenPR,
+		JobOpenPR:    f.handleOpenPR,
 	}
 }
 

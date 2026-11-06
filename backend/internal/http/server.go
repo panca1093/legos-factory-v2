@@ -249,9 +249,6 @@ func (s *Server) routes() {
 	api.POST("/local/init", s.local(s.handleLocalInit))
 	api.GET("/local/gh", s.local(s.handleLocalGH))
 
-	api.GET("/knowledge", s.handleListKnowledge)
-	api.GET("/knowledge/:id", s.handleGetKnowledge)
-
 	api.GET("/kb/docs", s.handleKBList)
 	api.GET("/kb/doc", s.handleKBGet)
 	api.PUT("/kb/doc", s.requireRole(model.RoleEngineer, s.handleKBPut))

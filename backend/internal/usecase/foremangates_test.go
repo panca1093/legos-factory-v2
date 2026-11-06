@@ -199,6 +199,9 @@ func TestPlanGateRevisionsAreCountedAndBounded(t *testing.T) {
 	if got := r.reload(t); got.PlanRevisions != 0 || got.State != model.StatePlanning {
 		t.Fatalf("a human revision resets the counter: %d %s", got.PlanRevisions, got.State)
 	}
+	if ev := r.events(t, "plan_revision_human"); len(ev) != 1 || ev[0].Actor != "human" || ev[0].Message != "split it differently" {
+		t.Fatalf("a human plan revision must leave its own event: %+v", ev)
+	}
 }
 
 func TestPlanGateEscalatesRiskyPlansForAHumanDecision(t *testing.T) {
@@ -216,6 +219,9 @@ func TestPlanGateEscalatesRiskyPlansForAHumanDecision(t *testing.T) {
 	}
 	if ev := stateChangedTo(t, r, model.StateQueued); ev.Actor != "human" {
 		t.Fatalf("actor %q", ev.Actor)
+	}
+	if ev := r.events(t, "plan_approved"); len(ev) != 1 || ev[0].Actor != "human" || !strings.Contains(ev[0].Message, "task(s)") && !strings.Contains(ev[0].Message, "tasks)") {
+		t.Fatalf("plan approval must leave a plan_approved event: %+v", ev)
 	}
 }
 

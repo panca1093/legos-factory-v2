@@ -66,16 +66,10 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	}
 	emb := kb.HashEmbedder{}
 	know := &usecase.KB{Bundle: bundle, Idx: &store.KBRepo{DB: db, Embedder: emb.Name()}, Emb: emb, Log: log}
-	journal := &usecase.JournalStore{KB: know, Proj: projRepo}
-	if n, err := journal.Export(context.Background(), &store.KnowledgeRepo{DB: db}); err != nil {
-		log.Warn("knowledge export failed", "err", err)
-	} else if n > 0 {
-		log.Info("exported knowledge records to the factory bundle", "records", n)
-	}
 	if _, err := know.SyncFactory(context.Background()); err != nil {
 		log.Warn("factory knowledge indexing incomplete", "err", err)
 	}
-	catalog := &usecase.Cataloger{Knowledge: journal, Proj: projRepo, Settings: settingsRepo, Log: log}
+	catalog := &usecase.Cataloger{Bundle: bundle, Log: log}
 	secrets, err := secretBox(cfg, log)
 	if err != nil {
 		return nil, err

@@ -9,6 +9,13 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
+func firstRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
 // Learning drafts are deterministic templates: a human edits and approves
 // them, or discards them. Until approved they are never offered to agents.
 
