@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -123,7 +124,7 @@ func failedChecksSection(failures []model.CheckResult) string {
 
 // retryPayload keeps the failing checks in front of the Builder when a human retries after a failed verification.
 func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[string]any {
-	payload := f.withBrief(ctx, wo, map[string]any{"reason": "human_retry"}, nil, "")
+	payload := f.withBrief(ctx, wo, wo.Revision, map[string]any{"reason": "human_retry"}, nil, "")
 	if note := f.doneGateNote(ctx, wo); note != "" {
 		p := map[string]any{"reason": "fix_done_gate", "note": note}
 		if b := f.storedBrief(ctx, wo); b != "" {
@@ -324,11 +325,12 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	}
 	payload := map[string]any{"reason": "fix_findings"}
 	evPayload := map[string]any{}
+	newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
 	if b := fixBrief(fromRuns(openFindings(all), runIDs), f.currentArchitectReport(cur), nil, ""); b != "" {
+		b = f.withEarlierFixes(ctx, wo.ID, newRev, b)
 		payload["brief"] = b
 		evPayload["brief"] = b
 	}
-	newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "review_fixes": fixes}); err != nil {
 		return err
 	}
@@ -516,12 +518,56 @@ func fromRuns(fs []model.Finding, runIDs []string) []model.Finding {
 	return out
 }
 
-// withBrief adds the order's fix brief to a Builder payload when there is one.
-func (f *Factory) withBrief(ctx context.Context, wo *model.WorkOrder, payload map[string]any, issues []string, humanReason string) map[string]any {
+// withBrief adds the fix brief for revision rev to a Builder payload when there is one.
+func (f *Factory) withBrief(ctx context.Context, wo *model.WorkOrder, rev int, payload map[string]any, issues []string, humanReason string) map[string]any {
 	if b := f.briefFor(ctx, wo, issues, humanReason); b != "" {
-		payload["brief"] = b
+		payload["brief"] = f.withEarlierFixes(ctx, wo.ID, rev, b)
 	}
 	return payload
+}
+
+const earlierFixesHeading = "Already addressed in earlier revisions — keep these fixes intact, do not undo or regress them:"
+
+// earlierFixRevisions caps the carried-forward section so a long fix loop cannot grow the brief without limit.
+const earlierFixRevisions = 3
+
+var briefItemStart = regexp.MustCompile(`(?m)^\d+\. `)
+
+// withEarlierFixes appends the items earlier revisions' briefs asked for, newest revisions capped, to the brief of revision rev.
+func (f *Factory) withEarlierFixes(ctx context.Context, woID string, rev int, brief string) string {
+	byRev := map[int][]string{}
+	for after := int64(0); ; {
+		evs, err := f.WO.Events(ctx, woID, after, 500)
+		if err != nil || len(evs) == 0 {
+			break
+		}
+		for _, e := range evs {
+			after = e.ID
+			r, _ := e.Payload["revision"].(float64)
+			b, _ := e.Payload["brief"].(string)
+			if (e.Kind != "fix_requested" && e.Kind != "revision_requested") || int(r) >= rev || b == "" {
+				continue
+			}
+			b, _, _ = strings.Cut(b, "\n\n"+earlierFixesHeading)
+			byRev[int(r)] = append(byRev[int(r)], briefItemStart.Split(b, -1)...)
+		}
+	}
+	revs := slices.Sorted(maps.Keys(byRev))
+	revs = revs[max(0, len(revs)-earlierFixRevisions):]
+	var section strings.Builder
+	seen := map[string]bool{}
+	for _, r := range revs {
+		for _, it := range byRev[r] {
+			if it = strings.TrimSpace(it); it != "" && !seen[it] {
+				seen[it] = true
+				section.WriteString("\n- " + it)
+			}
+		}
+	}
+	if section.Len() == 0 {
+		return brief
+	}
+	return brief + "\n\n" + earlierFixesHeading + section.String()
 }
 
 // latestChecks is each check's most recent result for the current revision; the

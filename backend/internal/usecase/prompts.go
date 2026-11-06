@@ -307,7 +307,7 @@ func fixContext(wo *model.WorkOrder, job model.Job, tasks []model.Task) (ctx, ta
 	}
 	tail = "Work only within the assigned workspace. When done, reply with one line describing what changed."
 	if brief, _ := job.Payload["brief"].(string); brief != "" {
-		ctx += "\nFix brief. Address every numbered item and change only what the items require:\n" + brief + "\n"
+		ctx += "\nFix brief. Address every numbered item and change only what the items require. Items under \"Already addressed\" were fixed in earlier revisions and must still hold after your changes; if resolving a numbered item would undo one, say so in your per-item reply instead of undoing it:\n" + brief + "\n"
 		tail = `Work only within the assigned workspace. When done, reply with one line stating for each item number either "N: fixed (file:line)" or "N: not fixed because <reason>".`
 	}
 	return ctx, tail

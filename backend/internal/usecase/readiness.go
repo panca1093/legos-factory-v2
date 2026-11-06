@@ -137,6 +137,7 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry boo
 		payload := map[string]any{"reason": "fix_done_gate", "note": note}
 		evPayload := map[string]any{"revision": newRev, "reason": "fix_done_gate", "note": note}
 		if b := fixBrief(openFindings(findings), report, issues, ""); b != "" {
+			b = f.withEarlierFixes(ctx, wo.ID, newRev, b)
 			payload["brief"], evPayload["brief"] = b, b
 		}
 		f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: done gate requests a fix: %s", newRev, out.Note), evPayload)

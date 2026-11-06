@@ -141,8 +141,8 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		}
 		return nil
 	case "request_changes":
-		payload := f.withBrief(ctx, wo, map[string]any{"reason": "human_revision"}, nil, reason)
 		newRev := wo.Revision + 1
+		payload := f.withBrief(ctx, wo, newRev, map[string]any{"reason": "human_revision"}, nil, reason)
 		if err := f.WO.UpdateFields(ctx, woID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": 0, "review_fixes": 0}); err != nil {
 			return err
 		}
