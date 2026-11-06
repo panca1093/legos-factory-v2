@@ -607,10 +607,13 @@
 }
 
 @media (min-width: 721px) {
-  .chats.list-hidden {
+  .chats.list-hidden,
+  .side-open .chats {
     grid-template-columns: minmax(0, 1fr);
   }
-  .chats.list-hidden > .chatlist {
+  .chats.list-hidden > .chatlist,
+  .side-open .chats > .chatlist,
+  .side-open .chats .list-btn {
     display: none;
   }
 }
