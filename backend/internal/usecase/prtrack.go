@@ -69,7 +69,11 @@ func (f *Factory) checkPR(ctx context.Context, gitFor gitLookup, wo model.WorkOr
 	}
 	switch {
 	case st.State == model.PRStateMerged:
-		return f.recordPR(ctx, wo, "pr_merged", "merged", st.At, map[string]any{"pr_merged_at": st.At.Unix(), "pr_closed_at": nil})
+		if err := f.recordPR(ctx, wo, "pr_merged", "merged", st.At, map[string]any{"pr_merged_at": st.At.Unix(), "pr_closed_at": nil}); err != nil {
+			return err
+		}
+		f.portCodeMap(ctx, &wo)
+		return nil
 	case st.State == model.PRStateClosed && wo.PRClosedAt == nil:
 		return f.recordPR(ctx, wo, "pr_closed", "closed without merging", st.At, map[string]any{"pr_closed_at": st.At.Unix()})
 	}

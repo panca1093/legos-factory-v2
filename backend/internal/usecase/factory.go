@@ -126,7 +126,10 @@ type runOpts struct {
 func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID, prompt string, extra map[string]string, taskID string, opts runOpts) (model.AgentResult, string, error) {
 	switch role {
 	case model.AgentForeman, model.AgentArchitect, model.AgentBuilder, model.AgentInspector:
-		prompt += f.codeFactsText(ctx, wo)
+		if txt := f.codeFactsText(ctx, wo); txt != "" {
+			prompt += txt
+			f.auditCodeMap(ctx, wo, txt, &opts)
+		}
 	}
 	if f.Usage != nil {
 		release, ok := f.Usage.Reserve(50_000) // conservative estimate per agent run

@@ -196,7 +196,7 @@ const PROJECT_FOLDERS = [
   { key: "brief", label: "Brief", types: ["Brief"] },
   { key: "spec", label: "Spec", types: ["Spec"] },
   { key: "task", label: "Task", types: ["Task DAG", "Task Summary"] },
-  { key: "notes", label: "Notes", types: ["Note", "Reviewer Routing"] },
+  { key: "notes", label: "Notes", types: ["Note", "Code Map", "Reviewer Routing"] },
   { key: "repo", label: "Repository", types: [] as string[] },
   { key: "review", label: "Needs review", types: [] as string[] },
 ];

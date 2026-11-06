@@ -42,6 +42,7 @@ func (f *Factory) syncRepo(ctx context.Context, wo *model.WorkOrder, force bool)
 			wo.KBBaseSHA = sha
 		}
 	}
+	f.seedCodeFacts(ctx, wo)
 	switch {
 	case skipped:
 	case err != nil:
