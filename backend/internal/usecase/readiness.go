@@ -159,7 +159,7 @@ func (f *Factory) resumeDoneGateFix(ctx context.Context, wo *model.WorkOrder) er
 func architectFixes(r *architectReport) string {
 	var b strings.Builder
 	for _, v := range r.Verdicts {
-		if v.Status != "met" && v.Fix != "" {
+		if strings.ToLower(strings.TrimSpace(v.Status)) != "met" && v.Fix != "" {
 			fmt.Fprintf(&b, "\n- %s: %s", v.CriterionID, v.Fix)
 		}
 	}
@@ -203,7 +203,6 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 		issues = escalation
 		reason = "The done gate needs a human decision: " + joinNotes(issues)
 		if checkCount == 0 {
-			issues = append(append([]string{}, escalation...), "no verification evidence is recorded for the current revision")
 			reason += " (no verification evidence is recorded for the current revision either)"
 		}
 	case checkCount == 0:

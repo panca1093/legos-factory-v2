@@ -359,6 +359,21 @@ describe("NowCard", () => {
       changes.findAll(".fx-reason-list li").map((li) => li.text()),
     ).toEqual(["a", "renamed x; moved y"]);
   });
+  it("has no issue list for events logged before the backend sent one", () => {
+    const order = wo({ state: "NEEDS_HUMAN_REVIEW" });
+    expect(
+      currentIssues(order, [
+        into("NEEDS_HUMAN_REVIEW"),
+        ev("readiness_needs_human_review", "a; b"),
+      ]),
+    ).toEqual([]);
+    expect(
+      currentIssues(order, [
+        into("NEEDS_HUMAN_REVIEW"),
+        ev("done_gate", "x", { outcome: "escalate", note: "x", issues: null }),
+      ]),
+    ).toEqual([]);
+  });
   it("Latest uses the newest event by id", () => {
     const w = mountNow(wo({ state: "IMPLEMENTING" }), [
       { ...ev("agent_step", "newest step"), id: 9000 },

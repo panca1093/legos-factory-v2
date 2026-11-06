@@ -485,3 +485,17 @@ func TestDoneGateSendsArchitectFixesAndListsIssuesWhole(t *testing.T) {
 		t.Fatalf("issues must stay whole, one per reason: readiness %v gate %v", issues, gate)
 	}
 }
+
+func TestArchitectFixesSkipsMetAndEmpty(t *testing.T) {
+	r := &architectReport{Verdicts: []ArchitectVerdict{
+		{CriterionID: "c1", Status: " Met ", Fix: "ignored"},
+		{CriterionID: "c2", Status: "not_met"},
+		{CriterionID: "c3", Status: "unclear", Fix: "add a test"},
+	}}
+	if got := architectFixes(r); got != "\n\nThe Architect's suggested fixes:\n- c3: add a test" {
+		t.Fatalf("got %q", got)
+	}
+	if got := architectFixes(&architectReport{Verdicts: r.Verdicts[:2]}); got != "" {
+		t.Fatalf("no qualifying fix must add no header, got %q", got)
+	}
+}
