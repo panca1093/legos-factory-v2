@@ -87,7 +87,7 @@ const shipNote: Record<string, string> = {
       </div>
       <ReasonText
         v-if="reason && ship?.key === 'approval'"
-        label="Why you are asked:"
+        label="Open issues from the done gate:"
         :text="reason"
       />
       <p v-if="ship?.key === 'approval'" class="small muted">

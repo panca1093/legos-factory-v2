@@ -45,6 +45,14 @@ const paused = computed(() => !!props.order.paused_at),
       undefined,
     ),
   ),
+  approvalSummary = computed(() => {
+    const n = (reason.value ?? "").split(";").filter((p) => p.trim()).length;
+    if (n > 1)
+      return `The done gate left ${n} open issues for you. Check them against the changes before you approve.`;
+    return (
+      reason.value || "The checks passed and the done gate handed this to you."
+    );
+  }),
   done = computed(
     () =>
       props.tasks.filter((t) => taskState(t.id, props.runs) === "completed")
@@ -194,7 +202,6 @@ const headline = computed(() => {
       </template>
       <template v-else-if="planEscalated">
         <ReasonText
-          label="Why you are asked:"
           :text="reason || 'The plan gate escalated this plan.'"
           :suffix="
             order.plan_revisions
@@ -221,12 +228,7 @@ const headline = computed(() => {
         </div>
       </template>
       <template v-else-if="order.state === 'NEEDS_HUMAN_REVIEW'">
-        <ReasonText
-          :label="ship?.label + '.'"
-          :text="
-            reason || 'The checks passed and the done gate handed this to you.'
-          "
-        />
+        <p class="small" data-test="approval-summary">{{ approvalSummary }}</p>
         <button class="lg-btn primary small" @click="emit('goto', 'changes')">
           Review changes &amp; PR
         </button>

@@ -318,6 +318,17 @@ describe("NowCard", () => {
     expect(w.text()).toContain("fresh reason");
     expect(w.text()).not.toContain("old plan reason");
   });
+  it("summarises a multi-issue done gate instead of repeating the list", () => {
+    const w = mountNow(wo({ state: "NEEDS_HUMAN_REVIEW" }), [
+      into("NEEDS_HUMAN_REVIEW"),
+      ev("readiness_needs_human_review", "first issue; second issue; third"),
+    ]);
+    expect(w.find('[data-test="approval-summary"]').text()).toContain(
+      "left 3 open issues",
+    );
+    expect(w.find(".fx-reason").exists()).toBe(false);
+    expect(w.text().match(/Waiting for your approval/g)).toHaveLength(1);
+  });
   it("Latest uses the newest event by id", () => {
     const w = mountNow(wo({ state: "IMPLEMENTING" }), [
       { ...ev("agent_step", "newest step"), id: 9000 },
