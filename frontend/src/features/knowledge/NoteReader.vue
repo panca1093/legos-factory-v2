@@ -51,7 +51,10 @@ const errMsg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const fmt = (v: unknown) => (typeof v === "string" ? v : JSON.stringify(v));
 const shortSha = (sha?: string) => (sha ? sha.slice(0, 10) : "unversioned");
 
-const canEdit = computed(() => !!detail.value?.editable && session.canWrite);
+const readOnly = computed(() => !!detail.value?.doc.read_only);
+const canEdit = computed(
+  () => !!detail.value?.editable && !readOnly.value && session.canWrite,
+);
 const isDraft = computed(() => detail.value?.doc.status === "draft");
 const isRepo = computed(() => detail.value?.doc.source === "repo");
 const canDelete = computed(() => {
@@ -365,6 +368,9 @@ async function askSelection() {
             data-test="kb-sha"
             >{{ shortSha(detail.doc.commit_sha) }}</code
           >
+        </p>
+        <p v-if="readOnly" class="notice" data-test="record-readonly">
+          Record of the work order, read-only.
         </p>
         <p v-if="isRepo" class="notice" data-test="repo-readonly">
           Changes to repository documents go through the repository.

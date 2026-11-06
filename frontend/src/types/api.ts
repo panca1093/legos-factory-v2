@@ -18,6 +18,8 @@ export interface Project {
   remote_repo?: string;
   publish_via?: "connection" | "gh" | "none";
   github_repo?: string;
+  kb_include?: string[];
+  kb_exclude?: string[];
   created_at: string;
 }
 
@@ -227,7 +229,8 @@ export interface KBDoc {
   trust: "unverified" | "machine" | "human";
   title: string;
   description: string;
-  meta: Record<string, unknown>;
+  read_only?: boolean;
+  meta: Record<string, unknown> & { origin?: string };
   links?: string[];
   indexed_at: number | string;
 }

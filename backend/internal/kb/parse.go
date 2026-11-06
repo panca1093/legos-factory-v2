@@ -207,6 +207,44 @@ func trustOf(verified any) string {
 	return model.KBTrustUnverified
 }
 
+// CompileGlob turns a glob into an anchored regexp, nil if invalid. Case matters and "[...]" is literal;
+// "*" and "?" stay within a segment, "**" crosses segments, a leading "./" is dropped and a trailing "/" means "/**".
+func CompileGlob(pattern string) *regexp.Regexp {
+	pattern = strings.TrimPrefix(pattern, "./")
+	if strings.HasSuffix(pattern, "/") {
+		pattern += "**"
+	}
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch c := pattern[i]; {
+		case strings.HasPrefix(pattern[i:], "**/"):
+			b.WriteString("(?:.*/)?")
+			i += 2
+		case strings.HasPrefix(pattern[i:], "**"):
+			b.WriteString(".*")
+			i++
+		case c == '*':
+			b.WriteString("[^/]*")
+		case c == '?':
+			b.WriteString("[^/]")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	b.WriteString("$")
+	re, err := regexp.Compile(b.String())
+	if err != nil {
+		return nil
+	}
+	return re
+}
+
+func GlobMatch(pattern, p string) bool {
+	re := CompileGlob(pattern)
+	return re != nil && re.MatchString(p)
+}
+
 func verifiers(v any) []string {
 	switch x := v.(type) {
 	case string:
