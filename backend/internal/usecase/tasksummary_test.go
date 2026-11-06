@@ -209,8 +209,12 @@ func TestOversizedWorkOrderStaysWithinBudget(t *testing.T) {
 	if len(body) > maxKnowledgeBody {
 		t.Fatalf("body %d bytes exceeds knowledge limit", len(body))
 	}
-	if !strings.HasPrefix(body, "Goal:") || !strings.HasSuffix(body, "[truncated]") {
-		t.Fatalf("oversized body must be cut at the budget:\n%s", body)
+	requireHeadersInOrder(t, body)
+	if len(body) > 1800 {
+		t.Fatalf("body %d bytes exceeds summary budget", len(body))
+	}
+	if i := strings.Index(body, "Main changes:"); strings.Contains(body[:i], "[truncated]") {
+		t.Fatalf("sections before Main changes must not be truncated:\n%s", body)
 	}
 }
 

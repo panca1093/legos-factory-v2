@@ -114,29 +114,38 @@ const (
 	summaryBudget   = 1800
 	summaryMaxLines = 8
 	summaryMaxItems = 5
-	summaryGoalCap  = 300
+	summaryGoalCap  = 150
 	summaryMaxFiles = 10
+
+	summaryGoalBudget     = 480
+	summaryVerifyBudget   = 330
+	summaryOpenBudget     = 400
+	summaryDecisionBudget = 290
 )
 
 // taskSummary renders the deterministic five-section summary of wo's task.
 func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Goal: %s\nObjective: %s\nAcceptance: %s\n\n",
-		orNone(truncate(oneLine(wo.Title), 120)), orNone(truncate(oneLine(wo.Objective), summaryGoalCap)), orNone(truncate(oneLine(wo.Acceptance), summaryGoalCap)))
+		orNone(clip(oneLine(wo.Title), 120)), orNone(clip(oneLine(wo.Objective), summaryGoalCap)), orNone(clip(oneLine(wo.Acceptance), summaryGoalCap)))
 
+	fitSection(&b, 0, summaryGoalBudget)
+	start := b.Len()
 	b.WriteString("Final verification:\n")
 	header, checks := f.finalVerification(ctx, wo)
 	b.WriteString(header + "\n")
 	var failing []model.QualityCheck
 	var lines []string
 	for _, c := range checks {
-		lines = append(lines, truncate(fmt.Sprintf("- %s → %s", oneLine(c.Name), c.Outcome), 120))
+		lines = append(lines, clip(fmt.Sprintf("- %s → %s", oneLine(c.Name), c.Outcome), 120))
 		if c.Outcome != string(model.Pass) {
 			failing = append(failing, c)
 		}
 	}
 	writeCapped(&b, summaryMaxLines, lines)
 
+	fitSection(&b, start, summaryVerifyBudget)
+	start = b.Len()
 	b.WriteString("\nOpen items / follow-up:\n")
 	empty := true
 	if outcome != "READY" {
@@ -151,13 +160,13 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		for _, fd := range all {
 			switch fd.Status {
 			case model.FindingOpen, model.FindingConfirmed, model.FindingEscalated:
-				findLines = append(findLines, truncate(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 160))
+				findLines = append(findLines, clip(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 160))
 			}
 		}
 	}
 	if r := f.currentArchitectReport(wo); r != nil {
 		for _, d := range r.Deviations {
-			devLines = append(devLines, truncate("- deviation: "+oneLine(d), 160))
+			devLines = append(devLines, clip("- deviation: "+oneLine(d), 160))
 		}
 	}
 	for _, l := range [][]string{failLines, findLines, devLines} {
@@ -170,6 +179,8 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		b.WriteString("none\n")
 	}
 
+	fitSection(&b, start, summaryOpenBudget)
+	start = b.Len()
 	b.WriteString("\nKey decisions and rationale:\n")
 	var decisions []model.KnowledgeRecord
 	if recs, err := f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: wo.ID, Limit: 200}); err == nil {
@@ -194,8 +205,9 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		b.WriteString("none recorded\n")
 	}
 	for _, k := range decisions {
-		b.WriteString(truncate(fmt.Sprintf("- %s: %s", k.Kind, oneLine(k.Title+" — "+k.Body)), 160) + "\n")
+		b.WriteString(clip(fmt.Sprintf("- %s: %s", k.Kind, oneLine(k.Title+" — "+k.Body)), 160) + "\n")
 	}
+	fitSection(&b, start, summaryDecisionBudget)
 
 	b.WriteString("\nMain changes:\n")
 	body := b.String()
@@ -212,6 +224,31 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		}
 	}
 	return truncate(body, summaryBudget)
+}
+
+func clip(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max] + "…"
+}
+
+func fitSection(b *strings.Builder, start, budget int) {
+	all := b.String()
+	sec := all[start:]
+	for len(sec) > budget {
+		trimmed := strings.TrimRight(sec, "\n")
+		i := strings.LastIndex(trimmed, "\n")
+		if i < 0 {
+			break
+		}
+		sec = trimmed[:i+1]
+	}
+	b.Reset()
+	b.WriteString(all[:start] + sec)
 }
 
 func orNone(s string) string {
