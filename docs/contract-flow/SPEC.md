@@ -103,7 +103,7 @@ Jev questions change from "does the review report an unaddressed problem" to che
 |---|---|
 | `covers_<c>` | Does a task implement `acceptance_criteria.<c>`? (unchanged) |
 | `verified_<c>` | Does the AC → verification table give `<c>` a concrete test or check? |
-| `critical_resolved` | Is every critical finding in `analysis` addressed by the spec or a task? |
+| `critical_resolved` | Is every critical finding in `analysis` addressed by the spec or a task? (asked only when the analysis has a critical finding) |
 | `open_questions` | Does the spec still contain an open question or a guessed behaviour? |
 | `scope_creep` | Does a task build something the request and criteria do not ask for? (unchanged) |
 | `touches_*` | Risk questions (unchanged) |
