@@ -71,10 +71,15 @@ func (c Connection) IsGit() bool {
 	return c.Provider == ProviderGitHub || c.Provider == ProviderGitLab || c.Provider == ProviderBitbucket
 }
 
-// GitAuth is the HTTPS basic credential used for clone and push.
+// GitAuth is the HTTPS basic credential used for clone and push. A provider
+// that relies on the user's own git credentials (gh mode) leaves the
+// credential empty and sets RemoteURL, the GitHub URL the workspace's origin
+// is pointed at, and DefaultBranch, the branch the workspace starts from.
 type GitAuth struct {
-	Username string
-	Password string
+	Username      string
+	Password      string
+	RemoteURL     string
+	DefaultBranch string
 }
 
 type PRRequest struct {

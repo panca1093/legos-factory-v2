@@ -11,6 +11,15 @@ var (
 	ErrKBDocNotFound     = errors.New("knowledge document not found")
 )
 
+var (
+	ErrGHMissing         = errors.New("the gh CLI is not installed; install it from https://cli.github.com")
+	ErrGHUnauthenticated = errors.New("gh is not authenticated; run `gh auth login` and `gh auth setup-git`")
+	ErrGHUnreachable     = errors.New("gh could not reach GitHub")
+	ErrNotSupported      = errors.New("not supported on this platform")
+	ErrCancelled         = errors.New("cancelled")
+	ErrBusy              = errors.New("another folder chooser is already open")
+)
+
 // ErrStateConflict marks domain rejections that indicate an invalid
 // operation for the current state (mapped to HTTP 409).
 var ErrStateConflict = errors.New("STATE_CONFLICT")

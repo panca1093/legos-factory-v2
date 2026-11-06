@@ -4,7 +4,9 @@ package http
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -29,6 +31,7 @@ type Server struct {
 	Projects     *usecase.Projects
 	WorkOrders   *usecase.WorkOrders
 	Integrations *usecase.Integrations
+	Local        *usecase.Local
 	Catalog      *usecase.Cataloger
 	KBDocs       *usecase.KBDocs
 	Chat         *usecase.Chat
@@ -48,6 +51,9 @@ func New(cfg *model.Config, log *slog.Logger) *Server {
 		TargetHeader: echo.HeaderXRequestID,
 	}))
 	e.Use(echomw.Recover())
+	if cfg.AuthMode == "dev" {
+		e.Use(loopbackHostOnly)
+	}
 	e.Use(requestLogger(log))
 	e.Use(echomw.BodyLimit("1MB"))
 	e.Use(echomw.CORSWithConfig(echomw.CORSConfig{
@@ -60,6 +66,23 @@ func New(cfg *model.Config, log *slog.Logger) *Server {
 	s.routes()
 	s.mountStatic()
 	return s
+}
+
+// loopbackHostOnly defeats DNS rebinding in dev mode, where login needs no
+// credentials: a page on another origin that resolves to 127.0.0.1 still
+// sends its own Host. The port is not checked so the Vite proxy keeps working.
+func loopbackHostOnly(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		h := c.Request().Host
+		if host, _, err := net.SplitHostPort(h); err == nil {
+			h = host
+		}
+		switch strings.Trim(h, "[]") {
+		case "localhost", "127.0.0.1", "::1":
+			return next(c)
+		}
+		return errorJSON(c, http.StatusForbidden, "FORBIDDEN_HOST", "dev mode only answers requests addressed to localhost, 127.0.0.1 or [::1]")
+	}
 }
 
 func requestLogger(log *slog.Logger) echo.MiddlewareFunc {
@@ -215,6 +238,13 @@ func (s *Server) routes() {
 	api.POST("/connections/:id/test", s.requireRole(model.RoleEngineer, s.handleTestConnection))
 	api.PUT("/projects/:id/binding", s.requireRole(model.RoleEngineer, s.handleBindProject))
 	api.POST("/integrations/jira/lookup", s.requireRole(model.RoleEngineer, s.handleJiraLookup))
+
+	api.POST("/local/pick-folder", s.local(s.handleLocalPickFolder))
+	api.POST("/local/pick-folder/cancel", s.local(s.handleLocalPickCancel))
+	api.GET("/local/inspect", s.local(s.handleLocalInspect))
+	api.POST("/local/clone", s.local(s.handleLocalClone))
+	api.POST("/local/init", s.local(s.handleLocalInit))
+	api.GET("/local/gh", s.local(s.handleLocalGH))
 
 	api.GET("/knowledge", s.handleListKnowledge)
 	api.GET("/knowledge/:id", s.handleGetKnowledge)

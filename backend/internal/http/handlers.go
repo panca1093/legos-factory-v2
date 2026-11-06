@@ -22,6 +22,7 @@ func (s *Server) handleListProjects(c echo.Context) error {
 	out := make([]model.Project, 0, len(projects))
 	for _, p := range projects {
 		p.QualityProfile = "" // not exposed in list view
+		s.Integrations.Annotate(c.Request().Context(), &p)
 		out = append(out, p)
 	}
 	return c.JSON(http.StatusOK, map[string]any{"projects": out})
@@ -39,6 +40,7 @@ func (s *Server) handleCreateProject(c echo.Context) error {
 	if err := s.Projects.Create(c.Request().Context(), currentUser(c), p); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not create project")
 	}
+	s.Integrations.Annotate(c.Request().Context(), p)
 	return c.JSON(http.StatusCreated, p)
 }
 
@@ -47,6 +49,7 @@ func (s *Server) handleGetProject(c echo.Context) error {
 	if err != nil {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "project not found")
 	}
+	s.Integrations.Annotate(c.Request().Context(), p)
 	return c.JSON(http.StatusOK, p)
 }
 

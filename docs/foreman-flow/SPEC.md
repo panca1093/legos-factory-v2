@@ -216,6 +216,10 @@ The factory polls at boot and then every 2 minutes (fixed, no config). It checks
 
 The timestamp fields are exposed on the work order JSON. The event is appended before the timestamp is written, so a crash can repeat an event but never lose one. Events go through the normal publisher, so SSE clients see them.
 
+#### Local folder projects (gh publishing)
+
+With `FACTORY_AUTH_MODE=dev` (backend on the user's own machine) a project can be a local git folder with no connection. When the folder's `origin` is on github.com, `GitFor` returns a `gh`-CLI provider (`publish_via: "gh"`, `github_repo: owner/repo`); a bound connection always wins. The workspace is cloned from the folder, its `origin` is re-pointed at the folder's own origin URL (https or ssh) and it starts from the freshly fetched default branch (falling back to the folder's own copy of that branch, else preparation fails); the user's folder is never touched, and in gh mode the push always targets the remote URL, never a local path. The branch is pushed with the user's own git credentials (`gh auth setup-git` or their ssh keys) and the PR is found-or-created and tracked through `gh`. A missing or logged-out `gh` fails the open-PR job visibly (`pr_open_failed`) instead of skipping it. The `/api/v1/local/*` helpers (folder picker, inspect, clone, init, gh status) exist only in dev mode.
+
 ## Jev integration
 
 - Endpoint `POST https://api.typesafe.ai/v1/systemone`, `Authorization: Bearer $TYPESAFE_API_KEY`.
