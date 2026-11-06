@@ -197,6 +197,9 @@ func (r *reviewReply) validate() error {
 		if f.Severity == "critical" && strings.TrimSpace(f.Cites) == "" {
 			return fmt.Errorf("findings[%d] is critical, so it must cite the contract", i)
 		}
+		if f.Severity == "critical" && f.Layer == "requirement" && strings.TrimSpace(f.Fix) == "" && strings.TrimSpace(f.Question) == "" {
+			return fmt.Errorf("findings[%d] is a critical requirement finding, so it needs a fix or a question", i)
+		}
 	}
 	for i, c := range r.Coverage {
 		if strings.TrimSpace(c.Criterion) == "" {

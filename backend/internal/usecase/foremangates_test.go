@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -116,7 +117,7 @@ func TestPlanGateApprovalStartsTheBuildWithoutAHuman(t *testing.T) {
 		t.Fatalf("code approved the plan, actor %q", ev.Actor)
 	}
 	ev := eventByKind(t, r, "plan_gate")
-	if ev.Actor != "jev" || ev.Payload["outcome"] != GateApprove || ev.Payload["gate"] != "plan" || ev.Payload["row"] != float64(5) {
+	if ev.Actor != "jev" || ev.Payload["outcome"] != GateApprove || ev.Payload["gate"] != "plan" || ev.Payload["row"] != float64(6) {
 		t.Fatalf("gate event: %+v", ev)
 	}
 	if _, ok := ev.Payload["request"]; !ok {
@@ -366,14 +367,14 @@ func TestSecondRoundReviewIsScopedToThePreviousCriticals(t *testing.T) {
 		t.Fatalf("state %s revisions %d", wo.State, wo.PlanRevisions)
 	}
 	notes, _ := lastPayload(r)["notes"].(string)
-	if !strings.Contains(notes, "F1 [critical, contract] c1: no error path") || strings.Contains(notes, "Coverage") {
+	if !strings.Contains(notes, "R1-F1 [critical, contract] c1: no error path") || strings.Contains(notes, "Coverage") {
 		t.Fatalf("the revise note holds the unresolved critical finding only: %q", notes)
 	}
 	if strings.Contains(h.starts[len(h.starts)-1].Prompt, "re-review") {
 		t.Fatal("round 1 is a full review")
 	}
 
-	h.review = `{"resolved":[{"id":"F1","status":"resolved"}],"findings":[{"id":"F2","severity":"high","layer":"contract","cites":"c1","issue":"error text unspecified","fix":"name the message"}],"coverage":[{"criterion":"c1","verification":"test"}]}`
+	h.review = `{"resolved":[{"id":"R1-F1","status":"resolved"}],"findings":[{"id":"F2","severity":"high","layer":"contract","cites":"c1","issue":"error text unspecified","fix":"name the message"}],"coverage":[{"criterion":"c1","verification":"test"}]}`
 	j.over = nil
 	r.plan(t)
 	if wo := r.review(t); wo.State != model.StateQueued {
@@ -385,7 +386,7 @@ func TestSecondRoundReviewIsScopedToThePreviousCriticals(t *testing.T) {
 	}
 	state := j.calls[len(j.calls)-1].state.(map[string]any)["analysis"].(map[string]any)
 	fs, _ := state["findings"].([]reviewFinding)
-	if len(fs) != 1 || fs[0].ID != "F2" {
+	if len(fs) != 1 || fs[0].ID != "R2-F1" {
 		t.Fatalf("the resolved critical must leave the analysis: %+v", fs)
 	}
 	wo := r.reload(t)
@@ -406,7 +407,7 @@ func TestUnresolvedCriticalStaysInTheAnalysis(t *testing.T) {
 	r.plan(t)
 	r.review(t)
 	state := j.calls[len(j.calls)-1].state.(map[string]any)["analysis"].(map[string]any)
-	if fs, _ := state["findings"].([]reviewFinding); len(fs) != 1 || fs[0].ID != "F1" {
+	if fs, _ := state["findings"].([]reviewFinding); len(fs) != 1 || fs[0].ID != "R1-F1" {
 		t.Fatalf("F1 must carry over: %+v", fs)
 	}
 }
@@ -443,5 +444,130 @@ func TestUnsettledScopeCreepApprovesWithANoteForTheBuilder(t *testing.T) {
 	}
 	if len(wo.Clarifications) != 1 || !strings.Contains(wo.Clarifications[0].Answer, "it is unclear whether the plan includes work") {
 		t.Fatalf("notes: %+v", wo.Clarifications)
+	}
+}
+
+func TestPlanReviewNotesReachOnlyTheBuilder(t *testing.T) {
+	wo := &model.WorkOrder{Title: "t", Spec: "S", Clarifications: []model.Clarification{
+		{Question: "Which cap?", Answer: "5MB", By: "human"},
+		{Question: "Note from plan review (high, c1)", Answer: "name the message", By: builderNotesBy},
+	}}
+	for name, p := range map[string]string{
+		"clarification": clarification(wo),
+		"log":           clarificationLog(wo),
+		"plan":          planPrompt(wo, "", "", nil),
+		"review":        foremanReviewPrompt(wo, nil, nil, false),
+	} {
+		if strings.Contains(p, "name the message") || strings.Contains(p, "Note from plan review") {
+			t.Errorf("%s leaks the plan review note:\n%s", name, p)
+		}
+	}
+	if !strings.Contains(clarification(wo), "Q: Which cap?\nA: 5MB") {
+		t.Fatal("real answers stay")
+	}
+	if findClarification(wo.Clarifications, "Note from plan review (high, c1)") != nil {
+		t.Fatal("a note is not an answer")
+	}
+	if p := implementPrompt(wo, model.Job{TaskID: "x"}, nil); !strings.Contains(p, "Plan review notes") || !strings.Contains(p, "name the message") {
+		t.Fatalf("the Builder prompt carries the notes:\n%s", p)
+	}
+}
+
+func TestRequirementQuestionAlreadyAnsweredIsSettledNotAskedAgain(t *testing.T) {
+	q := strings.Replace(criticalRequirement, `"fix":"cap uploads at 5MB"`, `"fix":"","question":"Which upload cap?"`, 1)
+	r := harnessRig(t, &sessHarness{answer: answerJSON, review: q}, &fakeJudge{over: map[string]float64{"critical_resolved": 0.1}})
+	log, _ := json.Marshal([]model.Clarification{{Question: "Which upload cap?", Answer: "5MB", By: "human"}})
+	if err := r.wos.UpdateFields(context.Background(), r.wo.ID, map[string]any{"clarif_log": string(log)}); err != nil {
+		t.Fatal(err)
+	}
+	wo := r.review(t)
+	if wo.State != model.StatePlanning || !strings.Contains(wo.Brief, "- Settled: Which upload cap? -> 5MB") {
+		t.Fatalf("state %s brief %q", wo.State, wo.Brief)
+	}
+}
+
+func TestRequirementQuestionOverTheHumanCapTakesTheDefault(t *testing.T) {
+	q := strings.Replace(criticalRequirement, `"fix":"cap uploads at 5MB"`, `"fix":"","question":"Which upload cap?"`, 1)
+	r := harnessRig(t, &sessHarness{answer: answerJSON, review: q}, &fakeJudge{over: map[string]float64{"critical_resolved": 0.1}})
+	var log []model.Clarification
+	for i := 0; i < maxHumanQuestions; i++ {
+		log = append(log, model.Clarification{Question: fmt.Sprintf("q%d", i), Answer: "a", By: "human"})
+	}
+	raw, _ := json.Marshal(log)
+	if err := r.wos.UpdateFields(context.Background(), r.wo.ID, map[string]any{"clarif_log": string(raw)}); err != nil {
+		t.Fatal(err)
+	}
+	wo := r.review(t)
+	if wo.State != model.StatePlanning || !strings.Contains(wo.Brief, "- Unanswered, default taken: Which upload cap?") {
+		t.Fatalf("state %s brief %q", wo.State, wo.Brief)
+	}
+}
+
+func TestBriefAmendmentsShareOneSectionAndSurviveAnAsk(t *testing.T) {
+	r := harnessRig(t, &sessHarness{answer: answerJSON}, &fakeJudge{})
+	ctx := context.Background()
+	wo := r.reload(t)
+	wo.Brief = "Outcome: x\n\nOut of scope:\n- y"
+	for _, a := range []string{"cap at 5MB", "log rejects"} {
+		if err := r.f.amendBrief(ctx, wo, []string{a}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := r.f.amendBrief(ctx, wo, []string{"cap at 5MB"}); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(wo.Brief, amendmentsHeader); n != 1 || !strings.HasSuffix(wo.Brief, amendmentsHeader+"\n- cap at 5MB\n- log rejects") {
+		t.Fatalf("one section, deduplicated:\n%s", wo.Brief)
+	}
+
+	both := `{"findings":[{"id":"x","severity":"critical","layer":"requirement","cites":"brief","issue":"a","fix":"keep it private"},{"id":"x","severity":"critical","layer":"requirement","cites":"brief","issue":"b","fix":"","question":"Which cap?"}],"coverage":[]}`
+	r2 := harnessRig(t, &sessHarness{answer: answerJSON, review: both}, &fakeJudge{})
+	wo2 := r2.review(t)
+	if wo2.State != model.StateWaitingForHuman || !strings.Contains(wo2.Brief, "- keep it private") {
+		t.Fatalf("the amendment before the ask must stay: %s %q", wo2.State, wo2.Brief)
+	}
+}
+
+func TestFindingIdsAreAssignedByTheFactory(t *testing.T) {
+	two := `{"findings":[{"id":"F1","severity":"high","layer":"contract","issue":"a"},{"id":"F1","severity":"low","layer":"contract","issue":"b"}],"coverage":[]}`
+	r := harnessRig(t, &sessHarness{answer: answerJSON, review: two}, &fakeJudge{})
+	r.review(t)
+	fs := payloadFindings(eventByKind(t, r, "plan_reviewed").Payload)
+	if len(fs) != 2 || fs[0].ID != "R1-F1" || fs[1].ID != "R1-F2" {
+		t.Fatalf("ids: %+v", fs)
+	}
+}
+
+func TestMergeFindingsKeepsCriticalsAndCapsAtTen(t *testing.T) {
+	var prev []reviewFinding
+	for i := 0; i < 8; i++ {
+		prev = append(prev, reviewFinding{ID: fmt.Sprintf("p%d", i), Severity: "low"})
+	}
+	prev = append(prev, reviewFinding{ID: "c1", Severity: "critical"}, reviewFinding{ID: "c2", Severity: "critical"})
+	got := mergeFindings(prev, reviewReply{
+		Findings: []reviewFinding{{ID: "n1", Severity: "critical"}, {ID: "n2", Severity: "high"}},
+		Resolved: []findingStatus{{ID: "c2", Status: "resolved"}},
+	})
+	if len(got) != maxReviewFindings || got[0].ID != "c1" || got[1].ID != "n1" {
+		t.Fatalf("got %+v", got)
+	}
+	for _, f := range got {
+		if f.ID == "c2" {
+			t.Fatal("resolved critical must leave")
+		}
+	}
+}
+
+func TestRestartedReviewIgnoresItsOwnRoundsEvent(t *testing.T) {
+	h := &sessHarness{answer: answerJSON, review: criticalContract}
+	r := harnessRig(t, h, &fakeJudge{over: map[string]float64{"critical_resolved": 0.1}})
+	r.review(t) // round 1 records revision 0
+	r.plan(t)
+	r.review(t) // round 2 records revision 1 and is scoped
+	if !strings.Contains(h.starts[len(h.starts)-1].Prompt, "re-review") {
+		t.Fatal("round 2 is scoped to round 1")
+	}
+	if got := payloadRevision(eventByKind(t, r, "plan_reviewed").Payload); got != 1 {
+		t.Fatalf("revision %d", got)
 	}
 }

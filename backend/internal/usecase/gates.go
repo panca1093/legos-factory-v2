@@ -525,14 +525,15 @@ func planTaskTitles(tasks []PlanTask) string {
 //	2 escalate: touches_schema/authentication/authorization/payments/secrets is yes
 //	3 revise:   a covers_* or verified_* is no, critical_resolved is no,
 //	  open_questions is yes, or scope_creep is yes
-//	4 revise:   covers_*, verified_* or critical_resolved is unsettled
-//	5 approve
+//	4 escalate: a touches_* is unsettled (risk is a human call)
+//	5 revise:   covers_*, verified_* or critical_resolved is unsettled
+//	6 approve
 //
-// Rows 3 and 4 become escalate once in.PlanRevisions reaches maxPlanRevisions.
-// Unsettled scope_creep, open_questions and touches_* never revise: they come
-// go to the Builder as notes. The revise note holds only the
-// triggering answers and the critical findings in in.Findings. Only the
-// questions in asked are read; answers to other ids are ignored.
+// Rows 3 and 5 become escalate once in.PlanRevisions reaches maxPlanRevisions.
+// Unsettled scope_creep and open_questions never revise: they go to the
+// Builder as notes. The revise note holds only the triggering answers and the
+// critical findings in in.Findings. Only the questions in asked are read;
+// answers to other ids are ignored.
 func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]float64, judgeErr error, overLimit bool) GateOutcome {
 	required := append(append([]string{}, planFixedIDs...), planRiskIDs...)
 	for _, c := range in.Criteria {
@@ -541,7 +542,7 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
 		return GateOutcome{Outcome: GateEscalate, Row: 1, Note: note}
 	}
-	var hard, soft, risky, builder []string
+	var hard, soft, risky, unsure, builder []string
 	labels := make(map[string]string, len(in.Criteria))
 	for _, c := range in.Criteria {
 		labels[c.ID] = fmt.Sprintf("%s (%s)", c.ID, c.Text)
@@ -566,12 +567,15 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 			criticals = append(criticals, findingLine(f))
 		}
 	}
-	criticalNote := "critical findings the spec or a task must address: " + strings.Join(criticals, " | ")
+	criticalNote := ""
+	if len(criticals) > 0 {
+		criticalNote = "; critical findings the spec or a task must address: " + strings.Join(criticals, " | ")
+	}
 	switch judge(answers["critical_resolved"]) {
 	case vNo:
-		hard = append(hard, "a critical finding is not addressed by the spec or any task; "+criticalNote)
+		hard = append(hard, "a critical finding is not addressed by the spec or any task"+criticalNote)
 	case vUnsettled:
-		soft = append(soft, "it is unclear whether every critical finding is addressed; "+criticalNote)
+		soft = append(soft, "it is unclear whether every critical finding is addressed"+criticalNote)
 	}
 	if judge(answers["open_questions"]) == vYes {
 		hard = append(hard, planPhrases["open_questions"])
@@ -589,7 +593,7 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 		case vYes:
 			risky = append(risky, planPhrases[id])
 		case vUnsettled:
-			builder = append(builder, "it is unclear whether "+planPhrases[id])
+			unsure = append(unsure, "it is unclear whether "+planPhrases[id])
 		}
 	}
 	if len(risky) > 0 {
@@ -599,10 +603,12 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	switch {
 	case len(hard) > 0:
 		row, note = 3, numberNotes(append(hard, soft...))
+	case len(unsure) > 0:
+		return GateOutcome{Outcome: GateEscalate, Row: 4, Note: joinNotes(unsure), Builder: builder}
 	case len(soft) > 0:
-		row, note = 4, numberNotes(soft)
+		row, note = 5, numberNotes(soft)
 	default:
-		return GateOutcome{Outcome: GateApprove, Row: 5, Builder: builder}
+		return GateOutcome{Outcome: GateApprove, Row: 6, Builder: builder}
 	}
 	if in.PlanRevisions >= maxPlanRevisions {
 		return GateOutcome{Outcome: GateEscalate, Row: row, Note: note, Builder: builder}
@@ -724,6 +730,7 @@ func gateEvent(gate string, state any, questions map[string]Noul, res JudgeResul
 		"outcome":         out.Outcome,
 		"note":            out.Note,
 		"issues":          out.Issues,
+		"builder_notes":   out.Builder,
 		"yes_over":        yesAbove,
 		"no_under":        noBelow,
 	}

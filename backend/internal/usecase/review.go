@@ -45,7 +45,8 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	var prev []reviewFinding
 	scoped := false
 	if wo.PlanRevisions > 0 { // a re-review inside the same gate budget checks the last round's criticals only
-		if e, err := f.WO.LatestEvent(ctx, wo.ID, "plan_reviewed"); err == nil && e != nil {
+		// a restart finds this round's own event: only the previous round's counts
+		if e, err := f.WO.LatestEvent(ctx, wo.ID, "plan_reviewed"); err == nil && e != nil && payloadRevision(e.Payload) == wo.PlanRevisions-1 {
 			prev, scoped = payloadFindings(e.Payload), true
 		}
 	}
@@ -57,6 +58,9 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
+	for i := range r.Findings { // ids come from the factory: the model reuses "F1" every round
+		r.Findings[i].ID = fmt.Sprintf("R%d-F%d", wo.PlanRevisions+1, i+1)
+	}
 	findings := r.Findings
 	if scoped {
 		findings = mergeFindings(prev, r)
@@ -65,7 +69,7 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	review := r.text()
 	f.Catalog.Record(ctx, wo, model.KnowledgePlanReview, model.TrustAIInterpretation, "foreman",
 		"Foreman plan review notes", review, "run:"+runID)
-	f.event(wo.ID, "foreman", "plan_reviewed", "Foreman review notes ready", map[string]any{"notes": review, "findings": findings, "coverage": r.Coverage, "run_id": runID})
+	f.event(wo.ID, "foreman", "plan_reviewed", "Foreman review notes ready", map[string]any{"notes": review, "findings": findings, "coverage": r.Coverage, "revision": wo.PlanRevisions, "run_id": runID})
 	if asked, err := f.settleRequirementFindings(ctx, wo, findings, prev); asked || err != nil {
 		return err
 	}
@@ -90,52 +94,121 @@ func payloadFindings(payload map[string]any) []reviewFinding {
 	return out
 }
 
+// payloadRevision is the plan revision a stored plan_reviewed event belongs to; events without one read as -1.
+func payloadRevision(payload map[string]any) int {
+	switch v := payload["revision"].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	}
+	return -1
+}
+
 // mergeFindings is the analysis after a scoped re-review: the previous
-// findings minus the criticals the Foreman marked resolved, plus new ones.
-// A critical without a status stays unresolved.
+// findings minus the criticals the Foreman marked resolved, plus new ones,
+// criticals first and capped. A critical without a status stays unresolved.
 func mergeFindings(prev []reviewFinding, r reviewReply) []reviewFinding {
 	resolved := map[string]bool{}
 	for _, s := range r.Resolved {
 		resolved[s.ID] = s.Status == "resolved"
 	}
-	out := []reviewFinding{}
-	for _, f := range prev {
-		if f.Severity != "critical" || !resolved[f.ID] {
-			out = append(out, f)
+	var crit, rest []reviewFinding
+	for _, f := range append(append([]reviewFinding{}, prev...), r.Findings...) {
+		switch {
+		case f.Severity == "critical" && resolved[f.ID]:
+		case f.Severity == "critical":
+			crit = append(crit, f)
+		default:
+			rest = append(rest, f)
 		}
 	}
-	return append(out, r.Findings...)
+	return append(crit, rest...)[:min(maxReviewFindings, len(crit)+len(rest))]
 }
 
+const amendmentsHeader = "Amendments from plan review:"
+
 // settleRequirementFindings handles the Foreman's own findings. A new
-// requirement-layer critical either asks the human (returns asked) or amends
-// the brief with its fix; the Architect then revises through the gate.
+// requirement-layer critical amends the brief with its fix, or asks the human
+// (returns asked) when it carries a question that is neither answered nor over
+// the human-question cap; the Architect then revises through the gate.
 func (f *Factory) settleRequirementFindings(ctx context.Context, wo *model.WorkOrder, findings, prev []reviewFinding) (asked bool, err error) {
 	seen := map[string]bool{}
 	for _, p := range prev {
 		seen[p.ID] = true
 	}
 	var amends []string
+	question := ""
 	for _, fd := range criticals(findings) {
 		if fd.Layer != "requirement" || seen[fd.ID] {
 			continue
 		}
-		if q := strings.TrimSpace(fd.Question); q != "" {
-			return true, f.askHuman(ctx, wo, "foreman", q)
+		q := strings.TrimSpace(fd.Question)
+		switch c := findClarification(wo.Clarifications, q); {
+		case q == "":
+		case c != nil:
+			amends = append(amends, "Settled: "+q+" -> "+c.Answer)
+			continue
+		case humanAnswers(wo) >= maxHumanQuestions:
+			amends = append(amends, "Unanswered, default taken: "+q)
+		default: // a question for the human: its fix waits for the answer
+			if question == "" {
+				question = q
+			}
+			continue
 		}
-		amends = append(amends, "- "+strings.TrimSpace(fd.Fix))
+		if fix := strings.TrimSpace(fd.Fix); fix != "" {
+			amends = append(amends, fix)
+		}
 	}
-	if len(amends) == 0 {
-		return false, nil
+	if len(amends) > 0 {
+		if err := f.amendBrief(ctx, wo, amends); err != nil {
+			return false, err
+		}
 	}
-	brief := strings.TrimRight(wo.Brief, "\n") + "\n\nAmendments from plan review:\n" + strings.Join(amends, "\n")
+	if question != "" {
+		return true, f.askHuman(ctx, wo, "foreman", question)
+	}
+	return false, nil
+}
+
+// amendBrief adds bullets to the brief's single amendments section, creating it on first use.
+func (f *Factory) amendBrief(ctx context.Context, wo *model.WorkOrder, amends []string) error {
+	var old []string
+	head, tail := strings.TrimRight(wo.Brief, "\n"), ""
+	if i := strings.Index(head, amendmentsHeader); i >= 0 {
+		lines := strings.Split(strings.TrimPrefix(head[i+len(amendmentsHeader):], "\n"), "\n")
+		n := 0
+		for n < len(lines) && strings.HasPrefix(lines[n], "- ") {
+			old = append(old, lines[n])
+			n++
+		}
+		tail = strings.Join(lines[n:], "\n")
+		head = strings.TrimRight(head[:i], "\n")
+	}
+	have := map[string]bool{}
+	for _, o := range old {
+		have[o] = true
+	}
+	for _, a := range amends {
+		if line := "- " + a; !have[line] {
+			old, have[line] = append(old, line), true
+		}
+	}
+	brief := head + "\n\n" + amendmentsHeader + "\n" + strings.Join(old, "\n")
+	if strings.TrimSpace(tail) != "" {
+		brief += "\n\n" + strings.TrimSpace(tail)
+	}
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"brief": brief}); err != nil {
-		return false, err
+		return err
 	}
 	wo.Brief = brief
 	f.writeBriefDoc(ctx, wo)
 	f.event(wo.ID, "foreman", "brief_amended", "Foreman amended the brief after plan review", map[string]any{"amendments": amends})
-	return false, nil
+	if over := overBudget("brief", brief, briefWords); over != "" {
+		f.event(wo.ID, "foreman", "budget_exceeded", "Brief accepted over budget: "+over, nil)
+	}
+	return nil
 }
 
 // planRevisionNotes rebuilds the Architect's revision note from the stored gate event of the revision that was requested.

@@ -12,9 +12,9 @@ import (
 
 func clarification(wo *model.WorkOrder) string {
 	var b strings.Builder
-	if len(wo.Clarifications) > 0 {
+	if answers := answered(wo.Clarifications); len(answers) > 0 {
 		b.WriteString("\nQuestions answered so far:\n")
-		for _, c := range wo.Clarifications {
+		for _, c := range answers {
 			fmt.Fprintf(&b, "Q: %s\nA: %s\n", c.Question, c.Answer)
 		}
 	}
@@ -27,7 +27,7 @@ func clarification(wo *model.WorkOrder) string {
 // clarificationLog is the Foreman's answers as plain text, for scripted harnesses.
 func clarificationLog(wo *model.WorkOrder) string {
 	var parts []string
-	for _, c := range wo.Clarifications {
+	for _, c := range answered(wo.Clarifications) {
 		parts = append(parts, c.Question+" -> "+c.Answer)
 	}
 	return strings.Join(parts, "\n")
@@ -344,11 +344,33 @@ func taskSection(job model.Job, tasks []model.Task) string {
 	return b.String()
 }
 
-func specSection(wo *model.WorkOrder) string {
-	if wo.Spec == "" {
-		return ""
+// answered drops the plan review's notes, which are not answers to anyone's question.
+func answered(list []model.Clarification) []model.Clarification {
+	out := make([]model.Clarification, 0, len(list))
+	for _, c := range list {
+		if c.By != builderNotesBy {
+			out = append(out, c)
+		}
 	}
-	return "\nSpec (the Architect verifies the result against this):\n" + wo.Spec + "\n"
+	return out
+}
+
+// specSection is only printed for the Builder, so the plan review's notes ride along here.
+func specSection(wo *model.WorkOrder) string {
+	var b strings.Builder
+	if wo.Spec != "" {
+		b.WriteString("\nSpec (the Architect verifies the result against this):\n" + wo.Spec + "\n")
+	}
+	var notes []string
+	for _, c := range wo.Clarifications {
+		if c.By == builderNotesBy {
+			notes = append(notes, "- "+c.Question+": "+c.Answer)
+		}
+	}
+	if len(notes) > 0 {
+		b.WriteString("\nPlan review notes (do not block the work; keep them in mind):\n" + strings.Join(notes, "\n") + "\n")
+	}
+	return b.String()
 }
 
 // fixContext is what every fix prompt shares: the spec, the plan and the numbered brief.
