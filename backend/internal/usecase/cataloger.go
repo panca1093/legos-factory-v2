@@ -112,7 +112,7 @@ func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome s
 
 const (
 	summaryBudget    = 1800
-	summaryMaxItems  = 5
+	summaryMaxItems  = 3
 	summaryMaxChecks = 8
 )
 
@@ -126,29 +126,31 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 	}
 	more := func(n int) string { return fmt.Sprintf("(+%d more)", n-summaryMaxItems) }
 
-	goal := fmt.Sprintf("Goal: %s\nObjective: %s\nAcceptance: %s",
-		clip(orNone(wo.Title), 120), clip(orNone(wo.Objective), 300), clip(orNone(wo.Acceptance), 300))
+	goal := fitLines("Goal: "+clip(orNone(wo.Title), 100), []string{
+		"Objective: " + clip(orNone(wo.Objective), 150),
+		"Acceptance: " + clip(orNone(wo.Acceptance), 150),
+	}, 450)
 
 	verLines, failing := f.finalVerification(ctx, wo)
-	ver := "Final verification:\n" + strings.Join(verLines, "\n")
+	ver := fitLines("Final verification:", verLines, 300)
 
 	var open []string
 	if outcome != "READY" {
-		open = append(open, "Outcome: "+outcome)
+		open = append(open, "- Outcome: "+outcome)
 	}
 	for i, c := range failing {
 		if i == summaryMaxItems {
 			open = append(open, more(len(failing)))
 			break
 		}
-		open = append(open, "check "+c)
+		open = append(open, "- check "+c)
 	}
 	if all, err := f.Findings.List(ctx, wo.ID); err == nil {
 		var lines []string
 		for _, fd := range all {
 			switch fd.Status {
 			case model.FindingOpen, model.FindingConfirmed, model.FindingEscalated:
-				lines = append(lines, clip(fmt.Sprintf("[%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 160))
+				lines = append(lines, clip(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 100))
 			}
 		}
 		for i, l := range lines {
@@ -165,23 +167,13 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 				open = append(open, more(len(r.Deviations)))
 				break
 			}
-			open = append(open, clip("deviation: "+oneLine(d), 160))
+			open = append(open, clip("- deviation: "+oneLine(d), 100))
 		}
 	}
-	openSection := "Open items / follow-up:\n"
 	if len(open) == 0 {
-		openSection += "none"
+		open = []string{"none"}
 	}
-	for i, o := range open {
-		if strings.HasPrefix(o, "(+") {
-			openSection += o
-		} else {
-			openSection += "- " + o
-		}
-		if i < len(open)-1 {
-			openSection += "\n"
-		}
-	}
+	openSection := fitLines("Open items / follow-up:", open, 450)
 
 	var decisions []model.KnowledgeRecord
 	if recs, err := f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: wo.ID, Limit: 200}); err == nil {
@@ -199,19 +191,14 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		}
 		return decisions[i].ID < decisions[j].ID
 	})
-	dec := "Key decisions and rationale:\n"
-	if len(decisions) == 0 {
-		dec += "none recorded"
+	decLines := make([]string, 0, len(decisions))
+	for _, k := range decisions {
+		decLines = append(decLines, clip("- "+k.Kind+": "+oneLine(k.Title+" — "+k.Body), 160))
 	}
-	for i, k := range decisions {
-		if i == summaryMaxItems {
-			break
-		}
-		if i > 0 {
-			dec += "\n"
-		}
-		dec += clip("- "+k.Kind+": "+oneLine(k.Title+" — "+k.Body), 160)
+	if len(decLines) == 0 {
+		decLines = []string{"none recorded"}
 	}
+	dec := fitLines("Key decisions and rationale:", decLines, 350)
 
 	body := strings.Join([]string{goal, ver, openSection, dec}, "\n\n") + "\n\nMain changes:"
 	for _, l := range f.changedFileLines(ctx, wo) {
@@ -305,6 +292,23 @@ func (f *Factory) changedFileLines(ctx context.Context, wo *model.WorkOrder) []s
 	out := make([]string, len(dirs))
 	for i, d := range dirs {
 		out[i] = fmt.Sprintf("- %s/ (%d files)", d, counts[d])
+	}
+	return out
+}
+
+// fitLines appends lines under head while the result stays within budget, ending with "(+N more)".
+func fitLines(head string, lines []string, budget int) string {
+	const reserve = len("\n(+99 more)")
+	out := head
+	for i, l := range lines {
+		room := budget
+		if i < len(lines)-1 {
+			room -= reserve
+		}
+		if len(out)+1+len(l) > room {
+			return out + fmt.Sprintf("\n(+%d more)", len(lines)-i)
+		}
+		out += "\n" + l
 	}
 	return out
 }

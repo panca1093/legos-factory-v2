@@ -209,8 +209,9 @@ func TestOversizedWorkOrderStaysWithinBudget(t *testing.T) {
 	if len(body) > summaryBudget {
 		t.Fatalf("body %d bytes exceeds budget", len(body))
 	}
-	if !strings.HasPrefix(body, "Goal:") || !strings.Contains(body, "Final verification:") {
-		t.Fatalf("leading sections lost:\n%s", body)
+	requireHeadersInOrder(t, body)
+	if head := body[:strings.Index(body, "Main changes:")]; strings.Contains(head, "[truncated]") {
+		t.Fatalf("leading sections truncated:\n%s", body)
 	}
 }
 
