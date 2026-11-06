@@ -390,7 +390,32 @@ Objective: %s
 Acceptance criteria:
 %s
 %s%s%s
-Work only within the assigned workspace. When done, reply with one line describing what changed.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo), specSection(wo), taskSection(job, tasks))
+Work only within the assigned workspace. When done, reply with one line describing what changed.
+
+Do not guess what should happen. If the task or spec is ambiguous about behaviour, stop without finishing and end
+your reply with a final line "%s <one question>". Decide anything about how yourself (naming, layout, a choice between
+equivalent implementations) and state it as an assumption in your reply.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo), specSection(wo), taskSection(job, tasks), needsContextMarker)
+}
+
+// architectAnswerPrompt asks the Architect to settle a Builder's behaviour question from the contract.
+func architectAnswerPrompt(wo *model.WorkOrder, tasks []model.Task, question string) string {
+	return fmt.Sprintf(`You are the Architect. A Builder, implementing your plan, asks what should happen.
+
+Work order: %s
+
+Acceptance criteria:
+%s
+%s%s
+Plan:
+%s
+Builder's question:
+%s
+
+Answer it only if the request, the brief, the spec or the repository settles it, or it is a small gap in the spec you
+can close. If it needs a product decision nobody has made, escalate — never guess it.
+Respond with ONLY a JSON object:
+{"decision":"ANSWER"|"ESCALATE","answer":"<required for ANSWER>","reason":"<why, especially for ESCALATE>"}`,
+		wo.Title, wo.Acceptance, briefSection(wo)+specSection(wo), clarification(wo), scopedTaskList(tasks), question)
 }
 
 func resolvePrompt(wo *model.WorkOrder, job model.Job, files []string) string {

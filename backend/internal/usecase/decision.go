@@ -101,6 +101,9 @@ func (f *Factory) AnswerClarification(ctx context.Context, woID, answer string) 
 	if wo.State != model.StateWaitingForHuman || wo.ClarifQuestion == "" || wo.ClarifAnswer != "" {
 		return stateConflict("WO %s is not waiting for clarification (state %s)", woID, wo.State)
 	}
+	if wo.ClarifTask != "" {
+		return f.resumeBuilder(ctx, wo, answer)
+	}
 	log := append(append([]model.Clarification{}, wo.Clarifications...), model.Clarification{Question: wo.ClarifQuestion, Answer: answer, By: "human"})
 	raw, _ := json.Marshal(log)
 	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"clarif_answer": answer, "clarif_log": string(raw), "review_rounds": 0, "clarif_rounds": 0, "plan_revisions": 0}); err != nil {

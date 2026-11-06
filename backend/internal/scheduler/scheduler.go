@@ -154,6 +154,10 @@ func (s *Scheduler) run(ctx context.Context, job model.Job) {
 		s.finish(ctx, job, model.JobCompleted, "")
 		return
 	}
+	if errors.Is(err, model.ErrRequeue) {
+		s.jobs.Release(ctx, job.ID)
+		return
+	}
 	attempts := s.jobs.Attempts(ctx, job.ID)
 	if attempts+1 >= job.MaxAttempts || errors.Is(err, model.ErrPermanent) {
 		s.log.Error("job failed permanently", "job", job.ID, "kind", job.Kind, "wo", job.WOID, "attempts", attempts+1, "err", err)

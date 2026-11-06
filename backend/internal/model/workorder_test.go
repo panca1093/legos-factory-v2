@@ -26,7 +26,7 @@ func TestInvalidTransitions(t *testing.T) {
 		{StateImplementing, StateReady},
 		{StateMergeReadiness, StateImplementing},
 		{StateReady, StateImplementing},
-		{StateWaitingForHuman, StateImplementing},
+		{StateWaitingForHuman, StateVerifying},
 	}
 	for _, c := range cases {
 		if CanTransition(c.from, c.to) {
