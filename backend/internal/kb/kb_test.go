@@ -2,6 +2,8 @@ package kb
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"os"
@@ -15,6 +17,40 @@ import (
 
 	"legos-factory/backend/internal/model"
 )
+
+func TestSupersededDefaultIsReplacedOnlyWhenUnedited(t *testing.T) {
+	const rel = "playbooks/all/how-we-work.md"
+	root := filepath.Join(t.TempDir(), "kb")
+	if _, err := OpenBundle(root, true); err != nil {
+		t.Fatal(err)
+	}
+	cur, _ := os.ReadFile(filepath.Join(root, rel))
+	old := []byte("---\ntype: Playbook\ntitle: How we work\ndescription: d\nstatus: stable\nrole: all\n---\n\nold default\n")
+	sum := sha256.Sum256(old)
+	supersededDefaults[rel] = append(supersededDefaults[rel], hex.EncodeToString(sum[:]))
+	t.Cleanup(func() { supersededDefaults[rel] = supersededDefaults[rel][:len(supersededDefaults[rel])-1] })
+
+	if err := os.WriteFile(filepath.Join(root, rel), old, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenBundle(root, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, rel)); string(got) != string(cur) {
+		t.Fatalf("an unedited old default must be replaced:\n%s", got)
+	}
+
+	edited := append(append([]byte{}, old...), "my rule\n"...)
+	if err := os.WriteFile(filepath.Join(root, rel), edited, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenBundle(root, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, rel)); string(got) != string(edited) {
+		t.Fatalf("an edited playbook must be kept:\n%s", got)
+	}
+}
 
 func TestParseFrontmatterAndFallbacks(t *testing.T) {
 	src := "---\ntype: ADR\ntitle: Money\nstatus: draft\nowner: me\nverified:\n  - {by: process:x, at: 2026-01-01}\n  - {by: \"human:ann\", at: 2026-01-02}\n---\n\n# Heading\n\nIntegers only.\nNo floats.\n\n## Sub\n\n```\n[x](code.md)\n```\n[a](../b/c.md#frag) [e](https://x.com/y.md) [s](self.md) [[Other]] [[deep/p|label]] [[missing]] [dup](../b/c.md)\n"

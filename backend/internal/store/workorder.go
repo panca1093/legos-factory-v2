@@ -19,7 +19,7 @@ type WorkOrderRepo struct{ DB *sql.DB }
 const woCols = `id, project_id, title, objective, acceptance, state,
 	builder_model, inspector_model, clarif_question, clarif_answer, revision,
 	commit_sha, source_ref, pr_url, pr_ref, pr_merged_at, pr_closed_at, pr_track_failed_at, foreman_model, architect_model, plan_review, review_rounds,
-	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, brief, spec, clarif_rounds, clarif_log, plan_revisions, architect_report, created_by, created_at, updated_at, COALESCE(source_chat_id,'')`
+	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, brief, spec, clarif_rounds, clarif_log, plan_revisions, architect_report, created_by, created_at, updated_at, COALESCE(source_chat_id,''), intake_pending`
 
 func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	if wo.ID == "" {
@@ -83,11 +83,12 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	var state string
 	var pausedAt, mergedAt, closedAt, trackFailedAt sql.NullInt64
 	var clarifLog string
+	var intakePending int
 	var createdAt, updatedAt int64
 	err := scan(&wo.ID, &wo.ProjectID, &wo.Title, &wo.Objective, &wo.Acceptance, &state,
 		&wo.BuilderModel, &wo.InspectorModel, &wo.ClarifQuestion, &wo.ClarifAnswer, &wo.Revision,
 		&wo.CommitSHA, &wo.SourceRef, &wo.PRURL, &wo.PRRef, &mergedAt, &closedAt, &trackFailedAt, &wo.ForemanModel, &wo.ArchitectModel, &wo.PlanReview,
-		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.Brief, &wo.Spec, &wo.ClarifRounds, &clarifLog, &wo.PlanRevisions, &wo.ArchitectReport, &wo.CreatedBy, &createdAt, &updatedAt, &wo.SourceChatID)
+		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.Brief, &wo.Spec, &wo.ClarifRounds, &clarifLog, &wo.PlanRevisions, &wo.ArchitectReport, &wo.CreatedBy, &createdAt, &updatedAt, &wo.SourceChatID, &intakePending)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrWorkOrderNotFound
 	}
@@ -95,6 +96,7 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 		return nil, err
 	}
 	wo.State = model.State(state)
+	wo.IntakePending = intakePending != 0
 	if clarifLog != "" {
 		_ = json.Unmarshal([]byte(clarifLog), &wo.Clarifications)
 	}

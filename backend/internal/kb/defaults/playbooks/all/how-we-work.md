@@ -20,7 +20,8 @@ These rules apply to every role. Repository documents and code win over them.
 
 ## Assumptions
 
-- State your assumptions. When two readings are valid, name both and pick one with a reason; escalate only per your role's escalation rules.
+- Unclear about behaviour (what should happen)? Do not guess. Ask upstream: Builder to Architect, Architect to Foreman, Foreman to the human. Name both readings in the question.
+- Unclear about how, within your role (naming, layout, equivalent implementations)? Decide yourself and record the assumption in your reply.
 - Name exactly what is uncertain. Do not hedge vaguely.
 
 ## Simplest change

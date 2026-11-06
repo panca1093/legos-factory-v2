@@ -228,30 +228,75 @@ func (r *verifyReply) validate() error {
 	return nil
 }
 
-// intakeReply is the Foreman's brief for the Architect.
+// openQuestion is a real unknown the Foreman cannot settle from the request or the repository.
+type openQuestion struct {
+	Question    string   `json:"question"`
+	Options     []string `json:"options"`
+	Recommended string   `json:"recommended"`
+}
+
+// ask renders the question as the human sees it.
+func (q openQuestion) ask() string {
+	s := strings.TrimSpace(q.Question)
+	if len(q.Options) > 0 {
+		s += " Options: " + strings.Join(q.Options, " / ") + "."
+	}
+	return s + " Recommended: " + strings.TrimSpace(q.Recommended) + "."
+}
+
+const maxOpenQuestions = 3
+
+// openQuestionsHeader marks a brief that still waits on a human answer.
+const openQuestionsHeader = "Open questions:"
+
+// intakeReply is the Foreman's brief for the Architect: what and why, never how.
 type intakeReply struct {
-	Brief              string   `json:"brief"`
-	Constraints        []string `json:"constraints"`
-	Risks              []string `json:"risks"`
-	SuggestedTaskShape string   `json:"suggested_task_shape"`
-	CodeFacts          []string `json:"code_facts"`
+	Outcome          string         `json:"outcome"`
+	Why              string         `json:"why"`
+	DomainInvariants []string       `json:"domain_invariants"`
+	SurfacesTouched  []string       `json:"surfaces_touched"`
+	Constraints      []string       `json:"constraints"`
+	OutOfScope       []string       `json:"out_of_scope"`
+	Assumptions      []string       `json:"assumptions"`
+	OpenQuestions    []openQuestion `json:"open_questions"`
+	CodeFacts        []string       `json:"code_facts"`
 }
 
 func (r *intakeReply) validate() error {
-	if strings.TrimSpace(r.Brief) == "" {
-		return errors.New("brief is required")
+	if strings.TrimSpace(r.Outcome) == "" {
+		return errors.New("outcome is required")
 	}
+	var qs []openQuestion
+	for i, q := range r.OpenQuestions {
+		if strings.TrimSpace(q.Question) == "" {
+			continue
+		}
+		if strings.TrimSpace(q.Recommended) == "" {
+			return fmt.Errorf("open_questions[%d] needs a recommended answer", i)
+		}
+		qs = append(qs, q)
+	}
+	if len(qs) > maxOpenQuestions {
+		qs = qs[:maxOpenQuestions] // ranked, so the tail is the least important
+	}
+	r.OpenQuestions = qs
 	return nil
 }
 
 // text renders the reply as the stored brief the Architect reads.
 func (r *intakeReply) text() string {
 	var b strings.Builder
-	b.WriteString(strings.TrimSpace(r.Brief))
+	b.WriteString(strings.TrimSpace(r.Outcome))
+	if why := strings.TrimSpace(r.Why); why != "" {
+		b.WriteString("\n\nWhy: " + why)
+	}
 	for _, s := range []struct {
 		title string
 		items []string
-	}{{"Constraints", r.Constraints}, {"Risks", r.Risks}} {
+	}{
+		{"Domain invariants", r.DomainInvariants}, {"Surfaces touched", r.SurfacesTouched},
+		{"Constraints", r.Constraints}, {"Out of scope", r.OutOfScope}, {"Assumptions", r.Assumptions},
+	} {
 		if len(s.items) == 0 {
 			continue
 		}
@@ -260,8 +305,11 @@ func (r *intakeReply) text() string {
 			b.WriteString("\n- " + strings.TrimSpace(it))
 		}
 	}
-	if shape := strings.TrimSpace(r.SuggestedTaskShape); shape != "" {
-		b.WriteString("\n\nSuggested task shape: " + shape)
+	if len(r.OpenQuestions) > 0 {
+		b.WriteString("\n\n" + openQuestionsHeader)
+		for _, q := range r.OpenQuestions {
+			b.WriteString("\n- " + q.ask())
+		}
 	}
 	return b.String()
 }
