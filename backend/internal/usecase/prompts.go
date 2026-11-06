@@ -69,7 +69,10 @@ Respond with ONLY a JSON object (no prose, no code fences):
 {"brief":"<what to build and where, in your words>",
  "constraints":["<behaviour or interfaces that must not change>"],
  "risks":["<what could go wrong>"],
- "suggested_task_shape":"<how to cut the work into tasks>"}`,
+ "suggested_task_shape":"<how to cut the work into tasks>"}
+
+Optionally add "code_facts": up to 10 strings "path:line — claim" for things you verified in the code that later
+agents would otherwise re-read (one line, under 200 characters each; the line number is optional).`,
 		wo.Title, wo.Objective, wo.Acceptance, facts)
 }
 
@@ -141,7 +144,8 @@ Rules:
 - If a product decision cannot be inferred from the objective or the brief, use decision CLARIFY and ask — never invent product requirements.
 - "deps" lists ids of tasks that must complete first; the graph must be acyclic and tasks must cover the objective.
 - "scope" lists the files or areas each task may touch.
-- role is "builder" for implementation tasks.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts)
+- role is "builder" for implementation tasks.
+- Optionally add "code_facts": up to 10 strings "path:line — claim" for things you verified in the code (one line, under 200 characters each).`, wo.Title, wo.Objective, wo.Acceptance, extra, facts)
 }
 
 func previousTasks(woID string, tasks []model.Task) string {

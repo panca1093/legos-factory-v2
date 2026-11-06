@@ -41,6 +41,7 @@ type Factory struct {
 	WO           WorkOrderStore
 	Runs         RunStore
 	Findings     FindingStore
+	CodeFacts    CodeFactStore // nil disables code facts
 	Quality      QualityStore
 	Proj         ProjectStore
 	Resolve      func(role model.AgentRole, wo *model.WorkOrder) Harness
@@ -127,6 +128,10 @@ type runOpts struct {
 }
 
 func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID, prompt string, extra map[string]string, taskID string, opts runOpts) (model.AgentResult, string, error) {
+	switch role {
+	case model.AgentForeman, model.AgentArchitect, model.AgentBuilder, model.AgentInspector:
+		prompt += f.codeFactsText(ctx, wo)
+	}
 	if f.Usage != nil {
 		release, ok := f.Usage.Reserve(50_000) // conservative estimate per agent run
 		if !ok {
