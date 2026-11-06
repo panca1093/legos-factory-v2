@@ -15,6 +15,13 @@ import (
 
 const kbListLimit = 500
 
+var factoryListTypes = map[string]bool{
+	model.KBTypePlaybook: true, model.KBTypeReviewerRoute: true, model.KBTypeBrief: true, model.KBTypeSpec: true,
+	model.KBTypeTaskDAG: true, model.KBTypeTaskSummary: true, model.KBTypeNote: true,
+}
+
+var ErrKBReadOnly = fmt.Errorf("%w: work-order documents are read-only records", model.ErrStateConflict)
+
 // KBDocs serves the Knowledge page: browsing both sources and editing,
 // approving, discarding or resetting factory documents.
 type KBDocs struct {
@@ -98,6 +105,9 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 			}
 		}
 		for _, h := range found {
+			if h.Doc.Source == model.KBSourceFactory && !factoryListTypes[h.Doc.Type] {
+				continue
+			}
 			if !seen[h.Doc.ID] {
 				seen[h.Doc.ID] = true
 				hits = append(hits, h)
@@ -164,6 +174,9 @@ func (s *KBDocs) factoryDoc(ctx context.Context, u *model.User, id string) (*mod
 	if d.Source != model.KBSourceFactory {
 		return nil, stateConflict("%s is a repository document; change it through the repository", d.Path)
 	}
+	if d.ReadOnly {
+		return nil, fmt.Errorf("%w: %s", ErrKBReadOnly, d.Path)
+	}
 	return d, nil
 }
 
@@ -173,7 +186,7 @@ func (s *KBDocs) Detail(ctx context.Context, u *model.User, id string) (*KBDetai
 		return nil, err
 	}
 	det := &KBDetail{Doc: *d, Links: []model.KBDoc{}, Backlinks: []model.KBDoc{},
-		Editable: d.Source == model.KBSourceFactory && u.Role.CanWrite()}
+		Editable: d.Source == model.KBSourceFactory && !d.ReadOnly && u.Role.CanWrite()}
 	if d.Source == model.KBSourceFactory {
 		det.DefaultAvailable = s.KB.Bundle.HasDefault(d.Path)
 		det.Frontmatter, det.Body, err = s.KB.Bundle.Read(d.Path)

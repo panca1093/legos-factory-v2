@@ -301,6 +301,37 @@ func TestSyncGitFactorySkipsReserved(t *testing.T) {
 	}
 }
 
+func TestSyncFactoryNeverIndexesJournal(t *testing.T) {
+	b, err := OpenBundle(filepath.Join(t.TempDir(), "kb"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.WriteMany([]File{
+		{Path: "projects/p1/journal/wo_1/001-plan.md", Front: map[string]any{"type": "Journal Entry"}, Body: "# J\n"},
+		{Path: "projects/p2/journal/wo_2/001-plan.md", Front: map[string]any{"type": "Journal Entry"}, Body: "# J\n"},
+		{Path: "projects/p2/notes/n.md", Front: map[string]any{"type": "Note"}, Body: "# N\n"},
+	}, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	idx := &fakeIndex{docs: map[string]model.KBParsed{}}
+	stale := func(pid, p string) {
+		id := DocID("factory", pid, p)
+		idx.docs[id] = model.KBParsed{KBDoc: model.KBDoc{ID: id, Source: "factory", ProjectID: pid, Path: p, ContentHash: "old"}}
+	}
+	stale("p1", "projects/p1/journal/wo_1/001-plan.md")
+	stale("p2", "projects/p2/journal/wo_2/001-plan.md")
+	if _, err := SyncFactory(ctx, idx, HashEmbedder{}, b); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := idx.docs["factory:p2:projects/p2/notes/n.md"]; !ok || len(idx.docs) != 1 {
+		t.Fatalf("docs %v", idx.docs)
+	}
+	if err := IndexFactoryFile(ctx, idx, HashEmbedder{}, b, "projects/p1/journal/wo_1/001-plan.md"); err != nil || len(idx.docs) != 1 {
+		t.Fatalf("IndexFactoryFile must skip journal: %v", err)
+	}
+}
+
 func TestSyncRepoIndexesTrackedRegularFilesOnly(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "id_ed25519.md")
 	put(t, filepath.Dir(secret), filepath.Base(secret), "PRIVATE KEY\n")

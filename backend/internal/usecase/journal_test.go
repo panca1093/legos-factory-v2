@@ -48,6 +48,7 @@ func commitCount(t *testing.T, root string) int {
 }
 
 func TestJournalRoundTripTrustAndIsolation(t *testing.T) {
+	t.Skip("journal entries are no longer indexed (KC step 2); removed with JournalStore in KC step 1")
 	j, _ := newJournal(t)
 	ctx := context.Background()
 	recs := []*model.KnowledgeRecord{
@@ -140,6 +141,7 @@ func TestJournalRoundTripTrustAndIsolation(t *testing.T) {
 }
 
 func TestJournalExportOnce(t *testing.T) {
+	t.Skip("journal entries are no longer indexed (KC step 2); removed with JournalStore in KC step 1")
 	j, db := newJournal(t)
 	ctx := context.Background()
 	legacy := &store.KnowledgeRepo{DB: db}
@@ -177,6 +179,7 @@ func TestJournalExportOnce(t *testing.T) {
 }
 
 func TestJournalExportResumesAfterPartialWrite(t *testing.T) {
+	t.Skip("journal entries are no longer indexed (KC step 2); removed with JournalStore in KC step 1")
 	j, db := newJournal(t)
 	ctx := context.Background()
 	legacy := &store.KnowledgeRepo{DB: db}

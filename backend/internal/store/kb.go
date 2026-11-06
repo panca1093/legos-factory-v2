@@ -411,6 +411,7 @@ func scanKB(scan rowScanner) (*model.KBDoc, error) {
 	if err := json.Unmarshal([]byte(meta), &d.Meta); err != nil {
 		return nil, err
 	}
+	d.ReadOnly = d.Meta["origin"] == "work_order"
 	d.IndexedAt = time.Unix(indexedAt, 0)
 	return &d, nil
 }

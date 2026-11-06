@@ -269,6 +269,38 @@ func TestKBWritesPutApproveDiscardReset(t *testing.T) {
 	}
 }
 
+func TestKBWorkOrderDocIsReadOnlyAndJournalHidden(t *testing.T) {
+	r := bootKB(t)
+	ctx := context.Background()
+	const brief, jour = "projects/p1/brief/b.md", "projects/p1/journal/wo_1/001-x.md"
+	if err := r.know.WriteFactory(ctx, brief, map[string]any{"type": model.KBTypeBrief, "title": "B", "origin": "work_order"}, "Request.", "brief"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.know.Bundle.Write(jour, map[string]any{"type": model.KBTypeJournalEntry, "title": "J"}, "entry", "journal"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.know.SyncFactory(ctx); err != nil {
+		t.Fatal(err)
+	}
+	code, body := r.do(t, "eng", "GET", "/api/v1/kb/docs?project_id=p1", "")
+	ids := docIDs(t, body)
+	if code != 200 || !has(ids, "factory:p1:"+brief) || has(ids, "factory:p1:"+jour) {
+		t.Fatalf("list: %d %v", code, ids)
+	}
+	code, body = r.do(t, "eng", "PUT", "/api/v1/kb/doc?id=factory:p1:"+brief, `{"frontmatter":{"type":"Brief"},"body":"x"}`)
+	if code != 409 || !strings.Contains(string(body), "KB_DOC_READ_ONLY") {
+		t.Fatalf("PUT: %d %s", code, body)
+	}
+	_, body = r.do(t, "eng", "GET", "/api/v1/kb/doc?id=factory:p1:"+brief, "")
+	var det struct {
+		Doc      model.KBDoc
+		Editable bool
+	}
+	if err := json.Unmarshal(body, &det); err != nil || !det.Doc.ReadOnly || det.Editable || !strings.Contains(string(body), `"read_only":true`) {
+		t.Fatalf("detail: %s", body)
+	}
+}
+
 func TestKBDelete(t *testing.T) {
 	r := bootKB(t)
 	if code, _ := r.do(t, "viewer", "DELETE", "/api/v1/kb/doc?id="+d1ID, ""); code != 403 {
