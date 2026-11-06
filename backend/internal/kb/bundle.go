@@ -394,6 +394,9 @@ func (b *Bundle) regenIndex(dir string) error {
 		heading = "Knowledge"
 	}
 	var sb strings.Builder
+	if dir == "." {
+		sb.WriteString("---\nokf_version: \"0.1\"\n---\n\n")
+	}
 	sb.WriteString("# " + heading + "\n\n")
 	for _, e := range ents {
 		name := e.Name()
