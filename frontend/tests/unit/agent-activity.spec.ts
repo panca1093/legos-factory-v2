@@ -424,13 +424,13 @@ describe("ActivityPanel filter", () => {
 describe("gate events", () => {
   it("summarises a Jev gate by outcome, row and note", () => {
     const e = ev(
-      "done_gate",
-      { outcome: "fix", row: 3, note: "criterion c2 is not covered" },
+      "converge_gate",
+      { outcome: "append", row: 3, note: "criterion c2 is not covered" },
       "jev",
     );
     expect(gateSummary(e)).toEqual({
-      gate: "Done gate",
-      outcome: "fix",
+      gate: "Converge gate",
+      outcome: "append",
       row: 3,
       note: "criterion c2 is not covered",
       tone: "orange",

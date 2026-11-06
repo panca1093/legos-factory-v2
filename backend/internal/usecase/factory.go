@@ -29,11 +29,6 @@ const (
 // MaxRevisionCycles bounds the fix/inspect remediation loop.
 const MaxRevisionCycles = 2
 
-// lastAttempt reports that a failure of job will not be retried, mirroring the scheduler.
-func lastAttempt(job model.Job) bool {
-	return job.MaxAttempts > 0 && job.Attempts+1 >= job.MaxAttempts
-}
-
 func stateConflict(format string, args ...any) error {
 	return fmt.Errorf("%w: %s", model.ErrStateConflict, fmt.Sprintf(format, args...))
 }

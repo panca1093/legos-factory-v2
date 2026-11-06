@@ -22,6 +22,7 @@ type WorkOrderStore interface {
 	UpdateFields(ctx context.Context, id string, fields map[string]any) error
 	UpdateStateAndFields(ctx context.Context, id string, s model.State, fields map[string]any) error
 	ReplacePlan(ctx context.Context, woID string, tasks []model.Task) error
+	AppendPlan(ctx context.Context, woID string, tasks []model.Task) error
 	Plan(ctx context.Context, woID string) ([]model.Task, error)
 	AppendEvent(ctx context.Context, woID, actor, kind, message string, payload map[string]any) (*model.Event, error)
 	Events(ctx context.Context, woID string, afterID int64, limit int) ([]model.Event, error)

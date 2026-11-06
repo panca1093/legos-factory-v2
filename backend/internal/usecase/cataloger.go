@@ -131,12 +131,12 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		}
 	}
 	if r := f.currentArchitectReport(wo); r != nil {
-		for i, d := range r.Deviations {
+		for i, g := range r.Gaps {
 			if i == summaryMaxItems {
-				open = append(open, more(len(r.Deviations)))
+				open = append(open, more(len(r.Gaps)))
 				break
 			}
-			open = append(open, clip("- deviation: "+safeLine(d), 100))
+			open = append(open, clip("- gap: "+safeLine(g.Type+" "+g.Cites+": "+g.Fix), 100))
 		}
 	}
 	if len(open) == 0 {

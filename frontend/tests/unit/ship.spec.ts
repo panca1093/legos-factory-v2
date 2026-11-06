@@ -125,10 +125,10 @@ describe("work order page ship states", () => {
     w.unmount();
   });
 
-  it("explains why the done gate escalated and offers the decisions on Changes & PR", async () => {
+  it("explains why the converge gate escalated and offers the decisions on Changes & PR", async () => {
     const gate = event(
-      "done_gate",
-      "Done gate escalated",
+      "converge_gate",
+      "Converge gate escalated",
       { outcome: "escalate", row: 2, note: "No acceptance criteria recorded" },
       "jev",
     );
@@ -160,88 +160,71 @@ describe("escalation and Architect helpers", () => {
     expect(
       escalationReason([
         event("plan_escalated", "The plan touches a database schema"),
-        event("done_gate", "ok", { outcome: "done", row: 5 }, "jev"),
+        event("converge_gate", "ok", { outcome: "converged", row: 5 }, "jev"),
       ]),
     ).toBe("The plan touches a database schema");
     expect(
       escalationReason([
-        event("done_gate", "x", { outcome: "escalate", note: "n1" }, "jev"),
-        event("done_gate", "x", { outcome: "escalate", note: "n2" }, "jev"),
+        event("converge_gate", "x", { outcome: "escalate", note: "n1" }, "jev"),
+        event("converge_gate", "x", { outcome: "escalate", note: "n2" }, "jev"),
       ]),
     ).toBe("n2");
     expect(escalationReason([])).toBe("");
   });
-  it("reads the latest Architect verification", () => {
+  it("reads the latest converge report", () => {
     const report = architectReport([
-      event("architect_verified", "a", { revision: 1, verdicts: [] }),
-      event("architect_verified", "b", {
+      event("converge_report", "a", { revision: 1, round: 1, gaps: [] }),
+      event("converge_report", "b", {
         revision: 2,
-        verdicts: [{ criterion_id: "c1", status: "not_met", evidence: "e" }],
-        deviations: ["touched go.mod"],
+        round: 2,
+        gaps: [
+          {
+            id: "C2-G1",
+            type: "missing",
+            layer: "code",
+            cites: "c1",
+            evidence: "e",
+            fix: "f",
+          },
+        ],
+        converged: false,
       }),
     ]);
     expect(report?.revision).toBe(2);
-    expect(report?.deviations).toEqual(["touched go.mod"]);
+    expect(report?.gaps.map((g) => g.id)).toEqual(["C2-G1"]);
     expect(architectReport([])).toBeNull();
   });
-  it("renders verdicts and deviations in the Review tab", () => {
-    const w = mount(ReviewPanel, {
-      props: {
-        checks: [],
-        findings: [],
-        revision: 2,
-        events: [
-          event("architect_verified", "b", {
-            revision: 2,
-            verdicts: [
-              {
-                criterion_id: "c1",
-                status: "not_met",
-                evidence: "no retry test",
-              },
-            ],
-            deviations: ["touched go.mod"],
-          }),
-        ],
-      },
-    });
-    const text = w.find('[data-test="architect-verdicts"]').text();
-    expect(text).toContain("c1");
-    expect(text).toContain("not met");
-    expect(text).toContain("no retry test");
-    expect(text).toContain("touched go.mod");
-  });
-  it("splits a verdict into gap, fix and folded evidence", () => {
-    const report = {
+  it("renders gaps in the Review tab and drafts the change request from their fixes", () => {
+    const payload = {
       revision: 2,
-      verdicts: [
-        { criterion_id: "c1", status: "met", evidence: "ok", fix: "ignored" },
+      round: 1,
+      gaps: [
         {
-          criterion_id: "c2",
-          status: "not_met",
-          evidence: "long evidence",
-          gap: "sections are cut",
+          id: "C1-G1",
+          type: "missing",
+          layer: "code",
+          cites: "c2",
+          evidence: "no retry test",
           fix: "give each section a budget",
         },
       ],
-      deviations: ["one", "two"],
+      converged: false,
     };
     const w = mount(ReviewPanel, {
       props: {
         checks: [],
         findings: [],
         revision: 2,
-        events: [event("architect_verified", "b", report)],
+        events: [event("converge_report", "b", payload)],
       },
     });
-    expect(w.find('[data-test="verdict-gap"]').text()).toContain(
-      "sections are cut",
-    );
+    const text = w.find('[data-test="architect-verdicts"]').text();
+    expect(text).toContain("C1-G1");
+    expect(text).toContain("missing");
+    expect(text).toContain("no retry test");
     expect(w.find('[data-test="verdict-fix"]').text()).toContain(
       "give each section a budget",
     );
-    expect(w.find("details").text()).toContain("long evidence");
-    expect(w.findAll(".fx-reason-list li")).toHaveLength(2);
     expect(changeRequestDraft(architectReport(w.props("events")!))).toBe(
       "c2: give each section a budget",
     );

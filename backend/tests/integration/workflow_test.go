@@ -71,7 +71,7 @@ func hasEvent(events []string, kind string) bool {
 }
 
 // scriptedJudge answers like a Jev that finds nothing wrong, optionally
-// sending the first plan back or asking for one fix at the done gate. It is a
+// sending the first plan back or asking for one append at the converge gate. It is a
 // fake: the real TypeSafe API is never called from tests.
 type scriptedJudge struct {
 	mu          sync.Mutex
@@ -226,7 +226,7 @@ func TestJevGatedLifecycleNeedsNoHumanUntilThePRDecision(t *testing.T) {
 	var gates []string
 	for _, e := range evs {
 		switch {
-		case e.Kind == "plan_gate" || e.Kind == "done_gate":
+		case e.Kind == "plan_gate" || e.Kind == "converge_gate":
 			if e.Actor != "jev" || e.Payload["request"] == nil || e.Payload["row"] == nil {
 				t.Fatalf("a gate event carries its actor, exact request and table row: %+v", e)
 			}
@@ -239,20 +239,20 @@ func TestJevGatedLifecycleNeedsNoHumanUntilThePRDecision(t *testing.T) {
 			t.Fatalf("no human decision was needed: %+v", e)
 		}
 	}
-	if strings.Join(gates, ",") != "plan_gate:approve,done_gate:fix,done_gate:done" {
+	if strings.Join(gates, ",") != "plan_gate:approve,converge_gate:append,converge_gate:converged" {
 		t.Fatalf("gate sequence %v", gates)
 	}
 	kinds := ta.eventKinds(t, id)
-	for _, kind := range []string{"architect_verified", "foreman_validated", "fix_requested", "readiness_ready", "plan_reviewed"} {
+	for _, kind := range []string{"converge_report", "converge_append", "fix_requested", "readiness_ready", "plan_reviewed"} {
 		if !hasEvent(kinds, kind) {
 			t.Fatalf("missing %s: %v", kind, kinds)
 		}
 	}
 	if w := ta.workOrder(t, id); w["revision"].(float64) != 2 {
-		t.Fatalf("blocker fix + done-gate fix = revision 2, got %v", w["revision"])
+		t.Fatalf("blocker fix + converge append = revision 2, got %v", w["revision"])
 	}
 	if !strings.Contains(string(judge.lastRequest), "greeter/greeter.go") {
-		t.Fatalf("the done gate must send the diff: %.300s", judge.lastRequest)
+		t.Fatalf("the converge gate must send the diff: %.300s", judge.lastRequest)
 	}
 
 	// specialists are chosen from the changed files and tag their findings

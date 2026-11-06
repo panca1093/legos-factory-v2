@@ -121,52 +121,27 @@ func TestReviewAndFindingsSchemas(t *testing.T) {
 	}
 }
 
-func TestVerifyReplySchema(t *testing.T) {
-	var v verifyReply
+func TestConvergeReplySchema(t *testing.T) {
+	var v convergeReply
 	for name, text := range map[string]string{
-		"no verdicts key":    `{"deviations":[]}`,
-		"unknown status":     `{"verdicts":[{"criterion_id":"c1","status":"done"}]}`,
-		"missing criterion":  `{"verdicts":[{"status":"met"}]}`,
-		"missing status":     `{"verdicts":[{"criterion_id":"c1"}]}`,
-		"verdicts not array": `{"verdicts":"met"}`,
+		"no gaps key":    `{"converged":true}`,
+		"unknown type":   `{"gaps":[{"type":"wrong","layer":"code","evidence":"a.go"}]}`,
+		"unknown layer":  `{"gaps":[{"type":"missing","layer":"ui","evidence":"a.go"}]}`,
+		"no evidence":    `{"gaps":[{"type":"missing","layer":"code"}]}`,
+		"gaps not array": `{"gaps":"none"}`,
+		"over the cap":   `{"gaps":[` + strings.Repeat(`{"type":"missing","layer":"code","evidence":"e"},`, maxConvergeGaps) + `{"type":"missing","layer":"code","evidence":"e"}]}`,
 	} {
 		if err := decodeReply(text, &v); err == nil {
 			t.Errorf("%s: expected rejection", name)
 		}
 	}
-	if err := decodeReply(`{"verdicts":[],"deviations":null}`, &v); err != nil {
-		t.Fatalf("an empty verdict list is valid (the gate then asks for a fix): %v", err)
+	if err := decodeReply(`{"gaps":[],"converged":true}`, &v); err != nil || !v.Converged {
+		t.Fatalf("an empty gap list is valid: %v", err)
 	}
-	err := decodeReply(`{"verdicts":[
-		{"criterion_id":" c1 ","status":"MET","evidence":"a.go"},
-		{"criterion_id":"c2","status":"Not-Met","evidence":"b.go","gap":" caps too big ","fix":" per-section budgets "},
-		{"criterion_id":"c3","status":"not met"},
-		{"criterion_id":"c4","status":"Unclear"}],
-		"deviations":["extra endpoint","  ",""]}`, &v)
-	if err != nil {
+	if err := decodeReply(`{"gaps":[{"type":" Missing ","layer":"CODE","cites":" c1 ","evidence":" a.go:1 ","fix":" f "}]}`, &v); err != nil {
 		t.Fatal(err)
 	}
-	var got []string
-	for _, x := range v.Verdicts {
-		got = append(got, x.CriterionID+"="+x.Status)
-	}
-	if strings.Join(got, ",") != "c1=met,c2=not_met,c3=not_met,c4=unclear" {
-		t.Fatalf("statuses must be normalised: %v", got)
-	}
-	if v.Verdicts[1].Gap != "caps too big" || v.Verdicts[1].Fix != "per-section budgets" {
-		t.Fatalf("gap and fix must be kept and trimmed: %+v", v.Verdicts[1])
-	}
-	if len(v.Deviations) != 1 || v.Deviations[0] != "extra endpoint" {
-		t.Fatalf("deviations: %q", v.Deviations)
-	}
-}
-
-func TestValidationReplySchema(t *testing.T) {
-	var v validationReply
-	if err := decodeReply(`{"notes":" "}`, &v); err == nil {
-		t.Fatal("blank notes must fail")
-	}
-	if err := decodeReply(`{"notes":"Criterion c2 is not met"}`, &v); err != nil || v.Notes != "Criterion c2 is not met" {
-		t.Fatalf("%v %+v", err, v)
+	if g := v.Gaps[0]; g.Type != "missing" || g.Layer != "code" || g.Cites != "c1" || g.Evidence != "a.go:1" || g.Fix != "f" {
+		t.Fatalf("gap must be normalised: %+v", g)
 	}
 }

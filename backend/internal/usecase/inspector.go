@@ -125,18 +125,11 @@ func failedChecksSection(failures []model.CheckResult) string {
 // retryPayload keeps the failing checks in front of the Builder when a human retries after a failed verification.
 func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[string]any {
 	brief := f.storedBrief(ctx, wo)
-	if note := f.doneGateNote(ctx, wo); note != "" {
-		p := map[string]any{"reason": "fix_done_gate", "note": note}
-		if brief != "" {
-			p["brief"] = brief
-		}
-		return p
-	}
 	payload := map[string]any{"reason": "human_retry"}
 	if brief != "" {
 		payload["brief"] = brief
 	} else {
-		payload = f.withBrief(ctx, wo, wo.Revision, payload, nil, "")
+		payload = f.withBrief(ctx, wo, wo.Revision, payload, "")
 	}
 	if wo.VerifyFailures == 0 || wo.Revision < 1 {
 		return payload
@@ -168,11 +161,6 @@ func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[str
 	return payload
 }
 
-// doneGateNote is the note of the done-gate fix that opened the order's current revision, or "".
-func (f *Factory) doneGateNote(ctx context.Context, wo *model.WorkOrder) string {
-	return f.doneGateField(ctx, wo, "note")
-}
-
 // storedBrief is the brief of the remediation that opened the order's current revision, for a retry after that remediation failed.
 func (f *Factory) storedBrief(ctx context.Context, wo *model.WorkOrder) string {
 	var best *model.Event
@@ -190,18 +178,6 @@ func (f *Factory) storedBrief(ctx context.Context, wo *model.WorkOrder) string {
 	}
 	b, _ := best.Payload["brief"].(string)
 	return b
-}
-
-func (f *Factory) doneGateField(ctx context.Context, wo *model.WorkOrder, key string) string {
-	e, err := f.WO.LatestEvent(ctx, wo.ID, "fix_requested")
-	if err != nil || e == nil || e.Payload["reason"] != "fix_done_gate" {
-		return ""
-	}
-	if rev, _ := e.Payload["revision"].(float64); int(rev) != wo.Revision {
-		return ""
-	}
-	v, _ := e.Payload[key].(string)
-	return v
 }
 
 func outputTail(out string) string {
@@ -234,8 +210,8 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		fmt.Sprintf("Specialist review by %s (%d changed files)", strings.Join(names, ", "), len(files)),
 		map[string]any{"specialists": picks, "routing": routing})
 
-	// With Jev on, the Architect checks the result against its spec while the
-	// specialists review the diff. Without Jev nothing reads the verdicts.
+	// With Jev on, the Architect compares the result with the contract while the
+	// specialists review the diff. Without Jev nothing reads the gaps.
 	var wg sync.WaitGroup
 	var archErr error
 	if f.Judge != nil {
@@ -245,10 +221,10 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
-					f.event(wo.ID, "architect", "architect_verify_failed", fmt.Sprintf("verification panicked: %v", r), nil)
+					f.event(wo.ID, "architect", "converge_failed", fmt.Sprintf("converge panicked: %v", r), nil)
 				}
 			}()
-			archErr = f.architectVerify(actx, *wo, files)
+			archErr = f.converge(actx, *wo, files)
 		}()
 		// an early return must neither leave the verification running nor wait for it to finish
 		defer func() {
@@ -257,8 +233,9 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		}()
 	}
 
-	var runIDs []string
+	var runIDs, notes []string
 	blockers, total := 0, 0
+	criteria := splitCriteria(wo.Acceptance)
 	for _, p := range picks {
 		var out findingsReply
 		kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentInspector), p.Specialty,
@@ -272,6 +249,9 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		var summary strings.Builder
 		specBlockers := 0
 		for _, fd := range out.Findings {
+			if fd.Severity != model.SeverityBlocker && citesCriterion(fd.Cites, criteria) {
+				fd.Severity, fd.Detail = model.SeverityBlocker, fd.Detail+" (cites "+fd.Cites+")"
+			}
 			id := fmt.Sprintf("fnd_%d", time.Now().UnixNano())
 			if err := f.Findings.Create(ctx, model.Finding{
 				ID: id, RunID: runID, WOID: wo.ID, Severity: fd.Severity, Title: fd.Title,
@@ -285,6 +265,8 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 			})
 			if fd.Severity == model.SeverityBlocker {
 				specBlockers++
+			} else {
+				notes = append(notes, fmt.Sprintf("[%s] %s (%s): %s", fd.Severity, fd.Title, fd.Location, fd.Detail))
 			}
 		}
 		blockers += specBlockers
@@ -294,17 +276,20 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	}
 	wg.Wait()
 	if archErr != nil && blockers == 0 {
-		// retry only the verification: requeueing the job would re-run every specialist
-		archErr = f.retryArchitectVerify(ctx, wo, files, archErr)
+		// retry only converge: requeueing the job would re-run every specialist
+		archErr = f.retryConverge(ctx, wo, files, archErr)
 	}
 	if archErr != nil {
-		f.event(wo.ID, "architect", "architect_verify_failed", archErr.Error(), nil)
+		f.event(wo.ID, "architect", "converge_failed", archErr.Error(), nil)
 	}
 	f.event(wo.ID, "inspector", "inspection_finished", fmt.Sprintf("%d finding(s), %d blocker(s)", total, blockers), nil)
+	if err := f.setBuilderNotes(ctx, wo.ID, "inspector", notes); err != nil {
+		return err
+	}
 
 	if blockers == 0 {
 		// a later clean inspection supersedes earlier findings; this inspection's own
-		// stay open for the done gate, which resolves them once it has decided
+		// stay open for the converge gate, which resolves them once it has decided
 		if err := f.Findings.ResolveOpenExcept(ctx, wo.ID, runIDs); err != nil {
 			return err
 		}
@@ -317,11 +302,6 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		}
 		return nil
 	}
-	// read after architectVerify stored its report, and before the revision bump: the report is stored under the current one
-	cur, err := f.WO.Get(ctx, wo.ID)
-	if err != nil {
-		return err
-	}
 	var all []model.Finding
 	if f.Findings != nil {
 		all, _ = f.Findings.List(ctx, wo.ID)
@@ -329,7 +309,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	payload := map[string]any{"reason": "fix_findings"}
 	evPayload := map[string]any{}
 	newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
-	if items := fixItems(fromRuns(openFindings(all), runIDs), f.currentArchitectReport(cur), nil, ""); len(items) > 0 {
+	if items := fixItems(fromRuns(openFindings(all), runIDs), ""); len(items) > 0 {
 		b := f.withEarlierFixes(ctx, wo.ID, newRev, items)
 		payload["brief"] = b
 		evPayload["brief"], evPayload["items"] = b, items
@@ -366,34 +346,41 @@ func (f *Factory) commitVerified(ctx context.Context, wo *model.WorkOrder) error
 	return nil
 }
 
-const architectVerifyAttempts = 3
+const convergeAttempts = 3
 
 var architectRetryDelay = 5 * time.Second
 
-func (f *Factory) retryArchitectVerify(ctx context.Context, wo *model.WorkOrder, files []string, err error) error {
-	for i := 1; i < architectVerifyAttempts && err != nil; i++ {
+func (f *Factory) retryConverge(ctx context.Context, wo *model.WorkOrder, files []string, err error) error {
+	for i := 1; i < convergeAttempts && err != nil; i++ {
 		select {
 		case <-ctx.Done():
 			return err
 		case <-time.After(architectRetryDelay):
 		}
-		err = f.architectVerify(ctx, *wo, files)
+		err = f.converge(ctx, *wo, files)
 	}
 	return err
 }
 
-// architectReport is the Architect's verification of one revision; the done
-// gate only trusts it for the revision it was made on.
+// architectReport is the Architect's converge report for one revision; the
+// converge gate only trusts it for the revision it was made on.
 type architectReport struct {
-	Revision   int                `json:"revision"`
-	Verdicts   []ArchitectVerdict `json:"verdicts"`
-	Deviations []string           `json:"deviations"`
+	Revision  int           `json:"revision"`
+	Round     int           `json:"round"`
+	Gaps      []convergeGap `json:"gaps"`
+	Converged bool          `json:"converged"`
 }
 
-// architectVerify has the Architect check the built result against its spec and
-// plan and stores the verdicts for the done gate. A failure is reported, not
-// fatal: the done gate then has no verdicts for this revision.
-func (f *Factory) architectVerify(ctx context.Context, wo model.WorkOrder, files []string) error {
+// convergeAppends is how many append rounds converge has used on the order.
+func (f *Factory) convergeAppends(ctx context.Context, woID string) (int, error) {
+	evs, err := f.WO.EventsByKind(ctx, woID, []string{"converge_append"})
+	return len(evs), err
+}
+
+// converge has the Architect compare the built result with the contract and
+// stores the gaps for the converge gate. A failure is reported, not fatal: the
+// gate then has no report for this revision.
+func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []string) error {
 	dir := f.workspaceDir(wo.ID)
 	diff, err := f.Sandbox.Diff(ctx, dir)
 	if err != nil {
@@ -403,90 +390,63 @@ func (f *Factory) architectVerify(ctx context.Context, wo model.WorkOrder, files
 	if err != nil {
 		return err
 	}
+	appends, err := f.convergeAppends(ctx, wo.ID)
+	if err != nil {
+		return err
+	}
 	checks, _ := f.checksText(ctx, &wo)
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "",
 		woQuery(&wo)+" "+strings.Join(files, " "), dir, wo.KBBaseSHA)
-	var r verifyReply
-	_, runID, err := f.runStructured(ctx, &wo, model.AgentArchitect, architectVerifyPrompt(&wo, tasks, diff, checks)+kbText,
-		map[string]string{"stage": "verify"}, "", &r, runOpts{Audit: audit})
+	var r convergeReply
+	_, runID, err := f.runStructured(ctx, &wo, model.AgentArchitect, convergePrompt(&wo, tasks, diff, checks)+kbText,
+		map[string]string{"stage": "converge"}, "", &r, runOpts{Audit: audit})
 	if err != nil {
 		if errors.Is(err, model.ErrPermanent) || ctx.Err() != nil {
-			f.event(wo.ID, "architect", "architect_verify_failed", err.Error(), nil)
+			f.event(wo.ID, "architect", "converge_failed", err.Error(), nil)
 			return nil
 		}
 		return err
 	}
-	report := architectReport{Revision: wo.Revision, Verdicts: r.Verdicts, Deviations: r.Deviations}
+	round := appends + 1
+	for i := range r.Gaps {
+		r.Gaps[i].ID = fmt.Sprintf("C%d-G%d", round, i+1)
+	}
+	report := architectReport{Revision: wo.Revision, Round: round, Gaps: r.Gaps, Converged: r.Converged}
 	raw, _ := json.Marshal(report)
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"architect_report": string(raw)}); err != nil {
 		return err
 	}
-	text := reportText(report)
-	met := 0
-	for _, v := range report.Verdicts {
-		if v.Status == "met" {
-			met++
-		}
-	}
-	f.event(wo.ID, "architect", "architect_verified",
-		fmt.Sprintf("Architect verification: %d of %d criteria met, %d deviation(s)", met, len(report.Verdicts), len(report.Deviations)),
-		map[string]any{"revision": wo.Revision, "verdicts": report.Verdicts, "deviations": report.Deviations, "run_id": runID})
+	f.event(wo.ID, "architect", "converge_report", fmt.Sprintf("Converge round %d: %d gap(s)", round, len(report.Gaps)),
+		map[string]any{"revision": wo.Revision, "round": round, "gaps": report.Gaps, "converged": report.Converged, "run_id": runID})
 	f.Catalog.Record(ctx, &wo, model.KnowledgeArchitectVerified, model.TrustAIInterpretation, "architect",
-		fmt.Sprintf("Architect verification of revision %d: %d of %d criteria met", wo.Revision, met, len(report.Verdicts)), text, "run:"+runID)
+		fmt.Sprintf("Architect converge of revision %d: %d gap(s)", wo.Revision, len(report.Gaps)), reportText(report), "run:"+runID)
 	return nil
 }
 
 func reportText(r architectReport) string {
 	var b strings.Builder
-	for _, v := range r.Verdicts {
-		fmt.Fprintf(&b, "%s: %s — %s\n", v.CriterionID, v.Status, v.Evidence)
-		if v.Gap != "" {
-			fmt.Fprintf(&b, "  Gap: %s\n", v.Gap)
-		}
-		if v.Fix != "" {
-			fmt.Fprintf(&b, "  Fix: %s\n", v.Fix)
-		}
+	for _, g := range r.Gaps {
+		fmt.Fprintf(&b, "%s\n", gapLine(g))
 	}
-	for _, d := range r.Deviations {
-		fmt.Fprintf(&b, "Deviation: %s\n", d)
+	if b.Len() == 0 {
+		b.WriteString("No gaps.\n")
 	}
 	return b.String()
 }
 
-// fixBrief renders every open finding, unmet verdict, deviation, gate issue and human reason as one numbered
+// fixBrief renders every open finding and the human reason as one numbered
 // checklist; it is a string because job payloads round-trip through JSON.
-func fixBrief(findings []model.Finding, report *architectReport, issues []string, humanReason string) string {
-	return numberedBrief(fixItems(findings, report, issues, humanReason))
+func fixBrief(findings []model.Finding, humanReason string) string {
+	return numberedBrief(fixItems(findings, humanReason))
 }
 
-func fixItems(findings []model.Finding, report *architectReport, issues []string, humanReason string) []string {
+func fixItems(findings []model.Finding, humanReason string) []string {
 	var items []string
 	if strings.TrimSpace(humanReason) != "" {
 		items = append(items, "The reviewer asked for changes: "+humanReason)
 	}
-	items = append(items, issues...)
 	for _, fd := range findings {
 		items = append(items, fmt.Sprintf("[%s] %s (%s): %s", fd.Severity, fd.Title, fd.Location, fd.Detail))
-	}
-	if report != nil {
-		for _, v := range report.Verdicts {
-			if strings.ToLower(strings.TrimSpace(v.Status)) == "met" {
-				continue
-			}
-			it := fmt.Sprintf("Acceptance criterion %s is %s. Evidence: %s", v.CriterionID, v.Status, v.Evidence)
-			if v.Gap != "" {
-				it += "\n   Missing: " + v.Gap
-			}
-			if v.Fix != "" {
-				it += "\n   Suggested fix: " + v.Fix
-			}
-			items = append(items, it)
-		}
-		for _, d := range report.Deviations {
-			if strings.TrimSpace(d) != "" {
-				items = append(items, "The Architect reports work outside the spec or plan: "+d)
-			}
-		}
 	}
 	return items
 }
@@ -499,13 +459,13 @@ func numberedBrief(items []string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// briefItems are the fix items of the order's open findings and current Architect report plus the given issues and human reason.
-func (f *Factory) briefItems(ctx context.Context, wo *model.WorkOrder, issues []string, humanReason string) []string {
+// briefItems are the fix items of the order's open findings plus the human reason.
+func (f *Factory) briefItems(ctx context.Context, wo *model.WorkOrder, humanReason string) []string {
 	var all []model.Finding
 	if f.Findings != nil {
 		all, _ = f.Findings.List(ctx, wo.ID)
 	}
-	return fixItems(openFindings(all), f.currentArchitectReport(wo), issues, humanReason)
+	return fixItems(openFindings(all), humanReason)
 }
 
 func openFindings(all []model.Finding) []model.Finding {
@@ -530,8 +490,8 @@ func fromRuns(fs []model.Finding, runIDs []string) []model.Finding {
 }
 
 // withBrief adds the fix brief for revision rev to a Builder payload when there is one.
-func (f *Factory) withBrief(ctx context.Context, wo *model.WorkOrder, rev int, payload map[string]any, issues []string, humanReason string) map[string]any {
-	if items := f.briefItems(ctx, wo, issues, humanReason); len(items) > 0 {
+func (f *Factory) withBrief(ctx context.Context, wo *model.WorkOrder, rev int, payload map[string]any, humanReason string) map[string]any {
+	if items := f.briefItems(ctx, wo, humanReason); len(items) > 0 {
 		payload["brief"], payload["items"] = f.withEarlierFixes(ctx, wo.ID, rev, items), items
 	}
 	return payload

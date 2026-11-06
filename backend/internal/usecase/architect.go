@@ -369,7 +369,7 @@ func (f *Factory) askHuman(ctx context.Context, wo *model.WorkOrder, actor, ques
 	wo.ClarifQuestion, wo.ClarifAnswer = question, ""
 	f.event(wo.ID, actor, "clarification_requested", question, nil)
 	if wo.ClarifTask != "" {
-		return f.step(ctx, wo, model.StateImplementing, model.StateWaitingForHuman, "factory", "Waiting for human clarification")
+		return f.step(ctx, wo, wo.State, model.StateWaitingForHuman, "factory", "Waiting for human clarification") // IMPLEMENTING, or SPECIALIST_REVIEW for a converge question
 	}
 	if wo.State != model.StateArchitectReview {
 		if err := f.toReview(ctx, wo); err != nil {

@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"legos-factory/backend/internal/model"
 )
 
-// Gate wording, thresholds and truth tables for the Jev plan and done gates
-// (docs/foreman-flow/SPEC.md sections 4 and 7). Everything here is pure.
+// Gate wording, thresholds and truth tables for the Jev plan and converge gates
+// (docs/contract-flow/SPEC.md sections 3 and 6). Everything here is pure.
 
 const (
 	yesAbove = 0.7
@@ -23,18 +24,20 @@ const (
 	maxRequestTokens  = 64000
 	maxQuestionTokens = 32000
 	limitMarginPct    = 90    // the token estimate is rough: stay under 90% of each limit
-	diffHunkBudget    = 48000 // bytes of hunk text per done-gate request
+	diffHunkBudget    = 48000 // bytes of hunk text per converge request
 
 	maxPlanRevisions = 2
+	// MaxConvergeAppends is how many times converge may append tasks to a work order before it escalates.
+	MaxConvergeAppends = 2
 )
 
 const (
-	GateEscalate = "escalate"
-	GateRevise   = "revise"
-	GateApprove  = "approve"
-	GateFix      = "fix"
-	GateDone     = "done"
-	GateLoop     = "loop" // checks failed or blockers open: the existing loops own it
+	GateEscalate  = "escalate"
+	GateRevise    = "revise"
+	GateApprove   = "approve"
+	GateAppend    = "append"
+	GateConverged = "converged"
+	GateLoop      = "loop" // checks failed or blockers open: the existing loops own it
 )
 
 // errNoJudge is the judgeErr callers pass when Factory.Judge is nil, so the
@@ -61,12 +64,13 @@ func judge(p float64) verdict {
 }
 
 type GateOutcome struct {
-	Outcome  string
-	Row      int
-	Note     string   // code-built revise/fix/escalate reason
-	Issues   []string // the done gate's reasons one by one; Note joins them
-	Builder  []string // plan gate: unsettled answers that go to the Builder as notes, not to a revision
-	InReport []string // the Issues that restate the Architect's report, which the fix brief carries in full
+	Outcome string
+	Row     int
+	Note    string   // code-built revise/append/escalate reason
+	Issues  []string // the converge gate's reasons one by one; Note joins them
+	Builder []string // unsettled answers that go to the Builder as notes, not to a revision or an append
+	Valid   []string // converge gate: ids of the blocking gaps Jev found real
+	Unmet   []string // converge gate: ids of the criteria Jev found unmet
 }
 
 type Criterion struct{ ID, Text string }
@@ -99,25 +103,44 @@ type GateFinding struct {
 	Message  string `json:"message"`
 }
 
-type DoneGateInput struct {
-	Criteria          []Criterion
-	Spec              string
-	Diff              []FileDiff
-	Checks            []GateCheck
-	OpenFindings      []GateFinding
-	ArchitectVerdicts []ArchitectVerdict
-	Deviations        []string // work the Architect found outside the spec or plan
-	ForemanNotes      string
+type ConvergeGateInput struct {
+	Criteria     []Criterion
+	Spec         string
+	Tasks        []PlanTask
+	Diff         []FileDiff
+	Checks       []GateCheck
+	OpenFindings []GateFinding
+	Gaps         []convergeGap
 }
 
-// ArchitectVerdict is the Architect's per-criterion result; Status is
-// "met", "not_met" or "unclear".
-type ArchitectVerdict struct {
-	CriterionID string `json:"criterion_id"`
-	Status      string `json:"status"`
-	Evidence    string `json:"evidence"`
-	Gap         string `json:"gap,omitempty"`
-	Fix         string `json:"fix,omitempty"`
+var criterionRef = regexp.MustCompile(`\bc\d+\b`)
+
+// citedCriteria are the acceptance criteria that cites names ("c3", "c3, spec §2").
+func citedCriteria(cites string, criteria []Criterion) []string {
+	var out []string
+	for _, ref := range criterionRef.FindAllString(strings.ToLower(cites), -1) {
+		for _, c := range criteria {
+			if c.ID == ref && !slices.Contains(out, ref) {
+				out = append(out, ref)
+			}
+		}
+	}
+	return out
+}
+
+func citesCriterion(cites string, criteria []Criterion) bool {
+	return len(citedCriteria(cites, criteria)) > 0
+}
+
+// blockingGaps are the gaps Jev is asked about: a missing or contradicting code gap, or any gap citing an acceptance criterion.
+func blockingGaps(gaps []convergeGap, criteria []Criterion) []convergeGap {
+	var out []convergeGap
+	for _, g := range gaps {
+		if (g.Layer == "code" && (g.Type == "missing" || g.Type == "contradicts")) || citesCriterion(g.Cites, criteria) {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 type orderedCriteria []Criterion
@@ -219,13 +242,6 @@ var (
 	planRiskIDs  = []string{"touches_schema", "touches_authentication", "touches_authorization", "touches_payments", "touches_secrets"}
 )
 
-var doneHardPhrases = map[string]string{
-	"deviates":         "the diff changes behaviour the spec does not describe",
-	"notes_unresolved": "the Foreman notes report a problem the diff does not fix",
-}
-
-var doneFixedIDs = []string{"deviates", "notes_unresolved"}
-
 func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 	state := map[string]any{
 		"request":             in.Request,
@@ -303,20 +319,30 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 	return state, qs
 }
 
-func doneGateState(in DoneGateInput) (map[string]any, map[string]Noul) {
+// convergeGateState asks gap_valid_<G> for each blocking gap and met_<c> for
+// every criterion. Contract tests (a later step) will exempt criteria whose
+// test is green; until then no criterion has one.
+func convergeGateState(in ConvergeGateInput) (map[string]any, map[string]Noul) {
 	diff, trimmed := trimHunks(in.Diff, diffHunkBudget)
 	state := map[string]any{
 		"acceptance_criteria": orderedCriteria(in.Criteria),
 		"spec":                in.Spec,
+		"plan":                orderedTasks(in.Tasks),
 		"diff":                diff,
 		"diff_trimmed":        trimmed,
 		"checks":              nonNilSlice(in.Checks),
 		"open_findings":       nonNilSlice(in.OpenFindings),
-		"architect_verdicts":  nonNilSlice(in.ArchitectVerdicts),
-		"deviations":          nonNilSlice(in.Deviations),
-		"foreman_notes":       in.ForemanNotes,
+		"gaps":                nonNilSlice(in.Gaps),
 	}
 	qs := map[string]Noul{}
+	for _, g := range blockingGaps(in.Gaps, in.Criteria) {
+		qs["gap_valid_"+g.ID] = Noul{
+			Instructions: fmt.Sprintf("Is the gap with id %s in gaps real: does diff fall short of spec or acceptance_criteria in the way it describes?", g.ID),
+			Criteria: yn(
+				fmt.Sprintf("The evidence of gap %s holds in diff or checks, and spec or acceptance_criteria really requires the behaviour it says is missing or contradicted.", g.ID),
+				fmt.Sprintf("The evidence of gap %s does not hold, the diff already does what it asks, or spec and acceptance_criteria do not require it.", g.ID)),
+		}
+	}
 	for _, c := range in.Criteria {
 		qs["met_"+c.ID] = Noul{
 			Instructions: fmt.Sprintf("Does diff implement the behaviour that acceptance_criteria.%s describes?", c.ID),
@@ -324,18 +350,6 @@ func doneGateState(in DoneGateInput) (map[string]any, map[string]Noul) {
 				fmt.Sprintf("The diff contains code that implements the behaviour acceptance_criteria.%s describes.", c.ID),
 				fmt.Sprintf("The diff contains no code for the behaviour acceptance_criteria.%s describes, or only code for something else.", c.ID)),
 		}
-	}
-	qs["deviates"] = Noul{
-		Instructions: "Does diff change behaviour that spec does not describe?",
-		Criteria: yn(
-			"The diff adds or alters user-visible behaviour, an interface or a data format that spec never mentions.",
-			"Every behaviour change in the diff is described by spec; formatting, tests and internal renames do not count."),
-	}
-	qs["notes_unresolved"] = Noul{
-		Instructions: "Do foreman_notes report a problem that the diff does not fix?",
-		Criteria: yn(
-			"foreman_notes name a defect or missing piece and the diff contains no change that resolves it.",
-			"foreman_notes report no problem, or the diff contains a change that resolves each problem they report."),
 	}
 	return state, qs
 }
@@ -616,103 +630,70 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	return GateOutcome{Outcome: GateRevise, Row: row, Note: note, Builder: builder}
 }
 
-// architectStatus reduces the Architect's verdicts to one status per
-// criterion: not_met beats unclear beats met; an unknown status or a missing
-// verdict is unclear.
-func architectStatus(verdicts []ArchitectVerdict, id string) (status string, given bool) {
-	rank := map[string]int{"met": 0, "unclear": 1, "not_met": 2}
-	status = "met"
-	for _, v := range verdicts {
-		if v.CriterionID != id {
-			continue
-		}
-		given = true
-		s := strings.ToLower(strings.TrimSpace(v.Status))
-		if _, ok := rank[s]; !ok {
-			s = "unclear"
-		}
-		if rank[s] > rank[status] {
-			status = s
-		}
-	}
-	if !given {
-		return "unclear", false
-	}
-	return status, true
+func gapLine(g convergeGap) string {
+	return fmt.Sprintf("%s [%s, %s, cites %s] %s Fix: %s", g.ID, g.Type, g.Layer, g.Cites, g.Evidence, g.Fix)
 }
 
-// decideDoneGate applies the done truth table (SPEC section 7), first match wins:
+// decideConvergeGate applies the converge truth table (contract-flow SPEC
+// section 6), first match wins:
 //
 //	1 loop:     a check failed or a blocker finding is open (existing loops own it)
 //	2 escalate: no acceptance criteria, Jev failed or not configured, state over
 //	  the limit, or any asked question has no answer
-//	3 fix:      a met_* is no, deviates/notes_unresolved is yes, the Architect
-//	  marks a criterion not_met, or the Architect reports deviations
-//	4 fix:      any answer is unsettled, or the Architect is unclear about a
-//	  criterion or gave no verdict for it
-//	5 done
+//	3 append:   a gap_valid_* is yes or a met_* is no
+//	4 escalate: a met_* is unsettled
+//	5 converged
 //
-// Rows 3 and 4 become escalate when no fix budget is left. Only the
+// Row 3 becomes escalate when no append budget is left. An unsettled
+// gap_valid_* never appends: it goes to the Builder as a note. Only the
 // questions in asked are read; answers to other ids are ignored.
-func decideDoneGate(in DoneGateInput, asked map[string]Noul, answers map[string]float64, judgeErr error, overLimit, checksFailed bool, openBlockers int, fixBudgetLeft bool) GateOutcome {
+func decideConvergeGate(in ConvergeGateInput, asked map[string]Noul, answers map[string]float64, judgeErr error, overLimit, checksFailed bool, openBlockers int, appendsLeft bool) GateOutcome {
 	if checksFailed || openBlockers > 0 {
 		return GateOutcome{Outcome: GateLoop, Row: 1, Note: "a check failed or a blocker finding is open"}
 	}
-	required := append([]string{}, doneFixedIDs...)
+	blocking := blockingGaps(in.Gaps, in.Criteria)
+	var required []string
+	for _, g := range blocking {
+		required = append(required, "gap_valid_"+g.ID)
+	}
 	for _, c := range in.Criteria {
 		required = append(required, "met_"+c.ID)
 	}
 	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
 		return GateOutcome{Outcome: GateEscalate, Row: 2, Note: note}
 	}
-	var hard, soft, inReport []string
+	var hard, soft, builder, valid, unmet []string
+	for _, g := range blocking {
+		switch judge(answers["gap_valid_"+g.ID]) {
+		case vYes:
+			valid = append(valid, g.ID)
+			hard = append(hard, "gap "+gapLine(g))
+		case vUnsettled:
+			builder = append(builder, "it is unclear whether this gap is real: "+gapLine(g))
+		}
+	}
 	labels := criterionLabels(in.Criteria)
 	for _, c := range in.Criteria {
 		switch judge(answers["met_"+c.ID]) {
 		case vNo:
+			unmet = append(unmet, c.ID)
 			hard = append(hard, fmt.Sprintf("the diff does not implement acceptance criterion %s", labels[c.ID]))
 		case vUnsettled:
 			soft = append(soft, fmt.Sprintf("it is unclear whether the diff implements acceptance criterion %s", labels[c.ID]))
 		}
-		switch status, given := architectStatus(in.ArchitectVerdicts, c.ID); {
-		case status == "not_met":
-			hard = append(hard, fmt.Sprintf("the Architect reports acceptance criterion %s as not met", labels[c.ID]))
-			inReport = append(inReport, hard[len(hard)-1])
-		case status == "unclear" && given:
-			soft = append(soft, fmt.Sprintf("the Architect is unsure whether acceptance criterion %s is met", labels[c.ID]))
-			inReport = append(inReport, soft[len(soft)-1])
-		case !given:
-			soft = append(soft, fmt.Sprintf("the Architect gave no verdict for acceptance criterion %s", labels[c.ID]))
-		}
 	}
-	for _, id := range doneFixedIDs {
-		switch judge(answers[id]) {
-		case vYes:
-			hard = append(hard, doneHardPhrases[id])
-		case vUnsettled:
-			soft = append(soft, "it is unclear whether "+doneHardPhrases[id])
-		}
-	}
-	for _, d := range in.Deviations {
-		if strings.TrimSpace(d) != "" {
-			hard = append(hard, fmt.Sprintf("the Architect reports work outside the spec or plan: %s", truncateText(d, 80)))
-			inReport = append(inReport, hard[len(hard)-1])
-		}
-	}
-	row, issues := 0, []string(nil)
 	switch {
 	case len(hard) > 0:
-		row, issues = 3, append(hard, soft...)
+		issues := append(hard, soft...)
+		outcome := GateAppend
+		if !appendsLeft {
+			outcome = GateEscalate
+		}
+		return GateOutcome{Outcome: outcome, Row: 3, Note: joinNotes(issues), Issues: issues, Builder: builder, Valid: valid, Unmet: unmet}
 	case len(soft) > 0:
-		row, issues = 4, soft
-	default:
-		return GateOutcome{Outcome: GateDone, Row: 5, Note: ""}
+		return GateOutcome{Outcome: GateEscalate, Row: 4, Note: joinNotes(soft), Issues: soft, Builder: builder}
 	}
-	outcome := GateFix
-	if !fixBudgetLeft {
-		outcome = GateEscalate
-	}
-	return GateOutcome{Outcome: outcome, Row: row, Note: joinNotes(issues), Issues: issues, InReport: inReport}
+	return GateOutcome{Outcome: GateConverged, Row: 5, Builder: builder}
 }
 
 // gateEvent builds the audit payload for an actor "jev" event: the exact

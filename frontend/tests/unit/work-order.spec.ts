@@ -145,14 +145,16 @@ it("prefills Request changes only from the current revision's Architect report",
     id: revision,
     work_order_id: order.id,
     actor: "architect",
-    kind: "architect_verified",
+    kind: "converge_report",
     message: "",
     payload: {
       revision,
-      verdicts: [
+      gaps: [
         {
-          criterion_id: "c1",
-          status: "not_met",
+          id: "C1-G1",
+          type: "missing",
+          layer: "code",
+          cites: "c1",
           evidence: "e",
           fix: "budget each section",
         },
