@@ -191,7 +191,13 @@ export function lastMessage(events: WOEvent[], ...kinds: string[]): string {
 
 export interface ArchitectReport {
   revision: number;
-  verdicts: { criterion_id: string; status: string; evidence: string }[];
+  verdicts: {
+    criterion_id: string;
+    status: string;
+    evidence: string;
+    gap?: string;
+    fix?: string;
+  }[];
   deviations: string[];
 }
 export function architectReport(events: WOEvent[]): ArchitectReport | null {
@@ -202,6 +208,14 @@ export function architectReport(events: WOEvent[]): ArchitectReport | null {
     verdicts: (e.payload?.verdicts as ArchitectReport["verdicts"]) ?? [],
     deviations: (e.payload?.deviations as string[]) ?? [],
   };
+}
+
+// Prefills Request changes with the Architect's fixes for criteria it did not accept.
+export function changeRequestDraft(r: ArchitectReport | null): string {
+  return (r?.verdicts ?? [])
+    .filter((v) => v.status !== "met" && v.fix)
+    .map((v) => `${v.criterion_id}: ${v.fix}`)
+    .join("\n\n");
 }
 
 // Parallel plan tasks run at once, so more than one run can be live.

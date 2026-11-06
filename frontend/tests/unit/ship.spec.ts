@@ -8,6 +8,7 @@ import ChangesPanel from "../../src/features/factory/reviews/ChangesPanel.vue";
 import { parseUnifiedDiff } from "../../src/features/factory/reviews/diff";
 import {
   architectReport,
+  changeRequestDraft,
   escalationReason,
 } from "../../src/features/factory/runs/agentActivity";
 import { subscribe } from "../../src/services/events/sse";
@@ -209,6 +210,42 @@ describe("escalation and Architect helpers", () => {
     expect(text).toContain("not met");
     expect(text).toContain("no retry test");
     expect(text).toContain("touched go.mod");
+  });
+  it("splits a verdict into gap, fix and folded evidence", () => {
+    const report = {
+      revision: 2,
+      verdicts: [
+        { criterion_id: "c1", status: "met", evidence: "ok", fix: "ignored" },
+        {
+          criterion_id: "c2",
+          status: "not_met",
+          evidence: "long evidence",
+          gap: "sections are cut",
+          fix: "give each section a budget",
+        },
+      ],
+      deviations: ["one", "two"],
+    };
+    const w = mount(ReviewPanel, {
+      props: {
+        checks: [],
+        findings: [],
+        revision: 2,
+        events: [event("architect_verified", "b", report)],
+      },
+    });
+    expect(w.find('[data-test="verdict-gap"]').text()).toContain(
+      "sections are cut",
+    );
+    expect(w.find('[data-test="verdict-fix"]').text()).toContain(
+      "give each section a budget",
+    );
+    expect(w.find("details").text()).toContain("long evidence");
+    expect(w.findAll(".fx-reason-list li")).toHaveLength(2);
+    expect(changeRequestDraft(architectReport(w.props("events")!))).toBe(
+      "c2: give each section a budget",
+    );
+    expect(changeRequestDraft(null)).toBe("");
   });
 });
 

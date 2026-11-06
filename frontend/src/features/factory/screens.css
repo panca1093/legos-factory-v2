@@ -664,14 +664,19 @@
   color: var(--accent);
   border-color: var(--accent);
 }
-.fx-finding {
+.fx-finding,
+.fx-verdict {
   display: grid;
   gap: 4px;
   padding: 10px 0;
   border-top: 1px solid var(--line);
 }
-.fx-finding p {
+.fx-finding p,
+.fx-verdict p {
   margin: 0;
+}
+.fx-verdict summary {
+  cursor: pointer;
 }
 .fx-check {
   display: flex;

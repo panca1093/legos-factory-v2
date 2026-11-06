@@ -112,7 +112,7 @@ func TestVerifyReplySchema(t *testing.T) {
 	}
 	err := decodeReply(`{"verdicts":[
 		{"criterion_id":" c1 ","status":"MET","evidence":"a.go"},
-		{"criterion_id":"c2","status":"Not-Met","evidence":"b.go"},
+		{"criterion_id":"c2","status":"Not-Met","evidence":"b.go","gap":" caps too big ","fix":" per-section budgets "},
 		{"criterion_id":"c3","status":"not met"},
 		{"criterion_id":"c4","status":"Unclear"}],
 		"deviations":["extra endpoint","  ",""]}`, &v)
@@ -125,6 +125,9 @@ func TestVerifyReplySchema(t *testing.T) {
 	}
 	if strings.Join(got, ",") != "c1=met,c2=not_met,c3=not_met,c4=unclear" {
 		t.Fatalf("statuses must be normalised: %v", got)
+	}
+	if v.Verdicts[1].Gap != "caps too big" || v.Verdicts[1].Fix != "per-section budgets" {
+		t.Fatalf("gap and fix must be kept and trimmed: %+v", v.Verdicts[1])
 	}
 	if len(v.Deviations) != 1 || v.Deviations[0] != "extra endpoint" {
 		t.Fatalf("deviations: %q", v.Deviations)
