@@ -141,6 +141,7 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		}
 		return nil
 	case "request_changes":
+		payload := f.withBrief(ctx, wo, map[string]any{"reason": "human_revision"}, nil, reason)
 		newRev := wo.Revision + 1
 		if err := f.WO.UpdateFields(ctx, woID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": 0, "review_fixes": 0}); err != nil {
 			return err
@@ -150,7 +151,7 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 			return err
 		}
 		f.recordPRDecision(ctx, wo, "Changes requested", reason)
-		_, err := f.Sched.Enqueue(ctx, JobImplement, woID, "", map[string]any{"reason": "human_revision"})
+		_, err := f.Sched.Enqueue(ctx, JobImplement, woID, "", payload)
 		return err
 	case "decline":
 		f.event(woID, "human", "pr_declined", reason, nil)

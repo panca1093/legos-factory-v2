@@ -166,6 +166,9 @@ Unchanged except:
 - Tasks run strictly in dependency order (the dependency-loss bug is fixed in `451ffb5`).
 - The Builder prompt names the task's own title, objective and `scope`, and lists the other tasks' titles as "other tasks — do not implement these".
 - On a retry after failed checks, the Builder gets the failing check's name, command and the tail of its output.
+- Every Builder prompt carries the spec (the one the Architect verifies against) and, on fix paths, the plan.
+- Every fix path (`fix_findings`, `human_revision`, `human_retry`, `fix_done_gate`) sends one numbered **fix brief** in the job payload, nothing filtered or truncated: the human's reason, the done-gate issues and the Foreman's notes, all open findings (severity, title, detail, location), every non-`met` Architect verdict of the current revision (evidence, gap, fix) and every deviation.
+- The Builder must address every numbered item and answer in its one-line reply with `N: fixed (file:line)` or `N: not fixed because <reason>`; the reply is not parsed.
 
 ### 6. Verification (factory + Inspector ∥ Architect)
 

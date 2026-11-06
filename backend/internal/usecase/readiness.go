@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"legos-factory/backend/internal/model"
@@ -129,9 +130,17 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry boo
 		}
 		wo.Revision, wo.CommitSHA, wo.ReviewFixes = newRev, "", fixes
 		note := out.Note + architectFixes(report)
-		f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: done gate requests a fix: %s", newRev, out.Note),
-			map[string]any{"revision": newRev, "reason": "fix_done_gate", "note": note})
-		return true, nil, f.enqueuePayload(ctx, JobImplement, wo.ID, map[string]any{"reason": "fix_done_gate", "note": note})
+		issues := slices.Clone(out.Issues)
+		if strings.TrimSpace(v.Notes) != "" {
+			issues = append(issues, "The Foreman's validation notes: "+v.Notes)
+		}
+		payload := map[string]any{"reason": "fix_done_gate", "note": note}
+		evPayload := map[string]any{"revision": newRev, "reason": "fix_done_gate", "note": note}
+		if b := fixBrief(openFindings(findings), report, issues, ""); b != "" {
+			payload["brief"], evPayload["brief"] = b, b
+		}
+		f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: done gate requests a fix: %s", newRev, out.Note), evPayload)
+		return true, nil, f.enqueuePayload(ctx, JobImplement, wo.ID, payload)
 	case GateEscalate:
 		if len(out.Issues) == 0 {
 			return false, []string{out.Note}, nil
@@ -152,7 +161,11 @@ func (f *Factory) resumeDoneGateFix(ctx context.Context, wo *model.WorkOrder) er
 	if note == "" {
 		note = "The done gate asked for a fix; its reasons are in the last done_gate event of the activity trail."
 	}
-	return f.enqueuePayload(ctx, JobImplement, wo.ID, map[string]any{"reason": "fix_done_gate", "note": note})
+	payload := map[string]any{"reason": "fix_done_gate", "note": note}
+	if b := f.doneGateBrief(ctx, wo); b != "" {
+		payload["brief"] = b
+	}
+	return f.enqueuePayload(ctx, JobImplement, wo.ID, payload)
 }
 
 // architectFixes lists the Architect's suggested fixes for unmet criteria, for the Builder's fix note.
