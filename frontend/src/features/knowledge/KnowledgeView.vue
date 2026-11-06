@@ -123,12 +123,16 @@ const sections = computed(() => {
   return groupFolders(l, isProjectNotebook(nb.value)).map((f) => ({
     ...f,
     folder: true,
-    open: folderOpen.value[f.key] ?? (f.docs.length > 0 && f.key !== "repo"),
+    open: f.docs.length > 0 && (folderOpen.value[f.key] ?? f.key !== "repo"),
   }));
 });
 const inView = computed(() =>
   sections.value.flatMap((s) => (s.open ? s.docs : [])),
 );
+const drafts = (key: string) =>
+  visible.value.filter((d) => d.status === "draft" && inNotebook(d, key))
+    .length;
+const capped = computed(() => docs.value.length === 500);
 const found = computed(() => sections.value.flatMap((s) => s.docs));
 const toggleFolder = (key: string, open: boolean) =>
   (folderOpen.value = { ...folderOpen.value, [key]: !open });
@@ -305,9 +309,18 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
             <Layers v-if="b.key === NB_ALL" class="icon" />
             <BookOpen v-else class="icon" />
             <span>{{ b.label }}</span
+            ><span
+              v-if="drafts(b.key)"
+              class="n draft"
+              :aria-label="`${drafts(b.key)} drafts`"
+              data-test="kb-draft-count"
+              >{{ drafts(b.key) }}</span
             ><span class="n">{{ b.count }}</span>
           </button>
         </div>
+        <p v-if="capped" class="small muted" data-test="kb-capped">
+          Showing the first 500 documents
+        </p>
         <p v-if="error" class="notice" role="alert">{{ error }}</p>
         <p v-else-if="loading" class="small muted" role="status">
           Loading notes…
@@ -320,6 +333,7 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
               class="nb-folder"
               :class="{ open: sec.open }"
               :disabled="!sec.docs.length"
+              :aria-label="`${sec.label}, ${sec.docs.length} ${sec.docs.length === 1 ? 'document' : 'documents'}`"
               :aria-expanded="sec.open"
               :aria-controls="`kb-folder-${sec.key}`"
               :data-test="`kb-folder-${sec.key}`"

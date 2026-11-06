@@ -710,6 +710,10 @@
 .nb-folder.open .icon {
   transform: rotate(90deg);
 }
+.nb-book .n.draft {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
 .nb-folder .n {
   margin-left: auto;
   font-weight: 550;

@@ -107,6 +107,7 @@ const wideDraft = mk({
   title: "Wide draft",
   indexed_at: 700,
 });
+let served: KBDoc[];
 const all = [
   brief,
   spec,
@@ -122,6 +123,7 @@ const all = [
 ];
 
 beforeEach(() => {
+  served = all;
   setActivePinia(createPinia());
   const f = useFactory();
   f.projects = [
@@ -149,7 +151,7 @@ beforeEach(() => {
     vi.fn(async (url: string) => {
       const u = new URL(url, "http://x");
       if (u.pathname === "/api/v1/kb/docs")
-        return new Response(JSON.stringify({ docs: all }));
+        return new Response(JSON.stringify({ docs: served }));
       const doc = all.find((d) => d.id === u.searchParams.get("id"))!;
       const detail: KBDocDetail = {
         doc,
@@ -205,11 +207,14 @@ it("has no status dropdown or drafts notebook, and loads every status once", asy
 it("lists All notes, Factory-wide and every project, even with zero documents", async () => {
   const w = await render();
   expect(w.findAll(".nb-book").map((b) => b.text())).toEqual([
-    "All notes11",
-    "Factory-wide2",
+    "All notes211",
+    "Factory-wide12",
     "Empty0",
-    "Greeter9",
+    "Greeter19",
   ]);
+  expect(
+    w.findAll('[data-test="kb-draft-count"]').map((b) => b.text()),
+  ).toEqual(["2", "1", "1"]);
   w.unmount();
 });
 
@@ -259,8 +264,7 @@ it("shows empty folders muted and not expandable", async () => {
     expect(f.attributes("disabled")).toBeDefined();
     expect(f.attributes("aria-expanded")).toBe("false");
   }
-  await folders[0].trigger("click");
-  expect(folders[0].attributes("aria-expanded")).toBe("false");
+  expect(folders[0].attributes("aria-label")).toBe("Brief, 0 documents");
   expect(titles(w)).toEqual([]);
   w.unmount();
 });
@@ -346,5 +350,103 @@ it("opens a work-order record read-only, and an editable note with Edit", async 
   await flushPromises();
   expect(q("record-readonly")).toBeNull();
   expect(q("kb-edit")).not.toBeNull();
+  w.unmount();
+});
+
+it("labels folder buttons with a count a screen reader can read", async () => {
+  const w = await render();
+  await open(w, "Greeter");
+  expect(folder("brief").getAttribute("aria-label")).toBe("Brief, 1 document");
+  expect(folder("task").getAttribute("aria-label")).toBe("Task, 2 documents");
+  w.unmount();
+});
+
+it("hints when the list hit the 500 cap", async () => {
+  const w = await render();
+  expect(q("kb-capped")).toBeNull();
+  w.unmount();
+  served = Array.from({ length: 500 }, (_, i) =>
+    mk({ id: `factory:prj_1:n${i}.md`, title: `N${i}`, indexed_at: i }),
+  );
+  const capped = await render();
+  expect(q("kb-capped")?.textContent).toContain("Showing the first 500");
+  capped.unmount();
+});
+
+it("closes a folder whose last document disappeared", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const w = await render();
+  await open(w, "Greeter");
+  folder("repo").click();
+  await flushPromises();
+  expect(folder("repo").getAttribute("aria-expanded")).toBe("true");
+  served = all.filter((d) => d.source !== "repo");
+  const input = w.find("input[type=search]");
+  for (const v of ["x", ""]) {
+    await input.setValue(v);
+    await vi.advanceTimersByTimeAsync(300);
+    await flushPromises();
+  }
+  vi.useRealTimers();
+  expect(folder("repo").disabled).toBe(true);
+  expect(folder("repo").getAttribute("aria-expanded")).toBe("false");
+  w.unmount();
+});
+
+it("moves with j and k over expanded folders only", async () => {
+  const w = await render();
+  await open(w, "Greeter");
+  folder("repo").click();
+  folder("brief").click();
+  await flushPromises();
+  const sel = () => w.find(".nb-item.on .t").text();
+  await row(w, "Spec doc").trigger("click");
+  await flushPromises();
+  const key = async (k: string) => {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: k, bubbles: true }),
+    );
+    await flushPromises();
+  };
+  await key("k");
+  expect(sel()).toBe("Spec doc");
+  await key("j");
+  expect(sel()).toBe("Summary doc");
+  folder("repo").click();
+  await flushPromises();
+  for (let i = 0; i < 8; i++) await key("j");
+  expect(sel()).toBe("Draft doc");
+  w.unmount();
+});
+
+it("keeps the open document when its folder is collapsed", async () => {
+  const w = await render();
+  await open(w, "Greeter");
+  await row(w, "Spec doc").trigger("click");
+  await flushPromises();
+  folder("spec").click();
+  await flushPromises();
+  expect(w.find("#kb-folder-spec").isVisible()).toBe(false);
+  expect(document.body.querySelector(".nb-h")!.textContent).toBe("Spec doc");
+  w.unmount();
+});
+
+it("resets folder state when switching notebooks", async () => {
+  const w = await render();
+  await open(w, "Greeter");
+  folder("brief").click();
+  folder("repo").click();
+  await flushPromises();
+  await open(w, "Factory-wide");
+  await open(w, "Greeter");
+  expect(folder("brief").getAttribute("aria-expanded")).toBe("true");
+  expect(folder("repo").getAttribute("aria-expanded")).toBe("false");
+  w.unmount();
+});
+
+it("labels a notebook for an unknown project by its id", async () => {
+  served = [mk({ id: "factory:prj_9:a.md", project_id: "prj_9", title: "A" })];
+  const w = await render();
+  expect(w.findAll(".nb-book").map((b) => b.text())).toContain("prj_91");
   w.unmount();
 });

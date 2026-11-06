@@ -106,14 +106,15 @@ describe("groupFolders", () => {
       doc({ id: "rs", type: "Spec", source: "repo" }),
       doc({ id: "d", type: "Note", status: "draft" }),
       doc({ id: "dep", type: "Note", status: "deprecated", indexed_at: 0 }),
+      doc({ id: "rr", type: "Reviewer Routing", indexed_at: 0 }),
     ];
     const out = groupFolders(docs, true);
     expect(ids(out)).toEqual([
       ["brief", ["b2", "b1"]],
-      ["spec", ["s", "rs"]],
+      ["spec", ["s"]],
       ["task", ["t1", "t2"]],
-      ["notes", ["n", "dep"]],
-      ["repo", ["r"]],
+      ["notes", ["n", "dep", "rr"]],
+      ["repo", ["r", "rs"]],
       ["review", ["d"]],
     ]);
     expect(out.flatMap((f) => f.docs)).toHaveLength(docs.length);

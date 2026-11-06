@@ -159,7 +159,7 @@ Consequences for the design:
 The page already groups by project (`notebooksOf`: All notes, Factory-wide, one notebook per project from the project list, shown even with zero documents). There is no status filter and no Drafts notebook: the page loads `status=all`. The change is inside a project:
 
 - No grouping by work order.
-- Collapsible folders, in order: Brief, Spec, Task (`Task DAG` and `Task Summary`), Notes, Repository (collapsed by default), Needs review (`status=draft`, any type). Empty folders are shown muted and do not expand. A document sits in exactly one folder: drafts first, then by type, then repo documents; leftovers go to "Other". While searching, the list is flat. Factory-wide has Playbooks and Needs review.
+- Collapsible folders, in order: Brief, Spec, Task (`Task DAG` and `Task Summary`), Notes, Repository (collapsed by default), Needs review (`status=draft`, any type). Empty folders are shown muted and do not expand. A document sits in exactly one folder: drafts first, then repo documents, then by type; leftovers go to "Other". While searching, the list is flat. Factory-wide has Playbooks and Needs review.
 - Each card shows the title, the type, and its origin ("Work order", "Chat", …). Sorted newest first.
 - The list and search endpoints return only allow-listed types: `Brief`, `Spec`, `Task DAG`, `Task Summary`, `Note`, `Playbook`, `Reviewer Routing`, plus repo documents that pass §6.
 - Work-order documents open read-only (no Edit). Other documents show Edit as today.

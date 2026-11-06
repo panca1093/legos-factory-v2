@@ -196,7 +196,7 @@ const PROJECT_FOLDERS = [
   { key: "brief", label: "Brief", types: ["Brief"] },
   { key: "spec", label: "Spec", types: ["Spec"] },
   { key: "task", label: "Task", types: ["Task DAG", "Task Summary"] },
-  { key: "notes", label: "Notes", types: ["Note"] },
+  { key: "notes", label: "Notes", types: ["Note", "Reviewer Routing"] },
   { key: "repo", label: "Repository", types: [] as string[] },
   { key: "review", label: "Needs review", types: [] as string[] },
 ];
@@ -217,7 +217,9 @@ export function groupFolders(docs: KBDoc[], project: boolean): Folder[] {
     const key =
       d.status === "draft"
         ? "review"
-        : (byType ?? (project && d.source === "repo" ? "repo" : "other"));
+        : project && d.source === "repo"
+          ? "repo"
+          : (byType ?? "other");
     at(key).docs.push(d);
   }
   return out.filter((f) => f.key !== "other" || f.docs.length);
