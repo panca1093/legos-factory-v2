@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"legos-factory/backend/internal/model"
@@ -72,17 +73,27 @@ func (p *Projects) SetKBScope(ctx context.Context, u *model.User, id string, req
 	return p.Store.Get(ctx, id)
 }
 
+const (
+	maxKBGlobs   = 50
+	maxKBGlobLen = 200
+)
+
 func cleanGlobs(in []string) ([]string, error) {
 	out := []string{}
 	for _, g := range in {
 		g = strings.TrimSpace(g)
 		switch {
 		case g == "":
-		case strings.HasPrefix(g, "/") || strings.Contains(g, "\\") || strings.Contains(g, ".."):
-			return nil, fmt.Errorf("%w: glob %q must be a relative pattern without a leading /, backslash or ..", ErrInvalid, g)
+		case len(g) > maxKBGlobLen:
+			return nil, fmt.Errorf("%w: a glob may be at most %d characters", ErrInvalid, maxKBGlobLen)
+		case strings.HasPrefix(g, "/") || strings.Contains(g, "\\") || slices.Contains(strings.Split(g, "/"), ".."):
+			return nil, fmt.Errorf("%w: glob %q must be a relative pattern without a leading /, backslash or .. segment", ErrInvalid, g)
 		default:
 			out = append(out, g)
 		}
+	}
+	if len(out) > maxKBGlobs {
+		return nil, fmt.Errorf("%w: at most %d globs per list", ErrInvalid, maxKBGlobs)
 	}
 	return out, nil
 }

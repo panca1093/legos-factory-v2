@@ -109,7 +109,7 @@ beforeEach(() => {
         body: "Body.",
         links: [],
         backlinks: [],
-        editable: !doc.read_only && doc.source === "factory",
+        editable: doc.source === "factory",
         default_available: false,
       };
       return new Response(JSON.stringify(detail));

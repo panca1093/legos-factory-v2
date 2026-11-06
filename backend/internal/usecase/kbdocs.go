@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -13,7 +14,10 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
-const kbListLimit = 500
+const (
+	kbListLimit   = 500
+	kbScopedFetch = 2000
+)
 
 var factoryListTypes = map[string]bool{
 	model.KBTypePlaybook: true, model.KBTypeReviewerRoute: true, model.KBTypeBrief: true, model.KBTypeSpec: true,
@@ -85,18 +89,26 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 	}
 	text := strings.TrimSpace(p.Q)
 	seen := map[string]bool{}
-	scopes := map[string]*model.Project{}
+	scopes := map[string]*kbScope{}
 	var hits []model.KBHit
 	for _, pid := range pids {
 		q.ProjectID = pid
+		sc := s.scopeOf(ctx, scopes, pid)
 		var found []model.KBHit
 		if text != "" {
 			q.Limit = 50
+			if sc != nil {
+				q.Limit = 4 * q.Limit
+			}
 			var err error
 			if found, err = s.KB.Idx.Search(ctx, q, s.KB.Emb.Embed(text)); err != nil {
 				return nil, err
 			}
 		} else {
+			q.Limit = kbListLimit
+			if sc != nil {
+				q.Limit = kbScopedFetch
+			}
 			docs, err := s.KB.Idx.List(ctx, q)
 			if err != nil {
 				return nil, err
@@ -109,7 +121,7 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 			if h.Doc.Source == model.KBSourceFactory && !factoryListTypes[h.Doc.Type] {
 				continue
 			}
-			if h.Doc.Source == model.KBSourceRepo && !s.inKBScope(ctx, scopes, h.Doc) {
+			if h.Doc.Source == model.KBSourceRepo && !sc.allows(h.Doc.Path) {
 				continue
 			}
 			if !seen[h.Doc.ID] {
@@ -140,24 +152,47 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 	return out, nil
 }
 
-func (s *KBDocs) inKBScope(ctx context.Context, cache map[string]*model.Project, d model.KBDoc) bool {
-	pr, ok := cache[d.ProjectID]
-	if !ok {
-		pr, _ = s.Proj.Get(ctx, d.ProjectID)
-		cache[d.ProjectID] = pr
+type kbScope struct{ inc, exc []*regexp.Regexp }
+
+// scopeOf compiles the project's globs once per request; nil means no restriction.
+func (s *KBDocs) scopeOf(ctx context.Context, cache map[string]*kbScope, pid string) *kbScope {
+	if sc, ok := cache[pid]; ok {
+		return sc
 	}
-	if pr == nil {
+	var sc *kbScope
+	if pr, err := s.Proj.Get(ctx, pid); err == nil && (len(pr.KBInclude) > 0 || len(pr.KBExclude) > 0) {
+		sc = &kbScope{}
+		for _, g := range pr.KBInclude {
+			if re := kb.CompileGlob(g); re != nil {
+				sc.inc = append(sc.inc, re)
+			}
+		}
+		for _, g := range pr.KBExclude {
+			if re := kb.CompileGlob(g); re != nil {
+				sc.exc = append(sc.exc, re)
+			}
+		}
+		if len(pr.KBInclude) > 0 && len(sc.inc) == 0 {
+			sc.inc = []*regexp.Regexp{regexp.MustCompile(`$^`)}
+		}
+	}
+	cache[pid] = sc
+	return sc
+}
+
+func (sc *kbScope) allows(path string) bool {
+	if sc == nil {
 		return true
 	}
-	matches := func(globs []string) bool {
-		for _, g := range globs {
-			if kb.GlobMatch(g, d.Path) {
+	any := func(res []*regexp.Regexp) bool {
+		for _, re := range res {
+			if re.MatchString(path) {
 				return true
 			}
 		}
 		return false
 	}
-	return (len(pr.KBInclude) == 0 || matches(pr.KBInclude)) && !matches(pr.KBExclude)
+	return (len(sc.inc) == 0 || any(sc.inc)) && !any(sc.exc)
 }
 
 // Related ranks documents by keyword match alone: factory-wide plus projectID's, stable only.

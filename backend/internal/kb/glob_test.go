@@ -1,6 +1,10 @@
 package kb
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestGlobMatch(t *testing.T) {
 	cases := []struct {
@@ -20,10 +24,28 @@ func TestGlobMatch(t *testing.T) {
 		{"backend/internal/kb/defaults/**", "backend/internal/kb/defaults/playbooks/b.md", true},
 		{"a?.md", "ab.md", true},
 		{"a?.md", "a/.md", false},
+		{"a/**/b", "a/b", true},
+		{"a/**/b", "a/x/y/b", true},
+		{"./docs/**", "docs/a.md", true},
+		{"docs/", "docs/a/b.md", true},
+		{"docs/", "docs", false},
+		{"Docs/**", "docs/a.md", false},
+		{"[ab].md", "[ab].md", true},
+		{"[ab].md", "a.md", false},
 	}
 	for _, c := range cases {
 		if got := GlobMatch(c.pattern, c.path); got != c.want {
 			t.Errorf("GlobMatch(%q, %q) = %v, want %v", c.pattern, c.path, got, c.want)
 		}
+	}
+}
+
+func TestGlobMatchLongPatternIsFast(t *testing.T) {
+	pattern := strings.Repeat("**/a", 50)[:200]
+	path := strings.Repeat("a/", 2000) + "b"
+	start := time.Now()
+	GlobMatch(pattern, path)
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("took %v", d)
 	}
 }
