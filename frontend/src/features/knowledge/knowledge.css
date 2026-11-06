@@ -59,10 +59,6 @@
   background: var(--tint);
   color: var(--accent);
 }
-.nb-book.drafts .n {
-  background: var(--warning-soft);
-  color: var(--warning);
-}
 .nb-book .icon {
   width: 16px;
   height: 16px;
@@ -681,11 +677,6 @@
     height: calc(100dvh - 190px);
   }
 }
-.nb-status {
-  min-height: 34px;
-  padding: 4px 10px;
-  font-size: 13px;
-}
 .nb-empty .nb-back {
   position: absolute;
   top: 12px;
@@ -695,27 +686,40 @@
   padding: 0 6px;
 }
 
-.nb-chips {
+.nb-folder {
   display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-}
-.nb-chip {
-  border: 1px solid var(--line);
+  width: 100%;
+  border: 0;
   background: none;
-  color: var(--muted);
+  color: var(--ink);
   font: inherit;
   font-size: 12px;
-  font-weight: 550;
-  padding: 3px 10px;
-  border-radius: 999px;
+  font-weight: 600;
+  padding: 8px 6px 4px;
   cursor: pointer;
+  text-align: left;
 }
-.nb-chip:hover {
-  color: var(--ink);
+.nb-folder .icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  transition: transform 0.15s;
 }
-.nb-chip.on {
-  background: var(--tint);
-  border-color: transparent;
-  color: var(--accent);
+.nb-folder.open .icon {
+  transform: rotate(90deg);
+}
+.nb-folder .n {
+  margin-left: auto;
+  font-weight: 550;
+  color: var(--muted);
+}
+.nb-folder:disabled {
+  color: var(--muted);
+  cursor: default;
+  opacity: 0.6;
+}
+.nb-item.dep {
+  opacity: 0.6;
 }

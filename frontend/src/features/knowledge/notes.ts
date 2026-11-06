@@ -148,55 +148,80 @@ export function when(t: number | string, now = Date.now()): string {
 }
 
 export const NB_ALL = "all";
-export const NB_DRAFTS = "drafts";
+export const NB_FACTORY = "p:";
 export type Notebook = { key: string; label: string; count: number };
 
 export function notebooksOf(
   docs: KBDoc[],
-  projectName: (id?: string) => string,
-  draftCount: number,
+  projects: { id: string; name: string }[],
 ): Notebook[] {
-  const by = new Map<string, Notebook>();
+  const by = new Map<string, Notebook>(
+    projects.map((p) => [p.id, { key: `p:${p.id}`, label: p.name, count: 0 }]),
+  );
+  const factory: Notebook = {
+    key: NB_FACTORY,
+    label: "Factory-wide",
+    count: 0,
+  };
   for (const d of docs) {
-    const key = d.project_id ?? "";
-    const nb = by.get(key) ?? {
-      key: `p:${key}`,
-      label: projectName(d.project_id),
-      count: 0,
-    };
-    nb.count++;
-    by.set(key, nb);
+    const id = d.project_id ?? "";
+    if (!id) factory.count++;
+    else {
+      const nb = by.get(id) ?? { key: `p:${id}`, label: id, count: 0 };
+      nb.count++;
+      by.set(id, nb);
+    }
   }
   const books = [...by.values()].sort((a, b) => a.label.localeCompare(b.label));
-  const out: Notebook[] = [
+  return [
     { key: NB_ALL, label: "All notes", count: docs.length },
+    factory,
+    ...books,
   ];
-  if (draftCount)
-    out.push({ key: NB_DRAFTS, label: "Drafts to review", count: draftCount });
-  return [...out, ...books];
 }
 
 export function inNotebook(d: KBDoc, key: string): boolean {
-  return (
-    key === NB_ALL || key === NB_DRAFTS || `p:${d.project_id ?? ""}` === key
-  );
+  return key === NB_ALL || `p:${d.project_id ?? ""}` === key;
 }
 
-export const TYPE_CHIPS = [
-  { key: "all", label: "All", types: [] as string[] },
+export const isProjectNotebook = (key: string) =>
+  key.startsWith("p:") && key !== NB_FACTORY;
+
+export const ts = (d: KBDoc) =>
+  typeof d.indexed_at === "number" ? d.indexed_at : Date.parse(d.indexed_at);
+
+export type Folder = { key: string; label: string; docs: KBDoc[] };
+
+const PROJECT_FOLDERS = [
   { key: "brief", label: "Brief", types: ["Brief"] },
   { key: "spec", label: "Spec", types: ["Spec"] },
   { key: "task", label: "Task", types: ["Task DAG", "Task Summary"] },
   { key: "notes", label: "Notes", types: ["Note"] },
+  { key: "repo", label: "Repository", types: [] as string[] },
+  { key: "review", label: "Needs review", types: [] as string[] },
+];
+const FACTORY_FOLDERS = [
+  { key: "playbooks", label: "Playbooks", types: ["Playbook"] },
+  { key: "review", label: "Needs review", types: [] as string[] },
 ];
 
-export const inTypeChip = (d: KBDoc, key: string) => {
-  const types = TYPE_CHIPS.find((c) => c.key === key)?.types;
-  return !types?.length || types.includes(d.type);
-};
-
-export const isProjectNotebook = (key: string) =>
-  key.startsWith("p:") && key !== "p:";
+export function groupFolders(docs: KBDoc[], project: boolean): Folder[] {
+  const defs = project ? PROJECT_FOLDERS : FACTORY_FOLDERS;
+  const out: Folder[] = [
+    ...defs.map((f) => ({ key: f.key, label: f.label, docs: [] as KBDoc[] })),
+    { key: "other", label: "Other", docs: [] },
+  ];
+  const at = (k: string) => out.find((f) => f.key === k)!;
+  for (const d of [...docs].sort((a, b) => ts(b) - ts(a))) {
+    const byType = defs.find((f) => f.types.includes(d.type))?.key;
+    const key =
+      d.status === "draft"
+        ? "review"
+        : (byType ?? (project && d.source === "repo" ? "repo" : "other"));
+    at(key).docs.push(d);
+  }
+  return out.filter((f) => f.key !== "other" || f.docs.length);
+}
 
 const ORIGINS: Record<string, string> = {
   work_order: "Work order",

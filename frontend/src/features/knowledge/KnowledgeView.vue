@@ -60,7 +60,7 @@ function scheduleDelete(id: string, title: string, onUndo: () => void) {
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { BookOpen, Layers } from "lucide-vue-next";
+import { BookOpen, ChevronRight, Layers } from "lucide-vue-next";
 import SearchField from "../../components/ui/SearchField.vue";
 import { useFactory } from "../../stores/factory";
 import type { KBDoc, KBDocDetail } from "../../types/api";
@@ -68,15 +68,14 @@ import DiscussPanel from "./DiscussPanel.vue";
 import NoteReader from "./NoteReader.vue";
 import {
   highlight,
+  groupFolders,
   inNotebook,
-  inTypeChip,
   isProjectNotebook,
   originLabel,
   NB_ALL,
-  NB_DRAFTS,
   notebooksOf,
   snippet,
-  TYPE_CHIPS,
+  ts,
   when,
 } from "./notes";
 import "./knowledge.css";
@@ -86,13 +85,11 @@ const router = useRouter();
 const route = useRoute();
 
 const docs = ref<KBDoc[]>([]),
-  draftCount = ref(0),
   loading = ref(true),
   error = ref("");
 const q = ref(""),
   nb = ref(NB_ALL),
-  status = ref("stable"),
-  chip = ref("all"),
+  folderOpen = ref<Record<string, boolean>>({}),
   openId = ref(""),
   openTitle = ref(""),
   discuss = ref(false),
@@ -106,32 +103,41 @@ const projectName = (id?: string) =>
   !id
     ? "Factory-wide"
     : (factory.projects.find((p) => p.id === id)?.name ?? id);
-const ts = (d: KBDoc) =>
-  typeof d.indexed_at === "number" ? d.indexed_at : Date.parse(d.indexed_at);
 
 const visible = computed(() =>
   docs.value.filter((d) => !pendingIds.value.has(d.id)),
 );
-const notebooks = computed(() =>
-  notebooksOf(visible.value, projectName, draftCount.value),
-);
-const list = computed(() => {
-  const l = visible.value.filter(
-    (d) =>
-      inNotebook(d, nb.value) &&
-      (!isProjectNotebook(nb.value) || inTypeChip(d, chip.value)),
-  );
-  return q.value.trim() ? l : [...l].sort((a, b) => ts(b) - ts(a));
+const notebooks = computed(() => notebooksOf(visible.value, factory.projects));
+const sections = computed(() => {
+  const l = visible.value.filter((d) => inNotebook(d, nb.value));
+  if (q.value.trim() || nb.value === NB_ALL)
+    return [
+      {
+        key: "",
+        label: "",
+        docs: q.value.trim() ? l : [...l].sort((a, b) => ts(b) - ts(a)),
+        folder: false,
+        open: true,
+      },
+    ];
+  return groupFolders(l, isProjectNotebook(nb.value)).map((f) => ({
+    ...f,
+    folder: true,
+    open: folderOpen.value[f.key] ?? (f.docs.length > 0 && f.key !== "repo"),
+  }));
 });
+const inView = computed(() =>
+  sections.value.flatMap((s) => (s.open ? s.docs : [])),
+);
+const found = computed(() => sections.value.flatMap((s) => s.docs));
+const toggleFolder = (key: string, open: boolean) =>
+  (folderOpen.value = { ...folderOpen.value, [key]: !open });
 
 let seq = 0;
 async function load() {
   const mine = ++seq;
   const p = new URLSearchParams();
-  if (nb.value === NB_DRAFTS) {
-    p.set("source", "factory");
-    p.set("status", "draft");
-  } else p.set("status", status.value);
+  p.set("status", "all");
   if (q.value.trim()) p.set("q", q.value.trim());
   try {
     const res = await api.get<{ docs: KBDoc[] }>(`/api/v1/kb/docs?${p}`);
@@ -144,42 +150,15 @@ async function load() {
     error.value = errMsg(e);
   }
   loading.value = false;
-  if (
-    nb.value !== NB_ALL &&
-    nb.value !== NB_DRAFTS &&
-    !notebooks.value.some((b) => b.key === nb.value)
-  )
-    nb.value = NB_ALL;
+  if (!notebooks.value.some((b) => b.key === nb.value)) nb.value = NB_ALL;
   syncOpen();
-}
-
-let draftSeq = 0;
-async function loadDraftCount() {
-  const mine = ++draftSeq;
-  let n = 0;
-  try {
-    const res = await api.get<{ docs: KBDoc[] }>(
-      "/api/v1/kb/docs?source=factory&status=draft",
-    );
-    n = (res.docs ?? []).length;
-  } catch {
-    /* the count is a hint; the list reports real errors */
-  }
-  if (mine === draftSeq) draftCount.value = n;
-}
-async function refreshAll() {
-  await Promise.all([load(), loadDraftCount()]);
-  if (nb.value === NB_DRAFTS && !draftCount.value) {
-    nb.value = NB_ALL;
-    await load();
-  }
 }
 
 function syncOpen() {
   if (editState.value !== null) return;
   const id = openId.value;
-  if (id && (id === pinned || list.value.some((d) => d.id === id))) return;
-  openId.value = list.value[0]?.id ?? "";
+  if (id && (id === pinned || found.value.some((d) => d.id === id))) return;
+  openId.value = inView.value[0]?.id ?? "";
 }
 
 let debounce: ReturnType<typeof setTimeout> | undefined;
@@ -192,9 +171,9 @@ watch(openId, () => (quote.value = ""));
 
 onMounted(async () => {
   document.addEventListener("keydown", onKey);
-  reloadList = refreshAll;
+  reloadList = load;
   await Promise.allSettled([factory.refreshProjects()]);
-  await refreshAll();
+  await load();
   const linked = route.query.doc;
   if (typeof linked !== "string" || !linked) return;
   if (!picked && docs.value.some((d) => d.id === linked)) openLinked(linked);
@@ -203,7 +182,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   clearTimeout(debounce);
   document.removeEventListener("keydown", onKey);
-  if (reloadList === refreshAll) reloadList = null;
+  if (reloadList === load) reloadList = null;
 });
 
 const leaveOk = () =>
@@ -233,30 +212,16 @@ function openLinked(id: string) {
 function setNb(key: string) {
   if (key === nb.value || !leaveOk()) return;
   editState.value = null;
-  const wasDrafts = nb.value === NB_DRAFTS;
   nb.value = key;
-  chip.value = "all";
+  folderOpen.value = {};
   pinned = "";
-  if (wasDrafts || key === NB_DRAFTS) {
-    docs.value = [];
-    load();
-  } else syncOpen();
-}
-function setStatus(e: Event) {
-  const el = e.target as HTMLSelectElement;
-  if (!leaveOk()) {
-    el.value = status.value;
-    return;
-  }
-  status.value = el.value;
-  editState.value = null;
-  load();
+  syncOpen();
 }
 function move(dir: 1 | -1) {
   if (editState.value !== null) return;
-  const i = list.value.findIndex((d) => d.id === openId.value);
-  const next =
-    list.value[Math.max(0, Math.min(list.value.length - 1, i + dir))];
+  const l = inView.value;
+  const i = l.findIndex((d) => d.id === openId.value);
+  const next = l[Math.max(0, Math.min(l.length - 1, i + dir))];
   if (!next) return;
   pinned = "";
   openId.value = next.id;
@@ -295,13 +260,14 @@ function afterReview() {
   openId.value = "";
   pinned = "";
   mobile.value = "list";
-  return refreshAll();
+  return load();
 }
 
 function remove(detail: KBDocDetail) {
   const { id, title } = detail.doc;
-  const i = list.value.findIndex((d) => d.id === id);
-  openId.value = (list.value[i + 1] ?? list.value[i - 1])?.id ?? "";
+  const l = inView.value;
+  const i = l.findIndex((d) => d.id === id);
+  openId.value = (l[i + 1] ?? l[i - 1])?.id ?? "";
   pinned = "";
   mobile.value = "list";
   scheduleDelete(id, title, () => {
@@ -332,9 +298,8 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
             :key="b.key"
             type="button"
             class="nb-book"
-            :class="{ on: nb === b.key, drafts: b.key === NB_DRAFTS }"
+            :class="{ on: nb === b.key }"
             :aria-pressed="nb === b.key"
-            :data-test="b.key === NB_DRAFTS ? 'drafts-shortcut' : undefined"
             @click="setNb(b.key)"
           >
             <Layers v-if="b.key === NB_ALL" class="icon" />
@@ -343,76 +308,70 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
             ><span class="n">{{ b.count }}</span>
           </button>
         </div>
-        <div
-          v-if="isProjectNotebook(nb)"
-          class="nb-chips"
-          role="group"
-          aria-label="Filter by type"
-        >
-          <button
-            v-for="c in TYPE_CHIPS"
-            :key="c.key"
-            type="button"
-            class="nb-chip"
-            :class="{ on: chip === c.key }"
-            :aria-pressed="chip === c.key"
-            :data-test="`kb-chip-${c.key}`"
-            @click="
-              chip = c.key;
-              syncOpen();
-            "
-          >
-            {{ c.label }}
-          </button>
-        </div>
-        <select
-          v-if="nb !== NB_DRAFTS"
-          :value="status"
-          class="lg-field nb-status"
-          aria-label="Status"
-          data-test="kb-status"
-          @change="setStatus"
-        >
-          <option value="stable">Stable</option>
-          <option value="draft">Draft</option>
-          <option value="deprecated">Deprecated</option>
-          <option value="all">All statuses</option>
-        </select>
         <p v-if="error" class="notice" role="alert">{{ error }}</p>
         <p v-else-if="loading" class="small muted" role="status">
           Loading notes…
         </p>
-        <div v-else class="nb-list" role="listbox" aria-label="Notes">
-          <button
-            v-for="d in list"
-            :key="d.id"
-            type="button"
-            class="nb-item"
-            :class="{ on: d.id === openId }"
-            role="option"
-            :aria-selected="d.id === openId"
-            data-test="kb-doc"
-            @click="select(d.id)"
-          >
-            <!-- eslint-disable vue/no-v-html -- highlight() escapes first -->
-            <span class="t" v-html="highlight(d.title, q)" />
-            <span class="s" v-html="highlight(snippet(d.description, q), q)" />
-            <!-- eslint-enable vue/no-v-html -->
-            <span class="m"
-              ><span class="tag">{{ d.type || "untyped" }}</span
-              ><span v-if="originLabel(d)" data-test="kb-origin">{{
-                originLabel(d)
-              }}</span
-              ><span
-                v-if="d.status !== 'stable'"
-                class="nb-pill"
-                :class="d.status"
-                >{{ d.status }}</span
-              >{{ d.source === "repo" ? "repo" : projectName(d.project_id) }} ·
-              {{ when(d.indexed_at) }}</span
+        <div v-else class="nb-list">
+          <section v-for="sec in sections" :key="sec.key">
+            <button
+              v-if="sec.folder"
+              type="button"
+              class="nb-folder"
+              :class="{ open: sec.open }"
+              :disabled="!sec.docs.length"
+              :aria-expanded="sec.open"
+              :aria-controls="`kb-folder-${sec.key}`"
+              :data-test="`kb-folder-${sec.key}`"
+              @click="toggleFolder(sec.key, sec.open)"
             >
-          </button>
-          <div v-if="!list.length" class="small muted nb-none">
+              <ChevronRight class="icon" />
+              <span>{{ sec.label }}</span
+              ><span class="n">{{ sec.docs.length }}</span>
+            </button>
+            <div
+              v-show="sec.open"
+              :id="sec.folder ? `kb-folder-${sec.key}` : undefined"
+              role="listbox"
+              :aria-label="sec.folder ? sec.label : 'Notes'"
+            >
+              <button
+                v-for="d in sec.docs"
+                :key="d.id"
+                type="button"
+                class="nb-item"
+                :class="{ on: d.id === openId, dep: d.status === 'deprecated' }"
+                role="option"
+                :aria-selected="d.id === openId"
+                data-test="kb-doc"
+                @click="select(d.id)"
+              >
+                <!-- eslint-disable vue/no-v-html -- highlight() escapes first -->
+                <span class="t" v-html="highlight(d.title, q)" />
+                <span
+                  class="s"
+                  v-html="highlight(snippet(d.description, q), q)"
+                />
+                <!-- eslint-enable vue/no-v-html -->
+                <span class="m"
+                  ><span class="tag">{{ d.type || d.source }}</span
+                  ><span v-if="originLabel(d)" data-test="kb-origin">{{
+                    originLabel(d)
+                  }}</span
+                  ><span
+                    v-if="d.status !== 'stable'"
+                    class="nb-pill"
+                    :class="d.status"
+                    >{{ d.status }}</span
+                  >{{
+                    d.source === "repo" ? "repo" : projectName(d.project_id)
+                  }}
+                  · {{ when(d.indexed_at) }}</span
+                >
+              </button>
+            </div>
+          </section>
+          <div v-if="!found.length" class="small muted nb-none">
             {{
               q
                 ? `No notes match “${q}”.`
@@ -427,7 +386,7 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
         :discuss-open="discuss"
         @open="openLinked"
         @back="mobile = 'list'"
-        @changed="refreshAll"
+        @changed="load"
         @closed="afterReview"
         @remove="remove"
         @ask="toggleDiscuss"

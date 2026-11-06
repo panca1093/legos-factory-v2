@@ -156,14 +156,14 @@ Consequences for the design:
 
 ## 5. Knowledge page
 
-The page already groups by project (`notebooksOf`: Factory-wide, one notebook per project, Drafts). That stays. The change is inside a project:
+The page already groups by project (`notebooksOf`: All notes, Factory-wide, one notebook per project from the project list, shown even with zero documents). There is no status filter and no Drafts notebook: the page loads `status=all`. The change is inside a project:
 
 - No grouping by work order.
-- Filter chips by `type`: All, Brief, Spec, Task, Notes. "Task" shows both `Task DAG` and `Task Summary`.
+- Collapsible folders, in order: Brief, Spec, Task (`Task DAG` and `Task Summary`), Notes, Repository (collapsed by default), Needs review (`status=draft`, any type). Empty folders are shown muted and do not expand. A document sits in exactly one folder: drafts first, then by type, then repo documents; leftovers go to "Other". While searching, the list is flat. Factory-wide has Playbooks and Needs review.
 - Each card shows the title, the type, and its origin ("Work order", "Chat", …). Sorted newest first.
 - The list and search endpoints return only allow-listed types: `Brief`, `Spec`, `Task DAG`, `Task Summary`, `Note`, `Playbook`, `Reviewer Routing`, plus repo documents that pass §6.
 - Work-order documents open read-only (no Edit). Other documents show Edit as today.
-- Drafts notebook stays for `Reviewer Routing` and learning drafts.
+- `Reviewer Routing` and learning drafts appear under Needs review and keep Approve/Discard in the reader. Deprecated documents are listed dimmed with a badge.
 
 ## 6. Which repo documents count
 
@@ -206,7 +206,7 @@ Order (each step shippable):
 2. Allow-list types in list/search; stop indexing `Journal Entry`. Delete the existing `projects/*/journal/` directories (D8: not migrated; history is in git).
 3. Write `brief`, `spec`, `task-dag`, `task-summary` documents at their stages. Tests: each is written at its stage; a cancelled work order still gets a summary; a plan revision rewrites spec and dag; PUT on an `origin: work_order` document is refused.
 4. `Relevant()` reads the documents (§4.4). Test: excludes the current origin and other projects.
-5. `kb.include/exclude` and the UI type chips and read-only state.
+5. `kb.include/exclude` and the UI folders and read-only state.
 6. Lint and the `[B]` fix.
 
 Supersedes in `docs/repo-knowledge/SPEC.md`: goal 2 (journal as OKF files) and the `projects/<pid>/journal/<wo>/<seq>-<kind>.md` layout. Unchanged there: the two sources, precedence, hybrid retrieval, reviewer routing, default playbooks, learning drafts (`drafts/`).

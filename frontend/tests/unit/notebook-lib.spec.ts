@@ -1,5 +1,6 @@
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+  groupFolders,
   highlight,
   inNotebook,
   notebooksOf,
@@ -68,29 +69,83 @@ const doc = (over: Partial<KBDoc>): KBDoc => ({
   ...over,
 });
 
-it("groups notes into notebooks and keeps drafts separate", () => {
+it("lists All, Factory-wide and every project, even without documents", () => {
   const docs = [
     doc({ id: "a" }),
     doc({ id: "b", project_id: "p1" }),
-    doc({ id: "c", project_id: "p1" }),
-    doc({ id: "d", status: "draft" }),
+    doc({ id: "c", project_id: "p1", status: "draft" }),
   ];
-  const nbs = notebooksOf(
-    docs.filter((d) => d.status !== "draft"),
-    (id) => (id ? "Greeter" : "Factory-wide"),
-    1,
-  );
+  const nbs = notebooksOf(docs, [
+    { id: "p1", name: "Greeter" },
+    { id: "p2", name: "Empty" },
+  ]);
   expect(nbs.map((n) => [n.key, n.count])).toEqual([
     ["all", 3],
-    ["drafts", 1],
     ["p:", 1],
+    ["p:p2", 0],
     ["p:p1", 2],
   ]);
   expect(docs.filter((d) => inNotebook(d, "p:")).map((d) => d.id)).toEqual([
     "a",
-    "d",
   ]);
   expect(docs.filter((d) => inNotebook(d, "p:p1"))).toHaveLength(2);
+});
+
+describe("groupFolders", () => {
+  const ids = (fs: ReturnType<typeof groupFolders>) =>
+    fs.map((f) => [f.key, f.docs.map((d) => d.id)]);
+  it("places each project doc in exactly one folder, newest first", () => {
+    const docs = [
+      doc({ id: "b1", type: "Brief", indexed_at: 1 }),
+      doc({ id: "b2", type: "Brief", indexed_at: 2 }),
+      doc({ id: "s", type: "Spec" }),
+      doc({ id: "t1", type: "Task DAG" }),
+      doc({ id: "t2", type: "Task Summary" }),
+      doc({ id: "n", type: "Note" }),
+      doc({ id: "r", type: "Guide", source: "repo" }),
+      doc({ id: "rs", type: "Spec", source: "repo" }),
+      doc({ id: "d", type: "Note", status: "draft" }),
+      doc({ id: "dep", type: "Note", status: "deprecated", indexed_at: 0 }),
+    ];
+    const out = groupFolders(docs, true);
+    expect(ids(out)).toEqual([
+      ["brief", ["b2", "b1"]],
+      ["spec", ["s", "rs"]],
+      ["task", ["t1", "t2"]],
+      ["notes", ["n", "dep"]],
+      ["repo", ["r"]],
+      ["review", ["d"]],
+    ]);
+    expect(out.flatMap((f) => f.docs)).toHaveLength(docs.length);
+  });
+  it("keeps every project folder when empty and adds Other only when needed", () => {
+    expect(groupFolders([], true).map((f) => f.label)).toEqual([
+      "Brief",
+      "Spec",
+      "Task",
+      "Notes",
+      "Repository",
+      "Needs review",
+    ]);
+    const out = groupFolders([doc({ id: "x", type: "Weird" })], true);
+    expect(out.at(-1)).toMatchObject({ label: "Other" });
+    expect(out.at(-1)!.docs.map((d) => d.id)).toEqual(["x"]);
+  });
+  it("groups factory-wide docs into Playbooks, Needs review and Other", () => {
+    const out = groupFolders(
+      [
+        doc({ id: "p", type: "Playbook" }),
+        doc({ id: "d", type: "Reviewer Routing", status: "draft" }),
+        doc({ id: "o", type: "Note" }),
+      ],
+      false,
+    );
+    expect(ids(out)).toEqual([
+      ["playbooks", ["p"]],
+      ["review", ["d"]],
+      ["other", ["o"]],
+    ]);
+  });
 });
 
 it("keeps emphasis markers inside urls and code out of the formatting pass", () => {
