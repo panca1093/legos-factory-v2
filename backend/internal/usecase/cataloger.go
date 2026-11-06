@@ -29,17 +29,25 @@ type Cataloger struct {
 // Record appends one line to wo's project log and returns "". Failures are
 // logged, never propagated: knowledge capture must not break the workflow.
 func (c *Cataloger) Record(ctx context.Context, wo *model.WorkOrder, kind string, trust model.Trust, actor, title, body string, refs ...string) string {
-	if c == nil {
+	if c == nil || c.Bundle == nil {
 		return ""
 	}
-	line := fmt.Sprintf("* %s `%s` **%s** (%s) — %s", kb.Clock().Format("15:04"), wo.ID, kind, actor, oneLine(sanitize(title, 200)))
-	if b := clip(oneLine(sanitize(body, maxKnowledgeBody)), maxLogBody); b != "" {
+	at := kb.Clock() // one instant for the line time and the day heading
+	line := fmt.Sprintf("* %s `%s` **%s** (%s) — %s", at.Format("15:04"), wo.ID, kind, actor, oneLine(sanitize(title, 200)))
+	if b := clipRunes(oneLine(sanitize(body, maxKnowledgeBody)), maxLogBody); b != "" {
 		line += " — " + b
 	}
-	if _, err := c.Bundle.Append("projects/"+wo.ProjectID+"/log.md", line, "Log: "+oneLine(kind+" "+wo.ID)); err != nil {
+	if _, err := c.Bundle.Append("projects/"+wo.ProjectID+"/log.md", at, line, "Log: "+oneLine(kind+" "+wo.ID)); err != nil {
 		c.Log.Error("cataloger: log append failed", "wo", wo.ID, "kind", kind, "err", err)
 	}
 	return ""
+}
+
+func clipRunes(s string, max int) string {
+	if r := []rune(s); len(r) > max {
+		return string(r[:max-1]) + "…"
+	}
+	return s
 }
 
 // Relevant returns prior knowledge for the Architect; it is empty until retrieval reads documents.
@@ -65,7 +73,7 @@ func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome s
 }
 
 var decisionEventKinds = []string{
-	"plan_approved", "plan_revision_requested", "plan_revision_human", "clarification_answered",
+	"plan_approved", "plan_gate", "plan_revision_requested", "plan_revision_human", "clarification_answered",
 	"revision_requested", "pr_approved", "pr_declined",
 	"finding_" + model.FindingConfirmed, "finding_" + model.FindingDisputed,
 	"finding_" + model.FindingResolved, "finding_" + model.FindingEscalated,

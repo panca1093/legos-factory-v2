@@ -198,14 +198,14 @@ func TestBundleAppendWritesProjectLogOnly(t *testing.T) {
 	}
 
 	day("2026-11-05 23:50")
-	if _, err := b.Append("projects/p1/log.md", "* 23:50 `a` **k** (x) — first", "m1"); err != nil {
+	if _, err := b.Append("projects/p1/log.md", Clock(), "* 23:50 `a` **k** (x) — first", "m1"); err != nil {
 		t.Fatal(err)
 	}
 	day("2026-11-06 00:10")
-	if _, err := b.Append("projects/p1/log.md", "* 00:10 `a`\n **k** (x) — second", "m2"); err != nil {
+	if _, err := b.Append("projects/p1/log.md", Clock(), "* 00:10 `a`\n **k** (x) — second", "m2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := b.Append("projects/p1/log.md", "* 00:11 `a` **k** (x) — third", "m3"); err != nil {
+	if _, err := b.Append("projects/p1/log.md", Clock(), "* 00:11 `a` **k** (x) — third", "m3"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -231,7 +231,7 @@ func TestBundleAppendWritesProjectLogOnly(t *testing.T) {
 		t.Fatalf("Write still logs once to the root log:\n%s", root)
 	}
 	for _, bad := range []string{"log.md", "projects/log.md", "projects/p1/x.md", "projects/../log.md", "projects/p1/sub/log.md", "../log.md"} {
-		if _, err := b.Append(bad, "x", "m"); err == nil {
+		if _, err := b.Append(bad, Clock(), "x", "m"); err == nil {
 			t.Fatalf("Append(%q) should be refused", bad)
 		}
 	}

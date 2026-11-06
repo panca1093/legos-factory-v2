@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"legos-factory/backend/internal/kb"
 	"legos-factory/backend/internal/model"
@@ -64,7 +65,7 @@ func TestRecordAppendsOneLineToProjectLog(t *testing.T) {
 	wo := &model.WorkOrder{ID: "wo_c6680cdd-92d", ProjectID: "p1", Title: "t"}
 	long := strings.Repeat("word ", 200)
 
-	if id := cat.Record(ctx, wo, model.KnowledgePRDecision, model.TrustHumanDecision, "human", `PR approved: "t"`, "Reason: ok\nsecond line "+long+" password=hunter2"); id != "" {
+	if id := cat.Record(ctx, wo, model.KnowledgePRDecision, model.TrustHumanDecision, "human", `PR approved: "t"`, "Reason: ok password=hunter2\nsecond line "+long); id != "" {
 		t.Fatalf("Record returns no id any more, got %q", id)
 	}
 	cat.Record(ctx, wo, model.KnowledgeFindings, model.TrustAIInterpretation, "inspector", "6 finding(s)", "")
@@ -78,16 +79,26 @@ func TestRecordAppendsOneLineToProjectLog(t *testing.T) {
 		t.Fatalf("newest line first: %q", lines[4])
 	}
 	pr := lines[5]
-	if !strings.Contains(pr, "**pr_decision** (human) — PR approved: \"t\" — Reason: ok second line word") || strings.Contains(pr, "hunter2") || strings.Contains(pr, "\n") {
+	if !strings.Contains(pr, "**pr_decision** (human) — PR approved: \"t\" — Reason: ok password=[REDACTED] second line word") || !strings.Contains(pr, "…") || strings.Contains(pr, "hunter2") || strings.Contains(pr, "\n") {
 		t.Fatalf("pr line: %q", pr)
 	}
-	if body := pr[strings.LastIndex(pr, " — ")+len(" — "):]; len(body) > maxLogBody {
-		t.Fatalf("body not clipped: %d bytes", len(body))
+	if body := pr[strings.LastIndex(pr, " — ")+len(" — "):]; utf8.RuneCountInString(body) > maxLogBody {
+		t.Fatalf("body not clipped: %d chars", utf8.RuneCountInString(body))
 	}
 	entries, _ := os.ReadDir(filepath.Join(bundle.Root(), "projects", "p1"))
 	if len(entries) != 1 {
 		t.Fatalf("no record, kn_ file or index may be written beside log.md: %v", entries)
 	}
+}
+
+func TestRecordClipsBodyByCharacters(t *testing.T) {
+	cat, bundle := newLogCataloger(t)
+	cat.Record(context.Background(), &model.WorkOrder{ID: "wo", ProjectID: "p1"}, "k", model.TrustVerified, "x", "t", strings.Repeat("é", 400))
+	got := readLog(t, bundle.Root(), "projects/p1/log.md")
+	if want := strings.Repeat("é", 299) + "…\n"; !strings.HasSuffix(got, " — "+want) {
+		t.Fatalf("want 299 chars plus an ellipsis:\n%s", got)
+	}
+	(&Cataloger{Log: slog.Default()}).Record(context.Background(), &model.WorkOrder{ID: "wo", ProjectID: "p1"}, "k", model.TrustVerified, "x", "t", "b")
 }
 
 func TestRecordFailureIsNotPropagated(t *testing.T) {

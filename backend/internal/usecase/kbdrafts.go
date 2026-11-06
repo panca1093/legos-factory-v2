@@ -58,7 +58,7 @@ func (f *Factory) draftFromClarification(ctx context.Context, wo *model.WorkOrde
 	}
 	for _, e := range evs {
 		prevQ, _ := e.Payload["question"].(string)
-		if e.WOID == wo.ID || (e.Actor != "human" && e.Actor != "foreman") || sharedWords(question, prevQ) < 2 {
+		if e.WOID == wo.ID || e.Actor != "human" || sharedWords(question, prevQ) < 2 {
 			continue
 		}
 		body := fmt.Sprintf("# Draft: %s\n\nThe Foreman asked a similar question before.\n\nEarlier (%s):\nQuestion: %s\nAnswer: %s\n\nNow (%s):\nQuestion: %s\nAnswer: %s\n\nProposed rule: when the Foreman meets this kind of question, decide it as the human did and state the assumption instead of asking … (edit the rule to match the answers above).\n",

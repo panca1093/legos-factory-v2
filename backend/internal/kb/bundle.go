@@ -432,26 +432,26 @@ func countMD(dir string) int {
 }
 
 func (b *Bundle) logEntry(message string) error {
-	return b.appendLog("log.md", "* **Update**: "+strings.Join(strings.Fields(message), " "))
+	return b.appendLog("log.md", Clock(), "* **Update**: "+strings.Join(strings.Fields(message), " "))
 }
 
 var projectLog = regexp.MustCompile(`^projects/[A-Za-z0-9_-]+/log\.md$`)
 
 // Append adds line to a project log (projects/<pid>/log.md) and commits it, leaving the root log that Write feeds alone.
-func (b *Bundle) Append(rel, line, message string) (string, error) {
+func (b *Bundle) Append(rel string, at time.Time, line, message string) (string, error) {
 	rel = path.Clean(filepath.ToSlash(rel))
 	if !projectLog.MatchString(rel) {
 		return "", fmt.Errorf("path %q is not a project log", rel)
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err := b.appendLog(rel, strings.Join(strings.Fields(line), " ")); err != nil {
+	if err := b.appendLog(rel, at, strings.Join(strings.Fields(line), " ")); err != nil {
 		return "", err
 	}
 	return b.commit(message)
 }
 
-func (b *Bundle) appendLog(rel, entry string) error {
+func (b *Bundle) appendLog(rel string, at time.Time, entry string) error {
 	file := filepath.Join(b.root, filepath.FromSlash(rel))
 	old, err := os.ReadFile(file)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -459,7 +459,7 @@ func (b *Bundle) appendLog(rel, entry string) error {
 	}
 	text := strings.TrimPrefix(string(old), "# Log\n")
 	text = strings.TrimLeft(text, "\n")
-	day := "## " + Clock().Format("2006-01-02")
+	day := "## " + at.In(jakarta).Format("2006-01-02")
 	entry += "\n"
 	if strings.HasPrefix(text, day+"\n") {
 		text = day + "\n\n" + entry + strings.TrimPrefix(strings.TrimPrefix(text, day+"\n"), "\n")

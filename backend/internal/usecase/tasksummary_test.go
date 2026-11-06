@@ -311,7 +311,7 @@ func TestFormerDecisionKindsAreCoveredByEvents(t *testing.T) {
 	}
 	for _, extra := range []struct{ actor, kind string }{
 		{"factory", "plan_revision_requested"}, {"human", "revision_requested"}, {"human", "pr_declined"},
-		{"human", "finding_confirmed"}, {"human", "finding_resolved"}, {"human", "finding_escalated"}, {"foreman", "clarification_answered"},
+		{"jev", "plan_gate"}, {"human", "finding_confirmed"}, {"human", "finding_resolved"}, {"human", "finding_escalated"}, {"foreman", "clarification_answered"},
 	} {
 		env.event(t, wo.ID, extra.actor, extra.kind, "msg for "+extra.kind)
 	}
@@ -327,8 +327,8 @@ func TestFormerDecisionKindsAreCoveredByEvents(t *testing.T) {
 			t.Fatalf("former %s not covered by %s:\n%s", c.formerKind, c.event, joined)
 		}
 	}
-	if len(lines) != len(covers)+7 || strings.Contains(joined, "noise") {
-		t.Fatalf("want %d decision lines and no noise, got:\n%s", len(covers)+7, joined)
+	if len(lines) != len(covers)+8 || strings.Contains(joined, "noise") {
+		t.Fatalf("want %d decision lines and no noise, got:\n%s", len(covers)+8, joined)
 	}
 	if lines[0] != "- clarification_answered: msg for clarification_answered" || !strings.HasPrefix(lines[len(lines)-1], "- plan_approved") {
 		t.Fatalf("newest decision must come first:\n%s", joined)

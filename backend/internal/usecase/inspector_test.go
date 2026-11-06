@@ -265,7 +265,10 @@ func TestVerificationWritesNoKnowledgeButKeepsRevisionHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	logged, _ := os.ReadFile(filepath.Join(r.know.Bundle.Root(), "projects", "p1", "log.md"))
+	logged, err := os.ReadFile(filepath.Join(r.know.Bundle.Root(), "projects", "p1", "log.md"))
+	if err != nil && !os.IsNotExist(err) { // verification alone logs nothing, so no log file is the expected case
+		t.Fatal(err)
+	}
 	for _, kind := range []string{model.KnowledgeVerification, model.KnowledgeImplementation} {
 		if strings.Contains(string(logged), "**"+kind+"**") {
 			t.Fatalf("unexpected %s line in the project log:\n%s", kind, logged)

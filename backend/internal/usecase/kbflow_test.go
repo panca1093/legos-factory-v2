@@ -421,6 +421,11 @@ func TestSimilarClarificationProposesDraft(t *testing.T) {
 		map[string]any{"question": "Should discount rounding go up or down?"}); err != nil {
 		t.Fatal(err)
 	}
+	// newer than the human answer, so it is met first and must be skipped
+	if _, err := r.wos.AppendEvent(ctx, prev.ID, "foreman", "clarification_answered", "Always round UP.",
+		map[string]any{"question": "Should discount rounding go up or down?"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateWaitingForHuman); err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +440,7 @@ func TestSimilarClarificationProposesDraft(t *testing.T) {
 		t.Fatalf("draft: %+v", d)
 	}
 	_, body, _ := r.know.Bundle.Read(d.Path)
-	if !strings.Contains(body, "The Foreman asked a similar question before") || !strings.Contains(body, "Always round down.") || !strings.Contains(body, "Round down as well.") {
+	if !strings.Contains(body, "The Foreman asked a similar question before") || !strings.Contains(body, "Always round down.") || !strings.Contains(body, "Round down as well.") || strings.Contains(body, "round UP") {
 		t.Fatalf("body: %s", body)
 	}
 }
