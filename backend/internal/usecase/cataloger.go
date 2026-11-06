@@ -50,11 +50,6 @@ func clipRunes(s string, max int) string {
 	return s
 }
 
-// Relevant returns prior knowledge for the Architect; it is empty until retrieval reads documents.
-func (c *Cataloger) Relevant(ctx context.Context, wo *model.WorkOrder) []model.KnowledgeRecord {
-	return nil
-}
-
 // Completed logs the work order's terminal line; body names the summary document.
 func (c *Cataloger) Completed(ctx context.Context, wo *model.WorkOrder, outcome, body string) string {
 	return c.Record(ctx, wo, model.KnowledgeWorkOrderCompleted, model.TrustVerified, "cataloger",
@@ -303,22 +298,10 @@ func clip(s string, max int) string {
 	return s[:cut] + "…"
 }
 
-// knowledgePrompt renders prior records for an agent prompt, labelled by trust.
-func knowledgePrompt(records []model.KnowledgeRecord) string {
-	if len(records) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("\n\nPrior knowledge from this project (trust in brackets; ai_interpretation is NOT authoritative):\n")
-	for _, k := range records {
-		fmt.Fprintf(&b, "- [%s] %s: %s (ref knowledge:%s)\n", k.Trust, k.Title, truncate(oneLine(k.Body), 300), k.ID)
-	}
-	return b.String()
-}
-
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
-	regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|secret|password|passwd|authorization)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)`),
+	regexp.MustCompile(`(?i)([A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?token|token|secret|password|passwd|authorization))(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|(?:bearer\s+|basic\s+)?\S+)`),
+	regexp.MustCompile(`\b([a-z][a-z0-9+.-]*://)[^\s/:@]+:[^\s/@]+@`),
 	regexp.MustCompile(`\b(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b`),
 }
 
@@ -327,7 +310,8 @@ var secretPatterns = []*regexp.Regexp{
 func sanitize(s string, max int) string {
 	s = secretPatterns[0].ReplaceAllString(s, "[REDACTED PRIVATE KEY]")
 	s = secretPatterns[1].ReplaceAllString(s, "$1$2[REDACTED]")
-	s = secretPatterns[2].ReplaceAllString(s, "[REDACTED]")
+	s = secretPatterns[2].ReplaceAllString(s, "${1}[REDACTED]@")
+	s = secretPatterns[3].ReplaceAllString(s, "[REDACTED]")
 	return truncate(strings.TrimSpace(s), max)
 }
 
