@@ -80,7 +80,11 @@ Respond with ONLY a JSON object (no prose, no code fences):
  "constraints":["<behaviour or interfaces that must not change>"],
  "out_of_scope":["<what this work order must not do>"],
  "assumptions":["<default you chose for something unsaid>"],
- "open_questions":[{"question":"<one question>","options":["<a>","<b>"],"recommended":"<your pick and why>"}]}`,
+ "open_questions":[{"question":"<one question>","options":["<a>","<b>"],"recommended":"<your pick and why>"}]}
+
+Optionally add "code_facts": up to 10 strings "path:line — claim" for things you verified in the code that later
+agents would otherwise re-read (one line, under 200 characters each; the line number is optional). They are kept
+apart from the brief, so the no-paths rule does not apply to them.`,
 		wo.Title, wo.Objective, wo.Acceptance, briefSection(wo)+clarification(wo), facts, briefWords, maxOpenQuestions)
 }
 
@@ -161,7 +165,8 @@ Each task objective is under %d words. Cite spec sections ("Behaviour rule 2") i
 Rules:
 - If the behaviour is unclear and the objective, the brief and the clarifications do not settle it, use decision CLARIFY and ask — never guess or invent requirements. Choices about how, inside your role, are yours: decide and put them in the Decisions table.
 - "deps" lists ids of tasks that must complete first; the graph must be acyclic and tasks must cover the objective.
-- role is "builder" for implementation tasks.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts, specWords, taskWords)
+- role is "builder" for implementation tasks.
+- Optionally add "code_facts": up to 10 strings "path:line — claim" for things you verified in the code (one line, under 200 characters each). They are kept apart from the spec.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts, specWords, taskWords)
 }
 
 func previousTasks(woID string, tasks []model.Task) string {

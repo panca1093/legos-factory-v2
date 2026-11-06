@@ -94,6 +94,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 			f.event(wo.ID, "architect", "budget_exceeded", "Plan accepted over budget: "+over, nil)
 		}
 	}
+	f.recordCodeFacts(ctx, wo, model.AgentArchitect, plan.CodeFacts)
 	if plan.Decision == "CLARIFY" {
 		q := plan.QuestionText
 		if q == "" {
@@ -286,6 +287,7 @@ func (f *Factory) intake(ctx context.Context, wo *model.WorkOrder, facts string)
 	if len(r.OpenQuestions) > 0 {
 		pending = 1
 	}
+	f.recordCodeFacts(ctx, wo, model.AgentForeman, r.CodeFacts)
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"brief": brief, "intake_pending": pending}); err != nil {
 		return err
 	}
