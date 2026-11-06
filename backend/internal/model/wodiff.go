@@ -18,11 +18,13 @@ type WODiffFile struct {
 // default branch to its commit. Available is false, with a Reason, when no
 // diff can be produced.
 type WODiff struct {
-	Available bool         `json:"available"`
-	Reason    string       `json:"reason"`
-	Base      string       `json:"base"`
-	Head      string       `json:"head"`
-	Revision  int          `json:"revision"`
-	Files     []WODiffFile `json:"files"`
-	Truncated bool         `json:"truncated"`
+	Available bool   `json:"available"`
+	Reason    string `json:"reason"`
+	Base      string `json:"base"`
+	Head      string `json:"head"`
+	Revision  int    `json:"revision"`
+	// HeadFallback is true when the work order's commit_sha was not found and HEAD was used.
+	HeadFallback bool         `json:"head_fallback"`
+	Files        []WODiffFile `json:"files"`
+	Truncated    bool         `json:"truncated"`
 }

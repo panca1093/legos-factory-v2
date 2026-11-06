@@ -171,6 +171,41 @@ func TestCommitDiffTruncation(t *testing.T) {
 	}
 }
 
+func TestCommitDiffLiteralPathsSecretsAndFallback(t *testing.T) {
+	dir := wsWithBase(t, map[string]string{"app/i/p.tsx": "i\n", "a.txt": "a\n"})
+	put(t, dir, "app/[id]/p.tsx", "dyn\n")
+	put(t, dir, ":(top)x.txt", "magic\n")
+	put(t, dir, ".env.local", "TOKEN=abc\n")
+	put(t, dir, "app/i/p.tsx", "i2\n")
+	sha := commitAll(t, dir)
+
+	d, err := Local{}.CommitDiff(context.Background(), dir, sha)
+	if err != nil || !d.Available || d.HeadFallback {
+		t.Fatalf("%+v %v", d, err)
+	}
+	by := map[string]string{}
+	for _, f := range d.Files {
+		by[f.Path] = f.Patch
+		if f.Path == ".env.local" && (f.Patch != "" || !f.Truncated || f.Additions != 1) {
+			t.Fatalf("secret file must be counts only: %+v", f)
+		}
+	}
+	if strings.Contains(by["app/[id]/p.tsx"], "i2") || !strings.Contains(by["app/[id]/p.tsx"], "+dyn") {
+		t.Fatalf("[id] must match literally: %q", by["app/[id]/p.tsx"])
+	}
+	if !strings.Contains(by["app/i/p.tsx"], "+i2") || strings.Contains(by["app/i/p.tsx"], "dyn") {
+		t.Fatalf("app/i patch: %q", by["app/i/p.tsx"])
+	}
+	if !strings.Contains(by[":(top)x.txt"], "+magic") {
+		t.Fatalf("magic-looking name: %q", by[":(top)x.txt"])
+	}
+
+	d, _ = Local{}.CommitDiff(context.Background(), dir, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+	if !d.Available || !d.HeadFallback {
+		t.Fatalf("unknown sha must fall back to HEAD and say so: %+v", d)
+	}
+}
+
 func TestCommitDiffUnavailable(t *testing.T) {
 	ctx := context.Background()
 	l := Local{}

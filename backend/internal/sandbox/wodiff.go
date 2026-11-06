@@ -1,8 +1,11 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
+	"os/exec"
 	"path"
 	"strconv"
 	"strings"
@@ -26,6 +29,44 @@ func skipPatch(p string) bool {
 		strings.HasPrefix(p, "dist/") || strings.Contains(p, "/dist/")
 }
 
+func lit(args []string) []string {
+	return append([]string{"--literal-pathspecs", "-c", "core.quotePath=false"}, args...)
+}
+
+// gitLit runs git with paths taken literally, so names like app/[id]/p.tsx
+// or ":(top)x" never act as pathspec patterns.
+func gitLit(ctx context.Context, dir string, args ...string) (string, error) {
+	return gitOut(ctx, dir, append([]string{"--literal-pathspecs"}, args...)...)
+}
+
+// gitCapped reads at most limit bytes of stdout and kills git beyond that, so
+// a huge patch is never buffered.
+func gitCapped(ctx context.Context, dir string, limit int, args ...string) (out string, capped bool, err error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", lit(args)...)
+	cmd.Dir = dir
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", false, err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", false, err
+	}
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, io.LimitReader(pipe, int64(limit)+1))
+	if buf.Len() > limit {
+		capped = true
+		cancel()
+		buf.Truncate(limit)
+	}
+	werr := cmd.Wait()
+	if capped {
+		werr = nil
+	}
+	return buf.String(), capped, werr
+}
+
 func defaultBranchRef(ctx context.Context, dir string) string {
 	for _, ref := range []string{"refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/master"} {
 		if out, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", ref); err == nil && strings.TrimSpace(out) != "" {
@@ -45,11 +86,12 @@ func (Local) CommitDiff(ctx context.Context, dir, sha string) (model.WODiff, err
 	if !isLocalGitRepo(dir) {
 		return noDiff("The workspace is not a git repository."), nil
 	}
-	head := ""
+	head, fallback := "", false
 	if sha != "" {
 		if out, err := gitOut(ctx, dir, "rev-parse", "--verify", "--quiet", sha+"^{commit}"); err == nil {
 			head = strings.TrimSpace(out)
 		}
+		fallback = head == ""
 	}
 	if head == "" {
 		out, err := gitOut(ctx, dir, "rev-parse", "--verify", "--quiet", "HEAD")
@@ -71,11 +113,11 @@ func (Local) CommitDiff(ctx context.Context, dir, sha string) (model.WODiff, err
 		return noDiff("No changes committed yet."), nil
 	}
 
-	statusOut, err := gitOut(ctx, dir, "diff", "--name-status", "-z", "-M", base, head)
+	statusOut, err := gitLit(ctx, dir, "diff", "--name-status", "--no-ext-diff", "--no-textconv", "-z", "-M", base, head)
 	if err != nil {
 		return noDiff("Could not read the diff: " + err.Error()), nil
 	}
-	numOut, err := gitOut(ctx, dir, "diff", "--numstat", "-z", "-M", base, head)
+	numOut, err := gitLit(ctx, dir, "diff", "--numstat", "--no-ext-diff", "--no-textconv", "-z", "-M", base, head)
 	if err != nil {
 		return noDiff("Could not read the diff: " + err.Error()), nil
 	}
@@ -100,13 +142,13 @@ func (Local) CommitDiff(ctx context.Context, dir, sha string) (model.WODiff, err
 		nums[p] = counts{a, d, parts[0] == "-"}
 	}
 
-	res := model.WODiff{Available: true, Base: base, Head: head, Files: []model.WODiffFile{}}
+	res := model.WODiff{Available: true, Base: base, Head: head, HeadFallback: fallback, Files: []model.WODiffFile{}}
 	total := 0
 	sf := strings.Split(statusOut, "\x00")
 	for i := 0; i < len(sf) && sf[i] != ""; i++ {
 		code := sf[i][:1]
 		f := model.WODiffFile{}
-		if code == "R" || code == "C" {
+		if code == "R" {
 			if i+2 >= len(sf) {
 				break
 			}
@@ -132,7 +174,7 @@ func (Local) CommitDiff(ctx context.Context, dir, sha string) (model.WODiff, err
 		f.Additions, f.Deletions, f.Binary = n.add, n.del, n.binary
 		switch {
 		case f.Binary:
-		case skipPatch(f.Path):
+		case skipPatch(f.Path) || secretName(f.Path) || (f.OldPath != "" && secretName(f.OldPath)):
 			f.Truncated = true
 		case total >= maxTotalPatchBytes:
 			f.Truncated, res.Truncated = true, true
@@ -141,10 +183,11 @@ func (Local) CommitDiff(ctx context.Context, dir, sha string) (model.WODiff, err
 			if f.OldPath != "" {
 				args = append(args, f.OldPath)
 			}
-			patch, err := gitOut(ctx, dir, append(args, f.Path)...)
+			patch, capped, err := gitCapped(ctx, dir, maxFilePatchBytes+4096, append(args, f.Path)...)
 			if err != nil {
 				return noDiff("Could not read the diff: " + err.Error()), nil
 			}
+			f.Truncated = capped
 			if at := strings.Index(patch, "\n@@"); at >= 0 {
 				patch = patch[at+1:]
 			} else if !strings.HasPrefix(patch, "@@") {
