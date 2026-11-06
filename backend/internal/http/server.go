@@ -4,7 +4,9 @@ package http
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -30,7 +32,7 @@ type Server struct {
 	WorkOrders   *usecase.WorkOrders
 	Integrations *usecase.Integrations
 	Local        *usecase.Local
-	Catalog     *usecase.Cataloger
+	Catalog      *usecase.Cataloger
 	KBDocs       *usecase.KBDocs
 	Chat         *usecase.Chat
 	Bus          *Bus
@@ -49,6 +51,9 @@ func New(cfg *model.Config, log *slog.Logger) *Server {
 		TargetHeader: echo.HeaderXRequestID,
 	}))
 	e.Use(echomw.Recover())
+	if cfg.AuthMode == "dev" {
+		e.Use(loopbackHostOnly)
+	}
 	e.Use(requestLogger(log))
 	e.Use(echomw.BodyLimit("1MB"))
 	e.Use(echomw.CORSWithConfig(echomw.CORSConfig{
@@ -61,6 +66,23 @@ func New(cfg *model.Config, log *slog.Logger) *Server {
 	s.routes()
 	s.mountStatic()
 	return s
+}
+
+// loopbackHostOnly defeats DNS rebinding in dev mode, where login needs no
+// credentials: a page on another origin that resolves to 127.0.0.1 still
+// sends its own Host. The port is not checked so the Vite proxy keeps working.
+func loopbackHostOnly(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		h := c.Request().Host
+		if host, _, err := net.SplitHostPort(h); err == nil {
+			h = host
+		}
+		switch strings.Trim(h, "[]") {
+		case "localhost", "127.0.0.1", "::1":
+			return next(c)
+		}
+		return errorJSON(c, http.StatusForbidden, "FORBIDDEN_HOST", "dev mode only answers requests addressed to localhost, 127.0.0.1 or [::1]")
+	}
 }
 
 func requestLogger(log *slog.Logger) echo.MiddlewareFunc {

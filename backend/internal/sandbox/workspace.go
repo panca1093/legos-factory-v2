@@ -43,7 +43,10 @@ func Prepare(ctx context.Context, dataDir, woID, repoURL string, auth *model.Git
 			return nil, fmt.Errorf("clone workspace: %v: %s", err, out)
 		}
 		if auth != nil && auth.RemoteURL != "" {
-			retarget(ctx, root, auth)
+			if err := retarget(ctx, root, auth); err != nil {
+				_ = os.RemoveAll(root)
+				return nil, err
+			}
 		}
 		return &Workspace{Dir: root}, nil
 	}
@@ -54,18 +57,33 @@ func Prepare(ctx context.Context, dataDir, woID, repoURL string, auth *model.Git
 }
 
 // retarget points the clone's origin at the real remote and starts the
-// workspace from its latest default branch. A failed fetch keeps the folder's
-// branches, so the work still starts from the folder's default branch.
-func retarget(ctx context.Context, dir string, auth *model.GitAuth) {
-	if _, err := git(ctx, dir, "remote", "set-url", "origin", auth.RemoteURL); err != nil || auth.DefaultBranch == "" {
-		return
-	}
+// workspace from its latest default branch. A failed fetch falls back to the
+// folder's own copy of that branch; without either, preparation fails rather
+// than building on whatever branch the folder has checked out.
+func retarget(ctx context.Context, dir string, auth *model.GitAuth) error {
 	b := auth.DefaultBranch
+	if b == "" {
+		return fmt.Errorf("cannot determine the default branch of %s", auth.RemoteURL)
+	}
+	if out, err := git(ctx, dir, "remote", "set-url", "origin", auth.RemoteURL); err != nil {
+		return fmt.Errorf("git remote set-url: %v: %s", err, out)
+	}
 	_, _ = gitAuthed(ctx, dir, auth, "fetch", "--quiet", "origin", "+refs/heads/"+b+":refs/remotes/origin/"+b)
-	if _, err := git(ctx, dir, "checkout", "--quiet", "-B", b, "origin/"+b); err != nil {
-		return
+	if out, err := git(ctx, dir, "checkout", "--quiet", "-B", b, "origin/"+b); err != nil {
+		return fmt.Errorf("default branch %s is available neither from the remote nor in the project folder: %s", b, strings.TrimSpace(out))
 	}
 	_, _ = git(ctx, dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/"+b)
+	return nil
+}
+
+// isRemoteURL reports whether u names a host (scheme URL or scp-style), so a
+// local filesystem path can never be a publish target.
+func isRemoteURL(u string) bool {
+	if strings.Contains(u, "://") {
+		return true
+	}
+	at, colon := strings.Index(u, "@"), strings.Index(u, ":")
+	return at > 0 && colon > at && !strings.Contains(u[:at], "/")
 }
 
 // Destroy removes the workspace.
@@ -100,9 +118,13 @@ func (Local) PushBranch(ctx context.Context, dir, branch string, auth *model.Git
 	if !isLocalGitRepo(dir) {
 		return "", fmt.Errorf("workspace is not a git checkout; nothing to push")
 	}
-	base := ""
-	if auth != nil && auth.DefaultBranch != "" {
-		base = auth.DefaultBranch
+	target, base := "origin", ""
+	if auth != nil && auth.RemoteURL != "" {
+		// the workspace's origin may still be the user's folder, so push to the remote itself
+		if !isRemoteURL(auth.RemoteURL) || auth.DefaultBranch == "" {
+			return "", fmt.Errorf("refusing to push: %q is not a remote URL or its default branch is unknown", auth.RemoteURL)
+		}
+		target, base = auth.RemoteURL, auth.DefaultBranch
 	} else if out, err := git(ctx, dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
 		base = strings.TrimPrefix(strings.TrimSpace(out), "origin/")
 	} else if out, err := git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
@@ -111,7 +133,7 @@ func (Local) PushBranch(ctx context.Context, dir, branch string, auth *model.Git
 	if base == "" || base == "HEAD" {
 		return "", fmt.Errorf("cannot determine the default branch of origin")
 	}
-	if out, err := gitAuthed(ctx, dir, auth, "push", "--quiet", "origin", "HEAD:refs/heads/"+branch); err != nil {
+	if out, err := gitAuthed(ctx, dir, auth, "push", "--quiet", target, "HEAD:refs/heads/"+branch); err != nil {
 		return "", fmt.Errorf("git push: %v: %s", err, redact(out, auth))
 	}
 	return base, nil

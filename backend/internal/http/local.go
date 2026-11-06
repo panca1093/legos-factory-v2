@@ -84,6 +84,10 @@ func (s *Server) handleLocalInit(c echo.Context) error {
 }
 
 func (s *Server) handleLocalGH(c echo.Context) error {
-	installed, authenticated, account := s.Local.GHStatus(c.Request().Context())
-	return c.JSON(http.StatusOK, map[string]any{"installed": installed, "authenticated": authenticated, "account": account})
+	installed, authenticated, account, problem := s.Local.GHStatus(c.Request().Context())
+	out := map[string]any{"installed": installed, "authenticated": authenticated, "account": account}
+	if problem != "" {
+		out["error"] = problem
+	}
+	return c.JSON(http.StatusOK, out)
 }

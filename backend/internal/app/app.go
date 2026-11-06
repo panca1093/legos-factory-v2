@@ -89,7 +89,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	}
 	var localProjects *usecase.Local
 	if cfg.AuthMode == "dev" { // gh and the folder endpoints act as the machine's user
-		ghFor := func(repo string) usecase.GitProvider { return integration.NewGHCLI(repo, nil) }
+		ghFor := func(repo, remote string) usecase.GitProvider { return integration.NewGHCLI(repo, remote, nil) }
 		integrations.Host, integrations.GH = sandbox.Host{}, ghFor
 		localProjects = &usecase.Local{Host: sandbox.Host{}, GH: ghFor}
 	}

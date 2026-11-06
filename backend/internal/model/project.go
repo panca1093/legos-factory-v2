@@ -16,3 +16,15 @@ type Project struct {
 	GitHubRepo     string    `json:"github_repo"`           // computed: owner/repo in gh mode
 	CreatedAt      time.Time `json:"created_at"`
 }
+
+// LocalRepo describes a folder on the host: the folder itself, or when it is
+// not a git repo, the git repos among its direct children.
+type LocalRepo struct {
+	Path          string      `json:"path"`
+	Name          string      `json:"name"`
+	IsGit         bool        `json:"is_git"`
+	GitHubRepo    string      `json:"github_repo"`
+	DefaultBranch string      `json:"default_branch"`
+	Language      string      `json:"language"`
+	Repos         []LocalRepo `json:"repos"`
+}

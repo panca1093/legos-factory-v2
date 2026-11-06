@@ -72,6 +72,7 @@ func (p *Projects) List(ctx context.Context, u *model.User) ([]model.Project, er
 
 // Create stores the project and makes its creator the first member.
 func (p *Projects) Create(ctx context.Context, u *model.User, pr *model.Project) error {
+	pr.RepoURL = expandPath(pr.RepoURL)
 	if err := p.Store.Create(ctx, pr); err != nil {
 		return err
 	}

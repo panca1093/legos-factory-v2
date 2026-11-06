@@ -45,7 +45,7 @@ func ghRig(t *testing.T) (folder, remote string) {
 func TestPrepareGHModeStartsFromLatestRemoteDefault(t *testing.T) {
 	folder, remote := ghRig(t)
 	data := t.TempDir()
-	auth := &model.GitAuth{RemoteURL: remote, DefaultBranch: "main"}
+	auth := &model.GitAuth{RemoteURL: "file://" + remote, DefaultBranch: "main"}
 	ws, err := Prepare(context.Background(), data, "wo_1", folder, auth)
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestPrepareGHModeStartsFromLatestRemoteDefault(t *testing.T) {
 	if got := mustGit(t, ws.Dir, "log", "-1", "--format=%s"); got != "two" {
 		t.Fatalf("workspace starts at %q, want the latest remote commit", got)
 	}
-	if got := mustGit(t, ws.Dir, "remote", "get-url", "origin"); got != remote {
+	if got := mustGit(t, ws.Dir, "remote", "get-url", "origin"); got != "file://"+remote {
 		t.Fatalf("origin = %q, want the remote", got)
 	}
 	if got := mustGit(t, folder, "rev-parse", "--abbrev-ref", "HEAD"); got != "wip" {
@@ -72,13 +72,64 @@ func TestPrepareGHModeStartsFromLatestRemoteDefault(t *testing.T) {
 
 func TestPrepareGHModeFallsBackToFolderWhenFetchFails(t *testing.T) {
 	folder, _ := ghRig(t)
-	auth := &model.GitAuth{RemoteURL: filepath.Join(t.TempDir(), "nowhere.git"), DefaultBranch: "main"}
+	auth := &model.GitAuth{RemoteURL: "file://" + filepath.Join(t.TempDir(), "nowhere.git"), DefaultBranch: "main"}
 	ws, err := Prepare(context.Background(), t.TempDir(), "wo_2", folder, auth)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := mustGit(t, ws.Dir, "log", "-1", "--format=%s"); got != "one" {
 		t.Fatalf("fallback should use the folder's copy of main, got %q", got)
+	}
+}
+
+func TestPrepareGHModeFailsWithoutAnyCopyOfTheDefaultBranch(t *testing.T) {
+	folder, remote := ghRig(t)
+	data := t.TempDir()
+	_, err := Prepare(context.Background(), data, "wo_4", folder, &model.GitAuth{RemoteURL: "file://" + remote, DefaultBranch: "nope"})
+	if err == nil {
+		t.Fatal("must not silently build on the folder's checked-out branch")
+	}
+	if _, statErr := os.Stat(filepath.Join(data, "workspaces", "wo_4")); !os.IsNotExist(statErr) {
+		t.Fatal("failed preparation must not leave a workspace behind")
+	}
+}
+
+func TestPushBranchGHModeNeverTargetsTheFolder(t *testing.T) {
+	folder, remote := ghRig(t)
+	ws, err := Prepare(context.Background(), t.TempDir(), "wo_5", folder, nil) // never retargeted: origin is the folder
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustGit(t, ws.Dir, "commit", "-q", "--allow-empty", "-m", "work")
+
+	for _, bad := range []*model.GitAuth{
+		{RemoteURL: folder, DefaultBranch: "main"},
+		{RemoteURL: "file://" + remote},
+	} {
+		if _, err := (Local{}).PushBranch(context.Background(), ws.Dir, "legos-factory/wo_5", bad); err == nil {
+			t.Fatalf("push with %+v must be refused", bad)
+		}
+	}
+	good := &model.GitAuth{RemoteURL: "file://" + remote, DefaultBranch: "main"}
+	if base, err := (Local{}).PushBranch(context.Background(), ws.Dir, "legos-factory/wo_5", good); err != nil || base != "main" {
+		t.Fatalf("base=%q err=%v", base, err)
+	}
+	if mustGit(t, remote, "log", "-1", "--format=%s", "legos-factory/wo_5") != "work" {
+		t.Fatal("remote did not receive the branch")
+	}
+	if out := mustGit(t, folder, "branch", "--list", "legos-factory/*"); out != "" {
+		t.Fatalf("the user's folder received a branch: %q", out)
+	}
+}
+
+func TestIsRemoteURL(t *testing.T) {
+	for u, want := range map[string]bool{
+		"https://github.com/a/b.git": true, "ssh://git@github.com/a/b.git": true, "git@github.com:a/b.git": true,
+		"file:///tmp/x.git": true, "/Users/me/code": false, "../x": false, "": false, "/a@b:c": false,
+	} {
+		if isRemoteURL(u) != want {
+			t.Errorf("isRemoteURL(%q) = %v, want %v", u, !want, want)
+		}
 	}
 }
 

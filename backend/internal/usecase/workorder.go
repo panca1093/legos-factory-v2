@@ -51,7 +51,7 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 	var auth *model.GitAuth
 	if g, bound, err := w.Integrations.GitFor(ctx, proj); bound {
 		switch {
-		case errors.Is(err, model.ErrGHMissing), errors.Is(err, model.ErrGHUnauthenticated):
+		case errors.Is(err, model.ErrGHMissing), errors.Is(err, model.ErrGHUnauthenticated), errors.Is(err, model.ErrGHUnreachable):
 			// a missing gh login must not block local work; the open-PR job reports it
 		case err != nil:
 			return nil, fmt.Errorf("%w: repository connection unavailable: %v", ErrWorkspace, err)

@@ -29,7 +29,7 @@ type LocalHost interface {
 // Local backs the /local endpoints that add a project from a folder.
 type Local struct {
 	Host LocalHost
-	GH   func(repo string) GitProvider
+	GH   func(repo, remoteURL string) GitProvider
 
 	picking atomic.Bool
 }
@@ -173,17 +173,20 @@ func (l *Local) Init(ctx context.Context, name, parentDir string) (*model.LocalR
 	return l.Inspect(ctx, target)
 }
 
-// GHStatus reports whether the gh CLI is installed and logged in.
-func (l *Local) GHStatus(ctx context.Context) (installed, authenticated bool, account string) {
+// GHStatus reports whether the gh CLI is installed and logged in; problem is
+// set when gh failed for another reason (e.g. no network), which is not "logged out".
+func (l *Local) GHStatus(ctx context.Context) (installed, authenticated bool, account, problem string) {
 	if l.GH == nil {
-		return false, false, ""
+		return false, false, "", ""
 	}
-	account, err := l.GH("").CheckAuth(ctx)
+	account, err := l.GH("", "").CheckAuth(ctx)
 	switch {
 	case err == nil:
-		return true, true, account
+		return true, true, account, ""
 	case errors.Is(err, model.ErrGHMissing):
-		return false, false, ""
+		return false, false, "", ""
+	case errors.Is(err, model.ErrGHUnreachable):
+		return true, false, "", err.Error()
 	}
-	return true, false, ""
+	return true, false, "", ""
 }

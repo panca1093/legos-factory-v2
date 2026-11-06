@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,5 +57,29 @@ func TestLocalRoutesAreDevOnlyAndEngineerOnly(t *testing.T) {
 	}
 	if rec := call(http.MethodGet, "/api/v1/local/inspect?path=relative", eng); rec.Code != http.StatusBadRequest {
 		t.Errorf("inspect relative: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestDevModeRejectsForeignHosts(t *testing.T) {
+	for mode, tc := range map[string]struct {
+		host string
+		want int
+	}{
+		"dev":  {"evil.example.com:8080", http.StatusForbidden},
+		"dev2": {"localhost:5173", http.StatusOK},
+		"dev3": {"127.0.0.1:8080", http.StatusOK},
+		"dev4": {"[::1]:8080", http.StatusOK},
+		"dev5": {"localhost", http.StatusOK},
+		"oidc": {"app.example.com", http.StatusOK},
+	} {
+		auth := strings.TrimRight(mode, "012345")
+		srv := New(&model.Config{AuthMode: auth, FrontendOrigin: "http://localhost:5173"}, slog.New(slog.NewTextHandler(testDiscard{}, nil)))
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		req.Host = tc.host
+		rec := httptest.NewRecorder()
+		srv.Echo.ServeHTTP(rec, req)
+		if rec.Code != tc.want {
+			t.Errorf("%s host %q: %d, want %d", auth, tc.host, rec.Code, tc.want)
+		}
 	}
 }

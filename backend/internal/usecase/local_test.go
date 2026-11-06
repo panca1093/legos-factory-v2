@@ -71,7 +71,7 @@ func TestGitForSelection(t *testing.T) {
 	ctx := context.Background()
 	host := &fakeHost{repos: map[string]string{"/w/gh": "git@github.com:acme/greeter.git", "/w/gl": "https://gitlab.com/a/b.git"}}
 	var asked string
-	in := &Integrations{Host: host, GH: func(repo string) GitProvider { asked = repo; return fakeGH{} }}
+	in := &Integrations{Host: host, GH: func(repo, _ string) GitProvider { asked = repo; return fakeGH{} }}
 
 	g, bound, err := in.GitFor(ctx, &model.Project{RepoURL: "/w/gh"})
 	if !bound || err != nil || g == nil || asked != "acme/greeter" {
@@ -100,7 +100,7 @@ func TestGitForSelection(t *testing.T) {
 
 func TestGitForReportsMissingGH(t *testing.T) {
 	host := &fakeHost{repos: map[string]string{"/w/gh": "https://github.com/acme/greeter.git"}}
-	in := &Integrations{Host: host, GH: func(string) GitProvider { return fakeGH{err: model.ErrGHMissing} }}
+	in := &Integrations{Host: host, GH: func(string, string) GitProvider { return fakeGH{err: model.ErrGHMissing} }}
 	g, bound, err := in.GitFor(context.Background(), &model.Project{RepoURL: "/w/gh"})
 	if !bound || g != nil || !errors.Is(err, model.ErrGHMissing) {
 		t.Fatalf("bound=%v g=%v err=%v", bound, g, err)
@@ -109,7 +109,7 @@ func TestGitForReportsMissingGH(t *testing.T) {
 
 func TestAnnotate(t *testing.T) {
 	host := &fakeHost{repos: map[string]string{"/w/gh": "https://github.com/acme/greeter.git"}}
-	in := &Integrations{Host: host, GH: func(string) GitProvider { return fakeGH{} }}
+	in := &Integrations{Host: host, GH: func(string, string) GitProvider { return fakeGH{} }}
 	for _, tc := range []struct {
 		p    model.Project
 		via  string
@@ -288,16 +288,16 @@ func TestAbortedCloneRemovesPartialTarget(t *testing.T) {
 func TestGHStatus(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
-		gh              func(string) GitProvider
+		gh              func(string, string) GitProvider
 		installed, auth bool
 		account         string
 	}{
 		{nil, false, false, ""},
-		{func(string) GitProvider { return fakeGH{} }, true, true, "octo"},
-		{func(string) GitProvider { return fakeGH{err: model.ErrGHUnauthenticated} }, true, false, ""},
-		{func(string) GitProvider { return fakeGH{err: model.ErrGHMissing} }, false, false, ""},
+		{func(string, string) GitProvider { return fakeGH{} }, true, true, "octo"},
+		{func(string, string) GitProvider { return fakeGH{err: model.ErrGHUnauthenticated} }, true, false, ""},
+		{func(string, string) GitProvider { return fakeGH{err: model.ErrGHMissing} }, false, false, ""},
 	} {
-		i, a, acct := (&Local{GH: tc.gh}).GHStatus(ctx)
+		i, a, acct, _ := (&Local{GH: tc.gh}).GHStatus(ctx)
 		if i != tc.installed || a != tc.auth || (a && acct != tc.account) {
 			t.Errorf("got %v %v %q, want %v %v %q", i, a, acct, tc.installed, tc.auth, tc.account)
 		}

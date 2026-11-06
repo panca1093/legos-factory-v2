@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"time"
 
 	"legos-factory/backend/internal/model"
 )
@@ -25,8 +28,21 @@ type Integrations struct {
 	// Host and GH enable publishing local projects through the user's own gh
 	// login; both are set in dev auth mode only.
 	Host LocalHost
-	GH   func(repo string) GitProvider
+	GH   func(repo, remoteURL string) GitProvider
+
+	origins sync.Map // project dir -> originInfo, keyed to .git/config's mtime
+	authOK  sync.Map // repo -> time of the last successful gh auth check
 }
+
+type originInfo struct {
+	mod          time.Time
+	repo, origin string
+}
+
+const ghAuthTTL = 5 * time.Minute
+
+// warmer is implemented by providers that cache per-repo facts (default branch).
+type warmer interface{ Warm(ctx context.Context) error }
 
 var remoteRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$`)
 
@@ -199,15 +215,30 @@ func (in *Integrations) LookupIssue(ctx context.Context, u *model.User, req mode
 
 // localGitHub returns owner/repo when p has no connection and is a local git
 // repo whose origin is on github.com, else "".
-func (in *Integrations) localGitHub(ctx context.Context, p *model.Project) string {
+func (in *Integrations) localGitHub(ctx context.Context, p *model.Project) (repo, origin string) {
 	if in == nil || in.GH == nil || in.Host == nil || p.GitConnection != "" {
-		return ""
+		return "", ""
 	}
 	dir := expandPath(p.RepoURL)
-	if !filepath.IsAbs(dir) || !in.Host.IsGitRepo(dir) {
-		return ""
+	if !filepath.IsAbs(dir) {
+		return "", ""
 	}
-	return ParseGitHubRepo(in.Host.OriginURL(ctx, dir))
+	var mod time.Time
+	if fi, err := os.Stat(filepath.Join(dir, ".git", "config")); err == nil {
+		mod = fi.ModTime()
+		if v, ok := in.origins.Load(dir); ok && v.(originInfo).mod.Equal(mod) {
+			return v.(originInfo).repo, v.(originInfo).origin
+		}
+	}
+	if !in.Host.IsGitRepo(dir) {
+		return "", ""
+	}
+	origin = in.Host.OriginURL(ctx, dir)
+	repo = ParseGitHubRepo(origin)
+	if !mod.IsZero() {
+		in.origins.Store(dir, originInfo{mod, repo, origin})
+	}
+	return repo, origin
 }
 
 // Annotate fills the computed publish_via and github_repo fields.
@@ -215,7 +246,7 @@ func (in *Integrations) Annotate(ctx context.Context, p *model.Project) {
 	p.PublishVia, p.GitHubRepo = "none", ""
 	if p.GitConnection != "" {
 		p.PublishVia = "connection"
-	} else if repo := in.localGitHub(ctx, p); repo != "" {
+	} else if repo, _ := in.localGitHub(ctx, p); repo != "" {
 		p.PublishVia, p.GitHubRepo = "gh", repo
 	}
 }
@@ -228,13 +259,21 @@ func (in *Integrations) GitFor(ctx context.Context, p *model.Project) (g GitProv
 		return nil, false, nil
 	}
 	if p.GitConnection == "" {
-		repo := in.localGitHub(ctx, p)
+		repo, origin := in.localGitHub(ctx, p)
 		if repo == "" {
 			return nil, false, nil
 		}
-		g = in.GH(repo)
-		if _, err := g.CheckAuth(ctx); err != nil {
-			return nil, true, err
+		g = in.GH(repo, origin)
+		if at, ok := in.authOK.Load(repo); !ok || time.Since(at.(time.Time)) > ghAuthTTL {
+			if _, err := g.CheckAuth(ctx); err != nil {
+				return nil, true, err
+			}
+			in.authOK.Store(repo, time.Now())
+		}
+		if w, ok := g.(warmer); ok {
+			if err := w.Warm(ctx); err != nil {
+				return nil, true, fmt.Errorf("%w: %v", model.ErrGHUnreachable, err)
+			}
 		}
 		return g, true, nil
 	}

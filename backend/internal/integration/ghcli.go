@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -29,16 +30,43 @@ func ExecRunner(ctx context.Context, name string, args ...string) (string, strin
 // GHCLI publishes through the user's own gh login for one GitHub repository,
 // so no connection or stored token is involved.
 type GHCLI struct {
-	Repo string // owner/name
-	run  Runner
+	Repo   string // owner/name
+	Remote string // the folder's own origin URL (https or ssh), used for fetch and push
+	run    Runner
 }
 
 // NewGHCLI returns a provider for repo; a nil run executes the real gh binary.
-func NewGHCLI(repo string, run Runner) *GHCLI {
+func NewGHCLI(repo, remote string, run Runner) *GHCLI {
 	if run == nil {
 		run = ExecRunner
 	}
-	return &GHCLI{Repo: repo, run: run}
+	return &GHCLI{Repo: repo, Remote: remote, run: run}
+}
+
+const branchTTL = 10 * time.Minute
+
+type branchEntry struct {
+	name string
+	exp  time.Time
+}
+
+// branches caches default branches per repo so polling never shells out for them.
+var branches sync.Map
+
+// Warm resolves and caches the repo's default branch for GitAuth.
+func (g *GHCLI) Warm(ctx context.Context) error {
+	if e, ok := branches.Load(g.Repo); ok && time.Now().Before(e.(branchEntry).exp) {
+		return nil
+	}
+	b, err := g.DefaultBranch(ctx)
+	if err != nil {
+		return err
+	}
+	if b == "" {
+		return fmt.Errorf("gh could not report the default branch of %s", g.Repo)
+	}
+	branches.Store(g.Repo, branchEntry{b, time.Now().Add(branchTTL)})
+	return nil
 }
 
 func (g *GHCLI) gh(ctx context.Context, args ...string) (string, error) {
@@ -64,19 +92,23 @@ func (g *GHCLI) CheckAuth(ctx context.Context) (string, error) {
 	out, err := g.gh(ctx, "api", "user", "--jq", ".login")
 	var pe *model.ProviderError
 	if errors.As(err, &pe) {
-		return "", fmt.Errorf("%w: %s", model.ErrGHUnauthenticated, pe.Message)
+		if strings.Contains(pe.Message, "gh auth login") || strings.Contains(pe.Message, "HTTP 401") || strings.Contains(pe.Message, "not logged") {
+			return "", fmt.Errorf("%w: %s", model.ErrGHUnauthenticated, pe.Message)
+		}
+		return "", fmt.Errorf("%w: %s", model.ErrGHUnreachable, pe.Message)
 	}
 	return strings.TrimSpace(out), err
 }
 
 // GitAuth has no credential: git uses the user's configured helper
-// (`gh auth setup-git`). The default branch is best effort; empty means the
-// workspace keeps the folder's branch.
+// (`gh auth setup-git`). It never shells out; the default branch comes from
+// the cache Warm fills, and is empty when that has not run.
 func (g *GHCLI) GitAuth() model.GitAuth {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	branch, _ := g.DefaultBranch(ctx)
-	return model.GitAuth{RemoteURL: "https://github.com/" + g.Repo + ".git", DefaultBranch: branch}
+	a := model.GitAuth{RemoteURL: g.Remote}
+	if e, ok := branches.Load(g.Repo); ok {
+		a.DefaultBranch = e.(branchEntry).name
+	}
+	return a
 }
 
 func (g *GHCLI) DefaultBranch(ctx context.Context) (string, error) {
