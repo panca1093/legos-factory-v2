@@ -69,9 +69,6 @@ func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome s
 		note = "summary document: " + rel
 	}
 	f.Catalog.Completed(ctx, wo, outcome, note)
-	if outcome == "READY" {
-		f.portCodeMap(ctx, wo)
-	}
 }
 
 var decisionEventKinds = []string{
