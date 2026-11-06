@@ -351,6 +351,56 @@ describe("ActivityPanel actors", () => {
   });
 });
 
+describe("ActivityPanel filter", () => {
+  it("filters the trail by who acted and reports how many events are shown", async () => {
+    const w = mount(ActivityPanel, {
+      props: {
+        runs: [],
+        events: [
+          ev("state_changed", undefined, "factory", "Plan queued"),
+          ev("plan_reviewed", undefined, "foreman", "Plan approved"),
+          ev("plan_gate", { outcome: "approve", row: 5 }, "jev", "Gate"),
+          ev("pr_approved", undefined, "human", "Looks good"),
+        ],
+      },
+    });
+    const count = () => w.find('[data-test="activity-count"]').text();
+    const pick = async (label: string) => {
+      const b = w
+        .findAll(".fx-afilter button")
+        .find((x) => x.text() === label)!;
+      await b.trigger("click");
+      return b;
+    };
+    expect(count()).toBe("4 of 4 events");
+    const code = await pick("Code");
+    expect(code.attributes("aria-pressed")).toBe("true");
+    expect(w.findAll("article.event").map((a) => a.find("p").text())).toEqual([
+      "Plan queued",
+    ]);
+    await pick("Agents");
+    expect(w.findAll("article.event").map((a) => a.find("p").text())).toEqual([
+      "Plan approved",
+    ]);
+    await pick("Jev");
+    expect(count()).toBe("1 of 4 events");
+    await pick("You");
+    expect(w.find("article.event p").text()).toBe("Looks good");
+    await pick("All");
+    expect(w.findAll("article.event")).toHaveLength(4);
+  });
+  it("says so when nothing matches the filter", async () => {
+    const w = mount(ActivityPanel, {
+      props: { runs: [], events: [ev("state_changed", undefined, "factory")] },
+    });
+    await w
+      .findAll(".fx-afilter button")
+      .find((x) => x.text() === "Jev")!
+      .trigger("click");
+    expect(w.text()).toContain("No events match this filter.");
+  });
+});
+
 describe("gate events", () => {
   it("summarises a Jev gate by outcome, row and note", () => {
     const e = ev(

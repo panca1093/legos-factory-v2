@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { persona, isCrew, money } from "../../../composables/presentation";
 import BrickBot from "../../../components/agents/BrickBot.vue";
 import type { WOEvent, Run, Task } from "../../../types/api";
@@ -32,6 +32,25 @@ const live = computed(() => liveRuns(items.value));
 const history = computed(() =>
   items.value.filter((it) => !live.value.includes(it as never)).reverse(),
 );
+const filters = [
+  { key: "all", label: "All" },
+  { key: "code", label: "Code" },
+  { key: "agents", label: "Agents" },
+  { key: "jev", label: "Jev" },
+  { key: "human", label: "You" },
+] as const;
+type FilterKey = (typeof filters)[number]["key"];
+const filter = ref<FilterKey>("all");
+const actorOf = (it: (typeof history.value)[number]) =>
+  (it.type === "run" ? it.actor : it.event.actor).toLowerCase();
+const matches = (actor: string, f: FilterKey) =>
+  f === "all" ||
+  (f === "code" && actor === "factory") ||
+  (f === "agents" && isCrew(actor)) ||
+  actor === f;
+const shown = computed(() =>
+  history.value.filter((it) => matches(actorOf(it), filter.value)),
+);
 const taskTitle = computed(
   () => new Map(props.tasks.map((t) => [t.id, t.title] as const)),
 );
@@ -49,7 +68,27 @@ const taskTitle = computed(
     />
     <div class="section-head">
       <h2>What’s happening</h2>
-      <span class="pill">Recorded event stream</span>
+      <span class="tiny muted" data-test="activity-count"
+        >{{ shown.length }} of {{ history.length }} events</span
+      >
+    </div>
+    <div
+      v-if="history.length"
+      class="fx-chips fx-afilter"
+      role="group"
+      aria-label="Filter activity"
+    >
+      <button
+        v-for="f in filters"
+        :key="f.key"
+        type="button"
+        class="fx-chip"
+        :class="{ on: filter === f.key }"
+        :aria-pressed="filter === f.key"
+        @click="filter = f.key"
+      >
+        {{ f.label }}
+      </button>
     </div>
     <AgentLiveCard
       v-for="r in live"
@@ -58,8 +97,13 @@ const taskTitle = computed(
       :task="taskTitle.get(r.taskID)"
       :steer="steer && ((m: string) => steer!(r.id, m))"
     />
-    <TransitionGroup name="view" tag="div" class="timeline"
-      ><template v-for="it in history"
+    <TransitionGroup
+      name="view"
+      tag="div"
+      class="timeline fx-tl"
+      tabindex="0"
+      aria-label="Activity events"
+      ><template v-for="it in shown"
         ><article v-if="it.type === 'run'" :key="it.id" class="event">
           <BrickBot :persona="persona(it.actor)" class="compact" />
           <div class="event-body"><AgentRunCard :run="it" /></div>
@@ -104,6 +148,9 @@ const taskTitle = computed(
         </article></template
       ></TransitionGroup
     >
+    <div v-if="history.length && !shown.length" class="empty">
+      No events match this filter.
+    </div>
     <div v-if="!events.length" class="empty">
       The activity trail starts when you draft a blueprint.
     </div>
@@ -144,3 +191,15 @@ const taskTitle = computed(
     </details>
   </div>
 </template>
+<style scoped>
+.fx-afilter {
+  margin: 0 0 var(--space-3);
+}
+.fx-tl {
+  max-height: 480px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0 -8px;
+  padding: 4px 8px 0;
+}
+</style>
