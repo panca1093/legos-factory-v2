@@ -56,7 +56,13 @@ const approvedLocally = (w: WorkOrder) =>
   w.state === "READY" && !w.pr_url && !w.pr_closed_at && !w.pr_track_failed_at;
 export const isFinished = (w: WorkOrder) =>
   !!w.pr_merged_at || w.state === "CANCELLED" || approvedLocally(w);
-export const isRunning = (w: WorkOrder) => !isFinished(w) && !isNeedsYou(w);
+// Not yet picked up by an agent: just created, or approved and waiting for a builder.
+export const isTodo = (w: WorkOrder) =>
+  (w.state === "CREATED" || w.state === "QUEUED") &&
+  !isFinished(w) &&
+  !isNeedsYou(w);
+export const isRunning = (w: WorkOrder) =>
+  !isFinished(w) && !isNeedsYou(w) && !isTodo(w);
 export const isActive = (w: WorkOrder) => !isFinished(w);
 
 export const stages = ["Brief", "Plan", "Build", "Review", "Ship"] as const;

@@ -3,7 +3,11 @@ import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, expect, it, vi } from "vitest";
 import OverviewView from "../../src/features/overview/OverviewView.vue";
 import { heatCells } from "../../src/features/overview/heatmap";
-import { isRunning, needsYou } from "../../src/composables/presentation";
+import {
+  isRunning,
+  isTodo,
+  needsYou,
+} from "../../src/composables/presentation";
 import { useFactory } from "../../src/stores/factory";
 import { useSession } from "../../src/stores/session";
 import { overview, orders, projects, user } from "../fixtures/workspace";
@@ -127,17 +131,30 @@ it("needsYou keeps human gates and only escalated plan reviews", () => {
     ["BLOCKED", undefined],
   ]);
 });
-it("running includes pre-build states and unescalated plan reviews", () => {
+it("running includes planning and unescalated plan reviews but not orders waiting to be picked up", () => {
   expect(
     [
       withState("CREATED"),
+      withState("QUEUED"),
       withState("PLANNING"),
       withState("ARCHITECT_REVIEW", "pending"),
       withState("ARCHITECT_REVIEW", "approved"),
       withState("BLOCKED"),
       withState("READY"),
     ].map(isRunning),
-  ).toEqual([true, true, true, false, false, false]);
+  ).toEqual([false, false, true, true, false, false, false]);
+});
+it("to do holds only orders no agent has picked up yet", () => {
+  expect(
+    [
+      withState("CREATED"),
+      withState("QUEUED"),
+      withState("PLANNING"),
+      withState("IMPLEMENTING"),
+      withState("BLOCKED"),
+      withState("CANCELLED"),
+    ].map(isTodo),
+  ).toEqual([true, true, false, false, false, false]);
 });
 // 2026-11-01 is a Sunday
 const days = Array.from({ length: 10 }, (_, i) => ({

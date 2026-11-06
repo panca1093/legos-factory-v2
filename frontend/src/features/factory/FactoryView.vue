@@ -21,6 +21,7 @@ import {
   stages,
   isNeedsYou,
   isRunning,
+  isTodo,
 } from "../../composables/presentation";
 import type { WorkOrder } from "../../types/api";
 const factory = useFactory(),
@@ -54,6 +55,11 @@ const filtered = computed(() =>
 );
 const groups = computed(() =>
   [
+    {
+      key: "todo",
+      name: "To do",
+      items: filtered.value.filter(isTodo),
+    },
     {
       key: "attention",
       name: "Needs you",
@@ -236,42 +242,60 @@ onMounted(load);
       <p v-if="!filtered.length" class="notice">
         No work orders match. Adjust the filters or create a new work order.
       </p>
-      <section v-for="g in groups" :key="g.key" class="fx-group">
-        <h2>
-          {{ g.name }} <span class="fx-count">{{ g.items.length }}</span>
-        </h2>
-        <RouterLink
-          v-for="w in g.items"
-          :key="w.id"
-          :to="`/factory/${w.id}`"
-          class="fx-order"
-          :class="{ attn: g.key === 'attention' }"
-          data-test="order-row"
-        >
-          <span class="mono muted tiny">{{ w.id.slice(0, 12) }}</span>
-          <div class="fx-order-main">
-            <strong>{{ w.title }}</strong>
-            <span class="tiny muted"
-              ><i class="fx-dot" :style="{ '--c': color(w) }"></i
-              >{{ projectName(w) }} · updated {{ ago(w.updated_at) }}</span
-            >
-          </div>
-          <div
-            class="fx-segs"
-            role="img"
-            :aria-label="
-              stages.map((s, i) => `${s}: ${stageStatuses(w)[i]}`).join(', ')
-            "
-          >
-            <i v-for="(st, i) in stageStatuses(w)" :key="i" :class="st"></i>
-          </div>
-          <span class="fx-pill" :class="orderStatus(w).tone">{{
-            orderStatus(w).label
-          }}</span>
-          <ActorBadge :actor="actorOf(w)" />
-        </RouterLink>
-        <p v-if="!g.items.length" class="fx-empty">Nothing here.</p>
-      </section>
+      <div class="fx-board" :class="{ single: groups.length === 1 }">
+        <section v-for="g in groups" :key="g.key" class="fx-group">
+          <h2>
+            {{ g.name }} <span class="fx-count">{{ g.items.length }}</span>
+          </h2>
+          <ul class="fx-lane">
+            <li v-for="w in g.items" :key="w.id">
+              <RouterLink
+                :to="`/factory/${w.id}`"
+                class="fx-order"
+                :class="{ attn: g.key === 'attention' }"
+                data-test="order-row"
+                :aria-labelledby="`wo-title-${w.id}`"
+                :aria-describedby="`wo-status-${w.id}`"
+              >
+                <div class="fx-order-top">
+                  <span class="mono muted tiny">{{ w.id.slice(0, 12) }}</span>
+                  <ActorBadge :actor="actorOf(w)" />
+                </div>
+                <div class="fx-order-main">
+                  <strong :id="`wo-title-${w.id}`">{{ w.title }}</strong>
+                  <span class="tiny muted"
+                    ><i class="fx-dot" :style="{ '--c': color(w) }"></i
+                    >{{ projectName(w) }} · updated
+                    {{ ago(w.updated_at) }}</span
+                  >
+                </div>
+                <div
+                  class="fx-segs"
+                  role="img"
+                  :aria-label="
+                    stages
+                      .map((s, i) => `${s}: ${stageStatuses(w)[i]}`)
+                      .join(', ')
+                  "
+                >
+                  <i
+                    v-for="(st, i) in stageStatuses(w)"
+                    :key="i"
+                    :class="st"
+                  ></i>
+                </div>
+                <span
+                  :id="`wo-status-${w.id}`"
+                  class="fx-pill"
+                  :class="orderStatus(w).tone"
+                  >{{ orderStatus(w).label }}</span
+                >
+              </RouterLink>
+            </li>
+          </ul>
+          <p v-if="!g.items.length" class="fx-empty">Nothing here.</p>
+        </section>
+      </div>
     </template>
   </div>
   <NewWorkOrderDrawer
