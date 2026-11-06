@@ -117,7 +117,7 @@ func fakeAgent(scenario string) {
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": `{"cwd":"` + cwd + `",`}})
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": `"model":"` + chosenModel + `","config":` + fmt.Sprintf("%q", os.Getenv("OPENCODE_CONFIG_CONTENT")) + `,"meta":` + fmt.Sprintf("%q", sessionMeta) + `,"set":` + fmt.Sprintf("%q", strings.Join(setCalls, ",")) + `}`}})
 				update(map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.0123, "currency": "USD"}})
-				reply(m.ID, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 100, "outputTokens": 20}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 4000, "cachedWriteTokens": 900}})
 			case "permission":
 				send(map[string]any{"id": "perm-1", "method": "session/request_permission", "params": map[string]any{
 					"sessionId": "fake-ses",
@@ -211,7 +211,7 @@ func TestACPRunReportsStepsTextAndUsage(t *testing.T) {
 	if streamed.String() != res.Text {
 		t.Fatalf("OnText streamed %q, result text %q", streamed.String(), res.Text)
 	}
-	if res.TokensIn != 100 || res.TokensOut != 20 || res.CostMicros != 12300 || res.CostSource != "measured" || res.SessionRef != "fake-ses" {
+	if res.TokensIn != 5000 || res.TokensOut != 20 || res.CostMicros != 12300 || res.CostSource != "measured" || res.SessionRef != "fake-ses" {
 		t.Fatalf("result = %+v", res)
 	}
 }
