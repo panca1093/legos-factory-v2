@@ -531,4 +531,19 @@ describe("runCacheSplit", () => {
     expect(line).toContain("400 cache write (≈$0.50)");
     w.unmount();
   });
+
+  it("leaves out the dollar estimate when the cost is unknown", () => {
+    const w = mount(ActivityPanel, {
+      props: {
+        events: [],
+        runs: [
+          run({ tokens_in: 10500, cache_read_tokens: 10000, tokens_out: 100 }),
+        ],
+      },
+    });
+    const line = w.find('[data-test="run-cache"]').text();
+    expect(line).toContain("10000 cache read");
+    expect(line).not.toContain("≈");
+    w.unmount();
+  });
 });

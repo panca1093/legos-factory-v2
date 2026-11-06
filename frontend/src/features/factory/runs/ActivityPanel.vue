@@ -204,11 +204,16 @@ const taskTitle = computed(
             data-test="run-cache"
             :title="'Cost split is an estimate from price weights; the agent reports only the total.'"
             >· {{ runCacheSplit(r)!.fresh }} fresh in ·
-            {{ runCacheSplit(r)!.read }} cache read (≈{{
-              money(runCacheSplit(r)!.readMicros)
-            }}) · {{ runCacheSplit(r)!.write }} cache write (≈{{
-              money(runCacheSplit(r)!.writeMicros)
-            }})</span
+            {{ runCacheSplit(r)!.read }} cache read<template
+              v-if="r.cost_micros > 0"
+            >
+              (≈{{ money(runCacheSplit(r)!.readMicros) }})</template
+            >
+            · {{ runCacheSplit(r)!.write }} cache write<template
+              v-if="r.cost_micros > 0"
+            >
+              (≈{{ money(runCacheSplit(r)!.writeMicros) }})</template
+            ></span
           >
         </summary>
         <pre class="output terminal">{{
