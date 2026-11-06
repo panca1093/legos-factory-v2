@@ -149,7 +149,7 @@ func (f *Factory) askBack(ctx context.Context, wo *model.WorkOrder, job model.Jo
 	}
 	asks, repeated := 0, false
 	for _, c := range wo.Clarifications {
-		if c.Task == job.TaskID {
+		if c.By != builderNotesBy && c.Task == job.TaskID {
 			asks++
 			repeated = repeated || strings.EqualFold(strings.TrimSpace(c.Question), question)
 		}

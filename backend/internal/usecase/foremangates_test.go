@@ -457,6 +457,7 @@ func TestPlanReviewNotesReachOnlyTheBuilder(t *testing.T) {
 		"log":           clarificationLog(wo),
 		"plan":          planPrompt(wo, "", "", nil),
 		"review":        foremanReviewPrompt(wo, nil, nil, false),
+		"architect":     architectAnswerPrompt(wo, nil, "q?"),
 	} {
 		if strings.Contains(p, "name the message") || strings.Contains(p, "Note from plan review") {
 			t.Errorf("%s leaks the plan review note:\n%s", name, p)

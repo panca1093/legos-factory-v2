@@ -355,27 +355,30 @@ func answered(list []model.Clarification) []model.Clarification {
 	return out
 }
 
-// specSection is only printed for the Builder, so the plan review's notes ride along here.
 func specSection(wo *model.WorkOrder) string {
-	var b strings.Builder
-	if wo.Spec != "" {
-		b.WriteString("\nSpec (the Architect verifies the result against this):\n" + wo.Spec + "\n")
+	if wo.Spec == "" {
+		return ""
 	}
+	return "\nSpec (the Architect verifies the result against this):\n" + wo.Spec + "\n"
+}
+
+// planNotesSection is for Builder prompts only: no other role is shown the plan review's notes.
+func planNotesSection(wo *model.WorkOrder) string {
 	var notes []string
 	for _, c := range wo.Clarifications {
 		if c.By == builderNotesBy {
 			notes = append(notes, "- "+c.Question+": "+c.Answer)
 		}
 	}
-	if len(notes) > 0 {
-		b.WriteString("\nPlan review notes (do not block the work; keep them in mind):\n" + strings.Join(notes, "\n") + "\n")
+	if len(notes) == 0 {
+		return ""
 	}
-	return b.String()
+	return "\nPlan review notes (do not block the work; keep them in mind):\n" + strings.Join(notes, "\n") + "\n"
 }
 
 // fixContext is what every fix prompt shares: the spec, the plan and the numbered brief.
 func fixContext(wo *model.WorkOrder, job model.Job, tasks []model.Task) (ctx, tail string) {
-	ctx = specSection(wo)
+	ctx = specSection(wo) + planNotesSection(wo)
 	if len(tasks) > 0 {
 		ctx += "\nPlan:\n" + scopedTaskList(tasks)
 	}
@@ -443,7 +446,7 @@ Work only within the assigned workspace. When done, reply with one line describi
 
 Do not guess what should happen. If the task or spec is ambiguous about behaviour, stop without finishing and end
 your reply with a final line "%s <one question>". Decide anything about how yourself (naming, layout, a choice between
-equivalent implementations) and state it as an assumption in your reply.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo), specSection(wo), taskSection(job, tasks), needsContextMarker)
+equivalent implementations) and state it as an assumption in your reply.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo), specSection(wo)+planNotesSection(wo), taskSection(job, tasks), needsContextMarker)
 }
 
 // architectAnswerPrompt asks the Architect to settle a Builder's behaviour question from the contract.
