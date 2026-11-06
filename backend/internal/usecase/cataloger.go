@@ -112,65 +112,58 @@ func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome s
 
 const (
 	summaryBudget   = 1800
-	summaryMaxLines = 8
 	summaryMaxItems = 5
-	summaryGoalCap  = 300
+	summaryGoalCap  = 120
 	summaryMaxFiles = 10
+
+	goalBudget     = 450
+	verifyBudget   = 300
+	openBudget     = 450
+	decisionBudget = 350
 )
 
 // taskSummary renders the deterministic five-section summary of wo's task.
+// Each section has its own byte budget so "Main changes:" always fits.
 func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Goal: %s\nObjective: %s\nAcceptance: %s\n\n",
-		orNone(truncate(oneLine(wo.Title), 120)), orNone(truncate(oneLine(wo.Objective), summaryGoalCap)), orNone(truncate(oneLine(wo.Acceptance), summaryGoalCap)))
+	goal := fmt.Sprintf("Goal: %s\nObjective: %s\nAcceptance: %s\n",
+		orNone(fit(oneLine(wo.Title), 100)), orNone(fit(oneLine(wo.Objective), summaryGoalCap)), orNone(fit(oneLine(wo.Acceptance), summaryGoalCap)))
 
-	b.WriteString("Final verification:\n")
 	header, checks := f.finalVerification(ctx, wo)
-	b.WriteString(header + "\n")
+	vlines := []string{header}
 	var failing []model.QualityCheck
-	var lines []string
 	for _, c := range checks {
-		lines = append(lines, truncate(fmt.Sprintf("- %s → %s", oneLine(c.Name), c.Outcome), 120))
+		vlines = append(vlines, fit(fmt.Sprintf("- %s → %s", oneLine(c.Name), c.Outcome), 120))
 		if c.Outcome != string(model.Pass) {
 			failing = append(failing, c)
 		}
 	}
-	writeCapped(&b, summaryMaxLines, lines)
+	verify := section("Final verification:", vlines, len(vlines), verifyBudget)
 
-	b.WriteString("\nOpen items / follow-up:\n")
-	empty := true
+	var olines []string
 	if outcome != "READY" {
-		b.WriteString("Outcome: " + outcome + "\n")
-		empty = false
+		olines = append(olines, "Outcome: "+outcome)
 	}
-	var failLines, findLines, devLines []string
 	for _, c := range failing {
-		failLines = append(failLines, fmt.Sprintf("- check %s %s", oneLine(c.Name), c.Outcome))
+		olines = append(olines, fit(fmt.Sprintf("- check %s %s", oneLine(c.Name), c.Outcome), 120))
 	}
 	if all, err := f.Findings.List(ctx, wo.ID); err == nil {
 		for _, fd := range all {
 			switch fd.Status {
 			case model.FindingOpen, model.FindingConfirmed, model.FindingEscalated:
-				findLines = append(findLines, truncate(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 160))
+				olines = append(olines, fit(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 160))
 			}
 		}
 	}
 	if r := f.currentArchitectReport(wo); r != nil {
 		for _, d := range r.Deviations {
-			devLines = append(devLines, truncate("- deviation: "+oneLine(d), 160))
+			olines = append(olines, fit("- deviation: "+oneLine(d), 160))
 		}
 	}
-	for _, l := range [][]string{failLines, findLines, devLines} {
-		if len(l) > 0 {
-			empty = false
-			writeCapped(&b, summaryMaxItems, l)
-		}
+	if len(olines) == 0 {
+		olines = []string{"none"}
 	}
-	if empty {
-		b.WriteString("none\n")
-	}
+	open := section("Open items / follow-up:", olines, summaryMaxItems+1, openBudget)
 
-	b.WriteString("\nKey decisions and rationale:\n")
 	var decisions []model.KnowledgeRecord
 	if recs, err := f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: wo.ID, Limit: 200}); err == nil {
 		for _, k := range recs {
@@ -187,31 +180,55 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		}
 		return decisions[i].ID < decisions[j].ID
 	})
-	if len(decisions) > summaryMaxItems {
-		decisions = decisions[:summaryMaxItems]
-	}
-	if len(decisions) == 0 {
-		b.WriteString("none recorded\n")
-	}
-	for _, k := range decisions {
-		b.WriteString(truncate(fmt.Sprintf("- %s: %s", k.Kind, oneLine(k.Title+" — "+k.Body)), 160) + "\n")
-	}
-
-	b.WriteString("\nMain changes:\n")
-	body := b.String()
-	files, note := f.changedFiles(ctx, wo)
-	if note != "" {
-		body += note + "\n"
-	} else {
-		for i, line := range changeLines(files) {
-			if len(body)+len(line)+1 > summaryBudget {
-				body += fmt.Sprintf("(+%d more)\n", len(changeLines(files))-i)
-				break
-			}
-			body += line + "\n"
+	dlines := []string{"none recorded"}
+	if len(decisions) > 0 {
+		dlines = nil
+		for _, k := range decisions {
+			dlines = append(dlines, fit(fmt.Sprintf("- %s: %s", k.Kind, oneLine(k.Title+" — "+k.Body)), 160))
 		}
 	}
-	return truncate(body, summaryBudget)
+	decide := section("Key decisions and rationale:", dlines, summaryMaxItems, decisionBudget)
+
+	body := goal + "\n" + verify + "\n" + open + "\n" + decide + "\n"
+	var mlines []string
+	files, note := f.changedFiles(ctx, wo)
+	if note != "" {
+		mlines = []string{note}
+	} else {
+		mlines = changeLines(files)
+	}
+	return body + section("Main changes:", mlines, len(mlines), summaryBudget-len(body))
+}
+
+// section renders head and up to maxItems lines within budget bytes,
+// replacing dropped lines with a "(+N more)" marker that is itself budgeted.
+func section(head string, lines []string, maxItems, budget int) string {
+	const reserve = len("(+999 more)\n")
+	out := head + "\n"
+	for i, l := range lines {
+		limit := budget
+		if i < len(lines)-1 {
+			limit -= reserve
+		}
+		if i >= maxItems || len(out)+len(l)+1 > limit {
+			return out + fmt.Sprintf("(+%d more)\n", len(lines)-i)
+		}
+		out += l + "\n"
+	}
+	return out
+}
+
+// fit shortens s to at most max bytes including the ellipsis.
+func fit(s string, max int) string {
+	const ell = "…"
+	if len(s) <= max {
+		return s
+	}
+	cut := max - len(ell)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + ell
 }
 
 func orNone(s string) string {
@@ -219,16 +236,6 @@ func orNone(s string) string {
 		return "(none)"
 	}
 	return s
-}
-
-func writeCapped(b *strings.Builder, max int, lines []string) {
-	for i, l := range lines {
-		if i == max {
-			fmt.Fprintf(b, "(+%d more)\n", len(lines)-max)
-			return
-		}
-		b.WriteString(l + "\n")
-	}
 }
 
 func changeLines(files []string) []string {
