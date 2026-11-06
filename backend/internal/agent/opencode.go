@@ -219,7 +219,7 @@ func (s *sessionState) absorb(msgs []message) bool {
 			s.result = model.AgentResult{
 				Text:       text.String(),
 				SessionRef: s.id,
-				TokensIn:   int64(m.Tokens.Input),
+				TokensIn:   int64(m.Tokens.Input + m.Tokens.Cache.Read + m.Tokens.Cache.Write),
 				TokensOut:  int64(m.Tokens.Output),
 				CostMicros: int64(m.Cost * 1_000_000),
 				CostSource: "measured",
@@ -280,6 +280,10 @@ type message struct {
 	Tokens struct {
 		Input  int `json:"input"`
 		Output int `json:"output"`
+		Cache  struct {
+			Read  int `json:"read"`
+			Write int `json:"write"`
+		} `json:"cache"`
 	} `json:"tokens"`
 	Cost float64 `json:"cost"`
 }

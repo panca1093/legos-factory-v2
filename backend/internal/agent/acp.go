@@ -424,8 +424,10 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 	var res struct {
 		StopReason string `json:"stopReason"`
 		Usage      struct {
-			InputTokens  int64 `json:"inputTokens"`
-			OutputTokens int64 `json:"outputTokens"`
+			InputTokens       int64 `json:"inputTokens"`
+			OutputTokens      int64 `json:"outputTokens"`
+			CachedReadTokens  int64 `json:"cachedReadTokens"`
+			CachedWriteTokens int64 `json:"cachedWriteTokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil {
@@ -449,7 +451,9 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 	defer c.mu.Unlock()
 	r.result = model.AgentResult{
 		Text: c.text.String(), SessionRef: r.sessionID,
-		TokensIn: res.Usage.InputTokens, TokensOut: res.Usage.OutputTokens,
+		// inputTokens excludes cache reads/writes, which carry nearly all of a cached prompt
+		TokensIn:   res.Usage.InputTokens + res.Usage.CachedReadTokens + res.Usage.CachedWriteTokens,
+		TokensOut:  res.Usage.OutputTokens,
 		CostMicros: int64((c.cost - r.costBase) * 1_000_000), CostSource: "unknown",
 	}
 	if c.costSeen {

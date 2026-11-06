@@ -115,7 +115,7 @@ func (s *opencodeStub) messagesJSON(id string) string {
 	}
 	user := `{"type":"user","finish":""}`
 	if sess.finished {
-		return fmt.Sprintf(`{"data":[%s,{"type":"assistant","finish":"stop","content":[{"type":"text","text":"plan JSON here"}],"tokens":{"input":10,"output":20},"cost":0.5}]}`, user)
+		return fmt.Sprintf(`{"data":[%s,{"type":"assistant","finish":"stop","content":[{"type":"text","text":"plan JSON here"}],"tokens":{"input":10,"output":20,"cache":{"read":300,"write":40}},"cost":0.5}]}`, user)
 	}
 	if sess.running {
 		return fmt.Sprintf(`{"data":[%s,{"type":"assistant","finish":"","content":[]}]}`, user)
@@ -151,7 +151,7 @@ func TestFullSessionLifecycle(t *testing.T) {
 	if res.Text != "plan JSON here" {
 		t.Fatalf("unexpected result text: %q", res.Text)
 	}
-	if res.TokensIn != 10 || res.TokensOut != 20 {
+	if res.TokensIn != 350 || res.TokensOut != 20 {
 		t.Fatalf("tokens not parsed: %+v", res)
 	}
 	if res.CostMicros != 500000 || res.CostSource != "measured" {
