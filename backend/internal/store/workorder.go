@@ -290,6 +290,40 @@ func (r *WorkOrderRepo) LatestEvent(ctx context.Context, woID, kind string) (*mo
 	return &e, nil
 }
 
+// LatestEvents returns the newest limit events in ascending order and whether
+// older ones exist.
+func (r *WorkOrderRepo) LatestEvents(ctx context.Context, woID string, limit int) ([]model.Event, bool, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT id, wo_id, actor, kind, message, payload, created_at
+		FROM wof_events WHERE wo_id = ? ORDER BY id DESC LIMIT ?`, woID, limit+1)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var out []model.Event
+	for rows.Next() {
+		var e model.Event
+		var payload string
+		var createdAt int64
+		if err := rows.Scan(&e.ID, &e.WOID, &e.Actor, &e.Kind, &e.Message, &payload, &createdAt); err != nil {
+			return nil, false, err
+		}
+		_ = json.Unmarshal([]byte(payload), &e.Payload)
+		e.CreatedAt = time.Unix(createdAt, 0)
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	more := len(out) > limit
+	if more {
+		out = out[:limit]
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, more, nil
+}
+
 func (r *WorkOrderRepo) Events(ctx context.Context, woID string, afterID int64, limit int) ([]model.Event, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT id, wo_id, actor, kind, message, payload, created_at
 		FROM wof_events WHERE wo_id = ? AND id > ? ORDER BY id ASC LIMIT ?`, woID, afterID, limit)

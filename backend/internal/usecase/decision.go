@@ -131,7 +131,11 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 			}
 		}
 		// the human approval is the explicit authorization to publish
-		if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil && proj.GitConnection != "" {
+		// bound even when gh is unauthenticated, so handleOpenPR fails visibly
+		if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil {
+			if _, bound, _ := f.Integrations.GitFor(ctx, proj); !bound {
+				return nil
+			}
 			if _, err := f.Sched.Enqueue(ctx, JobOpenPR, woID, "", map[string]any{}); err != nil {
 				f.Log.Error("open PR enqueue failed", "wo", woID, "err", err)
 			}
@@ -160,6 +164,17 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 	default:
 		return fmt.Errorf("unknown PR decision %q", decision)
 	}
+}
+
+// Diff returns the work order's committed change, reading the workspace under
+// its lock so it cannot race a task merge.
+func (f *Factory) Diff(ctx context.Context, wo *model.WorkOrder) (model.WODiff, error) {
+	mu := f.wsLock(wo.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	d, err := f.Sandbox.CommitDiff(ctx, f.workspaceDir(wo.ID), wo.CommitSHA)
+	d.Revision = wo.Revision
+	return d, err
 }
 
 // Cancel stops pending jobs and transitions the WO to CANCELLED.

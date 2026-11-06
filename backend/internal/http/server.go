@@ -226,6 +226,7 @@ func (s *Server) routes() {
 	wo.POST("/findings/:finding_id/decision", s.requireRole(model.RoleEngineer, s.handleFindingDecision))
 	wo.GET("/runs", s.handleListRuns)
 	wo.GET("/activity", s.handleListEvents)
+	wo.GET("/diff", s.handleWODiff)
 	wo.GET("/quality", s.handleListQuality)
 	wo.GET("/findings", s.handleListFindings)
 	wo.GET("/events", s.handleWOEvents)
