@@ -144,7 +144,7 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 	}
 	openSection := fitLines("## Open items and follow-up", open, 450)
 
-	decLines := f.decisionLines(ctx, wo.ID)
+	decLines := append(specDecisions(wo.Spec), f.decisionLines(ctx, wo.ID)...)
 	if len(decLines) == 0 {
 		decLines = []string{"none recorded"}
 	}

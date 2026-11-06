@@ -21,7 +21,7 @@ const (
 
 var factoryListTypes = map[string]bool{
 	model.KBTypePlaybook: true, model.KBTypeReviewerRoute: true, model.KBTypeBrief: true, model.KBTypeSpec: true,
-	model.KBTypeTaskDAG: true, model.KBTypeTaskSummary: true, model.KBTypeNote: true,
+	model.KBTypeTaskDAG: true, model.KBTypeTaskSummary: true, model.KBTypeNote: true, model.KBTypeCodeMap: true,
 }
 
 var ErrKBReadOnly = fmt.Errorf("%w: work-order documents are read-only records", model.ErrStateConflict)

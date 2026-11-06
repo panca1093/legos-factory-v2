@@ -32,6 +32,7 @@ const (
 	KBTypeTaskDAG       = "Task DAG"
 	KBTypeTaskSummary   = "Task Summary"
 	KBTypeNote          = "Note"
+	KBTypeCodeMap       = "Code Map"
 )
 
 // KBDoc is one indexed markdown document: pointers and metadata, never its text.
