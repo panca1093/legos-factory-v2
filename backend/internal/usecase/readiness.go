@@ -238,7 +238,7 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 		return err
 	}
 	if next == model.StateBlocked {
-		f.Catalog.Completed(ctx, wo, "BLOCKED")
+		f.completeWO(ctx, wo, "BLOCKED")
 	}
 	return nil
 }

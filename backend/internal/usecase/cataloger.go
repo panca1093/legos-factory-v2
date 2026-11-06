@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
@@ -80,9 +81,9 @@ func (c *Cataloger) Relevant(ctx context.Context, wo *model.WorkOrder) []model.K
 	return out
 }
 
-// Completed records the terminal outcome, linking every record of the work
-// order, and returns that record's id.
-func (c *Cataloger) Completed(ctx context.Context, wo *model.WorkOrder, outcome string) string {
+// Completed records the task summary as the work order's terminal entry,
+// linking every record of the work order, and returns that record's id.
+func (c *Cataloger) Completed(ctx context.Context, wo *model.WorkOrder, outcome, body string) string {
 	if c == nil {
 		return ""
 	}
@@ -94,10 +95,240 @@ func (c *Cataloger) Completed(ctx context.Context, wo *model.WorkOrder, outcome 
 	for _, k := range prior {
 		refs = append(refs, "knowledge:"+k.ID)
 	}
-	body := fmt.Sprintf("Outcome: %s\nRevision: %d\nCommit: %s\nObjective: %s\nAcceptance: %s",
-		outcome, wo.Revision, orUnversioned(wo.CommitSHA), wo.Objective, wo.Acceptance)
 	return c.Record(ctx, wo, model.KnowledgeWorkOrderCompleted, model.TrustVerified, "cataloger",
-		fmt.Sprintf("Work order %q %s", wo.Title, strings.ToLower(outcome)), body, refs...)
+		fmt.Sprintf("Task summary: %s (%s)", wo.Title, outcome), body, refs...)
+}
+
+// completeWO records the terminal task summary from the order's current state.
+func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome string) {
+	if f.Catalog == nil {
+		return
+	}
+	if cur, err := f.WO.Get(ctx, wo.ID); err == nil {
+		wo = cur
+	}
+	f.Catalog.Completed(ctx, wo, outcome, f.taskSummary(ctx, wo, outcome))
+}
+
+const (
+	summaryBudget    = 1800
+	summaryMaxItems  = 3
+	summaryMaxChecks = 8
+)
+
+// taskSummary renders the deterministic five-section summary of wo's task.
+func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome string) string {
+	orNone := func(s string) string {
+		if s = oneLine(s); s == "" {
+			return "(none)"
+		}
+		return s
+	}
+	more := func(n int) string { return fmt.Sprintf("(+%d more)", n-summaryMaxItems) }
+
+	goal := fitLines("Goal: "+clip(orNone(wo.Title), 100), []string{
+		"Objective: " + clip(orNone(wo.Objective), 150),
+		"Acceptance: " + clip(orNone(wo.Acceptance), 150),
+	}, 450)
+
+	verLines, failing := f.finalVerification(ctx, wo)
+	ver := fitLines("Final verification:", verLines, 300)
+
+	var open []string
+	if outcome != "READY" {
+		open = append(open, "- Outcome: "+outcome)
+	}
+	for i, c := range failing {
+		if i == summaryMaxItems {
+			open = append(open, more(len(failing)))
+			break
+		}
+		open = append(open, "- check "+c)
+	}
+	if all, err := f.Findings.List(ctx, wo.ID); err == nil {
+		var lines []string
+		for _, fd := range all {
+			switch fd.Status {
+			case model.FindingOpen, model.FindingConfirmed, model.FindingEscalated:
+				lines = append(lines, clip(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 100))
+			}
+		}
+		for i, l := range lines {
+			if i == summaryMaxItems {
+				open = append(open, more(len(lines)))
+				break
+			}
+			open = append(open, l)
+		}
+	}
+	if r := f.currentArchitectReport(wo); r != nil {
+		for i, d := range r.Deviations {
+			if i == summaryMaxItems {
+				open = append(open, more(len(r.Deviations)))
+				break
+			}
+			open = append(open, clip("- deviation: "+oneLine(d), 100))
+		}
+	}
+	if len(open) == 0 {
+		open = []string{"none"}
+	}
+	openSection := fitLines("Open items / follow-up:", open, 450)
+
+	var decisions []model.KnowledgeRecord
+	if recs, err := f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: wo.ID, Limit: 200}); err == nil {
+		for _, k := range recs {
+			switch k.Kind {
+			case model.KnowledgePlanApproved, model.KnowledgePlanRevision, model.KnowledgeClarification,
+				model.KnowledgeFindingDecision, model.KnowledgePRDecision, model.KnowledgeArchitectReview:
+				decisions = append(decisions, k)
+			}
+		}
+	}
+	sort.SliceStable(decisions, func(i, j int) bool {
+		if !decisions[i].CreatedAt.Equal(decisions[j].CreatedAt) {
+			return decisions[i].CreatedAt.After(decisions[j].CreatedAt)
+		}
+		return decisions[i].ID < decisions[j].ID
+	})
+	decLines := make([]string, 0, len(decisions))
+	for _, k := range decisions {
+		decLines = append(decLines, clip("- "+k.Kind+": "+oneLine(k.Title+" — "+k.Body), 160))
+	}
+	if len(decLines) == 0 {
+		decLines = []string{"none recorded"}
+	}
+	dec := fitLines("Key decisions and rationale:", decLines, 350)
+
+	body := strings.Join([]string{goal, ver, openSection, dec}, "\n\n") + "\n\nMain changes:"
+	for _, l := range f.changedFileLines(ctx, wo) {
+		if len(body)+1+len(l) > summaryBudget {
+			body += "\n(+more)"
+			break
+		}
+		body += "\n" + l
+	}
+	if len(body) > summaryBudget {
+		body = truncate(body, summaryBudget-len("… [truncated]"))
+	}
+	return body
+}
+
+// finalVerification walks revisions down from wo.Revision to the newest one
+// that has checks, returning its section lines and its failing checks.
+func (f *Factory) finalVerification(ctx context.Context, wo *model.WorkOrder) (lines, failing []string) {
+	for rev := wo.Revision; rev >= 0; rev-- {
+		stored, err := f.Quality.ForRevision(ctx, wo.ID, rev)
+		if err != nil || len(stored) == 0 {
+			continue
+		}
+		checks := latestPerName(stored)
+		sha := ""
+		for _, c := range checks {
+			if c.CommitSHA != "" {
+				sha = c.CommitSHA
+			}
+		}
+		head := fmt.Sprintf("Revision %d, uncommitted / not verified on this revision", rev)
+		if sha != "" {
+			head = fmt.Sprintf("Revision %d, commit %s", rev, sha)
+		}
+		if rev != wo.Revision {
+			head += fmt.Sprintf(" (revision %d has no checks recorded)", wo.Revision)
+		}
+		lines = append(lines, head)
+		for i, c := range checks {
+			if i == summaryMaxChecks {
+				lines = append(lines, fmt.Sprintf("(+%d more)", len(checks)-summaryMaxChecks))
+				break
+			}
+			lines = append(lines, clip(fmt.Sprintf("- %s → %s", c.Name, c.Outcome), 120))
+		}
+		for _, c := range checks {
+			if c.Outcome != string(model.Pass) {
+				failing = append(failing, fmt.Sprintf("%s %s", c.Name, c.Outcome))
+			}
+		}
+		return lines, failing
+	}
+	return []string{"No checks recorded"}, nil
+}
+
+func (f *Factory) changedFileLines(ctx context.Context, wo *model.WorkOrder) []string {
+	if f.Sandbox == nil {
+		return []string{"unavailable (no sandbox)"}
+	}
+	mu := f.wsLock(wo.ID)
+	if !mu.TryLock() {
+		return []string{"unavailable (workspace busy)"}
+	}
+	files, err := f.Sandbox.ChangedFiles(ctx, f.workspaceDir(wo.ID))
+	mu.Unlock()
+	switch {
+	case err != nil:
+		return []string{"unavailable (" + err.Error() + ")"}
+	case len(files) == 0:
+		return []string{"none (no changes in workspace)"}
+	case len(files) <= 10:
+		out := make([]string, len(files))
+		for i, p := range files {
+			out[i] = "- " + p
+		}
+		return out
+	}
+	counts := map[string]int{}
+	for _, p := range files {
+		dir, _, ok := strings.Cut(p, "/")
+		if !ok {
+			dir = "."
+		}
+		counts[dir]++
+	}
+	dirs := make([]string, 0, len(counts))
+	for d := range counts {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	out := make([]string, len(dirs))
+	for i, d := range dirs {
+		out[i] = fmt.Sprintf("- %s/ (%d files)", d, counts[d])
+	}
+	return out
+}
+
+// fitLines appends lines under head while the result stays within budget, ending with "(+N more)".
+func fitLines(head string, lines []string, budget int) string {
+	const reserve = len("\n(+99 more)")
+	out := head
+	for i, l := range lines {
+		room := budget
+		if i < len(lines)-1 {
+			room -= reserve
+		}
+		if len(out)+1+len(l) > room {
+			return out + fmt.Sprintf("\n(+%d more)", len(lines)-i)
+		}
+		out += "\n" + l
+	}
+	return out
+}
+
+// clip cuts s to at most max bytes on a rune boundary, marking the cut with an ellipsis.
+func clip(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	if max <= 0 {
+		return ""
+	}
+	cut := max - len("…")
+	if cut < 0 {
+		cut = 0
+	}
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
 }
 
 // Find searches knowledge visible to u. A requested project is checked

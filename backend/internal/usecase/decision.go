@@ -125,7 +125,7 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 			return err
 		}
 		f.recordPRDecision(ctx, wo, "PR approved", reason)
-		f.Catalog.Completed(ctx, wo, "READY")
+		f.completeWO(ctx, wo, "READY")
 		if f.Catalog.summariesEnabled(ctx) {
 			if _, err := f.Sched.Enqueue(ctx, JobCatalogSummary, woID, "", map[string]any{}); err != nil {
 				f.Log.Error("cataloger: summary enqueue failed", "wo", woID, "err", err)
@@ -163,7 +163,7 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 			return err
 		}
 		f.recordPRDecision(ctx, wo, "PR declined", reason)
-		f.Catalog.Completed(ctx, wo, "DECLINED")
+		f.completeWO(ctx, wo, "DECLINED")
 		return nil
 	default:
 		return fmt.Errorf("unknown PR decision %q", decision)
@@ -200,7 +200,7 @@ func (f *Factory) Cancel(ctx context.Context, woID string) error {
 		return err
 	}
 	f.event(woID, "human", "cancelled", "Work order cancelled", map[string]any{"from": string(wo.State)})
-	f.Catalog.Completed(ctx, wo, "CANCELLED")
+	f.completeWO(ctx, wo, "CANCELLED")
 	return nil
 }
 

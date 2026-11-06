@@ -230,3 +230,67 @@ func TestHumanRetryKeepsFailedChecks(t *testing.T) {
 		t.Fatalf("task retry must keep the plain task prompt: %v", q.payloads[0])
 	}
 }
+
+type flipSandbox struct {
+	dirSandbox
+	passing *bool
+}
+
+func (s flipSandbox) RunCheck(_ context.Context, _ string, c model.Check, _ time.Duration) model.CheckResult {
+	if !*s.passing {
+		return model.CheckResult{Name: c.Name, Command: c.Command, Outcome: model.Fail}
+	}
+	return model.CheckResult{Name: c.Name, Command: c.Command, Outcome: model.Pass}
+}
+
+func (flipSandbox) Commit(context.Context, string, string) (string, error) { return "abc1234", nil }
+
+func TestVerificationWritesNoKnowledgeButKeepsRevisionHistory(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	passing := false
+	r.f.Sandbox = flipSandbox{passing: &passing}
+	if err := os.MkdirAll(r.f.workspaceDir(r.wo.ID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(r.f.workspaceDir(r.wo.ID), "go.mod"), []byte("module x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for rev := 0; rev <= 1; rev++ {
+		passing = rev == 1
+		if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateVerifying); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.f.handleVerify(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recs, err := r.f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: r.wo.ID, Limit: 200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range recs {
+		if k.Kind == model.KnowledgeVerification || k.Kind == model.KnowledgeImplementation || strings.HasPrefix(k.Title, "Verification passed on revision") {
+			t.Fatalf("unexpected knowledge record %q (%s)", k.Title, k.Kind)
+		}
+	}
+	for _, kind := range []string{"verification_started", "verification_passed"} {
+		if n := len(r.events(t, kind)); kind == "verification_started" && n != 2 || kind == "verification_passed" && n != 1 {
+			t.Fatalf("%s events = %d", kind, n)
+		}
+	}
+	if len(r.events(t, "check_fail")) == 0 || len(r.events(t, "check_pass")) == 0 {
+		t.Fatalf("check events: fail=%d pass=%d", len(r.events(t, "check_fail")), len(r.events(t, "check_pass")))
+	}
+	for rev := 0; rev <= 1; rev++ {
+		rows, err := r.f.Quality.ForRevision(ctx, r.wo.ID, rev)
+		if err != nil || len(rows) == 0 {
+			t.Fatalf("revision %d rows = %d, err %v", rev, len(rows), err)
+		}
+		for _, row := range rows {
+			if rev == 1 && row.CommitSHA != "abc1234" {
+				t.Fatalf("revision 1 row commit = %q", row.CommitSHA)
+			}
+		}
+	}
+}
