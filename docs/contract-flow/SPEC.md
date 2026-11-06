@@ -1,6 +1,6 @@
 # Contract-first work order flow — spec (v1)
 
-Status: approved for build · 2026-11-06 · supersedes parts of `docs/foreman-flow/SPEC.md` (§4 plan gate, §6 Architect verification, §7 done gate)
+Status: implemented · 2026-11-07 · PRs #44–#50 merged · no live work order run yet · supersedes parts of `docs/foreman-flow/SPEC.md` (§4 plan gate, §6 Architect verification, §7 done gate)
 
 ## Why
 
