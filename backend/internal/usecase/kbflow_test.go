@@ -190,6 +190,7 @@ func TestPlanStartSyncsRepoAndPromptsCarryPointersAndPlaybook(t *testing.T) {
 	for _, want := range []string{
 		"Repository documents that may matter for this work. They are in your workspace; read the ones you need:",
 		"- docs/money.md — Money — Money is integer rupiah", kbPrecedence,
+		"--- How we work ---", "## Simplest change",
 	} {
 		if !strings.Contains(arch, want) {
 			t.Fatalf("architect prompt lacks %q:\n%s", want, arch)
@@ -203,7 +204,7 @@ func TestPlanStartSyncsRepoAndPromptsCarryPointersAndPlaybook(t *testing.T) {
 		t.Fatal(err)
 	}
 	rev := r.h.prompts["foreman"][0]
-	for _, want := range []string{"Factory playbooks for your role", "When the Foreman escalates to a human", "Escalate when", "docs/money.md", kbPrecedence} {
+	for _, want := range []string{"Factory playbooks for your role", "When the Foreman escalates to a human", "Escalate when", "--- How we work ---", "docs/money.md", kbPrecedence} {
 		if !strings.Contains(rev, want) {
 			t.Fatalf("foreman prompt lacks %q:\n%s", want, rev)
 		}
@@ -226,7 +227,7 @@ func TestPlanStartSyncsRepoAndPromptsCarryPointersAndPlaybook(t *testing.T) {
 		t.Fatalf("architect saw bundle %v, want %s", started[0].Payload["kb_factory_commit"], head0)
 	}
 	docs, _ := started[1].Payload["kb_docs"].([]any)
-	if !contains(docs, "factory::playbooks/foreman/escalation.md") || !contains(docs, "repo:p1:docs/money.md") {
+	if !contains(docs, "factory::playbooks/foreman/escalation.md") || !contains(docs, "factory::playbooks/all/how-we-work.md") || !contains(docs, "repo:p1:docs/money.md") {
 		t.Fatalf("foreman audit docs: %v", docs)
 	}
 }

@@ -136,7 +136,7 @@ func TestBundleSeedWriteRemove(t *testing.T) {
 		t.Fatalf("dir index:\n%s", idx)
 	}
 	top, _ := os.ReadFile(filepath.Join(root, "index.md"))
-	if !strings.Contains(string(top), "* [projects/](projects/) - 1 documents") || !strings.Contains(string(top), "* [playbooks/](playbooks/) - 7 documents") {
+	if !strings.Contains(string(top), "* [projects/](projects/) - 1 documents") || !strings.Contains(string(top), "* [playbooks/](playbooks/) - 8 documents") {
 		t.Fatalf("root index:\n%s", top)
 	}
 	lg, _ := os.ReadFile(filepath.Join(root, "log.md"))
