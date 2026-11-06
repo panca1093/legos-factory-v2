@@ -31,7 +31,7 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 				return err
 			}
 		}
-		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": "Plan gate requested a revision; see the last plan_gate event in the activity trail."})
+		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": f.planRevisionNotes(ctx, wo)})
 	}
 	if wo.State != model.StateArchitectReview || wo.PlanReview != "pending" {
 		return nil // superseded: the plan was revised, approved or escalated meanwhile
@@ -54,6 +54,21 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 		"Foreman plan review notes", review, "run:"+runID)
 	f.event(wo.ID, "foreman", "plan_reviewed", "Foreman review notes ready", map[string]any{"notes": review, "run_id": runID})
 	return f.planGate(ctx, wo, tasks, review)
+}
+
+// planRevisionNotes rebuilds the Architect's revision note from the stored gate and Foreman events of the revision that was requested.
+func (f *Factory) planRevisionNotes(ctx context.Context, wo *model.WorkOrder) string {
+	e, err := f.WO.LatestEvent(ctx, wo.ID, "plan_revision_requested")
+	if err != nil || e == nil {
+		return "Plan gate requested a revision; see the last plan_gate event in the activity trail."
+	}
+	notes := "Plan gate: " + e.Message
+	if r, err := f.WO.LatestEvent(ctx, wo.ID, "plan_reviewed"); err == nil && r != nil {
+		if s, _ := r.Payload["notes"].(string); s != "" {
+			notes += "\n\nForeman review: " + s
+		}
+	}
+	return notes
 }
 
 func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []model.Task, review string) error {

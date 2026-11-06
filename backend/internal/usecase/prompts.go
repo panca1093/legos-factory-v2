@@ -103,10 +103,19 @@ func foremanPrime(wo *model.WorkOrder) string {
 	return "You are continuing a work order you already started. Your earlier decisions:" + briefSection(wo) + clarification(wo) + "\n---\n\n"
 }
 
-func planPrompt(wo *model.WorkOrder, notes, facts string) string {
+func planPrompt(wo *model.WorkOrder, notes, facts string, prev []model.Task) string {
 	extra := briefSection(wo) + clarification(wo)
+	if wo.Spec != "" || len(prev) > 0 {
+		extra += "\nPrevious draft:\nSpec:\n" + wo.Spec + "\nTasks:\n" + previousTasks(wo.ID, prev)
+	}
 	if notes != "" {
-		extra += fmt.Sprintf("\nRevise the previous draft according to: %s\n", notes)
+		extra += fmt.Sprintf(`
+Revise the previous draft according to these notes:
+%s
+
+This is a targeted edit, not a redraft: keep every part the notes do not criticise, change only what is needed,
+address every numbered item, keep task ids stable where the task survives, and say in summary what changed.
+`, notes)
 	}
 	return fmt.Sprintf(`You are the Architect of a software engineering team.
 
@@ -133,6 +142,19 @@ Rules:
 - "deps" lists ids of tasks that must complete first; the graph must be acyclic and tasks must cover the objective.
 - "scope" lists the files or areas each task may touch.
 - role is "builder" for implementation tasks.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts)
+}
+
+func previousTasks(woID string, tasks []model.Task) string {
+	var b strings.Builder
+	for _, t := range tasks {
+		deps := make([]string, len(t.Deps))
+		for i, d := range t.Deps {
+			deps[i] = strings.TrimPrefix(d, woID+"_")
+		}
+		fmt.Fprintf(&b, "- %s: %s — %s (scope: %s; deps: %s)\n", strings.TrimPrefix(t.ID, woID+"_"), t.Title, t.Objective,
+			strings.Join(t.Scope, ", "), strings.Join(deps, ", "))
+	}
+	return b.String()
 }
 
 func criteriaSection(cs []Criterion) string {
@@ -270,8 +292,30 @@ func taskSection(job model.Job, tasks []model.Task) string {
 	return b.String()
 }
 
+func specSection(wo *model.WorkOrder) string {
+	if wo.Spec == "" {
+		return ""
+	}
+	return "\nSpec (the Architect verifies the result against this):\n" + wo.Spec + "\n"
+}
+
+// fixContext is what every fix prompt shares: the spec, the plan and the numbered brief.
+func fixContext(wo *model.WorkOrder, job model.Job, tasks []model.Task) (ctx, tail string) {
+	ctx = specSection(wo)
+	if len(tasks) > 0 {
+		ctx += "\nPlan:\n" + scopedTaskList(tasks)
+	}
+	tail = "Work only within the assigned workspace. When done, reply with one line describing what changed."
+	if brief, _ := job.Payload["brief"].(string); brief != "" {
+		ctx += "\nFix brief. Address every numbered item and change only what the items require:\n" + brief + "\n"
+		tail = `Work only within the assigned workspace. When done, reply with one line stating for each item number either "N: fixed (file:line)" or "N: not fixed because <reason>".`
+	}
+	return ctx, tail
+}
+
 func implementPrompt(wo *model.WorkOrder, job model.Job, tasks []model.Task) string {
 	reason, _ := job.Payload["reason"].(string)
+	fixCtx, tail := fixContext(wo, job, tasks)
 	if failed, _ := job.Payload["failed_checks"].(string); reason == "fix_failed_verification" && failed != "" {
 		return fmt.Sprintf(`You are the Builder. Work order %q failed deterministic verification.
 
@@ -283,9 +327,9 @@ Objective: %s
 
 Acceptance criteria:
 %s
-%s
-Work only within the assigned workspace. When done, reply with one line describing what changed.`,
-			wo.Title, failed, wo.Objective, wo.Acceptance, clarification(wo))
+%s%s
+%s`,
+			wo.Title, failed, wo.Objective, wo.Acceptance, clarification(wo), fixCtx, tail)
 	}
 	if note, _ := job.Payload["note"].(string); reason == "fix_done_gate" && note != "" {
 		return fmt.Sprintf(`You are the Builder. The final review of work order %q found the change incomplete.
@@ -297,9 +341,9 @@ Objective: %s
 
 Acceptance criteria:
 %s
-%s
-Work only within the assigned workspace. When done, reply with one line describing what changed.`,
-			wo.Title, note, wo.Objective, wo.Acceptance, clarification(wo))
+%s%s
+%s`,
+			wo.Title, note, wo.Objective, wo.Acceptance, clarification(wo), fixCtx, tail)
 	}
 	if reason != "" {
 		return fmt.Sprintf(`You are the Builder. Work order %q requires remediation.
@@ -309,10 +353,10 @@ Objective: %s
 
 Acceptance criteria:
 %s
-%s
+%s%s%s
 Implement the change and any behavioral tests needed to satisfy the criteria.
-Work only within the assigned workspace. When done, reply with one line describing what changed.`,
-			wo.Title, reason, wo.Objective, wo.Acceptance, clarification(wo))
+%s`,
+			wo.Title, reason, wo.Objective, wo.Acceptance, clarification(wo), fixCtx, taskSection(job, tasks), tail)
 	}
 	return fmt.Sprintf(`You are the Builder. Implement task %q of work order %q.
 
@@ -320,8 +364,8 @@ Objective: %s
 
 Acceptance criteria:
 %s
-%s%s
-Work only within the assigned workspace. When done, reply with one line describing what changed.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo), taskSection(job, tasks))
+%s%s%s
+Work only within the assigned workspace. When done, reply with one line describing what changed.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo), specSection(wo), taskSection(job, tasks))
 }
 
 func resolvePrompt(wo *model.WorkOrder, job model.Job, files []string) string {

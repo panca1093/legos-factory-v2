@@ -104,6 +104,8 @@ From intake until the plan gate decides, the Foreman is **one agent session**: i
 Input: brief, request, criteria, repo facts.
 Output: `planReply` gains a `spec` field (behaviour, interfaces, edge cases) next to `summary` and `tasks`. Each task gets `scope`: the files or areas it may touch.
 
+**Revisions edit the previous draft.** A re-draft (gate revise, human revision, Foreman-answer re-draft) receives the stored spec and task list (id, title, objective, scope, deps) with the notes, and is told to change only what the notes criticise, keep surviving task ids stable and say in `summary` what changed.
+
 **Follow-up questions.** When the brief is unclear, the Architect replies `CLARIFY` with a question. The question goes to the **Foreman first**:
 
 - Foreman reply `ANSWER`: the answer is stored and the Architect re-drafts.
@@ -153,7 +155,7 @@ Truth table, first matching row wins:
 | 4 | any answer unsettled | revise |
 | 5 | otherwise | approve |
 
-`revise` sends the Architect a note the code builds from the answers that triggered it (e.g. "criterion c3 is not covered; tasks t2 and t4 overlap") plus the Foreman's notes. When `plan_revisions` has reached 2, a revise outcome becomes **escalate**. A human revision (or a human answer to a clarification) resets the counter. `plan_revisions` is a column on the work order (migration 010) and is also returned in the work order JSON.
+`revise` sends the Architect a numbered note the code builds from the answers that triggered it, with nothing dropped: each criterion with its full text, and for `scope_creep` / `task_overlap` the plan's task titles and scopes. The Foreman's notes follow in full. When `plan_revisions` has reached 2, a revise outcome becomes **escalate**. A human revision (or a human answer to a clarification) resets the counter. `plan_revisions` is a column on the work order (migration 010) and is also returned in the work order JSON.
 
 Wiring: `approve` moves `ARCHITECT_REVIEW → QUEUED` with actor `factory` and queues the root tasks. `revise` moves to `PLANNING` and enqueues a plan job. `escalate` keeps the order in `ARCHITECT_REVIEW` with `plan_review = approved` (the marker the existing approve/revise UI keys on) and records a `plan_escalated` event with the reason; it does not use `WAITING_FOR_HUMAN`, which stays reserved for Architect questions. Plan task ids are sent to Jev as `t1..tn`, not the stored `wo_..._task` ids.
 
@@ -166,6 +168,9 @@ Unchanged except:
 - Tasks run strictly in dependency order (the dependency-loss bug is fixed in `451ffb5`).
 - The Builder prompt names the task's own title, objective and `scope`, and lists the other tasks' titles as "other tasks — do not implement these".
 - On a retry after failed checks, the Builder gets the failing check's name, command and the tail of its output.
+- Every Builder prompt carries the spec (the one the Architect verifies against) and, on fix paths, the plan.
+- Every fix path (`fix_findings`, `human_revision`, `human_retry`, `fix_done_gate`) sends one numbered **fix brief** in the job payload, nothing filtered or truncated: the human's reason, the done-gate issues and the Foreman's notes, all open findings (severity, title, detail, location), every non-`met` Architect verdict of the current revision (evidence, gap, fix) and every deviation. Open findings are those of the current inspection. The brief is stored in the `fix_requested` / `revision_requested` event, so a human retry after a failed fix build resends it. A retried plan task keeps its task section.
+- The Builder must address every numbered item and answer in its one-line reply with `N: fixed (file:line)` or `N: not fixed because <reason>`; the reply is not parsed.
 
 ### 6. Verification (factory + Inspector ∥ Architect)
 
@@ -180,7 +185,7 @@ The Foreman agent writes validation notes (`{"notes": "..."}`) from the Inspecto
 
 If there are no acceptance criteria, or the Architect report is missing or was made on an older revision, the done gate escalates without a Foreman run or a Jev request. If the Foreman validation itself fails permanently (or on the job's last attempt) the gate records an escalation `Foreman validation failed: …` and readiness continues to `NEEDS_HUMAN_REVIEW`; the order is never left in `SPECIALIST_REVIEW`.
 
-The inspection's own findings stay open until the gate has decided (earlier revisions' findings are resolved by the clean inspection), so `open_findings` reflects the current inspection. The `evaluate` job is idempotent: it does nothing unless the order is in `SPECIALIST_REVIEW`, and finishes a half-done fix when it finds the order already back in `IMPLEMENTING`. A human retry after a failed fix build keeps the gate's note. Without a Judge the done gate (and the Foreman validation run) is skipped entirely.
+The inspection's own findings stay open until the gate has decided (earlier revisions' findings are resolved by the clean inspection), so `open_findings` reflects the current inspection. The `evaluate` job is idempotent: it does nothing unless the order is in `SPECIALIST_REVIEW`, and finishes a half-done fix when it finds the order already back in `IMPLEMENTING`. A human retry after a failed fix build keeps the gate's note and brief. Without a Judge the done gate (and the Foreman validation run) is skipped entirely.
 
 The factory sends one Jev request. State: criteria, spec, a diff summary (per file: path, lines changed, the hunks up to a size budget; lock and generated files keep counts only), check results, open findings, the Architect verdicts (`architect_verdicts`: criterion, `met`/`not_met`/`unclear`, evidence) and `deviations`, and the Foreman notes.
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -128,9 +129,16 @@ func failedChecksSection(failures []model.CheckResult) string {
 
 // retryPayload keeps the failing checks in front of the Builder when a human retries after a failed verification.
 func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[string]any {
-	payload := map[string]any{"reason": "human_retry"}
+	payload := f.withBrief(ctx, wo, map[string]any{"reason": "human_retry"}, nil, "")
 	if note := f.doneGateNote(ctx, wo); note != "" {
-		return map[string]any{"reason": "fix_done_gate", "note": note}
+		p := map[string]any{"reason": "fix_done_gate", "note": note}
+		if b := f.storedBrief(ctx, wo); b != "" {
+			p["brief"] = b
+		}
+		return p
+	}
+	if b := f.storedBrief(ctx, wo); b != "" {
+		payload["brief"] = b
 	}
 	if wo.VerifyFailures == 0 || wo.Revision < 1 {
 		return payload
@@ -158,11 +166,35 @@ func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[str
 	if len(failed) == 0 {
 		return payload
 	}
-	return map[string]any{"reason": "fix_failed_verification", "failed_checks": failedChecksSection(failed)}
+	payload["reason"], payload["failed_checks"] = "fix_failed_verification", failedChecksSection(failed)
+	return payload
 }
 
 // doneGateNote is the note of the done-gate fix that opened the order's current revision, or "".
 func (f *Factory) doneGateNote(ctx context.Context, wo *model.WorkOrder) string {
+	return f.doneGateField(ctx, wo, "note")
+}
+
+// storedBrief is the brief of the remediation that opened the order's current revision, for a retry after that remediation failed.
+func (f *Factory) storedBrief(ctx context.Context, wo *model.WorkOrder) string {
+	var best *model.Event
+	for _, kind := range []string{"fix_requested", "revision_requested"} {
+		e, err := f.WO.LatestEvent(ctx, wo.ID, kind)
+		if err != nil || e == nil {
+			continue
+		}
+		if rev, _ := e.Payload["revision"].(float64); int(rev) == wo.Revision && (best == nil || e.ID > best.ID) {
+			best = e
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	b, _ := best.Payload["brief"].(string)
+	return b
+}
+
+func (f *Factory) doneGateField(ctx context.Context, wo *model.WorkOrder, key string) string {
 	e, err := f.WO.LatestEvent(ctx, wo.ID, "fix_requested")
 	if err != nil || e == nil || e.Payload["reason"] != "fix_done_gate" {
 		return ""
@@ -170,8 +202,8 @@ func (f *Factory) doneGateNote(ctx context.Context, wo *model.WorkOrder) string 
 	if rev, _ := e.Payload["revision"].(float64); int(rev) != wo.Revision {
 		return ""
 	}
-	note, _ := e.Payload["note"].(string)
-	return note
+	v, _ := e.Payload[key].(string)
+	return v
 }
 
 func outputTail(out string) string {
@@ -287,17 +319,33 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		}
 		return nil
 	}
+	// read after architectVerify stored its report, and before the revision bump: the report is stored under the current one
+	cur, err := f.WO.Get(ctx, wo.ID)
+	if err != nil {
+		return err
+	}
+	var all []model.Finding
+	if f.Findings != nil {
+		all, _ = f.Findings.List(ctx, wo.ID)
+	}
+	payload := map[string]any{"reason": "fix_findings"}
+	evPayload := map[string]any{}
+	if b := fixBrief(fromRuns(openFindings(all), runIDs), f.currentArchitectReport(cur), nil, ""); b != "" {
+		payload["brief"] = b
+		evPayload["brief"] = b
+	}
 	newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "review_fixes": fixes}); err != nil {
 		return err
 	}
 	wo.Revision, wo.CommitSHA, wo.ReviewFixes = newRev, "", fixes
-	f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: requesting bounded remediation", newRev), nil)
+	evPayload["revision"], evPayload["reason"] = newRev, "fix_findings"
+	f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: requesting bounded remediation", newRev), evPayload)
 	if err := f.step(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "factory", "Fix required; returning to builder"); err != nil {
 		return err
 	}
 	// the fix runs as a builder job; its completion drives → VERIFYING again
-	return f.enqueue(ctx, JobImplement, wo.ID, "fix_findings")
+	return f.enqueuePayload(ctx, JobImplement, wo.ID, payload)
 }
 
 // commitVerified records the verified workspace as a local commit (never
@@ -404,6 +452,82 @@ func reportText(r architectReport) string {
 		fmt.Fprintf(&b, "Deviation: %s\n", d)
 	}
 	return b.String()
+}
+
+// fixBrief renders every open finding, unmet verdict, deviation, gate issue and human reason as one numbered
+// checklist; it is a string because job payloads round-trip through JSON.
+func fixBrief(findings []model.Finding, report *architectReport, issues []string, humanReason string) string {
+	var items []string
+	if strings.TrimSpace(humanReason) != "" {
+		items = append(items, "The reviewer asked for changes: "+humanReason)
+	}
+	items = append(items, issues...)
+	for _, fd := range findings {
+		items = append(items, fmt.Sprintf("[%s] %s (%s): %s", fd.Severity, fd.Title, fd.Location, fd.Detail))
+	}
+	if report != nil {
+		for _, v := range report.Verdicts {
+			if strings.ToLower(strings.TrimSpace(v.Status)) == "met" {
+				continue
+			}
+			it := fmt.Sprintf("Acceptance criterion %s is %s. Evidence: %s", v.CriterionID, v.Status, v.Evidence)
+			if v.Gap != "" {
+				it += "\n   Missing: " + v.Gap
+			}
+			if v.Fix != "" {
+				it += "\n   Suggested fix: " + v.Fix
+			}
+			items = append(items, it)
+		}
+		for _, d := range report.Deviations {
+			if strings.TrimSpace(d) != "" {
+				items = append(items, "The Architect reports work outside the spec or plan: "+d)
+			}
+		}
+	}
+	var b strings.Builder
+	for i, it := range items {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, it)
+	}
+	return strings.TrimSpace(b.String())
+}
+
+// briefFor is the fix brief of the order's open findings and current Architect report plus the given issues and human reason.
+func (f *Factory) briefFor(ctx context.Context, wo *model.WorkOrder, issues []string, humanReason string) string {
+	var all []model.Finding
+	if f.Findings != nil {
+		all, _ = f.Findings.List(ctx, wo.ID)
+	}
+	return fixBrief(openFindings(all), f.currentArchitectReport(wo), issues, humanReason)
+}
+
+func openFindings(all []model.Finding) []model.Finding {
+	var open []model.Finding
+	for _, fd := range all {
+		if fd.Status == model.FindingOpen || fd.Status == model.FindingConfirmed || fd.Status == model.FindingEscalated {
+			open = append(open, fd)
+		}
+	}
+	return open
+}
+
+// fromRuns keeps the findings raised by the given inspection runs.
+func fromRuns(fs []model.Finding, runIDs []string) []model.Finding {
+	var out []model.Finding
+	for _, fd := range fs {
+		if slices.Contains(runIDs, fd.RunID) {
+			out = append(out, fd)
+		}
+	}
+	return out
+}
+
+// withBrief adds the order's fix brief to a Builder payload when there is one.
+func (f *Factory) withBrief(ctx context.Context, wo *model.WorkOrder, payload map[string]any, issues []string, humanReason string) map[string]any {
+	if b := f.briefFor(ctx, wo, issues, humanReason); b != "" {
+		payload["brief"] = b
+	}
+	return payload
 }
 
 // latestChecks is each check's most recent result for the current revision; the
