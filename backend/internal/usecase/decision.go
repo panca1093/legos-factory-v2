@@ -148,7 +148,7 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		}
 		evPayload := map[string]any{"revision": newRev}
 		if b, ok := payload["brief"]; ok {
-			evPayload["brief"] = b
+			evPayload["brief"], evPayload["items"] = b, payload["items"]
 		}
 		f.event(woID, "human", "revision_requested", reason, evPayload)
 		if err := f.step(ctx, wo, model.StateNeedsHumanReview, model.StateImplementing, "human", "Changes requested; invalidating prior quality approval"); err != nil {

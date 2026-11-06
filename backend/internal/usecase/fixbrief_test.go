@@ -330,3 +330,32 @@ func TestImplementPromptTellsTheBuilderToKeepAlreadyAddressedItems(t *testing.T)
 		t.Fatalf("prompt lacks the keep-intact rule:\n%s", p)
 	}
 }
+
+func TestHumanReasonWithOwnNumberedListStaysOneEarlierItem(t *testing.T) {
+	ctx := context.Background()
+	r := inspectRig(t, &replyHarness{})
+	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateNeedsHumanReview); err != nil {
+		t.Fatal(err)
+	}
+	reason := "Please:\n1. rename X\n2. add test"
+	if err := r.f.HumanPRDecision(ctx, r.wo.ID, "request_changes", reason); err != nil {
+		t.Fatal(err)
+	}
+	b := r.f.withEarlierFixes(ctx, r.wo.ID, 2, []string{"NEW"})
+	_, tail, _ := strings.Cut(b, earlierHeading)
+	if want := "\n- The reviewer asked for changes: " + reason; tail != want {
+		t.Fatalf("earlier section %q, want %q", tail, want)
+	}
+}
+
+func TestEarlierFixesDropReraisedItemsAndForemanNotes(t *testing.T) {
+	ctx := context.Background()
+	r := doneRig(t, &fakeJudge{}, unmetVerifyReport)
+	seedFix(t, r, 1, "1. ITEM-A\n2. ITEM-B\n3. "+foremanNotesPrefix+"hm")
+	r.f.event(r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": 1, "items": []string{"ITEM-A", "ITEM-B", foremanNotesPrefix + "hm"}})
+	b := r.f.withEarlierFixes(ctx, r.wo.ID, 2, []string{"ITEM-A"})
+	head, tail, _ := strings.Cut(b, earlierHeading)
+	if !strings.HasPrefix(head, "1. ITEM-A") || strings.Contains(tail, "ITEM-A") || !strings.Contains(tail, "- ITEM-B") || strings.Contains(b, "validation notes") {
+		t.Fatalf("brief:\n%s", b)
+	}
+}

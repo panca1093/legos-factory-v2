@@ -124,16 +124,19 @@ func failedChecksSection(failures []model.CheckResult) string {
 
 // retryPayload keeps the failing checks in front of the Builder when a human retries after a failed verification.
 func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[string]any {
-	payload := f.withBrief(ctx, wo, wo.Revision, map[string]any{"reason": "human_retry"}, nil, "")
+	brief := f.storedBrief(ctx, wo)
 	if note := f.doneGateNote(ctx, wo); note != "" {
 		p := map[string]any{"reason": "fix_done_gate", "note": note}
-		if b := f.storedBrief(ctx, wo); b != "" {
-			p["brief"] = b
+		if brief != "" {
+			p["brief"] = brief
 		}
 		return p
 	}
-	if b := f.storedBrief(ctx, wo); b != "" {
-		payload["brief"] = b
+	payload := map[string]any{"reason": "human_retry"}
+	if brief != "" {
+		payload["brief"] = brief
+	} else {
+		payload = f.withBrief(ctx, wo, wo.Revision, payload, nil, "")
 	}
 	if wo.VerifyFailures == 0 || wo.Revision < 1 {
 		return payload
@@ -326,10 +329,10 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	payload := map[string]any{"reason": "fix_findings"}
 	evPayload := map[string]any{}
 	newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
-	if b := fixBrief(fromRuns(openFindings(all), runIDs), f.currentArchitectReport(cur), nil, ""); b != "" {
-		b = f.withEarlierFixes(ctx, wo.ID, newRev, b)
+	if items := fixItems(fromRuns(openFindings(all), runIDs), f.currentArchitectReport(cur), nil, ""); len(items) > 0 {
+		b := f.withEarlierFixes(ctx, wo.ID, newRev, items)
 		payload["brief"] = b
-		evPayload["brief"] = b
+		evPayload["brief"], evPayload["items"] = b, items
 	}
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "review_fixes": fixes}); err != nil {
 		return err
@@ -453,6 +456,10 @@ func reportText(r architectReport) string {
 // fixBrief renders every open finding, unmet verdict, deviation, gate issue and human reason as one numbered
 // checklist; it is a string because job payloads round-trip through JSON.
 func fixBrief(findings []model.Finding, report *architectReport, issues []string, humanReason string) string {
+	return numberedBrief(fixItems(findings, report, issues, humanReason))
+}
+
+func fixItems(findings []model.Finding, report *architectReport, issues []string, humanReason string) []string {
 	var items []string
 	if strings.TrimSpace(humanReason) != "" {
 		items = append(items, "The reviewer asked for changes: "+humanReason)
@@ -481,6 +488,10 @@ func fixBrief(findings []model.Finding, report *architectReport, issues []string
 			}
 		}
 	}
+	return items
+}
+
+func numberedBrief(items []string) string {
 	var b strings.Builder
 	for i, it := range items {
 		fmt.Fprintf(&b, "%d. %s\n", i+1, it)
@@ -488,13 +499,13 @@ func fixBrief(findings []model.Finding, report *architectReport, issues []string
 	return strings.TrimSpace(b.String())
 }
 
-// briefFor is the fix brief of the order's open findings and current Architect report plus the given issues and human reason.
-func (f *Factory) briefFor(ctx context.Context, wo *model.WorkOrder, issues []string, humanReason string) string {
+// briefItems are the fix items of the order's open findings and current Architect report plus the given issues and human reason.
+func (f *Factory) briefItems(ctx context.Context, wo *model.WorkOrder, issues []string, humanReason string) []string {
 	var all []model.Finding
 	if f.Findings != nil {
 		all, _ = f.Findings.List(ctx, wo.ID)
 	}
-	return fixBrief(openFindings(all), f.currentArchitectReport(wo), issues, humanReason)
+	return fixItems(openFindings(all), f.currentArchitectReport(wo), issues, humanReason)
 }
 
 func openFindings(all []model.Finding) []model.Finding {
@@ -520,8 +531,8 @@ func fromRuns(fs []model.Finding, runIDs []string) []model.Finding {
 
 // withBrief adds the fix brief for revision rev to a Builder payload when there is one.
 func (f *Factory) withBrief(ctx context.Context, wo *model.WorkOrder, rev int, payload map[string]any, issues []string, humanReason string) map[string]any {
-	if b := f.briefFor(ctx, wo, issues, humanReason); b != "" {
-		payload["brief"] = f.withEarlierFixes(ctx, wo.ID, rev, b)
+	if items := f.briefItems(ctx, wo, issues, humanReason); len(items) > 0 {
+		payload["brief"], payload["items"] = f.withEarlierFixes(ctx, wo.ID, rev, items), items
 	}
 	return payload
 }
@@ -533,24 +544,50 @@ const earlierFixRevisions = 3
 
 var briefItemStart = regexp.MustCompile(`(?m)^\d+\. `)
 
-// withEarlierFixes appends the items earlier revisions' briefs asked for, newest revisions capped, to the brief of revision rev.
-func (f *Factory) withEarlierFixes(ctx context.Context, woID string, rev int, brief string) string {
+const foremanNotesPrefix = "The Foreman's validation notes: "
+
+// storedItems are the fix items a fix_requested / revision_requested event asked for; events from before items were stored fall back to splitting the brief.
+func storedItems(p map[string]any) []string {
+	if raw, ok := p["items"].([]any); ok {
+		var out []string
+		for _, v := range raw {
+			if s, _ := v.(string); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	b, _ := p["brief"].(string)
+	b, _, _ = strings.Cut(b, "\n\n"+earlierFixesHeading)
+	return briefItemStart.Split(b, -1)
+}
+
+// withEarlierFixes numbers the current items and appends the items earlier revisions asked for, newest revisions capped, to the brief of revision rev.
+func (f *Factory) withEarlierFixes(ctx context.Context, woID string, rev int, items []string) string {
+	brief := numberedBrief(items)
 	byRev := map[int][]string{}
 	for after := int64(0); ; {
 		evs, err := f.WO.Events(ctx, woID, after, 500)
-		if err != nil || len(evs) == 0 {
+		if err != nil {
+			f.Log.Error("earlier fixes: reading events failed, section may be partial", "wo", woID, "err", err)
+			break
+		}
+		if len(evs) == 0 {
 			break
 		}
 		for _, e := range evs {
 			after = e.ID
-			r, _ := e.Payload["revision"].(float64)
-			b, _ := e.Payload["brief"].(string)
-			if (e.Kind != "fix_requested" && e.Kind != "revision_requested") || int(r) >= rev || b == "" {
+			if e.Kind != "fix_requested" && e.Kind != "revision_requested" {
 				continue
 			}
-			b, _, _ = strings.Cut(b, "\n\n"+earlierFixesHeading)
-			byRev[int(r)] = append(byRev[int(r)], briefItemStart.Split(b, -1)...)
+			if r, _ := e.Payload["revision"].(float64); int(r) < rev {
+				byRev[int(r)] = append(byRev[int(r)], storedItems(e.Payload)...)
+			}
 		}
+	}
+	current := map[string]bool{}
+	for _, it := range items {
+		current[strings.TrimSpace(it)] = true
 	}
 	revs := slices.Sorted(maps.Keys(byRev))
 	revs = revs[max(0, len(revs)-earlierFixRevisions):]
@@ -558,7 +595,7 @@ func (f *Factory) withEarlierFixes(ctx context.Context, woID string, rev int, br
 	seen := map[string]bool{}
 	for _, r := range revs {
 		for _, it := range byRev[r] {
-			if it = strings.TrimSpace(it); it != "" && !seen[it] {
+			if it = strings.TrimSpace(it); it != "" && !seen[it] && !current[it] && !strings.HasPrefix(it, foremanNotesPrefix) {
 				seen[it] = true
 				section.WriteString("\n- " + it)
 			}
