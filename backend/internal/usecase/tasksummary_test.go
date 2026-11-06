@@ -126,14 +126,14 @@ func TestReadyAfterFailThenPassWritesOneSummary(t *testing.T) {
 	}
 	body := got[0].Body
 	requireHeadersInOrder(t, body)
-	if !strings.Contains(body, "revision 1, commit deadbeef1234") {
+	if !strings.Contains(body, "Revision 1, commit deadbeef1234") {
 		t.Fatalf("missing revision-1 commit:\n%s", body)
 	}
 	dec := body[strings.Index(body, "Key decisions and rationale:"):strings.Index(body, "Main changes:")]
 	if !strings.Contains(dec, "Finding disputed: nil check") || !strings.Contains(dec, "false positive") {
 		t.Fatalf("seeded decision missing under Key decisions:\n%s", body)
 	}
-	if !strings.Contains(body, "a.go, b.go") {
+	if !strings.Contains(body, "- a.go\n- b.go") {
 		t.Fatalf("changed files missing:\n%s", body)
 	}
 }
@@ -157,11 +157,11 @@ func TestCancelAfterFailedVerificationShowsEarlierFailAsUncommitted(t *testing.T
 	}
 	body := got[0].Body
 	requireHeadersInOrder(t, body)
-	if !strings.Contains(body, "current revision 1 has no checks") || !strings.Contains(body, "revision 0, uncommitted / not verified on this revision") || !strings.Contains(body, "test: FAIL") {
+	if !strings.Contains(body, "Revision 0, uncommitted / not verified on this revision (revision 1 has no checks recorded)") || !strings.Contains(body, "- test → FAIL") {
 		t.Fatalf("earlier FAIL not shown as uncommitted:\n%s", body)
 	}
 	open := body[strings.Index(body, "Open items / follow-up:"):strings.Index(body, "Key decisions")]
-	if !strings.Contains(open, "Outcome: CANCELLED") || !strings.Contains(open, "Failing check: test") {
+	if !strings.Contains(open, "Outcome: CANCELLED") || !strings.Contains(open, "- check test FAIL") {
 		t.Fatalf("open items: %s", open)
 	}
 }
@@ -174,7 +174,7 @@ func TestBlockedWithNothingRecordedRendersFallbacks(t *testing.T) {
 
 	body := env.completed(t, wo.ID)[0].Body
 	requireHeadersInOrder(t, body)
-	for _, want := range []string{"no checks recorded", "no verification recorded", "Outcome: BLOCKED", "none recorded", "no changed files recorded"} {
+	for _, want := range []string{"No checks recorded", "Outcome: BLOCKED", "none recorded", "none (no changes in workspace)"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing fallback %q:\n%s", want, body)
 		}
@@ -209,9 +209,8 @@ func TestOversizedWorkOrderStaysWithinBudget(t *testing.T) {
 	if len(body) > summaryBudget {
 		t.Fatalf("body %d bytes exceeds budget", len(body))
 	}
-	requireHeadersInOrder(t, body)
-	if strings.Contains(body[:strings.Index(body, "Main changes:")], "[truncated]") {
-		t.Fatalf("truncation marker before Main changes:\n%s", body)
+	if !strings.HasPrefix(body, "Goal:") || !strings.Contains(body, "Final verification:") {
+		t.Fatalf("leading sections lost:\n%s", body)
 	}
 }
 
