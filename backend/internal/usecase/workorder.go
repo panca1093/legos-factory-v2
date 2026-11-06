@@ -50,11 +50,15 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 	}
 	var auth *model.GitAuth
 	if g, bound, err := w.Integrations.GitFor(ctx, proj); bound {
-		if err != nil {
+		switch {
+		case errors.Is(err, model.ErrGHMissing), errors.Is(err, model.ErrGHUnauthenticated):
+			// a missing gh login must not block local work; the open-PR job reports it
+		case err != nil:
 			return nil, fmt.Errorf("%w: repository connection unavailable: %v", ErrWorkspace, err)
+		default:
+			a := g.GitAuth()
+			auth = &a
 		}
-		a := g.GitAuth()
-		auth = &a
 	}
 	// prepare before persisting: a stored CREATED order without a workspace gets resumed into planning on restart
 	dir, err := w.Sandbox.Prepare(ctx, wo.ID, proj.RepoURL, auth)

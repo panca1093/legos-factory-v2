@@ -29,7 +29,8 @@ type Server struct {
 	Projects     *usecase.Projects
 	WorkOrders   *usecase.WorkOrders
 	Integrations *usecase.Integrations
-	Catalog      *usecase.Cataloger
+	Local        *usecase.Local
+	Catalog     *usecase.Cataloger
 	KBDocs       *usecase.KBDocs
 	Chat         *usecase.Chat
 	Bus          *Bus
@@ -215,6 +216,12 @@ func (s *Server) routes() {
 	api.POST("/connections/:id/test", s.requireRole(model.RoleEngineer, s.handleTestConnection))
 	api.PUT("/projects/:id/binding", s.requireRole(model.RoleEngineer, s.handleBindProject))
 	api.POST("/integrations/jira/lookup", s.requireRole(model.RoleEngineer, s.handleJiraLookup))
+
+	api.POST("/local/pick-folder", s.local(s.handleLocalPickFolder))
+	api.GET("/local/inspect", s.local(s.handleLocalInspect))
+	api.POST("/local/clone", s.local(s.handleLocalClone))
+	api.POST("/local/init", s.local(s.handleLocalInit))
+	api.GET("/local/gh", s.local(s.handleLocalGH))
 
 	api.GET("/knowledge", s.handleListKnowledge)
 	api.GET("/knowledge/:id", s.handleGetKnowledge)

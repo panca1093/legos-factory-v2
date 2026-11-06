@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -21,6 +22,10 @@ type Integrations struct {
 	Projects *Projects
 	Git      func(c model.Connection, token string) (GitProvider, error)
 	Issues   func(c model.Connection, token string) (IssueTracker, error)
+	// Host and GH enable publishing local projects through the user's own gh
+	// login; both are set in dev auth mode only.
+	Host LocalHost
+	GH   func(repo string) GitProvider
 }
 
 var remoteRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$`)
@@ -192,11 +197,46 @@ func (in *Integrations) LookupIssue(ctx context.Context, u *model.User, req mode
 		Acceptance: acceptance, URL: issue.URL}, nil
 }
 
-// GitFor returns the provider and auth for a project's bound connection;
-// ok is false when the project is not bound.
+// localGitHub returns owner/repo when p has no connection and is a local git
+// repo whose origin is on github.com, else "".
+func (in *Integrations) localGitHub(ctx context.Context, p *model.Project) string {
+	if in == nil || in.GH == nil || in.Host == nil || p.GitConnection != "" {
+		return ""
+	}
+	dir := expandPath(p.RepoURL)
+	if !filepath.IsAbs(dir) || !in.Host.IsGitRepo(dir) {
+		return ""
+	}
+	return ParseGitHubRepo(in.Host.OriginURL(ctx, dir))
+}
+
+// Annotate fills the computed publish_via and github_repo fields.
+func (in *Integrations) Annotate(ctx context.Context, p *model.Project) {
+	p.PublishVia, p.GitHubRepo = "none", ""
+	if p.GitConnection != "" {
+		p.PublishVia = "connection"
+	} else if repo := in.localGitHub(ctx, p); repo != "" {
+		p.PublishVia, p.GitHubRepo = "gh", repo
+	}
+}
+
+// GitFor returns the provider and auth for a project: its bound connection,
+// which wins, else the user's gh login for a local repo with a GitHub origin.
+// ok is false when the project is neither.
 func (in *Integrations) GitFor(ctx context.Context, p *model.Project) (g GitProvider, ok bool, err error) {
-	if in == nil || p.GitConnection == "" {
+	if in == nil {
 		return nil, false, nil
+	}
+	if p.GitConnection == "" {
+		repo := in.localGitHub(ctx, p)
+		if repo == "" {
+			return nil, false, nil
+		}
+		g = in.GH(repo)
+		if _, err := g.CheckAuth(ctx); err != nil {
+			return nil, true, err
+		}
+		return g, true, nil
 	}
 	c, err := in.Store.Get(ctx, p.GitConnection)
 	if err != nil {

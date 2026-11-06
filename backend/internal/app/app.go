@@ -87,6 +87,12 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	if secrets != nil { // a nil *SecretBox in the interface would not be nil
 		integrations.Secrets = secrets
 	}
+	var localProjects *usecase.Local
+	if cfg.AuthMode == "dev" { // gh and the folder endpoints act as the machine's user
+		ghFor := func(repo string) usecase.GitProvider { return integration.NewGHCLI(repo, nil) }
+		integrations.Host, integrations.GH = sandbox.Host{}, ghFor
+		localProjects = &usecase.Local{Host: sandbox.Host{}, GH: ghFor}
+	}
 	box := sandbox.Local{DataDir: cfg.DataDir}
 	workOrders := &usecase.WorkOrders{Store: woRepo, Projects: projects, Sandbox: box, Integrations: integrations, Settings: settingsRepo}
 
@@ -162,6 +168,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Projects = projects
 	srv.WorkOrders = workOrders
 	srv.Integrations = integrations
+	srv.Local = localProjects
 	srv.Catalog = catalog
 	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo, WO: woRepo, DataDir: cfg.DataDir}
 	srv.Factory = factory
