@@ -28,6 +28,7 @@ const props = defineProps<{
   chat: Chat;
   messages: ChatMessage[];
   busy: boolean;
+  active: boolean;
 }>();
 const emit = defineEmits<{ remove: [] }>();
 const store = useChats(),
@@ -40,7 +41,8 @@ const helpProject = ref(false),
   confirmDelete = ref(false),
   drafting = ref(false),
   draftError = ref(""),
-  prefill = ref<WorkOrderDraft | null>(null),
+  saved = ref<WorkOrderDraft | null>(null),
+  drawerOpen = ref(false),
   related = ref<RelatedDoc[]>([]);
 let abort: AbortController | undefined;
 let relatedSeq = 0;
@@ -100,14 +102,21 @@ async function setProject(e: Event) {
     toast(reason(err));
   }
 }
-async function createWorkOrder() {
+async function createWorkOrder(fresh = false) {
   if (blocker.value || drafting.value) return;
+  if (saved.value && !fresh) {
+    drawerOpen.value = true;
+    return;
+  }
+  saved.value = null;
   const ctl = (abort = new AbortController());
   drafting.value = true;
   draftError.value = "";
   try {
     const d = await store.draftWorkOrder(props.chat.id, ctl.signal);
-    if (!ctl.signal.aborted) prefill.value = d;
+    if (ctl.signal.aborted) return;
+    saved.value = d;
+    drawerOpen.value = true;
   } catch (e) {
     if (!ctl.signal.aborted) draftError.value = reason(e);
   } finally {
@@ -119,7 +128,8 @@ function cancelDraft() {
   drafting.value = false;
 }
 function created(r: { id: string; planningError: string }) {
-  prefill.value = null;
+  saved.value = null;
+  drawerOpen.value = false;
   void router.push({
     path: `/factory/${r.id}`,
     query: r.planningError ? { planningError: r.planningError } : {},
@@ -138,24 +148,25 @@ watch(
   () => props.chat.id,
   () => {
     related.value = [];
-    prefill.value = null;
+    saved.value = null;
+    drawerOpen.value = false;
     draftError.value = "";
     confirmDelete.value = false;
     cancelDraft();
-    void loadRelated();
   },
 );
-watch(
-  () => props.busy,
-  (now, was) => {
-    if (was && !now) void loadRelated();
-  },
-);
-onMounted(() => {
+function load() {
   void loadRelated();
   if (!factory.projects.length) void factory.refreshProjects().catch(() => {});
   void factory.refreshWorkOrders().catch(() => {});
-});
+}
+watch(
+  () => [props.active, props.chat.id, props.busy] as const,
+  ([active, id, busy], [wasActive, wasId, wasBusy]) => {
+    if (active && (!wasActive || id !== wasId || (wasBusy && !busy))) load();
+  },
+);
+onMounted(() => props.active && load());
 onBeforeUnmount(() => abort?.abort());
 </script>
 <template>
@@ -182,11 +193,12 @@ onBeforeUnmount(() => abort?.abort());
           </p>
         </Popover>
       </h4>
+      <label class="ch-sr" for="ctx-project-select">Project</label>
       <select
+        id="ctx-project-select"
         class="lg-field"
-        aria-labelledby="ctx-project"
         :value="chat.project_id ?? ''"
-        :disabled="!session.canWrite || busy"
+        :disabled="!session.canWrite || busy || drafting"
         @change="setProject"
       >
         <option value="">No project</option>
@@ -213,7 +225,7 @@ onBeforeUnmount(() => abort?.abort());
           data-test="create-wo"
           aria-describedby="ctx-wo-note"
           :disabled="!!blocker"
-          @click="createWorkOrder"
+          @click="createWorkOrder(false)"
           ><Plus class="icon" />Create work order</Button
         >
         <div v-else class="ctx-busy" role="status">
@@ -225,6 +237,15 @@ onBeforeUnmount(() => abort?.abort());
         <p id="ctx-wo-note" class="ctx-note">
           {{ blocker || "You review and edit the draft before it is created." }}
         </p>
+        <Button
+          v-if="saved && !drafting"
+          small
+          variant="ghost"
+          data-test="redraft"
+          :disabled="!!blocker"
+          @click="createWorkOrder(true)"
+          >Draft again</Button
+        >
         <p v-if="draftError" class="ctx-error" role="alert">
           {{ draftError }}
         </p>
@@ -281,7 +302,10 @@ onBeforeUnmount(() => abort?.abort());
       <h4 id="ctx-att">Attachments</h4>
       <div v-if="attachments.length" class="atts">
         <template v-for="a in attachments" :key="a.kind + a.name">
-          <RouterLink v-if="a.kind === 'kb'" class="ch-chip kb" to="/knowledge"
+          <RouterLink
+            v-if="a.kind === 'kb'"
+            class="ch-chip kb"
+            :to="{ path: '/knowledge', query: { doc: a.doc_id } }"
             ><BookOpen class="icon" /><span class="ch-fn">{{
               a.name
             }}</span></RouterLink
@@ -321,12 +345,13 @@ onBeforeUnmount(() => abort?.abort());
       </template>
     </div>
     <NewWorkOrderDrawer
-      v-if="prefill"
+      v-if="drawerOpen && saved"
       open
       :project-i-d="chat.project_id"
-      :prefill="prefill"
+      :prefill="saved"
       :source-chat-i-d="chat.id"
-      @close="prefill = null"
+      @edit="saved = $event"
+      @close="drawerOpen = false"
       @created="created"
     />
   </div>

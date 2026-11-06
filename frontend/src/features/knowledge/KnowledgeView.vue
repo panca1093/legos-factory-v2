@@ -94,7 +94,8 @@ const q = ref(""),
   quote = ref(""),
   mobile = ref<"list" | "read" | "talk">("list"),
   editState = ref<boolean | null>(null);
-let pinned = "";
+let pinned = "",
+  picked = false;
 
 const projectName = (id?: string) =>
   !id
@@ -186,7 +187,9 @@ onMounted(async () => {
   await Promise.allSettled([factory.refreshProjects()]);
   await refreshAll();
   const linked = route.query.doc;
-  if (typeof linked === "string" && linked) openLinked(linked);
+  if (typeof linked !== "string" || !linked) return;
+  if (!picked && docs.value.some((d) => d.id === linked)) openLinked(linked);
+  void router.replace({ query: { ...route.query, doc: undefined } });
 });
 onBeforeUnmount(() => {
   clearTimeout(debounce);
@@ -199,6 +202,7 @@ const leaveOk = () =>
   window.confirm("Discard your unsaved changes to this note?");
 
 function select(id: string) {
+  picked = true;
   if (id !== openId.value && !leaveOk()) return;
   pinned = "";
   openId.value = id;

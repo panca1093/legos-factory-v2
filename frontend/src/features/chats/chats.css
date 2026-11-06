@@ -447,12 +447,18 @@
   text-transform: none;
   cursor: pointer;
 }
+.ch-ctx h4 {
+  position: relative;
+}
+.ch-ctx .lg-pop {
+  position: static;
+}
 .ch-ctx .lg-menu {
-  right: auto;
-  left: 0;
+  right: 0;
+  left: auto;
   min-width: 0;
-  width: 240px;
-  transform-origin: top left;
+  width: min(240px, 100%);
+  box-sizing: border-box;
 }
 .ch-ctx .ctx-explain {
   margin: 0;

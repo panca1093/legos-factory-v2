@@ -84,7 +84,10 @@ watch(ctxOpen, async (open) => {
   if (!open) return;
   narrow.value = window.matchMedia("(max-width: 860px)").matches;
   await nextTick();
-  ctxPanel.value?.querySelector<HTMLElement>("input, select, button")?.focus();
+  (
+    ctxPanel.value?.querySelector<HTMLElement>("select:not(:disabled)") ??
+    ctxPanel.value?.querySelector<HTMLElement>("button")
+  )?.focus();
 });
 watch(busy, (now, was) => {
   if (!was || now) return;
@@ -318,7 +321,7 @@ onMounted(async () => {
                   <RouterLink
                     v-if="a.kind === 'kb'"
                     class="ch-chip kb"
-                    to="/knowledge"
+                    :to="{ path: '/knowledge', query: { doc: a.doc_id } }"
                     ><BookOpen class="icon" /><span class="ch-fn">{{
                       a.name
                     }}</span></RouterLink
@@ -380,6 +383,7 @@ onMounted(async () => {
         :chat="chat"
         :messages="messages"
         :busy="busy"
+        :active="ctxOpen"
         @remove="remove"
       />
     </aside>

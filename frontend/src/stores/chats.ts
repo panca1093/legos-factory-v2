@@ -87,10 +87,7 @@ export const useChats = defineStore("chats", {
       this.chats = [r.chat, ...this.chats.filter((c) => c.id !== r.chat.id)];
       return r.chat;
     },
-    async update(
-      id: string,
-      patch: { title?: string; model?: string; project_id?: string },
-    ) {
+    async update(id: string, patch: { model?: string; project_id?: string }) {
       const r = await api.patch<{ chat: Chat }>(`/api/v1/chats/${id}`, patch);
       this.chats = this.chats
         .map((c) => (c.id === id ? r.chat : c))

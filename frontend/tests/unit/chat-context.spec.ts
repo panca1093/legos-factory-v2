@@ -3,6 +3,8 @@ import { createPinia, setActivePinia } from "pinia";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { readFileSync } from "node:fs";
+import NewWorkOrderDrawer from "../../src/features/factory/work-orders/NewWorkOrderDrawer.vue";
+import { useFactory } from "../../src/stores/factory";
 import ChatContextPanel from "../../src/features/chats/ChatContextPanel.vue";
 import { useChats, type Chat, type ChatMessage } from "../../src/stores/chats";
 import { useSession } from "../../src/stores/session";
@@ -75,12 +77,17 @@ const router = () =>
   });
 
 async function mountPanel(
-  props: Partial<{ chat: Chat; messages: ChatMessage[]; busy: boolean }> = {},
+  props: Partial<{
+    chat: Chat;
+    messages: ChatMessage[];
+    busy: boolean;
+    active: boolean;
+  }> = {},
 ) {
   const r = router();
   await r.push("/chats/c1");
   const w = mount(ChatContextPanel, {
-    props: { chat, messages: replied, busy: false, ...props },
+    props: { chat, messages: replied, busy: false, active: true, ...props },
     global: { plugins: [r] },
     attachTo: document.body,
   });
@@ -282,45 +289,207 @@ describe("title frame", () => {
     expect(out).toEqual([{ event: "title", data: { title: "Short" } }]);
   });
 
-  it("updates the chat title in the store before done", async () => {
+  it("updates the chat title before the done frame is processed", async () => {
     const enc = new TextEncoder();
-    const body = (s: string) =>
-      new ReadableStream({
-        start(c) {
-          c.enqueue(enc.encode(s));
-          c.close();
-        },
-      });
     const f = (e: string, d: unknown) =>
       `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`;
-    let titleAtDone = "";
-    const s = useChats();
+    let ctl!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        ctl = c;
+      },
+    });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        if (init?.method !== "POST") return new Promise(() => {});
-        const text =
-          f("user_message", { message: msg(1, "user") }) +
-          f("title", { title: "Short title" }) +
-          f("done", { message: msg(2, "assistant") });
-        titleAtDone = "";
-        return { ok: true, body: body(text) };
+      vi.fn(async (_url: string, init?: RequestInit) =>
+        init?.method === "POST"
+          ? { ok: true, body: stream }
+          : new Promise(() => {}),
+      ),
+    );
+    const s = useChats();
+    s.chats = [{ ...chat, title: "" }];
+    const sending = s.send("c1", { content: "q" });
+    ctl.enqueue(
+      enc.encode(
+        f("user_message", { message: msg(1, "user") }) +
+          f("title", { title: "Short title" }),
+      ),
+    );
+    await vi.waitFor(() => expect(s.chats[0].title).toBe("Short title"));
+    expect(s.busy.c1).toBe(true);
+    expect(s.messages.c1.at(-1)?.pending).toBe(true);
+    ctl.enqueue(enc.encode(f("done", { message: msg(2, "assistant") })));
+    ctl.close();
+    await sending;
+    expect(s.messages.c1.at(-1)?.id).toBe(2);
+  });
+});
+
+describe("chat context panel races and roles", () => {
+  const chatB: Chat = { ...chat, id: "c2", title: "Other", project_id: "p1" };
+
+  it("loads related knowledge and work orders only while open", async () => {
+    const { w } = await mountPanel({ active: false });
+    expect(calls.map((c) => c.url)).toEqual([]);
+    await w.setProps({ active: true });
+    await flushPromises();
+    expect(calls.map((c) => c.url)).toEqual(
+      expect.arrayContaining([
+        "/api/v1/chats/c1/related-knowledge",
+        "/api/v1/work-orders",
+      ]),
+    );
+    w.unmount();
+  });
+
+  it("fetches once when switching chats from a busy chat", async () => {
+    const { w } = await mountPanel({ busy: true });
+    calls.length = 0;
+    await w.setProps({ chat: chatB, busy: false });
+    await flushPromises();
+    expect(
+      calls.filter((c) => c.url.endsWith("/related-knowledge")),
+    ).toHaveLength(1);
+    w.unmount();
+  });
+
+  it("ignores a stale related-knowledge result after switching chats", async () => {
+    let release: (v: unknown) => void = () => {};
+    handlers["GET /api/v1/chats/c1/related-knowledge"] = () => ({ docs: [] });
+    const { w } = await mountPanel();
+    const real = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/v1/chats/c1/related-knowledge")
+          await new Promise((r) => (release = r));
+        if (url === "/api/v1/chats/c1/related-knowledge")
+          return {
+            ok: true,
+            status: 200,
+            text: async () =>
+              JSON.stringify({
+                docs: [{ id: "old", title: "Stale doc", kind: "Note" }],
+              }),
+          };
+        return real(url, init);
       }),
     );
-    s.chats = [{ ...chat, title: "" }];
-    const stop = s.$onAction(({ name, after }) => {
-      if (name === "send") after(() => (titleAtDone = s.chats[0]?.title ?? ""));
-    });
-    await s.send("c1", { content: "q" });
-    stop();
-    expect(titleAtDone).toBe("Short title");
+    await w.setProps({ busy: true });
+    await w.setProps({ busy: false });
+    await w.setProps({ chat: chatB });
+    await flushPromises();
+    release(null);
+    await flushPromises();
+    expect(w.text()).not.toContain("Stale doc");
+    w.unmount();
+  });
+
+  it("does not open the drawer for chat A's draft after switching to chat B", async () => {
+    let resolve: (v: unknown) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("work-order-draft"))
+          await new Promise((r) => (resolve = r));
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(draft),
+        };
+      }),
+    );
+    const { w } = await mountPanel();
+    await w.find('[data-test="create-wo"]').trigger("click");
+    await w.setProps({ chat: chatB });
+    resolve(null);
+    await flushPromises();
+    expect(document.body.querySelector("#wo-title")).toBeNull();
+    expect(w.find('[data-test="cancel-draft"]').exists()).toBe(false);
+    w.unmount();
+  });
+
+  it("locks the project select while drafting", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    const { w } = await mountPanel();
+    await w.find('[data-test="create-wo"]').trigger("click");
+    expect(w.find("select").attributes("disabled")).toBeDefined();
+    w.unmount();
+  });
+
+  it("keeps the draft and edits when the drawer is closed and reopened", async () => {
+    handlers["POST /api/v1/chats/c1/work-order-draft"] = () => draft;
+    const { w } = await mountPanel();
+    await w.find('[data-test="create-wo"]').trigger("click");
+    await flushPromises();
+    const title = () =>
+      document.body.querySelector<HTMLInputElement>("#wo-title");
+    title()!.value = "My edit";
+    title()!.dispatchEvent(new Event("input"));
+    await flushPromises();
+    [...document.body.querySelectorAll("button")]
+      .find((b) => b.textContent?.trim() === "Cancel")!
+      .click();
+    await flushPromises();
+    expect(title()).toBeNull();
+    await w.find('[data-test="create-wo"]').trigger("click");
+    await flushPromises();
+    expect(title()!.value).toBe("My edit");
+    expect(
+      calls.filter((c) => c.url.endsWith("work-order-draft")),
+    ).toHaveLength(1);
+    w.unmount();
+  });
+
+  it("gives viewers no create button or project change", async () => {
+    useSession().user = { id: "u", name: "P", email: "p@x", role: "VIEWER" };
+    const { w } = await mountPanel();
+    expect(w.find("select").attributes("disabled")).toBeDefined();
+    expect(w.find('[data-test="create-wo"]').attributes("disabled")).toBe("");
+    expect(w.text()).toContain("read-only");
+    expect(w.text()).not.toContain("Delete chat");
+    w.unmount();
   });
 });
 
 describe("rail recent chats sizing", () => {
-  it("packs rail nav rows to the top instead of stretching them", () => {
-    const css = readFileSync("src/styles/shell.css", "utf8");
-    const block = css.match(/\.rail \.grow\s*{([^}]*)}/)?.[1] ?? "";
-    expect(block).toContain("align-content: start");
+  it("applies align-content: start to the rail's growing nav", () => {
+    const style = document.createElement("style");
+    style.textContent = readFileSync("src/styles/shell.css", "utf8");
+    document.head.append(style);
+    document.body.innerHTML =
+      '<aside class="rail"><nav class="lg-nav grow"></nav></aside>';
+    const nav = document.querySelector(".lg-nav")!;
+    const align = [...(style.sheet?.cssRules ?? [])]
+      .map((r) => r as CSSStyleRule)
+      .filter((r) => r.selectorText && nav.matches(r.selectorText))
+      .map((r) => r.cssText)
+      .join(" ");
+    style.remove();
+    expect(align).toMatch(/align-content:\s*start/);
+  });
+});
+
+describe("new work order drawer from a chat", () => {
+  it("leaves the project empty instead of defaulting to the first one", async () => {
+    const f = useFactory();
+    f.projects = projects as never;
+    const w = mount(NewWorkOrderDrawer, {
+      props: {
+        open: true,
+        sourceChatID: "c1",
+        prefill: draft,
+      },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    expect(
+      document.body.querySelector<HTMLSelectElement>("#wo-project")!.value,
+    ).toBe("");
+    w.unmount();
   });
 });

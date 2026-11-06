@@ -7,10 +7,12 @@ import { useSession } from "../../src/stores/session";
 import { useToast } from "../../src/composables/useToast";
 import type { KBDoc, KBDocDetail } from "../../src/types/api";
 
-const push = vi.fn();
+const push = vi.fn(),
+  replace = vi.fn();
+const routeState = vi.hoisted(() => ({ query: {} as Record<string, string> }));
 vi.mock("vue-router", () => ({
-  useRouter: () => ({ push }),
-  useRoute: () => ({ query: {} }),
+  useRouter: () => ({ push, replace }),
+  useRoute: () => ({ query: routeState.query }),
 }));
 
 const mk = (over: Partial<KBDoc>): KBDoc => ({
@@ -80,6 +82,8 @@ beforeEach(() => {
   setActivePinia(createPinia());
   sessionStorage.clear();
   push.mockClear();
+  replace.mockClear();
+  routeState.query = {};
   const f = useFactory();
   f.projects = [
     {
@@ -149,6 +153,26 @@ const click = async (t: string) => {
 };
 const items = (w: Awaited<ReturnType<typeof render>>) =>
   w.findAll('[data-test="kb-doc"]');
+
+it("opens the doc from ?doc= once, then clears the param", async () => {
+  routeState.query = { doc: repoDoc.id };
+  const w = await render();
+  expect(calls.at(-1)!.url).toBe(
+    `/api/v1/kb/doc?id=${encodeURIComponent(repoDoc.id)}`,
+  );
+  expect(replace).toHaveBeenCalledWith({ query: { doc: undefined } });
+  w.unmount();
+});
+
+it("ignores an unknown ?doc= and falls back to the newest note", async () => {
+  routeState.query = { doc: "factory:gone:x.md" };
+  const w = await render();
+  expect(calls.at(-1)!.url).toBe(
+    `/api/v1/kb/doc?id=${encodeURIComponent(factoryDoc.id)}`,
+  );
+  expect(replace).toHaveBeenCalled();
+  w.unmount();
+});
 
 it("lists notebooks with counts and opens the newest note in the reader", async () => {
   const w = await render();
