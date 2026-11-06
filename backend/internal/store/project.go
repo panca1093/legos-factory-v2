@@ -49,6 +49,19 @@ func (r *ProjectRepo) SetBinding(ctx context.Context, id, connectionID, remoteRe
 	return nil
 }
 
+// Delete fails on the work_orders foreign key while any order remains; members,
+// knowledge and KB docs cascade, chats keep their rows with project_id cleared.
+func (r *ProjectRepo) Delete(ctx context.Context, id string) error {
+	res, err := r.DB.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return model.ErrProjectNotFound
+	}
+	return nil
+}
+
 func (r *ProjectRepo) Get(ctx context.Context, id string) (*model.Project, error) {
 	row := r.DB.QueryRowContext(ctx, `SELECT `+pCols+` FROM projects WHERE id = ?`, id)
 	return scanP(row.Scan)

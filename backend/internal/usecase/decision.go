@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -202,6 +204,93 @@ func (f *Factory) Cancel(ctx context.Context, woID string) error {
 	f.event(woID, "human", "cancelled", "Work order cancelled", map[string]any{"from": string(wo.State)})
 	f.completeWO(ctx, wo, "CANCELLED")
 	return nil
+}
+
+// deletable: a finished order whose PR, if any, is merged or closed.
+func deletable(wo *model.WorkOrder) bool {
+	switch wo.State {
+	case model.StateCancelled, model.StateBlocked:
+		return true
+	case model.StateReady:
+		return wo.PRRef == "" || wo.PRMergedAt != nil || wo.PRClosedAt != nil
+	}
+	return false
+}
+
+// DeleteWorkOrder removes a finished order and its workspace dirs; remote branches and PRs are left alone.
+func (f *Factory) DeleteWorkOrder(ctx context.Context, woID string) error {
+	wo, err := f.WO.Get(ctx, woID)
+	if err != nil {
+		return err
+	}
+	if !deletable(wo) {
+		return stateConflict("WO %s is %s and still in flight; cancel it or wait for its PR to be merged or closed before deleting", woID, wo.State)
+	}
+	f.closePlanning(woID)
+	if err := f.WO.Delete(ctx, woID); err != nil {
+		return err
+	}
+	f.removeWorkspaces(woID)
+	f.Log.Info("work order deleted", "wo", woID, "project", wo.ProjectID, "state", string(wo.State))
+	return nil
+}
+
+// DeleteProject removes a project whose work orders are all finished, together with those orders.
+func (f *Factory) DeleteProject(ctx context.Context, projectID string) error {
+	if _, err := f.Proj.Get(ctx, projectID); err != nil {
+		return err
+	}
+	all, err := f.WO.List(ctx)
+	if err != nil {
+		return err
+	}
+	var own []model.WorkOrder
+	active := 0
+	for _, wo := range all {
+		if wo.ProjectID != projectID {
+			continue
+		}
+		own = append(own, wo)
+		if !deletable(&wo) {
+			active++
+		}
+	}
+	if active > 0 {
+		return stateConflict("project %s still has %d active work order(s); cancel them or wait for their PRs to be merged or closed before deleting the project", projectID, active)
+	}
+	for _, wo := range own {
+		f.closePlanning(wo.ID)
+		if err := f.WO.Delete(ctx, wo.ID); err != nil {
+			return err
+		}
+		f.removeWorkspaces(wo.ID)
+	}
+	if err := f.Proj.Delete(ctx, projectID); err != nil {
+		return err
+	}
+	f.Log.Info("project deleted", "project", projectID, "work_orders", len(own))
+	return nil
+}
+
+func (f *Factory) removeWorkspaces(woID string) {
+	root := filepath.Join(f.DataDir, "workspaces")
+	for _, dir := range []string{f.workspaceDir(woID), filepath.Join(root, woID+".tasks")} {
+		if err := removeInside(root, dir); err != nil {
+			f.Log.Warn("workspace cleanup failed", "wo", woID, "dir", dir, "err", err)
+		}
+	}
+}
+
+// removeInside never deletes root itself or anything outside it, so a project's own repo_url folder is unreachable.
+func removeInside(root, path string) error {
+	if root == "" || path == "" || !filepath.IsAbs(root) {
+		return fmt.Errorf("refusing to remove %q under %q", path, root)
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("refusing to remove %q outside %q", path, root)
+	}
+	return os.RemoveAll(path)
 }
 
 // recordPRDecision stores the human disposition. The PR reference is local:

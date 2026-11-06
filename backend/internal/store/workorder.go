@@ -118,6 +118,19 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	return &wo, nil
 }
 
+// Delete removes the order; runs, events, findings, checks, plan tasks and jobs
+// cascade, usage and knowledge records keep their rows with wo_id cleared.
+func (r *WorkOrderRepo) Delete(ctx context.Context, id string) error {
+	res, err := r.DB.ExecContext(ctx, `DELETE FROM work_orders WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return model.ErrWorkOrderNotFound
+	}
+	return nil
+}
+
 // UpdateState persists a state change; the conditional WHERE makes the
 // validated transition atomic (a concurrent writer cannot double-apply it).
 func (r *WorkOrderRepo) UpdateState(ctx context.Context, id string, s model.State) error {

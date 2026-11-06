@@ -34,6 +34,8 @@ All paths below are relative to `/api/v1`. Requests use same-origin cookies. Err
 | Planning | `POST /work-orders/:id/plan/generate`; `POST /work-orders/:id/plan/decisions` with `decision: approve/revise`, `notes` | Preserve draft, approve and revision. Collect actual human revision notes instead of silently substituting a canned reason. |
 | Clarification | `POST /work-orders/:id/clarifications` with `answer` | Preserve recorded question/answer and rereview. Only creator or admin may answer; viewers cannot mutate. |
 | Cancellation | `POST /work-orders/:id/cancel` | Preserve cancellation subject to current backend state and role. |
+| Delete work order | `DELETE /work-orders/:id` | 204; only CANCELLED, BLOCKED, or READY with no open PR; otherwise 409. |
+| Delete project | `DELETE /projects/:id` | 204; 409 while any work order is still active; deletes its finished orders. |
 | Activity/runs | `GET /work-orders/:id/activity`; `GET /work-orders/:id/runs` | Show returned actor, events, output/error, state, harness, costs and tokens. Do not fabricate elapsed time, throughput or percentages. |
 | Quality | `GET /work-orders/:id/quality`; `GET /work-orders/:id/findings` | Preserve checks by revision, command/output/exit code/outcome and finding severity/location/status. Put findings in Quality as well as in decision context. |
 | PR disposition | `POST /work-orders/:id/pr-decision` with `decision: approve/request_changes/decline`, `reason` | Preserve all three actions and state gates. Explain that this is a local disposition; no PR publishing endpoint exists. |

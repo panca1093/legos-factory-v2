@@ -217,6 +217,24 @@ func (s *Server) handleCancel(c echo.Context) error {
 	return c.JSON(http.StatusAccepted, map[string]string{"status": "cancelled"})
 }
 
+func (s *Server) handleDeleteWorkOrder(c echo.Context) error {
+	if err := s.Factory.DeleteWorkOrder(c.Request().Context(), c.Param("id")); err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+func (s *Server) handleDeleteProject(c echo.Context) error {
+	ctx := c.Request().Context()
+	if err := s.Projects.Authorize(ctx, currentUser(c), c.Param("id")); err != nil {
+		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "project not found")
+	}
+	if err := s.Factory.DeleteProject(ctx, c.Param("id")); err != nil {
+		return mapDomainError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 // visibleWorkOrders lists work orders in projects the caller may access.
 func (s *Server) visibleWorkOrders(c echo.Context) ([]model.WorkOrder, error) {
 	ctx := c.Request().Context()
