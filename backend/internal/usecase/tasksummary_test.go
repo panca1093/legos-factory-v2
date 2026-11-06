@@ -106,8 +106,8 @@ func TestReadyAfterFailThenPassWritesOneSummary(t *testing.T) {
 	env := newSummaryEnv(t, []string{"a.go", "b.go"}, true)
 	ctx := context.Background()
 	wo := env.newWO(t, "wo_ready", "Ship it", "Do the thing", "It works", model.StateNeedsHumanReview)
-	env.check(t, wo.ID, "lint", 0, "FAIL", "")
-	env.check(t, wo.ID, "lint", 1, "PASS", "deadbeef1234")
+	env.check(t, wo.ID, "typecheck", 0, "FAIL", "")
+	env.check(t, wo.ID, "typecheck", 1, "PASS", "deadbeef1234")
 	env.check(t, wo.ID, "test", 1, "PASS", "deadbeef1234")
 	if err := env.wos.UpdateFields(ctx, wo.ID, map[string]any{"revision": 1}); err != nil {
 		t.Fatal(err)
@@ -126,14 +126,14 @@ func TestReadyAfterFailThenPassWritesOneSummary(t *testing.T) {
 	}
 	body := got[0].Body
 	requireHeadersInOrder(t, body)
-	if !strings.Contains(body, "Revision 1, commit deadbeef1234") {
+	if !strings.Contains(body, "revision 1, commit deadbeef1234") {
 		t.Fatalf("missing revision-1 commit:\n%s", body)
 	}
 	dec := body[strings.Index(body, "Key decisions and rationale:"):strings.Index(body, "Main changes:")]
 	if !strings.Contains(dec, "Finding disputed: nil check") || !strings.Contains(dec, "false positive") {
 		t.Fatalf("seeded decision missing under Key decisions:\n%s", body)
 	}
-	if !strings.Contains(body, "- a.go\n- b.go") {
+	if !strings.Contains(body, "a.go, b.go") {
 		t.Fatalf("changed files missing:\n%s", body)
 	}
 }
@@ -157,11 +157,11 @@ func TestCancelAfterFailedVerificationShowsEarlierFailAsUncommitted(t *testing.T
 	}
 	body := got[0].Body
 	requireHeadersInOrder(t, body)
-	if !strings.Contains(body, "Revision 0, uncommitted / not verified on this revision (revision 1 has no checks recorded)") || !strings.Contains(body, "- test → FAIL") {
+	if !strings.Contains(body, "current revision 1 has no checks") || !strings.Contains(body, "revision 0, uncommitted / not verified on this revision") || !strings.Contains(body, "test: FAIL") {
 		t.Fatalf("earlier FAIL not shown as uncommitted:\n%s", body)
 	}
 	open := body[strings.Index(body, "Open items / follow-up:"):strings.Index(body, "Key decisions")]
-	if !strings.Contains(open, "Outcome: CANCELLED") || !strings.Contains(open, "- check test FAIL") {
+	if !strings.Contains(open, "Outcome: CANCELLED") || !strings.Contains(open, "Failing check: test") {
 		t.Fatalf("open items: %s", open)
 	}
 }
@@ -174,7 +174,7 @@ func TestBlockedWithNothingRecordedRendersFallbacks(t *testing.T) {
 
 	body := env.completed(t, wo.ID)[0].Body
 	requireHeadersInOrder(t, body)
-	for _, want := range []string{"No checks recorded", "Outcome: BLOCKED", "none recorded", "none (no changes in workspace)"} {
+	for _, want := range []string{"no checks recorded", "no verification recorded", "Outcome: BLOCKED", "none recorded", "no changed files recorded"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing fallback %q:\n%s", want, body)
 		}
@@ -206,43 +206,12 @@ func TestOversizedWorkOrderStaysWithinBudget(t *testing.T) {
 	env.f.completeWO(ctx, wo, "BLOCKED")
 
 	body := env.completed(t, wo.ID)[0].Body
-	if len(body) > maxKnowledgeBody {
-		t.Fatalf("body %d bytes exceeds knowledge limit", len(body))
+	if len(body) > summaryBudget {
+		t.Fatalf("body %d bytes exceeds budget", len(body))
 	}
 	requireHeadersInOrder(t, body)
-	if len(body) > 1800 {
-		t.Fatalf("body %d bytes exceeds summary budget", len(body))
-	}
-	if i := strings.Index(body, "Main changes:"); strings.Contains(body[:i], "[truncated]") {
-		t.Fatalf("sections before Main changes must not be truncated:\n%s", body)
-	}
-}
-
-func TestManyFilesAreGroupedAndAllHeadersKept(t *testing.T) {
-	var files []string
-	for i := 0; i < 50; i++ {
-		files = append(files, fmt.Sprintf("internal/deep/file_%02d.go", i))
-	}
-	files = append(files, "cmd/main.go")
-	env := newSummaryEnv(t, files, true)
-	wo := env.newWO(t, "wo_many", "Many", "obj", "acc", model.StateBlocked)
-	env.f.completeWO(context.Background(), wo, "BLOCKED")
-	body := env.completed(t, wo.ID)[0].Body
-	requireHeadersInOrder(t, body)
-	if len(body) > maxKnowledgeBody || !strings.Contains(body, "- internal/ (50 files)") || !strings.Contains(body, "- cmd/ (1 files)") {
-		t.Fatalf("files not grouped within budget:\n%s", body)
-	}
-}
-
-func TestBusyWorkspaceSkipsDiff(t *testing.T) {
-	env := newSummaryEnv(t, []string{"a.go"}, true)
-	wo := env.newWO(t, "wo_busy", "Busy", "obj", "acc", model.StateBlocked)
-	mu := env.f.wsLock(wo.ID)
-	mu.Lock()
-	defer mu.Unlock()
-	env.f.completeWO(context.Background(), wo, "BLOCKED")
-	if body := env.completed(t, wo.ID)[0].Body; !strings.Contains(body, "unavailable (workspace busy)") {
-		t.Fatalf("busy note missing:\n%s", body)
+	if strings.Contains(body[:strings.Index(body, "Main changes:")], "[truncated]") {
+		t.Fatalf("truncation marker before Main changes:\n%s", body)
 	}
 }
 

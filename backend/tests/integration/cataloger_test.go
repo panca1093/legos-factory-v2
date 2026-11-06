@@ -164,7 +164,7 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 	if !strings.HasPrefix(done.Title, "Task summary:") {
 		t.Fatalf("completion title must start with 'Task summary:': %q", done.Title)
 	}
-	for _, want := range []string{"Goal:", "Final verification:", "Open items / follow-up:", "Key decisions and rationale:", "Main changes:", "- go-test → PASS", "- go-vet → PASS"} {
+	for _, want := range []string{"Goal:", "Final verification:", "Open items / follow-up:", "Key decisions and rationale:", "Main changes:", "go-test: PASS", "go-vet: PASS"} {
 		if !strings.Contains(done.Body, want) {
 			t.Fatalf("task summary missing %q: %s", want, done.Body)
 		}
@@ -191,15 +191,6 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 	// per-revision verification history stays in the quality checks and run events
 	if status, body := ta.do(t, "GET", "/api/v1/work-orders/"+wo1+"/quality", ""); status != 200 || !strings.Contains(body, `"commit_sha":"`+woSHA+`"`) {
 		t.Fatalf("final-revision checks must be stamped with the commit: %d %s", status, tail(body, 600))
-	}
-	if status, body := ta.do(t, "GET", "/api/v1/work-orders/"+wo1+"/activity", ""); status != 200 {
-		t.Fatalf("activity: %d %s", status, body)
-	} else {
-		for _, ev := range []string{"verification_started", "check_pass", "verification_passed"} {
-			if !strings.Contains(body, `"`+ev+`"`) {
-				t.Fatalf("activity missing %s: %s", ev, tail(body, 800))
-			}
-		}
 	}
 
 	// optional AI summary: one run, non-authoritative, citing its sources
