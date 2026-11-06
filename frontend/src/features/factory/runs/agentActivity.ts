@@ -153,7 +153,11 @@ const reasonKinds = (o: WorkOrder): string[] => {
 };
 
 // Why the order waits right now. The causing event can be logged just before its state_changed, so the window opens after the transition preceding the current state's entry.
-export function currentReason(o: WorkOrder, events: WOEvent[]): string {
+export function currentReason(
+  o: WorkOrder,
+  events: WOEvent[],
+  hasMore = false,
+): string {
   const kinds = reasonKinds(o);
   if (!kinds.length) return "";
   const lastTransition = (end: number, to?: string) => {
@@ -166,6 +170,7 @@ export function currentReason(o: WorkOrder, events: WOEvent[]): string {
     return -1;
   };
   const entry = lastTransition(events.length, o.state);
+  if (entry < 0 && hasMore) return "Needs your decision";
   const from = entry < 0 ? 0 : lastTransition(entry) + 1;
   for (let i = events.length - 1; i >= from; i--) {
     const e = events[i];

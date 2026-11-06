@@ -16,6 +16,7 @@ const props = defineProps<{
   tasks: Task[];
   runs: Run[];
   events: WOEvent[];
+  hasMore?: boolean;
   canWrite: boolean;
   canClarify: boolean;
   busy: boolean;
@@ -34,7 +35,9 @@ const paused = computed(() => !!props.order.paused_at),
   finished = computed(() => isFinished(props.order)),
   status = computed(() => orderStatus(props.order)),
   ship = computed(() => shipState(props.order)),
-  reason = computed(() => currentReason(props.order, props.events)),
+  reason = computed(() =>
+    currentReason(props.order, props.events, props.hasMore),
+  ),
   last = computed(() =>
     props.events.reduce<WOEvent | undefined>(
       (a, e) => (!a || e.id >= a.id ? e : a),

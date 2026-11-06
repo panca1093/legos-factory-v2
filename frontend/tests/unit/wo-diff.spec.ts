@@ -86,6 +86,49 @@ describe("diffFromApi", () => {
   });
 });
 
+describe("header-less patches", () => {
+  it("does not mistake a deleted SQL comment line for a file header", () => {
+    const files = diffFromApi({
+      available: true,
+      files: [
+        file({
+          path: "q.sql",
+          patch: "@@ -1,2 +1,1 @@\n a\n--- drop me\n",
+          additions: 0,
+          deletions: 1,
+        }),
+      ],
+    });
+    expect(files[0].hunks[0].lines).toHaveLength(2);
+    expect(files[0].hunks[0].lines[1]).toMatchObject({
+      t: "del",
+      s: "-- drop me",
+    });
+  });
+});
+
+describe("large diffs and split view", () => {
+  const big = file({
+    path: "big.go",
+    additions: 400,
+    deletions: 0,
+    patch: "@@ -0,0 +1,2 @@\n+x\n+y\n",
+  });
+  it("holds a big file behind Load diff", async () => {
+    const w = panel({ diff: { available: true, files: [big, file({})] } });
+    expect(w.findAll(".fx-dtable")).toHaveLength(1);
+    await w.find('[data-test="diff-load"] button').trigger("click");
+    expect(w.findAll(".fx-dtable")).toHaveLength(2);
+  });
+  it("marks split lines with signs, not colour alone", async () => {
+    const w = panel({ diff });
+    await w.findAll(".fx-seg button")[1].trigger("click");
+    const signs = w.findAll(".fx-sl .sg").map((x) => x.text());
+    expect(signs).toContain("−");
+    expect(signs).toContain("+");
+  });
+});
+
 describe("Changes panel with the diff endpoint", () => {
   it("renders summary, files and notices, and hides builder output", () => {
     const w = panel({ diff });
@@ -139,7 +182,7 @@ describe("publishNote", () => {
     expect(publishNote({ publish_via: "none" })).toMatchObject({
       remote: false,
     });
-    expect(publishNote(undefined).text).toContain("No pull request is created");
+    expect(publishNote(undefined).text).not.toContain("local decision");
   });
 });
 
@@ -165,6 +208,33 @@ describe("currentReason", () => {
         into("NEEDS_HUMAN_REVIEW"),
       ]),
     ).toBe("note");
+  });
+  it("handles the real NEEDS_HUMAN_REVIEW sequence", () => {
+    expect(
+      currentReason(review, [
+        ev("plan_escalated", "old plan reason"),
+        into("IMPLEMENTING"),
+        ev("done_gate", "Done gate: escalate (row 3)", {
+          outcome: "escalate",
+          row: 3,
+        }),
+        ev("state_changed", "Preparing change summary", {
+          to: "PR_PREPARATION",
+        }),
+        ev("state_changed", "Evaluating merge readiness", {
+          to: "MERGE_READINESS",
+        }),
+        ev(
+          "readiness_needs_human_review",
+          "The done gate needs a human decision: row 3",
+        ),
+        into("NEEDS_HUMAN_REVIEW"),
+      ]),
+    ).toBe("The done gate needs a human decision: row 3");
+  });
+  it("falls back to a generic line when the entry is outside the loaded window", () => {
+    const events = [ev("plan_escalated", "old")];
+    expect(currentReason(review, events, true)).toBe("Needs your decision");
   });
   it("returns nothing when only older-state escalations exist", () => {
     expect(
@@ -301,6 +371,33 @@ describe("store", () => {
     expect(f.eventsHasMore).toBe(true);
     await f.loadDiff("LF-1");
     expect(f.diff?.files).toHaveLength(4);
+  });
+  it("discards a late response for a previous work order", async () => {
+    let resolveA!: (v: unknown) => void;
+    fetchMock.mockImplementation((url: string) =>
+      url.includes("/A/")
+        ? new Promise((r) => (resolveA = r))
+        : Promise.resolve(json({ ...diff, files: [diff.files[0]] })),
+    );
+    const f = useFactory();
+    const a = f.loadDiff("A");
+    await f.loadDiff("B");
+    resolveA(json(diff));
+    await a;
+    expect(f.diff?.files).toHaveLength(1);
+  });
+  it("keeps the last good diff when a refresh fails", async () => {
+    const f = useFactory();
+    fetchMock.mockResolvedValueOnce(json(diff));
+    await f.loadDiff("A");
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 500,
+      text: () => Promise.resolve("{}"),
+    });
+    await f.loadDiff("A");
+    expect(f.diff?.available).toBe(true);
+    expect(f.diffRefreshFailed).toBe(true);
   });
   it("records an unavailable diff when the request fails", async () => {
     fetchMock.mockResolvedValue({

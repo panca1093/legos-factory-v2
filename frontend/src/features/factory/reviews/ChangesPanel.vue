@@ -14,6 +14,8 @@ const props = defineProps<{
   reason?: string;
   publishNote?: string;
   diff?: WODiff | null;
+  refreshFailed?: boolean;
+  orderId?: string;
   prUrl?: string;
   prRef?: string;
   sourceRef?: string;
@@ -86,19 +88,20 @@ const shipNote: Record<string, string> = {
         <strong>Why you are asked:</strong> {{ reason }}
       </p>
       <p v-if="ship?.key === 'approval'" class="small muted">
-        {{
-          publishNote ||
-          "This records a local decision. No pull request is created for this project."
-        }}
+        {{ publishNote }}
       </p>
       <p v-else-if="ship" class="small muted">{{ shipNote[ship.key] }}</p>
       <p v-if="sourceRef" class="tiny muted">
         Source issue: {{ sourceRef.replace("jira:", "") }}
       </p>
     </section>
+    <p v-if="refreshFailed" class="tiny muted" data-test="diff-stale">
+      Couldn't refresh the diff; showing the last loaded version.
+    </p>
     <DiffView
       v-if="files.length"
       :files="files"
+      :reset-key="orderId"
       :meta="
         available
           ? {

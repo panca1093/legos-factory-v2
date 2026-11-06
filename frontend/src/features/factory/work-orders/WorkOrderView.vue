@@ -103,7 +103,9 @@ const crewModels = computed(
 const status = computed(() => order.value && orderStatus(order.value)),
   ship = computed(() => (order.value ? shipState(order.value) : null)),
   reason = computed(() =>
-    order.value ? currentReason(order.value, factory.events) : "",
+    order.value
+      ? currentReason(order.value, factory.events, factory.eventsHasMore)
+      : "",
   ),
   publish = computed(() => publishNote(project.value)),
   cost = computed(() => runs.value.reduce((n, r) => n + r.cost_micros, 0));
@@ -129,7 +131,7 @@ watch(
 watch(
   [id, tab, () => order.value?.revision, () => order.value?.commit_sha],
   ([value, key]) => {
-    if (key === "changes") void factory.loadDiff(value);
+    if (key === "changes" && order.value) void factory.loadDiff(value);
   },
   { immediate: true },
 );
@@ -275,6 +277,7 @@ function download() {
       :tasks="tasks"
       :runs="runs"
       :events="factory.events"
+      :has-more="factory.eventsHasMore"
       :can-write="session.canWrite"
       :can-clarify="canClarify"
       :busy="busy"
@@ -356,6 +359,8 @@ function download() {
         :reason="reason"
         :publish-note="publish.text"
         :diff="factory.diff"
+        :refresh-failed="factory.diffRefreshFailed"
+        :order-id="id"
         :pr-url="order.pr_url"
         :pr-ref="order.pr_ref"
         :source-ref="order.source_ref"
@@ -380,7 +385,7 @@ function download() {
           publish.remote
             ? publish.text +
               " The work order finishes when that pull request is merged."
-            : "This records your local approval for the current work order. No pull request is created."
+            : publish.text
         }}
       </p>
       <p v-else class="small muted">

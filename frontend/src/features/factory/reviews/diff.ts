@@ -165,7 +165,7 @@ const LOCKFILE =
 export function diffFromApi(d: WODiff): DiffFile[] {
   return d.files.map((f) => {
     const patch = f.patch ?? "";
-    const text = /^(diff --git |--- )/m.test(patch)
+    const text = /^(diff --git |--- )/.test(patch)
       ? patch
       : `--- a/${f.old_path || f.path}\n+++ b/${f.path}\n${patch}`;
     return {

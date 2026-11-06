@@ -37,6 +37,8 @@ export const useFactory = defineStore("factory", {
     events: [] as WOEvent[],
     eventsHasMore: false,
     diffSeq: 0,
+    diffAbort: null as AbortController | null,
+    diffRefreshFailed: false,
     diff: null as WODiff | null,
     quality: [] as QualityCheck[],
     findings: [] as Finding[],
@@ -85,6 +87,8 @@ export const useFactory = defineStore("factory", {
       this.events = [];
       this.eventsHasMore = false;
       this.diffSeq++;
+      this.diffAbort?.abort();
+      this.diffRefreshFailed = false;
       this.diff = null;
       this.quality = [];
       this.findings = [];
@@ -216,6 +220,8 @@ export const useFactory = defineStore("factory", {
         this.events = [];
         this.eventsHasMore = false;
         this.diffSeq++;
+        this.diffAbort?.abort();
+        this.diffRefreshFailed = false;
         this.diff = null;
         this.quality = [];
         this.findings = [];
@@ -255,12 +261,20 @@ export const useFactory = defineStore("factory", {
     },
     async loadDiff(id: string) {
       const seq = ++this.diffSeq;
+      this.diffAbort?.abort();
+      const ctl = (this.diffAbort = new AbortController());
       try {
-        const diff = await api.get<WODiff>(`/api/v1/work-orders/${id}/diff`);
-        if (seq === this.diffSeq)
-          this.diff = { ...diff, files: diff.files ?? [] };
+        const diff = await api.get<WODiff>(
+          `/api/v1/work-orders/${id}/diff`,
+          ctl.signal,
+        );
+        if (seq !== this.diffSeq) return;
+        this.diff = { ...diff, files: diff.files ?? [] };
+        this.diffRefreshFailed = false;
       } catch (e) {
-        if (seq === this.diffSeq)
+        if (seq !== this.diffSeq) return;
+        if (this.diff?.available) this.diffRefreshFailed = true;
+        else
           this.diff = {
             available: false,
             reason: e instanceof Error ? e.message : String(e),

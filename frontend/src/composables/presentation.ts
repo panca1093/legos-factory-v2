@@ -241,7 +241,9 @@ export function publishNote(
     };
   }
   return {
-    text: "This records a local decision. No pull request is created for this project.",
+    text: p
+      ? "This records a local decision. No pull request is created for this project."
+      : "Approving records your decision for this work order.",
     remote: false,
   };
 }
