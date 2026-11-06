@@ -67,6 +67,8 @@ func (s *Server) handleCreateWorkOrder(c echo.Context) error {
 	switch {
 	case err == nil:
 		return c.JSON(http.StatusCreated, wo)
+	case errors.Is(err, model.ErrChatNotFound):
+		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", "unknown source_chat_id")
 	case usecase.IsNotFound(err):
 		// unknown and inaccessible projects are indistinguishable to the caller
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", "unknown project_id")

@@ -264,6 +264,8 @@ func (s *Server) routes() {
 	api.DELETE("/chats/:id", s.requireRole(model.RoleEngineer, s.handleDeleteChat))
 	api.GET("/chats/:id/messages", s.handleChatMessages)
 	api.POST("/chats/:id/messages", s.requireRole(model.RoleEngineer, s.handleChatSend))
+	api.POST("/chats/:id/work-order-draft", s.requireRole(model.RoleEngineer, s.handleChatWorkOrderDraft))
+	api.GET("/chats/:id/related-knowledge", s.handleChatRelatedKnowledge)
 	api.GET("/chat/models", s.handleChatModels)
 
 	api.GET("/models", s.handleModels)

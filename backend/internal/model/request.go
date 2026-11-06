@@ -34,6 +34,7 @@ type CreateWorkOrderRequest struct {
 	BuilderModel   string `json:"builder_model"`
 	InspectorModel string `json:"inspector_model"`
 	SourceRef      string `json:"source_ref"`
+	SourceChatID   string `json:"source_chat_id"`
 }
 
 func (r *CreateWorkOrderRequest) Validate() error {

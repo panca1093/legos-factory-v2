@@ -18,7 +18,7 @@ type WorkOrderRepo struct{ DB *sql.DB }
 const woCols = `id, project_id, title, objective, acceptance, state,
 	builder_model, inspector_model, clarif_question, clarif_answer, revision,
 	commit_sha, source_ref, pr_url, pr_ref, pr_merged_at, pr_closed_at, pr_track_failed_at, foreman_model, architect_model, plan_review, review_rounds,
-	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, brief, spec, clarif_rounds, clarif_log, plan_revisions, architect_report, created_by, created_at, updated_at`
+	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, brief, spec, clarif_rounds, clarif_log, plan_revisions, architect_report, created_by, created_at, updated_at, COALESCE(source_chat_id,'')`
 
 func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	if wo.ID == "" {
@@ -28,11 +28,11 @@ func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	wo.CreatedAt, wo.UpdatedAt = now, now
 	_, err := r.DB.ExecContext(ctx, `INSERT INTO work_orders
 		(id, project_id, title, objective, acceptance, state, builder_model, inspector_model,
-		 clarif_question, clarif_answer, revision, source_ref, foreman_model, architect_model, check_profile, created_by, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 clarif_question, clarif_answer, revision, source_ref, foreman_model, architect_model, check_profile, created_by, created_at, updated_at, source_chat_id)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		wo.ID, wo.ProjectID, wo.Title, wo.Objective, wo.Acceptance, string(wo.State),
 		wo.BuilderModel, wo.InspectorModel, wo.ClarifQuestion, wo.ClarifAnswer, wo.Revision,
-		wo.SourceRef, wo.ForemanModel, wo.ArchitectModel, wo.CheckProfile, wo.CreatedBy, now.Unix(), now.Unix())
+		wo.SourceRef, wo.ForemanModel, wo.ArchitectModel, wo.CheckProfile, wo.CreatedBy, now.Unix(), now.Unix(), nullStr(wo.SourceChatID))
 	return err
 }
 
@@ -86,7 +86,7 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	err := scan(&wo.ID, &wo.ProjectID, &wo.Title, &wo.Objective, &wo.Acceptance, &state,
 		&wo.BuilderModel, &wo.InspectorModel, &wo.ClarifQuestion, &wo.ClarifAnswer, &wo.Revision,
 		&wo.CommitSHA, &wo.SourceRef, &wo.PRURL, &wo.PRRef, &mergedAt, &closedAt, &trackFailedAt, &wo.ForemanModel, &wo.ArchitectModel, &wo.PlanReview,
-		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.Brief, &wo.Spec, &wo.ClarifRounds, &clarifLog, &wo.PlanRevisions, &wo.ArchitectReport, &wo.CreatedBy, &createdAt, &updatedAt)
+		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.Brief, &wo.Spec, &wo.ClarifRounds, &clarifLog, &wo.PlanRevisions, &wo.ArchitectReport, &wo.CreatedBy, &createdAt, &updatedAt, &wo.SourceChatID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrWorkOrderNotFound
 	}

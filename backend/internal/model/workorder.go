@@ -106,6 +106,7 @@ type WorkOrder struct {
 	PlanRevisions   int        `json:"plan_revisions"`       // plan-gate revisions since the last human decision
 	ArchitectReport string     `json:"-"`                    // JSON of the latest Architect verification
 	SourceRef       string     `json:"source_ref,omitempty"` // e.g. jira:ABC-12
+	SourceChatID    string     `json:"source_chat_id,omitempty"`
 	PRURL           string     `json:"pr_url,omitempty"`
 	PRRef           string     `json:"pr_ref,omitempty"`
 	PRMergedAt      *time.Time `json:"pr_merged_at,omitempty"`

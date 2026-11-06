@@ -37,11 +37,18 @@ func bootChat(t *testing.T) *Server {
 			t.Fatal(err)
 		}
 	}
+	projRepo, members := &store.ProjectRepo{DB: db}, &store.MemberRepo{DB: db}
+	if err := projRepo.Create(context.Background(), &model.Project{ID: "p1", Name: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := members.Add(context.Background(), "p1", "ana"); err != nil {
+		t.Fatal(err)
+	}
 	log := slog.New(slog.NewTextHandler(testDiscard{}, nil))
 	srv := New(&model.Config{FrontendOrigin: "http://localhost:5173"}, log)
 	srv.Auth = &usecase.Identity{Users: users, Mode: "dev"}
 	srv.Chat = &usecase.Chat{
-		Store: &store.ChatRepo{DB: db}, Harness: agent.NewMock(), Dir: filepath.Join(t.TempDir(), "chat"),
+		Store: &store.ChatRepo{DB: db}, Harness: agent.NewMock(), Projects: &usecase.Projects{Store: projRepo, Members: members, Users: users}, Dir: filepath.Join(t.TempDir(), "chat"),
 		Models: func(context.Context) ([]model.ModelInfo, error) {
 			return []model.ModelInfo{{ProviderID: "mock", ModelID: "mock-local", Name: "Mock", Harness: "mock"}}, nil
 		},
@@ -105,6 +112,9 @@ func TestChatAPI(t *testing.T) {
 	for _, e := range events[1 : len(events)-1] {
 		var d struct{ Text string }
 		_ = json.Unmarshal([]byte(e.data), &d)
+		if e.name == "title" {
+			continue
+		}
 		if e.name != "delta" {
 			t.Fatalf("unexpected %s in the middle: %s", e.name, body)
 		}
@@ -182,5 +192,63 @@ func TestChatUnavailableIs503(t *testing.T) {
 	srv.Chat.Harness = nil
 	if code, body := chatDo(srv, "ana", "POST", "/api/v1/chats/"+created.Chat.ID+"/messages", `{"content":"hi"}`); code != http.StatusServiceUnavailable || !strings.Contains(body, "CHAT_UNAVAILABLE") {
 		t.Fatalf("no harness: %d %s", code, body)
+	}
+}
+
+func TestChatTitleFrameAndProjectAndDraftAPI(t *testing.T) {
+	srv := bootChat(t)
+	_, body := chatDo(srv, "ana", "POST", "/api/v1/chats", `{}`)
+	var created struct{ Chat model.Chat }
+	_ = json.Unmarshal([]byte(body), &created)
+	id := created.Chat.ID
+
+	srv.Chat.Gen = func(context.Context, string, string) (model.AgentResult, error) {
+		return model.AgentResult{Text: "Hello greeting"}, nil
+	}
+	_, body = chatDo(srv, "ana", "POST", "/api/v1/chats/"+id+"/messages", `{"content":"hello there"}`)
+	events := parseSSE(body)
+	n := len(events)
+	var title struct{ Title string }
+	_ = json.Unmarshal([]byte(events[n-2].data), &title)
+	if events[n-2].name != "title" || title.Title != "Hello greeting" || events[n-1].name != "done" {
+		t.Fatalf("stream tail: %s", body)
+	}
+
+	code, body := chatDo(srv, "ana", "PATCH", "/api/v1/chats/"+id, `{"project_id":"p1"}`)
+	if code != 200 || !strings.Contains(body, `"project_id":"p1"`) {
+		t.Fatalf("set project: %d %s", code, body)
+	}
+	if code, body := chatDo(srv, "ana", "PATCH", "/api/v1/chats/"+id, `{"project_id":"nope"}`); code != http.StatusNotFound {
+		t.Fatalf("unknown project: %d %s", code, body)
+	}
+	code, body = chatDo(srv, "ana", "PATCH", "/api/v1/chats/"+id, `{"project_id":""}`)
+	if code != 200 || strings.Contains(body, "project_id") {
+		t.Fatalf("clear project: %d %s", code, body)
+	}
+
+	code, body = chatDo(srv, "ana", "GET", "/api/v1/chats/"+id+"/related-knowledge", "")
+	if code != 200 || strings.TrimSpace(body) != `{"docs":[]}` {
+		t.Fatalf("related: %d %s", code, body)
+	}
+
+	srv.Chat.Gen = func(context.Context, string, string) (model.AgentResult, error) {
+		return model.AgentResult{Text: `{"title":"T","objective":"O","acceptance":"a\nb"}`}, nil
+	}
+	code, body = chatDo(srv, "ana", "POST", "/api/v1/chats/"+id+"/work-order-draft", "")
+	if code != 200 || strings.TrimSpace(body) != `{"title":"T","objective":"O","acceptance":"a\nb"}` {
+		t.Fatalf("draft: %d %s", code, body)
+	}
+	if code, _ := chatDo(srv, "vic", "POST", "/api/v1/chats/"+id+"/work-order-draft", ""); code != http.StatusForbidden {
+		t.Fatalf("viewer draft: %d", code)
+	}
+	if code, _ := chatDo(srv, "bob", "POST", "/api/v1/chats/"+id+"/work-order-draft", ""); code != http.StatusNotFound {
+		t.Fatalf("other user's draft: %d", code)
+	}
+	srv.Chat.Gen = func(context.Context, string, string) (model.AgentResult, error) {
+		return model.AgentResult{Text: "sorry, no"}, nil
+	}
+	code, body = chatDo(srv, "ana", "POST", "/api/v1/chats/"+id+"/work-order-draft", "")
+	if code != http.StatusBadGateway || !strings.Contains(body, "DRAFT_FAILED") {
+		t.Fatalf("bad draft: %d %s", code, body)
 	}
 }

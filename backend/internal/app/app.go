@@ -94,7 +94,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		localProjects = &usecase.Local{Host: sandbox.Host{}, GH: ghFor}
 	}
 	box := sandbox.Local{DataDir: cfg.DataDir}
-	workOrders := &usecase.WorkOrders{Store: woRepo, Projects: projects, Sandbox: box, Integrations: integrations, Settings: settingsRepo}
+	workOrders := &usecase.WorkOrders{Store: woRepo, Projects: projects, Sandbox: box, Integrations: integrations, Settings: settingsRepo, Chats: &store.ChatRepo{DB: db}}
 
 	auth := &usecase.Identity{
 		Users: userRepo,
@@ -216,7 +216,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		chatH = mockH
 	}
 	srv.Chat = &usecase.Chat{
-		Store: &store.ChatRepo{DB: db}, Docs: srv.KBDocs, Projects: projects,
+		Store: &store.ChatRepo{DB: db}, Docs: srv.KBDocs, Related: srv.KBDocs, Projects: projects,
 		Settings: settingsRepo, Usage: usageTracker, Harness: chatH,
 		Models: listModels,
 		Default: func(ctx context.Context) string {
