@@ -320,11 +320,7 @@ func (f *Factory) foremanAnswers(ctx context.Context, wo *model.WorkOrder, quest
 		f.event(wo.ID, "foreman", "clarification_answered", c.Answer, map[string]any{"question": question, "repeated": true})
 		return true, nil
 	}
-	f.event(wo.ID, "architect", "clarification_asked", question, nil)
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+question, f.workspaceDir(wo.ID), wo.KBBaseSHA)
-	var r foremanAnswerReply
-	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanAnswerPrompt(wo, facts, question)+kbText,
-		map[string]string{"stage": "answer"}, "", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})
+	r, runID, err := f.askForeman(ctx, wo, "architect", question, "", facts)
 	if err != nil {
 		return false, err
 	}
@@ -343,15 +339,33 @@ func (f *Factory) foremanAnswers(ctx context.Context, wo *model.WorkOrder, quest
 	return true, nil
 }
 
+// askForeman puts an agent's question to the Foreman; note is extra context for the prompt only.
+func (f *Factory) askForeman(ctx context.Context, wo *model.WorkOrder, actor, question, note, facts string) (foremanAnswerReply, string, error) {
+	f.event(wo.ID, actor, "clarification_asked", question, nil)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+question, f.workspaceDir(wo.ID), wo.KBBaseSHA)
+	var r foremanAnswerReply
+	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanAnswerPrompt(wo, facts, question+note)+kbText,
+		map[string]string{"stage": "answer"}, "", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})
+	return r, runID, err
+}
+
 // askHuman records a clarification question and parks the order in
-// WAITING_FOR_HUMAN until AnswerClarification re-drafts the plan.
+// WAITING_FOR_HUMAN until AnswerClarification re-drafts the plan, or resumes
+// the Builder task in wo.ClarifTask.
 func (f *Factory) askHuman(ctx context.Context, wo *model.WorkOrder, actor, question string) error {
 	f.closePlanning(wo.ID)
-	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"clarif_question": question, "clarif_answer": "", "plan_review": ""}); err != nil {
+	fields := map[string]any{"clarif_question": question, "clarif_answer": "", "clarif_task": wo.ClarifTask}
+	if wo.ClarifTask == "" {
+		fields["plan_review"] = ""
+	}
+	if err := f.WO.UpdateFields(ctx, wo.ID, fields); err != nil {
 		return err
 	}
 	wo.ClarifQuestion, wo.ClarifAnswer = question, ""
 	f.event(wo.ID, actor, "clarification_requested", question, nil)
+	if wo.ClarifTask != "" {
+		return f.step(ctx, wo, model.StateImplementing, model.StateWaitingForHuman, "factory", "Waiting for human clarification")
+	}
 	if wo.State != model.StateArchitectReview {
 		if err := f.toReview(ctx, wo); err != nil {
 			return err

@@ -103,6 +103,9 @@ func (f *Factory) AnswerClarification(ctx context.Context, woID, answer string) 
 	}
 	log := append(append([]model.Clarification{}, wo.Clarifications...), model.Clarification{Question: wo.ClarifQuestion, Answer: answer, By: "human"})
 	raw, _ := json.Marshal(log)
+	if wo.ClarifTask != "" {
+		return f.resumeBuilder(ctx, wo, answer, string(raw), log)
+	}
 	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"clarif_answer": answer, "clarif_log": string(raw), "review_rounds": 0, "clarif_rounds": 0, "plan_revisions": 0}); err != nil {
 		return err
 	}

@@ -3,6 +3,8 @@ package usecase
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +20,9 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
+	if wo.State == model.StateWaitingForHuman {
+		return nil // another task's Builder question parked the order; the human's answer re-enqueues the ready tasks
+	}
 	if err := f.step(ctx, wo, model.StateQueued, model.StateImplementing, "factory", "Builder started implementation"); err != nil {
 		if wo.State != model.StateImplementing {
 			return err
@@ -29,7 +34,19 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 		return err
 	}
 	provider, modelID := f.Model(model.AgentBuilder, wo)
-	_, _, err = f.runBuilder(ctx, wo, job, provider, modelID)
+	asks, _ := job.Payload["asks"].(float64)
+	for {
+		_, _, err = f.runBuilder(ctx, wo, job, provider, modelID)
+		var nc *needsContext
+		if !errors.As(err, &nc) {
+			break
+		}
+		// re-run inside this job: the unique active-job index rejects enqueueing the task from its own running job
+		if answered, err := f.askBack(ctx, wo, job, nc.question, int(asks)); err != nil || !answered {
+			return err
+		}
+		asks++
+	}
 	if err != nil {
 		return err
 	}
@@ -66,6 +83,11 @@ func (f *Factory) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 	if err != nil {
 		return res, runID, err
 	}
+	if q := builderQuestion(res.Text); q != "" && job.TaskID != "" {
+		// the partial edits are not committed or counted: the task is not done until a run completes
+		_ = f.Runs.Fail(context.WithoutCancel(ctx), runID, "needs context: "+q)
+		return res, runID, &needsContext{q}
+	}
 	runs := []heldRun{{runID, res}}
 	if err := f.requireChanges(ctx, wo, job, opts.Dir, runID); err != nil {
 		f.failRuns(ctx, wo.ID, runs, err)
@@ -80,6 +102,108 @@ func (f *Factory) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 		}
 	}
 	return res, runID, f.completeRuns(ctx, wo.ID, runs)
+}
+
+const (
+	needsContextMarker = "NEEDS_CONTEXT:"
+	// maxBuilderQuestions is how many questions per task the Architect settles; the next goes to the Foreman, any later one to a human.
+	maxBuilderQuestions = 2
+)
+
+// needsContext is a Builder run that ended on a behaviour question instead of finishing.
+type needsContext struct{ question string }
+
+func (e *needsContext) Error() string { return "builder needs context: " + e.question }
+
+// builderQuestion is the question on the reply's last line "NEEDS_CONTEXT: <question>", or "" for a finished task.
+func builderQuestion(text string) string {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	last := strings.Trim(strings.TrimSpace(lines[len(lines)-1]), "`*")
+	q, _ := strings.CutPrefix(last, needsContextMarker)
+	if q == last {
+		return ""
+	}
+	return strings.TrimSpace(q)
+}
+
+// askBack settles a Builder question and reports true when the task can run again with the answer.
+// It reports false after parking the order for a human, whose answer resumes the task.
+func (f *Factory) askBack(ctx context.Context, wo *model.WorkOrder, job model.Job, question string, asks int) (bool, error) {
+	f.event(wo.ID, "builder", "clarification_asked", question, map[string]any{"task_id": job.TaskID})
+	if asks <= maxBuilderQuestions {
+		if c := findClarification(wo.Clarifications, question); c != nil {
+			f.event(wo.ID, "factory", "clarification_answered", c.Answer, map[string]any{"question": question, "repeated": true})
+			return true, nil
+		}
+	}
+	actor, note := "builder", ""
+	if asks < maxBuilderQuestions {
+		tasks, _ := f.WO.Plan(ctx, wo.ID)
+		var r foremanAnswerReply
+		_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, architectAnswerPrompt(wo, tasks, question), map[string]string{"stage": "answer"}, "", &r, runOpts{})
+		if err != nil {
+			return false, err
+		}
+		if r.Decision == "ANSWER" {
+			return true, f.recordBuildAnswer(ctx, wo, question, r.Answer, r.Reason, "architect", runID)
+		}
+		f.event(wo.ID, "architect", "clarification_escalated", r.Reason, map[string]any{"run_id": runID})
+		actor, note = "architect", "\n(A Builder asked the Architect, who escalated: "+r.Reason+")"
+	}
+	if asks <= maxBuilderQuestions {
+		r, runID, err := f.askForeman(ctx, wo, actor, question, note, repoFacts(ctx, f.workspaceDir(wo.ID)))
+		if err != nil {
+			return false, err
+		}
+		if r.Decision == "ANSWER" {
+			f.closePlanning(wo.ID)
+			return true, f.recordBuildAnswer(ctx, wo, question, r.Answer, r.Reason, "foreman", runID)
+		}
+		f.event(wo.ID, "foreman", "clarification_escalated", r.Reason, map[string]any{"run_id": runID})
+	}
+	wo.ClarifTask = job.TaskID
+	return false, f.askHuman(ctx, wo, actor, question)
+}
+
+// recordBuildAnswer logs the answer and amends the spec, which is otherwise read-only once approved.
+func (f *Factory) recordBuildAnswer(ctx context.Context, wo *model.WorkOrder, question, answer, reason, by, runID string) error {
+	log := append(append([]model.Clarification{}, wo.Clarifications...), model.Clarification{Question: question, Answer: answer, By: by})
+	raw, _ := json.Marshal(log)
+	spec := amendSpec(wo.Spec, question, answer, reason, by)
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"clarif_log": string(raw), "spec": spec}); err != nil {
+		return err
+	}
+	wo.Clarifications, wo.Spec = log, spec
+	f.event(wo.ID, by, "clarification_answered", answer, map[string]any{"question": question, "run_id": runID})
+	return nil
+}
+
+// resumeBuilder records a human's answer to a Builder question and runs the task again.
+// Further questions on it go straight to a human, so the cap holds across the pause.
+func (f *Factory) resumeBuilder(ctx context.Context, wo *model.WorkOrder, answer, rawLog string, log []model.Clarification) error {
+	task, question := wo.ClarifTask, wo.ClarifQuestion
+	spec := amendSpec(wo.Spec, question, answer, "decided by a human", "human")
+	if err := f.stepWith(ctx, wo, model.StateWaitingForHuman, model.StateImplementing, "human", "Builder question answered; task resumes",
+		map[string]any{"clarif_answer": answer, "clarif_log": rawLog, "clarif_task": "", "spec": spec}); err != nil {
+		return err
+	}
+	wo.ClarifAnswer, wo.Clarifications, wo.Spec, wo.ClarifTask = answer, log, spec, ""
+	f.event(wo.ID, "human", "clarification_answered", answer, map[string]any{"question": question})
+	f.Catalog.Record(ctx, wo, model.KnowledgeClarification, model.TrustHumanDecision, "human",
+		"Clarification: "+question, fmt.Sprintf("Question: %s\nAnswer: %s", question, answer))
+	f.draftFromClarification(ctx, wo, question, answer)
+	if _, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, task, map[string]any{"asks": maxBuilderQuestions + 1}); err != nil {
+		return err
+	}
+	// tasks that were skipped while the order waited
+	return f.maybeAdvanceAfterImplementation(ctx, wo)
+}
+
+func amendSpec(spec, question, answer, reason, by string) string {
+	if reason == "" {
+		reason = "answered by the " + by
+	}
+	return spec + fmt.Sprintf("\n\nAmendment: %s → %s (reason: %s)", question, answer, reason)
 }
 
 // heldRun is a run kept open by runOpts.Hold together with its own result.
