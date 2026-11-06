@@ -94,9 +94,14 @@ func (f *Factory) convergeGate(ctx context.Context, wo *model.WorkOrder) (handle
 	if err != nil {
 		return false, nil, err
 	}
+	tested, changedTests, err := f.contractStatus(ctx, wo)
+	if err != nil {
+		return false, nil, err
+	}
+	report.Gaps = append(slices.Clone(report.Gaps), changedTests...)
 	in := ConvergeGateInput{
 		Criteria: criteria, Spec: wo.Spec, Tasks: gateTasks(tasks), Diff: diff, Checks: gateChecks,
-		OpenFindings: open, Gaps: report.Gaps,
+		OpenFindings: open, Gaps: report.Gaps, Tested: tested,
 	}
 	state, qs := convergeGateState(in)
 	res, over, jerr := f.askJudge(ctx, state, qs)

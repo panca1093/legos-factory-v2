@@ -16,7 +16,12 @@ type Project struct {
 	GitHubRepo     string    `json:"github_repo"`           // computed: owner/repo in gh mode
 	KBInclude      []string  `json:"kb_include"`            // globs; empty means every repo document
 	KBExclude      []string  `json:"kb_exclude"`            // globs hidden from the Knowledge list; still indexed
+	ContractTests  string    `json:"contract_tests"`        // off | on
 	CreatedAt      time.Time `json:"created_at"`
+}
+
+type ProjectContractTestsRequest struct {
+	ContractTests string `json:"contract_tests"`
 }
 
 type ProjectKBScopeRequest struct {

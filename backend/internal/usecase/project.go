@@ -73,6 +73,20 @@ func (p *Projects) SetKBScope(ctx context.Context, u *model.User, id string, req
 	return p.Store.Get(ctx, id)
 }
 
+// SetContractTests stores whether the project's work orders write and lock contract tests.
+func (p *Projects) SetContractTests(ctx context.Context, u *model.User, id string, req model.ProjectContractTestsRequest) (*model.Project, error) {
+	if err := p.Authorize(ctx, u, id); err != nil {
+		return nil, err
+	}
+	if req.ContractTests != "on" && req.ContractTests != "off" {
+		return nil, fmt.Errorf("%w: contract_tests must be \"on\" or \"off\"", ErrInvalid)
+	}
+	if err := p.Store.SetContractTests(ctx, id, req.ContractTests); err != nil {
+		return nil, err
+	}
+	return p.Store.Get(ctx, id)
+}
+
 const (
 	maxKBGlobs   = 50
 	maxKBGlobLen = 200

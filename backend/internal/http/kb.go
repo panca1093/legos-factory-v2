@@ -85,6 +85,18 @@ func (s *Server) handleKBDelete(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+func (s *Server) handleProjectContractTests(c echo.Context) error {
+	var req model.ProjectContractTestsRequest
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
+	}
+	p, err := s.Projects.SetContractTests(c.Request().Context(), currentUser(c), c.Param("id"), req)
+	if err != nil {
+		return integrationError(c, err)
+	}
+	return c.JSON(http.StatusOK, p)
+}
+
 func (s *Server) handleProjectKBScope(c echo.Context) error {
 	var req model.ProjectKBScopeRequest
 	if err := c.Bind(&req); err != nil {

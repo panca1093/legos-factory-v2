@@ -239,6 +239,7 @@ func (s *Server) routes() {
 	api.PATCH("/connections/:id", s.requireRole(model.RoleEngineer, s.handleUpdateConnection))
 	api.DELETE("/connections/:id", s.requireRole(model.RoleEngineer, s.handleDeleteConnection))
 	api.POST("/connections/:id/test", s.requireRole(model.RoleEngineer, s.handleTestConnection))
+	api.PUT("/projects/:id/contract-tests", s.requireRole(model.RoleEngineer, s.handleProjectContractTests))
 	api.PUT("/projects/:id/kb-scope", s.requireRole(model.RoleEngineer, s.handleProjectKBScope))
 	api.PUT("/projects/:id/binding", s.requireRole(model.RoleEngineer, s.handleBindProject))
 	api.POST("/integrations/jira/lookup", s.requireRole(model.RoleEngineer, s.handleJiraLookup))
