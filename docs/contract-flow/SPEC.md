@@ -34,7 +34,7 @@ Each artifact has one reader and a length budget. Budgets are enforced in the pr
 | Brief | Foreman | human, Architect | ~350 words | outcome, why, domain invariants, surfaces touched, constraints, out of scope, assumptions, open questions (≤3) |
 | Spec (contract) | Architect | human, all agents | ~750 words | behaviour rules, decisions table, interface contract, out of scope, AC → verification table |
 | Tasks | Architect | Builder | ~150 words each | outcome, scope (files), deps, how it is verified; cites spec sections instead of restating them |
-| Facts sheet | Foreman, Architect | agents only | no cap; one line per fact | `path:line — claim`, bound to `kb_base_sha` |
+| Facts sheet | Foreman, Architect | agents only | max 40 facts per work order (newest win), ≤200 chars each | `path:line — claim`, bound to `kb_base_sha` |
 | Clarifications log | factory | all | — | `Q → A (who, when)`, appended to the spec |
 
 No file paths, line numbers or code go in the brief or the spec. They belong in tasks (scope) and the facts sheet.
@@ -51,9 +51,9 @@ No file paths, line numbers or code go in the brief or the spec. They belong in 
 
 The facts sheet stops agents from re-reading the repository on every run (Foreman runs in `wo_15381843-2a1` re-grepped `BodyLimit` and `promptCapabilities` three times).
 
-- The Foreman writes facts at intake. The Architect and the Builder read them and may append to them.
+- The Foreman writes facts at intake and the Architect may append at planning. Every role reads them. (The Builder reply is free text, so it does not write facts.)
 - Prompt rule: trust the facts; open a file only for something they do not cover.
-- A fact is stale when `git diff --name-only <kb_base_sha>..HEAD` touches its file. Stale facts are dropped, with no LLM involved.
+- A fact is stale when `git diff --no-renames --name-only <sha>` (working tree, so uncommitted edits count) touches its file. Stale facts are hidden, with no LLM involved.
 - At Port (below), stable facts become a **Code Map** document in the project's knowledge. It is promoted automatically (no human verify); a later contradicting fact replaces the line.
 - Hidden in the UI by default, like the journal.
 
