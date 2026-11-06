@@ -16,6 +16,7 @@ import StatusBadge from "../../components/ui/StatusBadge.vue";
 import {
   money,
   isRunning,
+  isTodo,
   needsYou,
   persona,
 } from "../../composables/presentation";
@@ -33,6 +34,9 @@ const heatLabel: Record<HeatMode, string> = {
 const modes: HeatMode[] = ["Daily", "Weekly", "Cumulative"];
 const approvals = computed(() => needsYou(factory.workOrders));
 const running = computed(() => factory.workOrders.filter(isRunning));
+const inMaking = computed(() =>
+  factory.workOrders.filter((w) => isTodo(w) || isRunning(w)),
+);
 const shipped = computed(
   () => factory.workOrders.filter((w) => w.pr_merged_at).length,
 );
@@ -113,9 +117,9 @@ onMounted(() => {
       <div class="value">{{ approvals.length }}</div>
       <div class="note">decisions waiting</div></RouterLink
     >
-    <RouterLink class="lg-card lg-stat" to="/factory?status=running"
+    <RouterLink class="lg-card lg-stat" to="/factory"
       ><div class="label"><Zap class="icon" />In the making</div>
-      <div class="value">{{ running.length }}</div>
+      <div class="value">{{ inMaking.length }}</div>
       <div class="note">active work orders</div></RouterLink
     >
     <RouterLink class="lg-card lg-stat" to="/factory?status=complete"

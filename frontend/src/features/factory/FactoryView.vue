@@ -242,48 +242,58 @@ onMounted(load);
       <p v-if="!filtered.length" class="notice">
         No work orders match. Adjust the filters or create a new work order.
       </p>
-      <div class="fx-board">
+      <div class="fx-board" :class="{ single: groups.length === 1 }">
         <section v-for="g in groups" :key="g.key" class="fx-group">
           <h2>
             {{ g.name }} <span class="fx-count">{{ g.items.length }}</span>
           </h2>
-          <div class="fx-lane">
-            <RouterLink
-              v-for="w in g.items"
-              :key="w.id"
-              :to="`/factory/${w.id}`"
-              class="fx-order"
-              :class="{ attn: g.key === 'attention' }"
-              data-test="order-row"
-            >
-              <div class="fx-order-top">
-                <span class="mono muted tiny">{{ w.id.slice(0, 12) }}</span>
-                <ActorBadge :actor="actorOf(w)" />
-              </div>
-              <div class="fx-order-main">
-                <strong>{{ w.title }}</strong>
-                <span class="tiny muted"
-                  ><i class="fx-dot" :style="{ '--c': color(w) }"></i
-                  >{{ projectName(w) }} · updated {{ ago(w.updated_at) }}</span
-                >
-              </div>
-              <div
-                class="fx-segs"
-                role="img"
-                :aria-label="
-                  stages
-                    .map((s, i) => `${s}: ${stageStatuses(w)[i]}`)
-                    .join(', ')
-                "
+          <ul class="fx-lane">
+            <li v-for="w in g.items" :key="w.id">
+              <RouterLink
+                :to="`/factory/${w.id}`"
+                class="fx-order"
+                :class="{ attn: g.key === 'attention' }"
+                data-test="order-row"
+                :aria-labelledby="`wo-title-${w.id}`"
+                :aria-describedby="`wo-status-${w.id}`"
               >
-                <i v-for="(st, i) in stageStatuses(w)" :key="i" :class="st"></i>
-              </div>
-              <span class="fx-pill" :class="orderStatus(w).tone">{{
-                orderStatus(w).label
-              }}</span>
-            </RouterLink>
-            <p v-if="!g.items.length" class="fx-empty">Nothing here.</p>
-          </div>
+                <div class="fx-order-top">
+                  <span class="mono muted tiny">{{ w.id.slice(0, 12) }}</span>
+                  <ActorBadge :actor="actorOf(w)" />
+                </div>
+                <div class="fx-order-main">
+                  <strong :id="`wo-title-${w.id}`">{{ w.title }}</strong>
+                  <span class="tiny muted"
+                    ><i class="fx-dot" :style="{ '--c': color(w) }"></i
+                    >{{ projectName(w) }} · updated
+                    {{ ago(w.updated_at) }}</span
+                  >
+                </div>
+                <div
+                  class="fx-segs"
+                  role="img"
+                  :aria-label="
+                    stages
+                      .map((s, i) => `${s}: ${stageStatuses(w)[i]}`)
+                      .join(', ')
+                  "
+                >
+                  <i
+                    v-for="(st, i) in stageStatuses(w)"
+                    :key="i"
+                    :class="st"
+                  ></i>
+                </div>
+                <span
+                  :id="`wo-status-${w.id}`"
+                  class="fx-pill"
+                  :class="orderStatus(w).tone"
+                  >{{ orderStatus(w).label }}</span
+                >
+              </RouterLink>
+            </li>
+          </ul>
+          <p v-if="!g.items.length" class="fx-empty">Nothing here.</p>
         </section>
       </div>
     </template>
