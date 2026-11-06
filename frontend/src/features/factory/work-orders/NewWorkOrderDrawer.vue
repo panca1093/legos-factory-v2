@@ -6,10 +6,16 @@ import BrickBot from "../../../components/agents/BrickBot.vue";
 import { useFactory } from "../../../stores/factory";
 import { useSession } from "../../../stores/session";
 import type { Settings } from "../../../types/api";
-const props = defineProps<{ open: boolean; projectID?: string }>();
+const props = defineProps<{
+  open: boolean;
+  projectID?: string;
+  prefill?: { title: string; objective: string; acceptance: string };
+  sourceChatID?: string;
+}>();
 const emit = defineEmits<{
   close: [];
   created: [{ id: string; planningError: string }];
+  edit: [{ title: string; objective: string; acceptance: string }];
 }>();
 const factory = useFactory(),
   session = useSession(),
@@ -60,10 +66,12 @@ watch(
       step.value = 1;
       error.value = "";
       Object.assign(form, {
-        project_id: props.projectID || factory.projects[0]?.id || "",
-        title: "",
-        objective: "",
-        acceptance: "",
+        project_id: props.sourceChatID
+          ? (props.projectID ?? "")
+          : props.projectID || factory.projects[0]?.id || "",
+        title: props.prefill?.title ?? "",
+        objective: props.prefill?.objective ?? "",
+        acceptance: props.prefill?.acceptance ?? "",
         builder_model: "",
         inspector_model: "",
         source_ref: "",
@@ -83,10 +91,21 @@ watch(
 watch(
   () => factory.projects,
   (projects) => {
-    if (props.open && !form.project_id && projects.length)
+    if (
+      props.open &&
+      !form.project_id &&
+      projects.length &&
+      !props.sourceChatID
+    )
       form.project_id = props.projectID || projects[0].id;
   },
   { immediate: true },
+);
+watch(
+  () => [form.title, form.objective, form.acceptance] as const,
+  ([title, objective, acceptance]) => {
+    if (props.sourceChatID) emit("edit", { title, objective, acceptance });
+  },
 );
 onMounted(async () => {
   try {
@@ -121,6 +140,10 @@ async function create() {
       title: form.title.trim(),
       objective: form.objective.trim(),
       acceptance: form.acceptance.trim(),
+      // Jira import wins: a work order takes one source.
+      ...(props.sourceChatID && !form.source_ref
+        ? { source_chat_id: props.sourceChatID }
+        : {}),
     });
     let planningError = "";
     try {

@@ -47,6 +47,7 @@
 }
 .rail .grow {
   flex: 1;
+  align-content: start;
   min-height: 0;
   overflow: auto;
 }

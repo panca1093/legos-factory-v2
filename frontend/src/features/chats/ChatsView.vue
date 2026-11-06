@@ -9,7 +9,6 @@ import {
   PanelLeft,
   Plus,
   RotateCw,
-  Trash2,
 } from "lucide-vue-next";
 import Button from "../../components/ui/Button.vue";
 import IconButton from "../../components/ui/IconButton.vue";
@@ -17,9 +16,10 @@ import SearchField from "../../components/ui/SearchField.vue";
 import { useToast } from "../../composables/useToast";
 import { money } from "../../composables/presentation";
 import { useSession } from "../../stores/session";
-import { useChats, type ChatAttachment } from "../../stores/chats";
+import { useChats } from "../../stores/chats";
 import { ApiError } from "../../types/api";
 import ChatComposer from "./ChatComposer.vue";
+import ChatContextPanel from "./ChatContextPanel.vue";
 import {
   chatTitle,
   formatSize,
@@ -38,8 +38,6 @@ const listKey = "legos-chats-list";
 const query = ref(""),
   listHidden = ref(false),
   ctxOpen = ref(false),
-  confirmDelete = ref(false),
-  titleDraft = ref(""),
   draftModel = ref(""),
   scroller = ref<HTMLElement>(),
   creating = ref(false),
@@ -66,25 +64,6 @@ const groups = computed(() => {
       : store.chats,
   );
 });
-const usage = computed(() =>
-  messages.value.reduce(
-    (t, m) => ({
-      tokens_in: t.tokens_in + (m.usage?.tokens_in ?? 0),
-      tokens_out: t.tokens_out + (m.usage?.tokens_out ?? 0),
-      cost: t.cost + (m.usage?.cost_micros ?? 0),
-    }),
-    { tokens_in: 0, tokens_out: 0, cost: 0 },
-  ),
-);
-const attachments = computed(() => {
-  const seen = new Set<string>();
-  return messages.value
-    .flatMap((m) => m.attachments ?? [])
-    .filter((a) => {
-      const k = a.kind + (a.kind === "kb" ? a.doc_id : a.name);
-      return !seen.has(k) && !!seen.add(k);
-    });
-});
 const lastErrorId = computed(() => {
   const last = messages.value[messages.value.length - 1];
   return last?.role === "assistant" && last.error && !busy.value ? last.id : 0;
@@ -105,7 +84,10 @@ watch(ctxOpen, async (open) => {
   if (!open) return;
   narrow.value = window.matchMedia("(max-width: 860px)").matches;
   await nextTick();
-  ctxPanel.value?.querySelector<HTMLElement>("input, select, button")?.focus();
+  (
+    ctxPanel.value?.querySelector<HTMLElement>("select:not(:disabled)") ??
+    ctxPanel.value?.querySelector<HTMLElement>("button")
+  )?.focus();
 });
 watch(busy, (now, was) => {
   if (!was || now) return;
@@ -141,24 +123,11 @@ async function setModel(id: string, el?: HTMLSelectElement) {
     fail(e);
   }
 }
-async function rename() {
-  const title = titleDraft.value.trim();
-  if (!chat.value || !title || title === chat.value.title) {
-    titleDraft.value = chat.value?.title ?? "";
-    return;
-  }
-  try {
-    await store.update(chat.value.id, { title });
-  } catch (e) {
-    titleDraft.value = chat.value.title;
-    fail(e);
-  }
-}
 async function remove() {
   if (!chat.value) return;
   try {
     await store.remove(chat.value.id);
-    ctxOpen.value = confirmDelete.value = false;
+    ctxOpen.value = false;
     await router.replace("/chats");
     toast("Chat deleted");
   } catch (e) {
@@ -201,8 +170,6 @@ function retry() {
       })),
     });
 }
-const fileLabel = (a: ChatAttachment) =>
-  a.kind === "file" ? `${a.name} · ${formatSize(a.size)}` : a.name;
 function scrolled() {
   const el = scroller.value;
   if (el) stick = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
@@ -216,7 +183,7 @@ function toBottom() {
 watch(
   chatId,
   async (id) => {
-    ctxOpen.value = confirmDelete.value = false;
+    ctxOpen.value = false;
     stick = true;
     if (!id) return;
     try {
@@ -229,11 +196,6 @@ watch(
       } else fail(e);
     }
   },
-  { immediate: true },
-);
-watch(
-  () => chat.value?.title,
-  (t) => (titleDraft.value = t ?? ""),
   { immediate: true },
 );
 watch(() => [messages.value.length, messages.value.at(-1)?.content], toBottom);
@@ -359,7 +321,7 @@ onMounted(async () => {
                   <RouterLink
                     v-if="a.kind === 'kb'"
                     class="ch-chip kb"
-                    to="/knowledge"
+                    :to="{ path: '/knowledge', query: { doc: a.doc_id } }"
                     ><BookOpen class="icon" /><span class="ch-fn">{{
                       a.name
                     }}</span></RouterLink
@@ -417,72 +379,13 @@ onMounted(async () => {
       aria-label="Chat details"
       @keydown.esc="closeCtx"
     >
-      <h4>Title</h4>
-      <input
-        v-model="titleDraft"
-        class="lg-field"
-        aria-label="Chat title"
-        maxlength="120"
-        :disabled="!session.canWrite || busy"
-        @blur="rename"
-        @keydown.enter.prevent="($event.target as HTMLInputElement).blur()"
+      <ChatContextPanel
+        :chat="chat"
+        :messages="messages"
+        :busy="busy"
+        :active="ctxOpen"
+        @remove="remove"
       />
-      <h4>Model</h4>
-      <select
-        class="lg-field"
-        aria-label="Model"
-        :value="chat.model"
-        :disabled="!session.canWrite || busy"
-        @change="
-          setModel(
-            ($event.target as HTMLSelectElement).value,
-            $event.target as HTMLSelectElement,
-          )
-        "
-      >
-        <option v-for="m in store.models" :key="m.id" :value="m.id">
-          {{ m.name }}
-        </option>
-      </select>
-      <h4>Attachments</h4>
-      <div v-if="attachments.length" class="atts">
-        <template v-for="a in attachments" :key="a.kind + a.name">
-          <RouterLink v-if="a.kind === 'kb'" class="ch-chip kb" to="/knowledge"
-            ><BookOpen class="icon" /><span class="ch-fn">{{
-              a.name
-            }}</span></RouterLink
-          >
-          <span v-else class="ch-chip" :title="fileLabel(a)"
-            ><FileText class="icon" /><span class="ch-fn">{{ a.name }}</span
-            ><span class="ch-fs">{{ formatSize(a.size) }}</span></span
-          >
-        </template>
-      </div>
-      <p v-else class="empty-note">None yet.</p>
-      <h4>Usage</h4>
-      <dl class="ch-usage">
-        <dt>Messages</dt>
-        <dd>{{ messages.length }}</dd>
-        <dt>Tokens in / out</dt>
-        <dd>{{ usage.tokens_in }} / {{ usage.tokens_out }}</dd>
-        <dt>Cost</dt>
-        <dd>{{ money(usage.cost) }}</dd>
-      </dl>
-      <div v-if="session.canWrite" class="danger-zone">
-        <Button
-          v-if="!confirmDelete"
-          variant="danger"
-          small
-          :disabled="busy"
-          @click="confirmDelete = true"
-          ><Trash2 class="icon" />Delete chat</Button
-        >
-        <template v-else>
-          <span>Delete this chat and its messages?</span>
-          <Button small @click="confirmDelete = false">Cancel</Button>
-          <Button variant="danger" small @click="remove">Delete</Button>
-        </template>
-      </div>
     </aside>
   </section>
 </template>

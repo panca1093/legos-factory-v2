@@ -65,6 +65,7 @@ export interface WorkOrder {
   state: WorkOrderState;
   builder_model: string;
   inspector_model: string;
+  source_chat_id?: string;
   clarif_question?: string;
   clarif_answer?: string;
   revision: number;

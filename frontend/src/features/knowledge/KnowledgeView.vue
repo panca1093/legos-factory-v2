@@ -59,7 +59,7 @@ function scheduleDelete(id: string, title: string, onUndo: () => void) {
 </script>
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { BookOpen, Layers } from "lucide-vue-next";
 import SearchField from "../../components/ui/SearchField.vue";
 import { useFactory } from "../../stores/factory";
@@ -79,6 +79,7 @@ import "./knowledge.css";
 
 const factory = useFactory();
 const router = useRouter();
+const route = useRoute();
 
 const docs = ref<KBDoc[]>([]),
   draftCount = ref(0),
@@ -93,7 +94,8 @@ const q = ref(""),
   quote = ref(""),
   mobile = ref<"list" | "read" | "talk">("list"),
   editState = ref<boolean | null>(null);
-let pinned = "";
+let pinned = "",
+  picked = false;
 
 const projectName = (id?: string) =>
   !id
@@ -184,6 +186,10 @@ onMounted(async () => {
   reloadList = refreshAll;
   await Promise.allSettled([factory.refreshProjects()]);
   await refreshAll();
+  const linked = route.query.doc;
+  if (typeof linked !== "string" || !linked) return;
+  if (!picked && docs.value.some((d) => d.id === linked)) openLinked(linked);
+  void router.replace({ query: { ...route.query, doc: undefined } });
 });
 onBeforeUnmount(() => {
   clearTimeout(debounce);
@@ -196,6 +202,7 @@ const leaveOk = () =>
   window.confirm("Discard your unsaved changes to this note?");
 
 function select(id: string) {
+  picked = true;
   if (id !== openId.value && !leaveOk()) return;
   pinned = "";
   openId.value = id;

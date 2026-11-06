@@ -192,6 +192,7 @@ export const useFactory = defineStore("factory", {
       builder_model: string;
       inspector_model: string;
       source_ref?: string;
+      source_chat_id?: string;
     }) {
       const res = await api.post<WorkOrder>("/api/v1/work-orders", input);
       this.workOrders = [

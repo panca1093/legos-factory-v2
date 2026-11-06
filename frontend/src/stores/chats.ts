@@ -31,6 +31,17 @@ export interface ChatMessage {
   created_at: string;
   pending?: boolean;
 }
+export interface WorkOrderDraft {
+  title: string;
+  objective: string;
+  acceptance: string;
+}
+export interface RelatedDoc {
+  id: string;
+  title: string;
+  kind: string;
+  snippet?: string;
+}
 export interface ChatModel {
   id: string;
   name: string;
@@ -76,11 +87,24 @@ export const useChats = defineStore("chats", {
       this.chats = [r.chat, ...this.chats.filter((c) => c.id !== r.chat.id)];
       return r.chat;
     },
-    async update(id: string, patch: { title?: string; model?: string }) {
+    async update(id: string, patch: { model?: string; project_id?: string }) {
       const r = await api.patch<{ chat: Chat }>(`/api/v1/chats/${id}`, patch);
       this.chats = this.chats
         .map((c) => (c.id === id ? r.chat : c))
         .sort(byActivity);
+    },
+    async draftWorkOrder(id: string, signal?: AbortSignal) {
+      return api.post<WorkOrderDraft>(
+        `/api/v1/chats/${id}/work-order-draft`,
+        {},
+        signal,
+      );
+    },
+    async relatedKnowledge(id: string) {
+      const r = await api.get<{ docs?: RelatedDoc[] }>(
+        `/api/v1/chats/${id}/related-knowledge`,
+      );
+      return r.docs ?? [];
     },
     async remove(id: string) {
       await api.del(`/api/v1/chats/${id}`);
@@ -157,12 +181,17 @@ export const useChats = defineStore("chats", {
           const d = data as unknown as {
             message?: ChatMessage | string;
             text?: string;
+            title?: string;
             error?: unknown;
           };
           const reply = find(tmpReply);
           if (event === "user_message" && typeof d.message === "object")
             swap(tmpUser, d.message);
           else if (event === "delta" && reply) reply.content += d.text ?? "";
+          else if (event === "title" && d.title)
+            this.chats = this.chats.map((c) =>
+              c.id === id ? { ...c, title: d.title as string } : c,
+            );
           else if (event === "done") {
             if (typeof d.message === "object") swap(tmpReply, d.message);
             else markFailed(tmpReply, "The server sent an invalid message.");
