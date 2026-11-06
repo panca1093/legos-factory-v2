@@ -55,6 +55,9 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanReviewPrompt(wo, tasks, criticals(prev), scoped)+kbText,
 		map[string]string{"stage": "review", "clarification_answer": wo.ClarifAnswer},
 		"", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})
+	if errors.Is(err, model.ErrPermanent) {
+		return f.escalateReview(ctx, wo, err)
+	}
 	if err != nil {
 		return err
 	}
@@ -370,4 +373,17 @@ func (f *Factory) recordGate(woID, gate string, state any, qs map[string]Noul, r
 	delete(live, "unsent_request")
 	msg := fmt.Sprintf("%s gate: %s (row %d)", strings.ToUpper(gate[:1])+gate[1:], out.Outcome, out.Row)
 	f.eventLive(woID, "jev", gate+"_gate", msg, full, live)
+}
+
+// escalateReview hands the plan to the human when the Foreman review cannot produce a valid reply; otherwise the failed job would leave the order in ARCHITECT_REVIEW with nothing queued.
+func (f *Factory) escalateReview(ctx context.Context, wo *model.WorkOrder, cause error) error {
+	if f.cancelled(ctx, wo.ID) {
+		return nil
+	}
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "approved"}); err != nil {
+		return err
+	}
+	reason := "Foreman review failed: " + cause.Error()
+	f.event(wo.ID, "factory", "plan_escalated", "The plan needs a human decision: "+reason, map[string]any{"reason": reason, "row": 1})
+	return nil
 }

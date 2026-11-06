@@ -184,12 +184,17 @@ func (r *reviewReply) validate() error {
 	if len(r.Findings) > maxReviewFindings {
 		return fmt.Errorf("at most %d findings, got %d", maxReviewFindings, len(r.Findings))
 	}
+	kept := r.Findings[:0]
 	for i, f := range r.Findings {
-		if strings.TrimSpace(f.ID) == "" || strings.TrimSpace(f.Issue) == "" {
-			return fmt.Errorf("findings[%d] needs an id and an issue", i)
-		}
 		if err := oneOf(fmt.Sprintf("findings[%d].severity", i), f.Severity, "critical", "high", "low"); err != nil {
 			return err
+		}
+		bad := strings.TrimSpace(f.Issue) == "" || oneOf("layer", f.Layer, "contract", "requirement") != nil
+		if bad && f.Severity != "critical" {
+			continue // a malformed note must not fail the whole review; it never blocks anyway
+		}
+		if strings.TrimSpace(f.Issue) == "" {
+			return fmt.Errorf("findings[%d] needs an issue", i)
 		}
 		if err := oneOf(fmt.Sprintf("findings[%d].layer", i), f.Layer, "contract", "requirement"); err != nil {
 			return err
@@ -200,7 +205,9 @@ func (r *reviewReply) validate() error {
 		if f.Severity == "critical" && f.Layer == "requirement" && strings.TrimSpace(f.Fix) == "" && strings.TrimSpace(f.Question) == "" {
 			return fmt.Errorf("findings[%d] is a critical requirement finding, so it needs a fix or a question", i)
 		}
+		kept = append(kept, f)
 	}
+	r.Findings = kept
 	for i, c := range r.Coverage {
 		if strings.TrimSpace(c.Criterion) == "" {
 			return fmt.Errorf("coverage[%d] needs a criterion", i)

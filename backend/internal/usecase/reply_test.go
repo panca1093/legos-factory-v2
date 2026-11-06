@@ -86,7 +86,7 @@ func TestReviewAndFindingsSchemas(t *testing.T) {
 	}
 	for name, text := range map[string]string{
 		"unknown severity":        finding("blocker", "contract", "c1"),
-		"unknown layer":           finding("high", "code", "c1"),
+		"unknown layer":           finding("critical", "code", "c1"),
 		"critical without a cite": finding("critical", "contract", " "),
 		"bad coverage":            `{"findings":[],"coverage":[{"criterion":"c1","verification":"maybe"}]}`,
 		"coverage without id":     `{"findings":[],"coverage":[{"verification":"test"}]}`,

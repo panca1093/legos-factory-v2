@@ -222,7 +222,8 @@ Layer: "contract" when the spec or plan is incomplete or wrong (the Architect fi
 when the brief itself is wrong or silent (you fix it). For a requirement finding put the brief change in "fix",
 or put the question in "question" when only a human can decide it.
 Also state, for every acceptance criterion, how the spec's AC -> verification table verifies it: "test", "check" or "missing".`
-	shape := `{"findings":[{"id":"F1","severity":"critical|high|low","layer":"contract|requirement","cites":"c2","issue":"...","fix":"...","question":"only for a requirement finding that needs a human"}],
+	finding := `{"severity":"critical|high|low","layer":"contract|requirement","cites":"c2","issue":"...","fix":"...","question":"only for a requirement finding that needs a human"}`
+	shape := `{"findings":[` + finding + `],
  "coverage":[{"criterion":"c1","verification":"test|check|missing"}]}`
 	if scoped {
 		var b strings.Builder
@@ -239,7 +240,7 @@ Also state, for every acceptance criterion, how the spec's AC -> verification ta
 Previous critical findings:
 ` + b.String()
 		shape = `{"resolved":[{"id":"F1","status":"resolved|unresolved"}],
- "findings":[<only NEW findings from the regression scan, same shape as before; [] when none>],
+ "findings":[<only NEW findings from the regression scan, each exactly ` + finding + `; [] when none>],
  "coverage":[{"criterion":"c1","verification":"test|check|missing"}]}`
 	}
 	return fmt.Sprintf(`You are the Foreman, orchestrating a software engineering team. The Architect drafted

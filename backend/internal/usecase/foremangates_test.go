@@ -572,3 +572,32 @@ func TestRestartedReviewIgnoresItsOwnRoundsEvent(t *testing.T) {
 		t.Fatalf("revision %d", got)
 	}
 }
+
+// wo_731fdd9d-e79: a scoped re-review reply with invented keys (kind/refs/text) stranded the order in ARCHITECT_REVIEW.
+func TestScopedReviewDropsMalformedNotesAndShowsTheSchema(t *testing.T) {
+	h := &sessHarness{answer: answerJSON, review: criticalContract}
+	j := &fakeJudge{over: map[string]float64{"critical_resolved": 0.1}}
+	r := harnessRig(t, h, j)
+	r.review(t)
+	h.review = `{"resolved":[{"id":"R1-F1","status":"resolved"}],"findings":[{"id":"R2-F1","severity":"high","kind":"contract","refs":["c1"],"text":"wrong size message","fix":"name the limit"}],"coverage":[{"criterion":"c1","verification":"test"}]}`
+	j.over = nil
+	r.plan(t)
+	if wo := r.review(t); wo.State != model.StateQueued {
+		t.Fatalf("a malformed high finding must be dropped, not fail the review: state %s", wo.State)
+	}
+	if p := h.starts[len(h.starts)-1].Prompt; !strings.Contains(p, `"layer":"contract|requirement","cites":"c2","issue"`) {
+		t.Fatalf("the scoped prompt must spell out the finding schema:\n%s", p)
+	}
+}
+
+func TestReviewThatFailsPermanentlyEscalates(t *testing.T) {
+	h := &sessHarness{answer: answerJSON, review: `{"findings":[{"severity":"critical","layer":"contract","cites":"c1"}],"coverage":[]}`}
+	r := harnessRig(t, h, &fakeJudge{})
+	wo := r.review(t)
+	if wo.State != model.StateArchitectReview || wo.PlanReview != "approved" {
+		t.Fatalf("a permanently invalid review must escalate to the human: state %s plan_review %q", wo.State, wo.PlanReview)
+	}
+	if e := eventByKind(t, r, "plan_escalated"); !strings.Contains(e.Message, "Foreman review failed") {
+		t.Fatalf("escalation reason: %q", e.Message)
+	}
+}
