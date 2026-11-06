@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -408,5 +409,35 @@ describe("store", () => {
     const f = useFactory();
     await f.loadDiff("LF-1");
     expect(f.diff?.available).toBe(false);
+  });
+});
+
+describe("long reasons", () => {
+  const long = Array.from({ length: 8 }, (_, i) => `check ${i} failed`).join(
+    "; ",
+  );
+  const approval = { key: "approval", label: "Awaiting approval", tone: "" };
+  it("clamps a long note and expands it to a bullet list", async () => {
+    const w = panel({ reason: long, ship: approval });
+    expect(w.find(".clamp").exists()).toBe(true);
+    expect(w.find("li").exists()).toBe(false);
+    await w.find(".fx-reason-toggle").trigger("click");
+    expect(w.findAll(".fx-reason li")).toHaveLength(8);
+    expect(w.find(".clamp").exists()).toBe(false);
+  });
+  it("leaves a short note alone", () => {
+    const w = panel({ reason: "Short", ship: approval });
+    expect(w.find(".fx-reason-toggle").exists()).toBe(false);
+  });
+});
+
+describe("diff layout containment", () => {
+  it("lets grid items shrink and scrolls code inside the file card", () => {
+    const css = readFileSync("src/features/factory/screens.css", "utf8");
+    expect(css).toMatch(
+      /\.fx-diff-files > div,\s*\.fx-dfile\s*{\s*min-width: 0;/,
+    );
+    expect(css).toMatch(/\.fx-dtable\s*{\s*overflow-x: auto;/);
+    expect(css).toMatch(/\.fx-dfile \.path\s*{[^}]*text-overflow: ellipsis;/);
   });
 });

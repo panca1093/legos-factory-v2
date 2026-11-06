@@ -4,6 +4,7 @@ import { Check, ExternalLink, MessageSquare, X } from "lucide-vue-next";
 import type { Run, WODiff } from "../../../types/api";
 import type { shipState } from "../../../composables/presentation";
 import DiffView from "./DiffView.vue";
+import ReasonText from "../ReasonText.vue";
 import { diffFromApi, diffFromRuns } from "./diff";
 const props = defineProps<{
   runs: Run[];
@@ -84,9 +85,11 @@ const shipNote: Record<string, string> = {
           </button>
         </div>
       </div>
-      <p v-if="reason && ship?.key === 'approval'" class="fx-reason">
-        <strong>Why you are asked:</strong> {{ reason }}
-      </p>
+      <ReasonText
+        v-if="reason && ship?.key === 'approval'"
+        label="Why you are asked:"
+        :text="reason"
+      />
       <p v-if="ship?.key === 'approval'" class="small muted">
         {{ publishNote }}
       </p>

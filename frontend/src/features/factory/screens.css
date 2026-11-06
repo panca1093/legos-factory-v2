@@ -618,6 +618,25 @@
   font-size: 13px;
   line-height: 19px;
 }
+.fx-reason .clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.fx-reason-list {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.fx-reason-toggle {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  cursor: pointer;
+}
 .fx-last {
   max-width: 100%;
   overflow: hidden;
@@ -689,6 +708,12 @@
   cursor: pointer;
 }
 
+.fx-diff-body > * {
+  min-width: 0;
+}
+.fx-dfile header {
+  min-width: 0;
+}
 .fx-diff {
   display: grid;
   gap: var(--space-3);
@@ -768,6 +793,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.fx-diff-files > div,
+.fx-dfile {
+  min-width: 0;
 }
 .fx-diff-files {
   display: grid;
