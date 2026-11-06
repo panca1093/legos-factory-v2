@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -363,6 +364,60 @@ func (r *WorkOrderRepo) LatestEvents(ctx context.Context, woID string, limit int
 		out[i], out[j] = out[j], out[i]
 	}
 	return out, more, nil
+}
+
+// EventsByKind returns the work order's events of the given kinds, oldest first.
+func (r *WorkOrderRepo) EventsByKind(ctx context.Context, woID string, kinds []string) ([]model.Event, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	args := []any{woID}
+	for _, k := range kinds {
+		args = append(args, k)
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id, wo_id, actor, kind, message, payload, created_at
+		FROM wof_events WHERE wo_id = ? AND kind IN (?`+strings.Repeat(",?", len(kinds)-1)+`) ORDER BY id ASC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Event
+	for rows.Next() {
+		var e model.Event
+		var payload string
+		var createdAt int64
+		if err := rows.Scan(&e.ID, &e.WOID, &e.Actor, &e.Kind, &e.Message, &payload, &createdAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(payload), &e.Payload)
+		e.CreatedAt = time.Unix(createdAt, 0)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// ProjectEvents returns the newest limit events of one kind across the project's work orders, newest first.
+func (r *WorkOrderRepo) ProjectEvents(ctx context.Context, projectID, kind string, limit int) ([]model.Event, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT e.id, e.wo_id, e.actor, e.kind, e.message, e.payload, e.created_at
+		FROM wof_events e JOIN work_orders w ON w.id = e.wo_id
+		WHERE w.project_id = ? AND e.kind = ? ORDER BY e.id DESC LIMIT ?`, projectID, kind, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.Event
+	for rows.Next() {
+		var e model.Event
+		var payload string
+		var createdAt int64
+		if err := rows.Scan(&e.ID, &e.WOID, &e.Actor, &e.Kind, &e.Message, &payload, &createdAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(payload), &e.Payload)
+		e.CreatedAt = time.Unix(createdAt, 0)
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 func (r *WorkOrderRepo) Events(ctx context.Context, woID string, afterID int64, limit int) ([]model.Event, error) {

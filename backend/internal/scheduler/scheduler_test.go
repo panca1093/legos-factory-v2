@@ -38,6 +38,33 @@ func testDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func TestJobOfUnknownKindFailsOnceWithoutRetry(t *testing.T) {
+	db := testDB(t)
+	s := New(&store.JobRepo{DB: db}, slog.Default(), 2)
+	ctx := context.Background()
+	id, err := s.Enqueue(ctx, "catalog_summary", "wo1", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Start(ctx)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var state string
+		var attempts int
+		db.QueryRow(`SELECT state, attempts FROM jobs WHERE id = ?`, id).Scan(&state, &attempts)
+		if state == string(model.JobFailed) {
+			if attempts > 1 {
+				t.Fatalf("an unknown kind must not be retried, attempts %d", attempts)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job still %s", state)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestConcurrentClaimingNoDoubleExecution(t *testing.T) {
 	db := testDB(t)
 	log := slog.Default()

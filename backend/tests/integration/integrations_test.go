@@ -96,7 +96,6 @@ func decode[T any](t *testing.T, body string) T {
 }
 
 func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
-	t.Skip("asserts a journal record through /knowledge; rewritten in KC step 1")
 	if testing.Short() {
 		t.Skip("integration test")
 	}
@@ -233,9 +232,8 @@ func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
 	if got := gitOut(t, repo, "rev-parse", base); got == sha {
 		t.Fatal("the default branch must never be pushed")
 	}
-	pr := awaitKnowledge(t, ta, "?work_order_id="+wo, "pr_opened")
-	if pr.Trust != "verified" || !contains(pr.SourceRefs, "pr:github:acme/greeter#5") {
-		t.Fatalf("PR knowledge record: %+v", pr)
+	if pr := awaitLogLine(t, ta, proj, "`"+wo+"` **pr_opened** (factory)"); !strings.Contains(pr, "Pull request opened: github:acme/greeter#5") {
+		t.Fatalf("PR log line: %s", pr)
 	}
 
 	// a disabled connection blocks new work on the bound project

@@ -193,30 +193,7 @@ async function save() {
               </div>
             </div>
           </section>
-          <section class="settings-section">
-            <h2>Cataloger summaries</h2>
-            <p>
-              Knowledge is always recorded deterministically. Optionally, the
-              Cataloger model writes one summary when a work order is approved;
-              it is stored as an AI interpretation that cites its sources.
-            </p>
-            <label class="switch-row"
-              ><span class="row"
-                ><BrickBot persona="cataloger" class="compact" /><strong
-                  class="small"
-                  >Summarize completed work orders</strong
-                ></span
-              ><span class="switch"
-                ><input
-                  v-model="config.cataloger_summaries"
-                  type="checkbox"
-                  data-test="cataloger-summaries"
-                  aria-label="Summarize completed work orders"
-                  :disabled="
-                    !session.isAdmin || busy || !initialized
-                  " /><span></span></span
-            ></label></section
-        ></template>
+        </template>
         <template v-else-if="tab === 'preferences'"
           ><section class="settings-section">
             <h2>Make yourself at home.</h2>

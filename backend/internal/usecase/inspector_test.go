@@ -265,14 +265,17 @@ func TestVerificationWritesNoKnowledgeButKeepsRevisionHistory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	recs, err := r.f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: r.wo.ID, Limit: 200})
-	if err != nil {
+	logged, err := os.ReadFile(filepath.Join(r.know.Bundle.Root(), "projects", "p1", "log.md"))
+	if err != nil && !os.IsNotExist(err) { // verification alone logs nothing, so no log file is the expected case
 		t.Fatal(err)
 	}
-	for _, k := range recs {
-		if k.Kind == model.KnowledgeVerification || k.Kind == model.KnowledgeImplementation || strings.HasPrefix(k.Title, "Verification passed on revision") {
-			t.Fatalf("unexpected knowledge record %q (%s)", k.Title, k.Kind)
+	for _, kind := range []string{model.KnowledgeVerification, model.KnowledgeImplementation} {
+		if strings.Contains(string(logged), "**"+kind+"**") {
+			t.Fatalf("unexpected %s line in the project log:\n%s", kind, logged)
 		}
+	}
+	if strings.Contains(string(logged), "Verification passed on revision") {
+		t.Fatalf("per-revision verification must not be logged:\n%s", logged)
 	}
 	for _, kind := range []string{"verification_started", "verification_passed"} {
 		if n := len(r.events(t, kind)); kind == "verification_started" && n != 2 || kind == "verification_passed" && n != 1 {
