@@ -377,6 +377,9 @@ func (f *Factory) recordGate(woID, gate string, state any, qs map[string]Noul, r
 
 // escalateReview hands the plan to the human when the Foreman review cannot produce a valid reply; otherwise the failed job would leave the order in ARCHITECT_REVIEW with nothing queued.
 func (f *Factory) escalateReview(ctx context.Context, wo *model.WorkOrder, cause error) error {
+	if f.cancelled(ctx, wo.ID) {
+		return nil
+	}
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "approved"}); err != nil {
 		return err
 	}
