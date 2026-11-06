@@ -161,7 +161,7 @@ var (
 )
 
 func convergeAnswers(over map[string]float64) map[string]float64 {
-	a := map[string]float64{"met_c1": 0.9, "met_c2": 0.95, "gap_valid_C1-G1": 0.05, "gap_valid_C1-G4": 0.05}
+	a := map[string]float64{"met_c1": 0.9, "met_c2": 0.95, "gap_valid_C1-G1": 0.05, "gap_valid_C1-G3": 0.05, "gap_valid_C1-G4": 0.05}
 	for k, v := range over {
 		a[k] = v
 	}
@@ -179,8 +179,8 @@ func TestBlockingGaps(t *testing.T) {
 	for _, g := range got {
 		ids = append(ids, g.ID)
 	}
-	if !reflect.DeepEqual(ids, []string{"C1-G1", "C1-G4", "x"}) {
-		t.Fatalf("a code missing/contradicts gap or any gap citing a criterion blocks: %v", ids)
+	if !reflect.DeepEqual(ids, []string{"C1-G1", "C1-G3", "C1-G4", "x", "y"}) {
+		t.Fatalf("every contract or requirement gap, a missing/contradicting code gap and any gap citing a criterion block: %v", ids)
 	}
 }
 
@@ -214,7 +214,7 @@ func TestDecideConvergeGate(t *testing.T) {
 		{"row3 unmet criterion appends", nil, convergeAnswers(map[string]float64{"met_c2": 0.1}), nil, nil, false, false, 0, true, GateAppend, 3, []string{"does not implement acceptance criterion c2 (show the cart total)"}},
 		{"row3 beats row4", nil, convergeAnswers(map[string]float64{"met_c1": 0.5, "met_c2": 0.1}), nil, nil, false, false, 0, true, GateAppend, 3, nil},
 		{"row3 no budget escalates", []convergeGap{gapMissing}, convergeAnswers(map[string]float64{"gap_valid_C1-G1": 0.9}), nil, nil, false, false, 0, false, GateEscalate, 3, []string{"gap C1-G1"}},
-		{"row3 non-blocking gaps are not asked", []convergeGap{gapPartial, gapContract}, convergeAnswers(nil), nil, nil, false, false, 0, true, GateConverged, 5, nil},
+		{"row3 non-blocking gaps are not asked", []convergeGap{gapPartial}, convergeAnswers(nil), nil, nil, false, false, 0, true, GateConverged, 5, nil},
 		{"row4 unsettled met escalates", nil, convergeAnswers(map[string]float64{"met_c1": 0.5}), nil, nil, false, false, 0, true, GateEscalate, 4, []string{"it is unclear whether the diff implements acceptance criterion c1 (add items to the cart)"}},
 		{"row4 unsettled met escalates even without budget", nil, convergeAnswers(map[string]float64{"met_c1": 0.5}), nil, nil, false, false, 0, false, GateEscalate, 4, nil},
 		{"unsettled gap_valid is a note, not an append", []convergeGap{gapMissing}, convergeAnswers(map[string]float64{"gap_valid_C1-G1": 0.5}), nil, nil, false, false, 0, true, GateConverged, 5, nil},

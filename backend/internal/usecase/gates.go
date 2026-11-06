@@ -132,11 +132,12 @@ func citesCriterion(cites string, criteria []Criterion) bool {
 	return len(citedCriteria(cites, criteria)) > 0
 }
 
-// blockingGaps are the gaps Jev is asked about: a missing or contradicting code gap, or any gap citing an acceptance criterion.
+// blockingGaps are the gaps Jev is asked about: every contract or requirement gap, a missing or
+// contradicting code gap, and any gap citing an acceptance criterion.
 func blockingGaps(gaps []convergeGap, criteria []Criterion) []convergeGap {
 	var out []convergeGap
 	for _, g := range gaps {
-		if (g.Layer == "code" && (g.Type == "missing" || g.Type == "contradicts")) || citesCriterion(g.Cites, criteria) {
+		if g.Layer != "code" || g.Type == "missing" || g.Type == "contradicts" || citesCriterion(g.Cites, criteria) {
 			out = append(out, g)
 		}
 	}

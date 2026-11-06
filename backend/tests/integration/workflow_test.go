@@ -77,6 +77,7 @@ type scriptedJudge struct {
 	mu          sync.Mutex
 	revisePlan  bool
 	fixDone     bool
+	gapValid    bool
 	planCalls   int
 	doneCalls   int
 	lastRequest []byte
@@ -101,6 +102,11 @@ func (j *scriptedJudge) Ask(_ context.Context, state any, qs map[string]usecase.
 		j.doneCalls++
 		if j.fixDone && j.doneCalls == 1 {
 			answers["met_c1"] = 0.1
+		}
+		for id := range qs {
+			if j.gapValid && j.doneCalls == 1 && strings.HasPrefix(id, "gap_valid_") {
+				answers[id] = 0.9
+			}
 		}
 	}
 	raw, _ := json.Marshal(map[string]any{"state": state, "questions": qs})
@@ -321,4 +327,30 @@ func TestManualPauseHoldsAnOrder(t *testing.T) {
 		t.Fatalf("resume: %d %s", status, body)
 	}
 	ta.awaitState(t, manual, "NEEDS_HUMAN_REVIEW", 60*time.Second)
+}
+
+func TestConvergeGapAppendsATaskEndToEnd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	ta := boot(t)
+	ta.a.Server.Factory.Judge = &scriptedJudge{gapValid: true}
+	proj := ta.createProject(t, "Greeter", fixtureRepo(t))
+	id := ta.createWOWith(t, proj, "[converge-gap] Make the greeter greeting function available.")
+	if status, _ := ta.do(t, "POST", "/api/v1/work-orders/"+id+"/plan/generate", ""); status != 202 {
+		t.Fatal("plan generate")
+	}
+	ta.awaitState(t, id, "NEEDS_HUMAN_REVIEW", 120*time.Second)
+	var gates []string
+	for _, e := range ta.activity(t, id) {
+		if e.Kind == "converge_gate" {
+			gates = append(gates, fmt.Sprint(e.Payload["outcome"]))
+		}
+	}
+	if strings.Join(gates, ",") != "append,converged" {
+		t.Fatalf("converge gates %v", gates)
+	}
+	if kinds := ta.eventKinds(t, id); !hasEvent(kinds, "converge_append") {
+		t.Fatalf("missing converge_append: %v", kinds)
+	}
 }

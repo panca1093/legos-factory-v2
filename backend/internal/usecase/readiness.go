@@ -54,7 +54,14 @@ func (f *Factory) handleEvaluate(ctx context.Context, job model.Job) error {
 // escalation is the reason a human must decide.
 func (f *Factory) convergeGate(ctx context.Context, wo *model.WorkOrder) (handled bool, escalation []string, err error) {
 	criteria := splitCriteria(wo.Acceptance)
+	appends, err := f.convergeAppends(ctx, wo.ID)
+	if err != nil {
+		return false, nil, err
+	}
 	report := f.currentArchitectReport(wo)
+	if report != nil && report.Round <= appends {
+		report = nil // that round already acted on this report
+	}
 	if len(criteria) == 0 || report == nil {
 		note := "the Architect's converge report is missing for this revision"
 		if len(criteria) == 0 {
@@ -90,13 +97,9 @@ func (f *Factory) convergeGate(ctx context.Context, wo *model.WorkOrder) (handle
 	if err != nil {
 		return false, nil, err
 	}
-	appends, err := f.convergeAppends(ctx, wo.ID)
-	if err != nil {
-		return false, nil, err
-	}
 	in := ConvergeGateInput{
 		Criteria: criteria, Spec: wo.Spec, Tasks: gateTasks(tasks), Diff: diff, Checks: gateChecks,
-		OpenFindings: open, Gaps: report.Gaps,
+		OpenFindings: open, Gaps: append(slices.Clone(report.Gaps), citedFindingGaps(findings, criteria)...),
 	}
 	state, qs := convergeGateState(in)
 	res, over, jerr := f.askJudge(ctx, state, qs)
@@ -118,6 +121,22 @@ func (f *Factory) convergeGate(ctx context.Context, wo *model.WorkOrder) (handle
 		return false, out.Issues, nil
 	}
 	return false, nil, nil
+}
+
+var citesMarker = regexp.MustCompile(`\(cites ([^)]*)\)$`)
+
+// citedFindingGaps turn the open non-blocker findings that cite an acceptance criterion into
+// gaps, so Jev, not the Inspector, decides whether they send work back.
+func citedFindingGaps(findings []model.Finding, criteria []Criterion) []convergeGap {
+	var out []convergeGap
+	for _, fd := range openFindings(findings) {
+		m := citesMarker.FindStringSubmatch(strings.TrimSpace(fd.Detail))
+		if fd.Severity == model.SeverityBlocker || m == nil || !citesCriterion(m[1], criteria) {
+			continue
+		}
+		out = append(out, convergeGap{ID: fd.ID, Type: "partial", Layer: "code", Cites: m[1], Evidence: fd.Location, Fix: fd.Title + ": " + fd.Detail})
+	}
+	return out
 }
 
 // convergeNotes are what the next Builder run should keep in mind without being blocked by it:
@@ -176,7 +195,7 @@ func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in Conve
 	}
 	covered := map[string]bool{}
 	var contract, requirement []convergeGap
-	for _, g := range report.Gaps {
+	for _, g := range in.Gaps {
 		if !slices.Contains(out.Valid, g.ID) {
 			continue
 		}
@@ -263,26 +282,30 @@ func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in Conve
 		break
 	}
 
-	round := report.Round
-	f.event(wo.ID, "factory", "converge_append", fmt.Sprintf("Converge round %d: %d valid gap(s), %d task(s) appended", round, len(out.Valid), len(added)),
-		map[string]any{"round": round, "gaps": out.Valid, "unmet": out.Unmet, "tasks": taskIDs(added), "revision": wo.Revision, "parked": parked})
+	record := func() {
+		f.event(wo.ID, "factory", "converge_append", fmt.Sprintf("Converge round %d: %d valid gap(s), %d task(s) appended", report.Round, len(out.Valid), len(added)),
+			map[string]any{"round": report.Round, "gaps": out.Valid, "unmet": out.Unmet, "tasks": taskIDs(added), "revision": wo.Revision, "parked": parked})
+	}
 	switch {
 	case parked:
+		record()
 		return nil
 	case build:
 		newRev := wo.Revision + 1
 		if err := f.stepWith(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "factory", "Converge appended tasks; returning to builder",
-			map[string]any{"revision": newRev, "commit_sha": "", "architect_report": ""}); err != nil {
+			map[string]any{"revision": newRev, "commit_sha": ""}); err != nil {
 			return err
 		}
 		wo.Revision, wo.CommitSHA = newRev, ""
+		record()
 		return f.maybeAdvanceAfterImplementation(ctx, wo)
 	}
-	// nothing to build: the amended contract is judged again
-	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"architect_report": ""}); err != nil {
+	// nothing to build: converge alone judges the amended contract again, as the next round
+	if err := f.enqueuePayload(ctx, JobInspect, wo.ID, map[string]any{"converge_only": true, "round": report.Round + 1}); err != nil {
 		return err
 	}
-	return f.enqueue(ctx, JobInspect, wo.ID, "")
+	record()
+	return nil
 }
 
 func taskIDs(tasks []model.Task) []string {

@@ -96,7 +96,7 @@ func (h *MockHarness) execute(ctx context.Context, req model.AgentRequest) (mode
 	switch req.Role {
 	case model.AgentArchitect:
 		if req.Context["stage"] == "converge" {
-			return finishJSON(res, map[string]any{"gaps": []any{}, "converged": true})
+			return h.converge(req, res)
 		}
 		if h.invalidOnce(req) {
 			res.Text = `Here is the plan: {"decision":"MAYBE"}`
@@ -123,6 +123,22 @@ func (h *MockHarness) execute(ctx context.Context, req model.AgentRequest) (mode
 	default:
 		return res, nil
 	}
+}
+
+// converge finds no gap, except one code gap for objectives marked "[converge-gap]"
+// on the first revision that reaches the gate with the fix already in.
+func (h *MockHarness) converge(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
+	obj := req.Context["objective"]
+	h.mu.Lock()
+	gap := strings.Contains(obj, "[converge-gap]") && req.Context["revision"] == "1" && !h.invalidSent["gap:"+obj]
+	h.invalidSent["gap:"+obj] = h.invalidSent["gap:"+obj] || gap
+	h.mu.Unlock()
+	if !gap {
+		return finishJSON(res, map[string]any{"gaps": []any{}, "converged": true})
+	}
+	return finishJSON(res, map[string]any{"converged": false, "gaps": []map[string]string{{
+		"type": "missing", "layer": "code", "cites": "c1", "evidence": "greeter/greeter.go:1", "fix": "Handle the empty name.",
+	}}})
 }
 
 // invalidOnce scripts one schema-invalid reply for objectives marked
