@@ -14,6 +14,7 @@ export interface ChatStreamEvent {
 export type ChatEvent =
   | { event: "user_message"; data: { message: ChatMessage } }
   | { event: "delta"; data: { text: string } }
+  | { event: "title"; data: { title: string } }
   | { event: "done"; data: { message: ChatMessage } }
   | { event: "error"; data: { message?: ChatMessage; error: string } };
 

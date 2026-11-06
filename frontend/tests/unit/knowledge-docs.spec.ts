@@ -8,7 +8,10 @@ import { useToast } from "../../src/composables/useToast";
 import type { KBDoc, KBDocDetail } from "../../src/types/api";
 
 const push = vi.fn();
-vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => ({ query: {} }),
+}));
 
 const mk = (over: Partial<KBDoc>): KBDoc => ({
   id: "factory:prj_1:playbooks/escalation.md",

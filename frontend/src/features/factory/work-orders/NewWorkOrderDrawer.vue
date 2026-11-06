@@ -6,7 +6,12 @@ import BrickBot from "../../../components/agents/BrickBot.vue";
 import { useFactory } from "../../../stores/factory";
 import { useSession } from "../../../stores/session";
 import type { Settings } from "../../../types/api";
-const props = defineProps<{ open: boolean; projectID?: string }>();
+const props = defineProps<{
+  open: boolean;
+  projectID?: string;
+  prefill?: { title: string; objective: string; acceptance: string };
+  sourceChatID?: string;
+}>();
 const emit = defineEmits<{
   close: [];
   created: [{ id: string; planningError: string }];
@@ -61,9 +66,9 @@ watch(
       error.value = "";
       Object.assign(form, {
         project_id: props.projectID || factory.projects[0]?.id || "",
-        title: "",
-        objective: "",
-        acceptance: "",
+        title: props.prefill?.title ?? "",
+        objective: props.prefill?.objective ?? "",
+        acceptance: props.prefill?.acceptance ?? "",
         builder_model: "",
         inspector_model: "",
         source_ref: "",
@@ -121,6 +126,7 @@ async function create() {
       title: form.title.trim(),
       objective: form.objective.trim(),
       acceptance: form.acceptance.trim(),
+      ...(props.sourceChatID ? { source_chat_id: props.sourceChatID } : {}),
     });
     let planningError = "";
     try {

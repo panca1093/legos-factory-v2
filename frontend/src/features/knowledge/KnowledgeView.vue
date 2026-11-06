@@ -59,7 +59,7 @@ function scheduleDelete(id: string, title: string, onUndo: () => void) {
 </script>
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { BookOpen, Layers } from "lucide-vue-next";
 import SearchField from "../../components/ui/SearchField.vue";
 import { useFactory } from "../../stores/factory";
@@ -79,6 +79,7 @@ import "./knowledge.css";
 
 const factory = useFactory();
 const router = useRouter();
+const route = useRoute();
 
 const docs = ref<KBDoc[]>([]),
   draftCount = ref(0),
@@ -184,6 +185,8 @@ onMounted(async () => {
   reloadList = refreshAll;
   await Promise.allSettled([factory.refreshProjects()]);
   await refreshAll();
+  const linked = route.query.doc;
+  if (typeof linked === "string" && linked) openLinked(linked);
 });
 onBeforeUnmount(() => {
   clearTimeout(debounce);
