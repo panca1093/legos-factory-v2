@@ -158,8 +158,26 @@ export function currentReason(
   events: WOEvent[],
   hasMore = false,
 ): string {
+  return reasonOf(o, events, hasMore).text;
+}
+
+// The done gate's reasons one by one, as the backend listed them; empty for events logged before it did.
+export function currentIssues(
+  o: WorkOrder,
+  events: WOEvent[],
+  hasMore = false,
+): string[] {
+  const issues = reasonOf(o, events, hasMore).event?.payload?.issues;
+  return Array.isArray(issues) ? issues.map(String) : [];
+}
+
+function reasonOf(
+  o: WorkOrder,
+  events: WOEvent[],
+  hasMore: boolean,
+): { text: string; event?: WOEvent } {
   const kinds = reasonKinds(o);
-  if (!kinds.length) return "";
+  if (!kinds.length) return { text: "" };
   const lastTransition = (end: number, to?: string) => {
     for (let i = end - 1; i >= 0; i--)
       if (
@@ -170,16 +188,17 @@ export function currentReason(
     return -1;
   };
   const entry = lastTransition(events.length, o.state);
-  if (entry < 0 && hasMore) return "Needs your decision";
+  if (entry < 0 && hasMore) return { text: "Needs your decision" };
   const from = entry < 0 ? 0 : lastTransition(entry) + 1;
   for (let i = events.length - 1; i >= from; i--) {
     const e = events[i];
     if (!kinds.includes(e.kind)) continue;
-    if (e.kind !== "done_gate") return e.message;
+    if (e.kind !== "done_gate") return { text: e.message, event: e };
     const g = gateSummary(e);
-    if (g?.outcome === "escalate") return g.note || e.message;
+    if (g?.outcome === "escalate")
+      return { text: g.note || e.message, event: e };
   }
-  return "";
+  return { text: "" };
 }
 
 // The latest message of the given kinds, e.g. why a readiness check blocked or an Inspector escalated.

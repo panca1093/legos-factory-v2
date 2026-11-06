@@ -25,6 +25,7 @@ import ChangesPanel from "../reviews/ChangesPanel.vue";
 import {
   architectReport,
   changeRequestDraft,
+  currentIssues,
   currentReason,
 } from "../runs/agentActivity";
 const factory = useFactory(),
@@ -110,6 +111,11 @@ const status = computed(() => order.value && orderStatus(order.value)),
     order.value
       ? currentReason(order.value, factory.events, factory.eventsHasMore)
       : "",
+  ),
+  issues = computed(() =>
+    order.value
+      ? currentIssues(order.value, factory.events, factory.eventsHasMore)
+      : [],
   ),
   publish = computed(() => publishNote(project.value)),
   cost = computed(() => runs.value.reduce((n, r) => n + r.cost_micros, 0));
@@ -365,6 +371,7 @@ function download() {
         :busy="busy"
         :ship="ship"
         :reason="reason"
+        :issues="issues"
         :publish-note="publish.text"
         :diff="factory.diff"
         :refresh-failed="factory.diffRefreshFailed"

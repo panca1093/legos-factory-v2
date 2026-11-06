@@ -11,7 +11,7 @@ import {
 } from "../../../composables/presentation";
 import ActorBadge from "../ActorBadge.vue";
 import ReasonText from "../ReasonText.vue";
-import { currentReason } from "../runs/agentActivity";
+import { currentIssues, currentReason } from "../runs/agentActivity";
 const props = defineProps<{
   order: WorkOrder;
   tasks: Task[];
@@ -45,8 +45,13 @@ const paused = computed(() => !!props.order.paused_at),
       undefined,
     ),
   ),
+  issues = computed(() =>
+    currentIssues(props.order, props.events, props.hasMore),
+  ),
   openIssues = computed(
-    () => (reason.value ?? "").split(";").filter((p) => p.trim()).length,
+    () =>
+      issues.value.length ||
+      (reason.value ?? "").split(";").filter((p) => p.trim()).length,
   ),
   done = computed(
     () =>

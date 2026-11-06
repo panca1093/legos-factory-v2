@@ -451,3 +451,37 @@ func TestHumanRetryAfterAFailedDoneGateFixKeepsTheNote(t *testing.T) {
 		t.Fatalf("retry payload %v", p)
 	}
 }
+
+func TestDoneGateSendsArchitectFixesAndListsIssuesWhole(t *testing.T) {
+	ctx := context.Background()
+	report := `{"revision":0,"verdicts":[{"criterion_id":"c1","status":"not_met","evidence":"round.go","gap":"floats remain","fix":"use int64 rupiah"}],"deviations":["renamed a; then moved b"]}`
+	r := doneRig(t, &fakeJudge{}, report)
+	if wo := r.evaluate(t); wo.State != model.StateImplementing {
+		t.Fatalf("state %s", wo.State)
+	}
+	note := r.q.payloads[len(r.q.payloads)-1]["note"].(string)
+	if !strings.Contains(note, "The Architect's suggested fixes:\n- c1: use int64 rupiah") {
+		t.Fatalf("builder note lacks the Architect's fix:\n%s", note)
+	}
+	if ev := eventByKind(t, r, "fix_requested"); strings.Contains(ev.Message, "suggested fixes") || ev.Payload["note"] != note {
+		t.Fatalf("fix event: %+v", ev)
+	}
+
+	if err := r.wos.UpdateFields(ctx, r.wo.ID, map[string]any{"review_fixes": MaxRevisionCycles, "architect_report": strings.Replace(report, `"revision":0`, `"revision":1`, 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateSpecialistReview); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.Quality.Save(ctx, model.QualityCheck{ID: "qc2", WOID: r.wo.ID, Name: "go-test", Command: "go test ./...", Outcome: "PASS", Revision: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview {
+		t.Fatalf("state %s", wo.State)
+	}
+	issues, _ := eventByKind(t, r, "readiness_needs_human_review").Payload["issues"].([]any)
+	gate, _ := eventByKind(t, r, "done_gate").Payload["issues"].([]any)
+	if len(issues) != 2 || len(gate) != 2 || !strings.HasSuffix(issues[1].(string), "renamed a; then moved b") {
+		t.Fatalf("issues must stay whole, one per reason: readiness %v gate %v", issues, gate)
+	}
+}

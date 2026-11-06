@@ -63,7 +63,8 @@ func judge(p float64) verdict {
 type GateOutcome struct {
 	Outcome string
 	Row     int
-	Note    string // code-built revise/fix/escalate reason
+	Note    string   // code-built revise/fix/escalate reason
+	Issues  []string // the done gate's reasons one by one; Note joins them
 }
 
 type Criterion struct{ ID, Text string }
@@ -507,7 +508,7 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 		required = append(required, "covers_"+c.ID)
 	}
 	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
-		return GateOutcome{GateEscalate, 1, note}
+		return GateOutcome{Outcome: GateEscalate, Row: 1, Note: note}
 	}
 	var hard, soft, risky []string
 	labels := criterionLabels(in.Criteria)
@@ -536,7 +537,7 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 		}
 	}
 	if len(risky) > 0 {
-		return GateOutcome{GateEscalate, 2, joinNotes(risky)}
+		return GateOutcome{Outcome: GateEscalate, Row: 2, Note: joinNotes(risky)}
 	}
 	row, note := 0, ""
 	switch {
@@ -545,12 +546,12 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	case len(soft) > 0:
 		row, note = 4, joinNotes(soft)
 	default:
-		return GateOutcome{GateApprove, 5, ""}
+		return GateOutcome{Outcome: GateApprove, Row: 5, Note: ""}
 	}
 	if in.PlanRevisions >= maxPlanRevisions {
-		return GateOutcome{GateEscalate, row, note}
+		return GateOutcome{Outcome: GateEscalate, Row: row, Note: note}
 	}
-	return GateOutcome{GateRevise, row, note}
+	return GateOutcome{Outcome: GateRevise, Row: row, Note: note}
 }
 
 // architectStatus reduces the Architect's verdicts to one status per
@@ -593,14 +594,14 @@ func architectStatus(verdicts []ArchitectVerdict, id string) (status string, giv
 // questions in asked are read; answers to other ids are ignored.
 func decideDoneGate(in DoneGateInput, asked map[string]Noul, answers map[string]float64, judgeErr error, overLimit, checksFailed bool, openBlockers int, fixBudgetLeft bool) GateOutcome {
 	if checksFailed || openBlockers > 0 {
-		return GateOutcome{GateLoop, 1, "a check failed or a blocker finding is open"}
+		return GateOutcome{Outcome: GateLoop, Row: 1, Note: "a check failed or a blocker finding is open"}
 	}
 	required := append([]string{}, doneFixedIDs...)
 	for _, c := range in.Criteria {
 		required = append(required, "met_"+c.ID)
 	}
 	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
-		return GateOutcome{GateEscalate, 2, note}
+		return GateOutcome{Outcome: GateEscalate, Row: 2, Note: note}
 	}
 	var hard, soft []string
 	labels := criterionLabels(in.Criteria)
@@ -633,19 +634,20 @@ func decideDoneGate(in DoneGateInput, asked map[string]Noul, answers map[string]
 			hard = append(hard, fmt.Sprintf("the Architect reports work outside the spec or plan: %s", truncateText(d, 80)))
 		}
 	}
-	row, note := 0, ""
+	row, issues := 0, []string(nil)
 	switch {
 	case len(hard) > 0:
-		row, note = 3, joinNotes(append(hard, soft...))
+		row, issues = 3, append(hard, soft...)
 	case len(soft) > 0:
-		row, note = 4, joinNotes(soft)
+		row, issues = 4, soft
 	default:
-		return GateOutcome{GateDone, 5, ""}
+		return GateOutcome{Outcome: GateDone, Row: 5, Note: ""}
 	}
+	outcome := GateFix
 	if !fixBudgetLeft {
-		return GateOutcome{GateEscalate, row, note}
+		outcome = GateEscalate
 	}
-	return GateOutcome{GateFix, row, note}
+	return GateOutcome{Outcome: outcome, Row: row, Note: joinNotes(issues), Issues: issues}
 }
 
 // gateEvent builds the audit payload for an actor "jev" event: the exact
@@ -662,6 +664,7 @@ func gateEvent(gate string, state any, questions map[string]Noul, res JudgeResul
 		"row":             out.Row,
 		"outcome":         out.Outcome,
 		"note":            out.Note,
+		"issues":          out.Issues,
 		"yes_over":        yesAbove,
 		"no_under":        noBelow,
 	}
