@@ -17,7 +17,7 @@ type WorkOrderStore interface {
 	Get(ctx context.Context, id string) (*model.WorkOrder, error)
 	List(ctx context.Context) ([]model.WorkOrder, error)
 	PRTracking(ctx context.Context) ([]model.WorkOrder, error)
-	Delete(ctx context.Context, id string) error
+	Delete(ctx context.Context, wo *model.WorkOrder) error
 	UpdateState(ctx context.Context, id string, s model.State) error
 	UpdateFields(ctx context.Context, id string, fields map[string]any) error
 	UpdateStateAndFields(ctx context.Context, id string, s model.State, fields map[string]any) error
@@ -34,7 +34,7 @@ type ProjectStore interface {
 	Create(ctx context.Context, p *model.Project) error
 	SetBinding(ctx context.Context, id, connectionID, remoteRepo string) error
 	SetLanguage(ctx context.Context, id, language string) error
-	Delete(ctx context.Context, id string) error
+	DeleteWithOrders(ctx context.Context, id string, orders []model.WorkOrder) error
 }
 
 type MemberStore interface {

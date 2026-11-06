@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -48,6 +49,11 @@ func LoadConfig() (*model.Config, error) {
 	if strings.EqualFold(strings.TrimSpace(c.TypeSafeModel), "jev-latest") {
 		return nil, fmt.Errorf("TYPESAFE_MODEL must be a pinned version such as jev-1.14.0, not jev-latest")
 	}
+	abs, err := filepath.Abs(c.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("FACTORY_DATA_DIR: %w", err)
+	}
+	c.DataDir = abs
 	return c, nil
 }
 

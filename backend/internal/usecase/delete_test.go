@@ -11,10 +11,27 @@ import (
 	"legos-factory/backend/internal/store"
 )
 
+type jobQueue struct {
+	*store.JobRepo
+	onCancel func(woID string)
+}
+
+func (q *jobQueue) Enqueue(context.Context, string, string, string, map[string]any) (string, error) {
+	return "", nil
+}
+
+func (q *jobQueue) CancelWO(ctx context.Context, woID string) error {
+	if q.onCancel != nil {
+		q.onCancel(woID)
+	}
+	return q.JobRepo.CancelWO(ctx, woID)
+}
+
 func deleteFixture(t *testing.T, state model.State) (*Factory, *store.WorkOrderRepo) {
 	t.Helper()
 	f, wo, wos := monitorFactory(t, nil)
 	f.Proj = &store.ProjectRepo{DB: wos.DB}
+	f.Sched = &jobQueue{JobRepo: &store.JobRepo{DB: wos.DB}}
 	f.DataDir = t.TempDir()
 	if err := wos.UpdateFields(context.Background(), wo.ID, map[string]any{"state": string(state)}); err != nil {
 		t.Fatal(err)
@@ -162,5 +179,139 @@ func TestRemoveInsideRefusesOutsidePaths(t *testing.T) {
 	}
 	if !exists(outside) || !exists(root) {
 		t.Fatal("a protected path was removed")
+	}
+}
+
+func addJob(t *testing.T, wos *store.WorkOrderRepo, id, woID, kind string, state model.JobState) {
+	t.Helper()
+	j := &store.JobRepo{DB: wos.DB}
+	if err := j.Insert(context.Background(), model.Job{ID: id, Kind: kind, WOID: woID, MaxAttempts: 1}); err != nil {
+		t.Fatal(err)
+	}
+	j.SetState(context.Background(), id, state)
+}
+
+func TestDeleteWorkOrderRefusesWhileJobRunning(t *testing.T) {
+	ctx := context.Background()
+	f, wos := deleteFixture(t, model.StateCancelled)
+	addJob(t, wos, "j1", "wo1", JobImplement, model.JobRunning)
+	if err := f.DeleteWorkOrder(ctx, "wo1"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("want state conflict, got %v", err)
+	}
+	if _, err := wos.Get(ctx, "wo1"); err != nil || !exists(filepath.Join(f.DataDir, "workspaces", "wo1")) {
+		t.Fatal("order with a running job was removed")
+	}
+}
+
+func TestDeleteWorkOrderCancelsPendingOpenPRJob(t *testing.T) {
+	ctx := context.Background()
+	f, wos := deleteFixture(t, model.StateReady)
+	addJob(t, wos, "j1", "wo1", JobOpenPR, model.JobPending)
+	var cancelled []string
+	f.Sched.(*jobQueue).onCancel = func(id string) { cancelled = append(cancelled, id) }
+	if err := f.DeleteWorkOrder(ctx, "wo1"); err != nil {
+		t.Fatal(err)
+	}
+	if len(cancelled) != 1 || cancelled[0] != "wo1" {
+		t.Fatalf("pending jobs not cancelled: %v", cancelled)
+	}
+}
+
+func TestDeleteWorkOrderDoesNotCancelJobsOfActiveOrder(t *testing.T) {
+	ctx := context.Background()
+	f, wos := deleteFixture(t, model.StateImplementing)
+	addJob(t, wos, "j1", "wo1", JobImplement, model.JobPending)
+	if err := f.DeleteWorkOrder(ctx, "wo1"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatal(err)
+	}
+	if !(&store.JobRepo{DB: wos.DB}).HasActive(ctx, "wo1", "", JobImplement) {
+		t.Fatal("refused delete cancelled the job")
+	}
+}
+
+func TestDeleteWorkOrderRefusesWhenSnapshotChanged(t *testing.T) {
+	ctx := context.Background()
+	f, wos := deleteFixture(t, model.StateReady)
+	f.Sched.(*jobQueue).onCancel = func(id string) {
+		if err := wos.UpdateFields(ctx, id, map[string]any{"pr_ref": "acme/app#9"}); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := f.DeleteWorkOrder(ctx, "wo1"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("want state conflict, got %v", err)
+	}
+	if _, err := wos.Get(ctx, "wo1"); err != nil {
+		t.Fatal("order removed although a PR appeared after the check")
+	}
+}
+
+func TestDeleteWorkOrderReadyWithTrackingFailure(t *testing.T) {
+	ctx := context.Background()
+	f, wos := deleteFixture(t, model.StateReady)
+	if err := wos.UpdateFields(ctx, "wo1", map[string]any{"pr_ref": "acme/app#7", "pr_track_failed_at": 1700000000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DeleteWorkOrder(ctx, "wo1"); err != nil {
+		t.Fatalf("tracking failed: %v", err)
+	}
+}
+
+func TestDeleteProjectRefusesWhileJobRunning(t *testing.T) {
+	ctx := context.Background()
+	f, wos := deleteFixture(t, model.StateCancelled)
+	if err := wos.Create(ctx, &model.WorkOrder{ID: "wo2", ProjectID: "p1", Title: "t", Objective: "o", State: model.StateCancelled, CreatedBy: "u1"}); err != nil {
+		t.Fatal(err)
+	}
+	addJob(t, wos, "j1", "wo2", JobImplement, model.JobRunning)
+	if err := f.DeleteProject(ctx, "p1"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("want state conflict, got %v", err)
+	}
+	for _, id := range []string{"wo1", "wo2"} {
+		if _, err := wos.Get(ctx, id); err != nil {
+			t.Fatalf("%s removed: %v", id, err)
+		}
+	}
+	if _, err := f.Proj.Get(ctx, "p1"); err != nil || !exists(filepath.Join(f.DataDir, "workspaces", "wo1")) {
+		t.Fatal("project delete was not all-or-nothing")
+	}
+}
+
+func TestDeleteProjectLateOrderIsConflictAndRemovesNothing(t *testing.T) {
+	ctx := context.Background()
+	f, wos := deleteFixture(t, model.StateCancelled)
+	f.Sched.(*jobQueue).onCancel = func(string) {
+		_ = wos.Create(ctx, &model.WorkOrder{ID: "late", ProjectID: "p1", Title: "t", Objective: "o", State: model.StateQueued, CreatedBy: "u1"})
+	}
+	if err := f.DeleteProject(ctx, "p1"); !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("want state conflict, got %v", err)
+	}
+	for _, id := range []string{"wo1", "late"} {
+		if _, err := wos.Get(ctx, id); err != nil {
+			t.Fatalf("%s removed: %v", id, err)
+		}
+	}
+	if !exists(filepath.Join(f.DataDir, "workspaces", "wo1")) {
+		t.Fatal("workspace removed although nothing was deleted")
+	}
+}
+
+func TestDeleteProjectDropsItsSearchIndex(t *testing.T) {
+	ctx := context.Background()
+	f, wos := deleteFixture(t, model.StateCancelled)
+	kbRepo := &store.KBRepo{DB: wos.DB}
+	doc := model.KBParsed{
+		KBDoc: model.KBDoc{ID: "d1", Source: model.KBSourceRepo, ProjectID: "p1", Path: "a.md", CommitSHA: "c", ContentHash: "h", Type: "Doc",
+			Status: model.KBStatusStable, Trust: model.KBTrustUnverified, Title: "zebrafish", Meta: map[string]any{}},
+		Body: "zebrafish quokka",
+	}
+	if err := kbRepo.Upsert(ctx, doc, []float32{1, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DeleteProject(ctx, "p1"); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := wos.DB.QueryRow(`SELECT COUNT(*) FROM kb_fts WHERE kb_fts MATCH 'quokka'`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("fts rows left: %d %v", n, err)
 	}
 }

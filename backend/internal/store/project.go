@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,17 +50,41 @@ func (r *ProjectRepo) SetBinding(ctx context.Context, id, connectionID, remoteRe
 	return nil
 }
 
-// Delete fails on the work_orders foreign key while any order remains; members,
-// knowledge and KB docs cascade, chats keep their rows with project_id cleared.
-func (r *ProjectRepo) Delete(ctx context.Context, id string) error {
-	res, err := r.DB.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, id)
+// DeleteWithOrders removes the project and the given orders in one transaction,
+// so a refusal (changed or running order, or an order created meanwhile) removes
+// nothing. Members, knowledge and KB docs cascade, chats keep their rows with
+// project_id cleared.
+func (r *ProjectRepo) DeleteWithOrders(ctx context.Context, id string, orders []model.WorkOrder) error {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for i := range orders {
+		if err := deleteSnapshot(ctx, tx, &orders[i]); err != nil && !errors.Is(err, model.ErrWorkOrderNotFound) {
+			return err
+		}
+	}
+	var left int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM work_orders WHERE project_id = ?`, id).Scan(&left); err != nil {
+		return err
+	}
+	if left > 0 {
+		return fmt.Errorf("%w: project %s gained %d work order(s) meanwhile; try again", model.ErrStateConflict, id, left)
+	}
+	// the contentless FTS table is not reached by FK cascades
+	if _, err := tx.ExecContext(ctx, `DELETE FROM kb_fts WHERE rowid IN (SELECT m.fts_rowid FROM kb_fts_map m
+		JOIN kb_docs d ON d.id = m.doc_id WHERE d.project_id = ?)`, id); err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return model.ErrProjectNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 func (r *ProjectRepo) Get(ctx context.Context, id string) (*model.Project, error) {

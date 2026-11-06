@@ -212,7 +212,7 @@ func deletable(wo *model.WorkOrder) bool {
 	case model.StateCancelled, model.StateBlocked:
 		return true
 	case model.StateReady:
-		return wo.PRRef == "" || wo.PRMergedAt != nil || wo.PRClosedAt != nil
+		return wo.PRRef == "" || wo.PRMergedAt != nil || wo.PRClosedAt != nil || wo.PRTrackFailedAt != nil
 	}
 	return false
 }
@@ -227,7 +227,10 @@ func (f *Factory) DeleteWorkOrder(ctx context.Context, woID string) error {
 		return stateConflict("WO %s is %s and still in flight; cancel it or wait for its PR to be merged or closed before deleting", woID, wo.State)
 	}
 	f.closePlanning(woID)
-	if err := f.WO.Delete(ctx, woID); err != nil {
+	if err := f.Sched.CancelWO(ctx, woID); err != nil {
+		return err
+	}
+	if err := f.WO.Delete(ctx, wo); err != nil {
 		return err
 	}
 	f.removeWorkspaces(woID)
@@ -260,13 +263,15 @@ func (f *Factory) DeleteProject(ctx context.Context, projectID string) error {
 	}
 	for _, wo := range own {
 		f.closePlanning(wo.ID)
-		if err := f.WO.Delete(ctx, wo.ID); err != nil {
+		if err := f.Sched.CancelWO(ctx, wo.ID); err != nil {
 			return err
 		}
-		f.removeWorkspaces(wo.ID)
 	}
-	if err := f.Proj.Delete(ctx, projectID); err != nil {
+	if err := f.Proj.DeleteWithOrders(ctx, projectID, own); err != nil {
 		return err
+	}
+	for _, wo := range own {
+		f.removeWorkspaces(wo.ID)
 	}
 	f.Log.Info("project deleted", "project", projectID, "work_orders", len(own))
 	return nil

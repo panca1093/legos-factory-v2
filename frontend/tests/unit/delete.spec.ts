@@ -59,6 +59,9 @@ describe("isDeletable", () => {
     expect(
       isDeletable(o({ state: "READY", pr_ref: "7", pr_closed_at: "t" })),
     ).toBe(true);
+    expect(
+      isDeletable(o({ state: "READY", pr_ref: "7", pr_track_failed_at: "t" })),
+    ).toBe(true);
     expect(isDeletable(o({ state: "IMPLEMENTING" }))).toBe(false);
     expect(isDeletable(o({ state: "BLOCKED" }))).toBe(true);
     expect(isDeletable(o({ state: "NEEDS_HUMAN_REVIEW" }))).toBe(false);
@@ -86,6 +89,24 @@ describe("store actions", () => {
       "LF-125",
       "LF-124",
     ]);
+  });
+  it("treats 404 as already deleted for both actions", async () => {
+    const f = useFactory();
+    f.selectedID = "LF-121";
+    reply(
+      404,
+      JSON.stringify({ error: { code: "NOT_FOUND", message: "gone" } }),
+    );
+    await f.deleteWorkOrder("LF-121");
+    expect(f.workOrders.map((w) => w.id)).not.toContain("LF-121");
+    expect(f.selectedID).toBe("");
+    reply(
+      404,
+      JSON.stringify({ error: { code: "NOT_FOUND", message: "gone" } }),
+    );
+    await f.deleteProject("loan");
+    expect(f.projects.map((p) => p.id)).toEqual(["atlas", "orbit"]);
+    expect(f.workOrders.some((w) => w.project_id === "loan")).toBe(false);
   });
   it("keeps state and throws the server message on 409", async () => {
     const f = useFactory();

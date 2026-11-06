@@ -68,7 +68,11 @@ export const isActive = (w: WorkOrder) => !isFinished(w);
 export const isDeletable = (w: WorkOrder) =>
   w.state === "CANCELLED" ||
   w.state === "BLOCKED" ||
-  (w.state === "READY" && (!w.pr_ref || !!w.pr_merged_at || !!w.pr_closed_at));
+  (w.state === "READY" &&
+    (!w.pr_ref ||
+      !!w.pr_merged_at ||
+      !!w.pr_closed_at ||
+      !!w.pr_track_failed_at));
 
 export const stages = ["Brief", "Plan", "Build", "Review", "Ship"] as const;
 export const stageTabs = ["plan", "plan", "progress", "review", "changes"];

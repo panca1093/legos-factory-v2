@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,6 +13,18 @@ import (
 	"legos-factory/backend/internal/store"
 	"legos-factory/backend/internal/usecase"
 )
+
+type jobQueue struct{ *store.JobRepo }
+
+func (jobQueue) Enqueue(context.Context, string, string, string, map[string]any) (string, error) {
+	return "", nil
+}
+
+type brokenMembers struct{ usecase.MemberStore }
+
+func (brokenMembers) IsMember(context.Context, string, string) (bool, error) {
+	return false, errors.New("db down")
+}
 
 func bootDelete(t *testing.T) (*Server, *store.WorkOrderRepo, string) {
 	t.Helper()
@@ -26,7 +39,7 @@ func bootDelete(t *testing.T) (*Server, *store.WorkOrderRepo, string) {
 	srv.WORepo = wos
 	srv.Projects = &usecase.Projects{Store: projRepo, Members: members, Users: &store.UserRepo{DB: db}}
 	data := t.TempDir()
-	srv.Factory = &usecase.Factory{WO: wos, Proj: projRepo, DataDir: data, Log: slog.Default()}
+	srv.Factory = &usecase.Factory{WO: wos, Proj: projRepo, Sched: jobQueue{&store.JobRepo{DB: db}}, DataDir: data, Log: slog.Default()}
 	return srv, wos, data
 }
 
@@ -134,5 +147,13 @@ func TestDeleteProjectEndpoint(t *testing.T) {
 	}
 	if b, err := os.ReadFile(filepath.Join(folder, "keep.txt")); err != nil || string(b) != "mine" {
 		t.Fatal("the user's own folder was touched")
+	}
+}
+
+func TestDeleteProjectAccessCheckFailureIs500(t *testing.T) {
+	srv, _, _ := bootDelete(t)
+	srv.Projects.Members = brokenMembers{srv.Projects.Members}
+	if code, body := chatDo(srv, "ana", "DELETE", "/api/v1/projects/p1", ""); code != http.StatusInternalServerError {
+		t.Fatalf("db error: %d %s", code, body)
 	}
 }

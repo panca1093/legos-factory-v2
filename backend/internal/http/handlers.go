@@ -227,7 +227,10 @@ func (s *Server) handleDeleteWorkOrder(c echo.Context) error {
 func (s *Server) handleDeleteProject(c echo.Context) error {
 	ctx := c.Request().Context()
 	if err := s.Projects.Authorize(ctx, currentUser(c), c.Param("id")); err != nil {
-		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "project not found")
+		if usecase.IsNotFound(err) {
+			return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "project not found")
+		}
+		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not check access")
 	}
 	if err := s.Factory.DeleteProject(ctx, c.Param("id")); err != nil {
 		return mapDomainError(c, err)
