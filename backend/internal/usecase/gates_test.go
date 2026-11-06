@@ -153,28 +153,44 @@ func TestDecidePlanGateAskedQuestions(t *testing.T) {
 	})
 }
 
-func doneAnswers(over map[string]float64) map[string]float64 {
-	a := map[string]float64{"met_c1": 0.9, "met_c2": 0.95, "deviates": 0.05, "notes_unresolved": 0.1}
+var (
+	gapMissing  = convergeGap{ID: "C1-G1", Type: "missing", Layer: "code", Cites: "c1", Evidence: "cart.go:10", Fix: "add AddItem"}
+	gapPartial  = convergeGap{ID: "C1-G2", Type: "partial", Layer: "code", Cites: "spec §2", Evidence: "cart.go:20", Fix: "tidy"}
+	gapContract = convergeGap{ID: "C1-G3", Type: "contradicts", Layer: "contract", Cites: "spec §3", Evidence: "cart.go:30", Fix: "reword"}
+	gapACOnly   = convergeGap{ID: "C1-G4", Type: "partial", Layer: "code", Cites: "c2, spec §1", Evidence: "total.go:1", Fix: "sum"}
+)
+
+func convergeAnswers(over map[string]float64) map[string]float64 {
+	a := map[string]float64{"met_c1": 0.9, "met_c2": 0.95, "gap_valid_C1-G1": 0.05, "gap_valid_C1-G3": 0.05, "gap_valid_C1-G4": 0.05}
 	for k, v := range over {
 		a[k] = v
 	}
 	return a
 }
 
-func metVerdicts() []ArchitectVerdict {
-	return []ArchitectVerdict{{CriterionID: "c1", Status: "met", Evidence: "ok"}, {CriterionID: "c2", Status: "met", Evidence: "ok"}}
+func convergeInput(gaps ...convergeGap) ConvergeGateInput {
+	return ConvergeGateInput{Criteria: testCriteria, Gaps: gaps}
 }
 
-func doneInput() DoneGateInput {
-	return DoneGateInput{Criteria: testCriteria, ArchitectVerdicts: metVerdicts()}
+func TestBlockingGaps(t *testing.T) {
+	got := blockingGaps([]convergeGap{gapMissing, gapPartial, gapContract, gapACOnly,
+		{ID: "x", Type: "unrequested", Layer: "code", Cites: "C2"}, {ID: "y", Type: "contradicts", Layer: "requirement", Cites: "spec"}}, testCriteria)
+	var ids []string
+	for _, g := range got {
+		ids = append(ids, g.ID)
+	}
+	if !reflect.DeepEqual(ids, []string{"C1-G1", "C1-G3", "C1-G4", "x", "y"}) {
+		t.Fatalf("every contract or requirement gap, a missing/contradicting code gap and any gap citing a criterion block: %v", ids)
+	}
 }
 
-func TestDecideDoneGate(t *testing.T) {
+func TestDecideConvergeGate(t *testing.T) {
 	boom := errors.New("boom")
 	cases := []struct {
 		name     string
+		gaps     []convergeGap
 		answers  map[string]float64
-		mod      func(*DoneGateInput)
+		mod      func(*ConvergeGateInput)
 		err      error
 		over     bool
 		failed   bool
@@ -184,51 +200,42 @@ func TestDecideDoneGate(t *testing.T) {
 		row      int
 		noteHas  []string
 	}{
-		{"row1 checks failed", doneAnswers(nil), nil, nil, false, true, 0, true, GateLoop, 1, nil},
-		{"row1 blockers", doneAnswers(nil), nil, nil, false, false, 2, true, GateLoop, 1, nil},
-		{"row1 beats judge error", nil, nil, boom, true, true, 0, true, GateLoop, 1, nil},
-		{"row2 judge error", nil, nil, boom, false, false, 0, true, GateEscalate, 2, []string{"boom"}},
-		{"row2 no judge", nil, nil, errNoJudge, false, false, 0, true, GateEscalate, 2, []string{"jev is not configured"}},
-		{"row2 over limit", doneAnswers(nil), nil, nil, true, false, 0, true, GateEscalate, 2, []string{"context limit"}},
-		{"row2 missing answers", map[string]float64{"met_c1": 0.9}, nil, nil, false, false, 0, true, GateEscalate, 2, nil},
-		{"row2 no criteria", doneAnswers(nil), func(in *DoneGateInput) { in.Criteria = nil }, nil, false, false, 0, true, GateEscalate, 2, []string{"no acceptance criteria to judge against"}},
-		{"row3 not met", doneAnswers(map[string]float64{"met_c2": 0.1}), nil, nil, false, false, 0, true, GateFix, 3, []string{"does not implement acceptance criterion c2 (show the cart total)"}},
-		{"row3 deviates", doneAnswers(map[string]float64{"deviates": 0.9}), nil, nil, false, false, 0, true, GateFix, 3, []string{"spec does not describe"}},
-		{"row3 notes unresolved", doneAnswers(map[string]float64{"notes_unresolved": 0.9}), nil, nil, false, false, 0, true, GateFix, 3, []string{"Foreman notes"}},
-		{"row3 no budget escalates", doneAnswers(map[string]float64{"deviates": 0.9}), nil, nil, false, false, 0, false, GateEscalate, 3, nil},
-		{"row3 architect not_met", doneAnswers(nil), func(in *DoneGateInput) { in.ArchitectVerdicts[0].Status = "not_met" }, nil, false, false, 0, true, GateFix, 3, []string{"Architect reports acceptance criterion c1 (add items to the cart) as not met"}},
-		{"row3 architect deviations", doneAnswers(nil), func(in *DoneGateInput) { in.Deviations = []string{"added an admin endpoint"} }, nil, false, false, 0, true, GateFix, 3, []string{"outside the spec or plan: added an admin endpoint"}},
-		{"row3 blank deviations ignored", doneAnswers(nil), func(in *DoneGateInput) { in.Deviations = []string{" ", ""} }, nil, false, false, 0, true, GateDone, 5, nil},
-		{"row3 not_met beats unclear for same criterion", doneAnswers(nil), func(in *DoneGateInput) {
-			in.ArchitectVerdicts = append(in.ArchitectVerdicts, ArchitectVerdict{CriterionID: "c1", Status: "not_met"}, ArchitectVerdict{CriterionID: "c1", Status: "unclear"})
-		}, nil, false, false, 0, true, GateFix, 3, nil},
-		{"row4 unsettled met", doneAnswers(map[string]float64{"met_c1": 0.5}), nil, nil, false, false, 0, true, GateFix, 4, []string{"it is unclear whether the diff implements acceptance criterion c1 (add items to the cart)"}},
-		{"row4 unsettled deviates", doneAnswers(map[string]float64{"deviates": 0.5}), nil, nil, false, false, 0, true, GateFix, 4, []string{"it is unclear whether the diff changes behaviour"}},
-		{"row4 no budget escalates", doneAnswers(map[string]float64{"notes_unresolved": 0.5}), nil, nil, false, false, 0, false, GateEscalate, 4, nil},
-		{"row4 architect unclear", doneAnswers(nil), func(in *DoneGateInput) { in.ArchitectVerdicts[1].Status = "unclear" }, nil, false, false, 0, true, GateFix, 4, []string{"Architect is unsure whether acceptance criterion c2"}},
-		{"row4 unknown status is unclear", doneAnswers(nil), func(in *DoneGateInput) { in.ArchitectVerdicts[1].Status = "maybe" }, nil, false, false, 0, true, GateFix, 4, nil},
-		{"row4 missing architect verdict", doneAnswers(nil), func(in *DoneGateInput) { in.ArchitectVerdicts = in.ArchitectVerdicts[:1] }, nil, false, false, 0, true, GateFix, 4, []string{"gave no verdict for acceptance criterion c2"}},
-		{"row4 no verdicts at all", doneAnswers(nil), func(in *DoneGateInput) { in.ArchitectVerdicts = nil }, nil, false, false, 0, true, GateFix, 4, nil},
-		{"row4 architect unclear no budget escalates", doneAnswers(nil), func(in *DoneGateInput) { in.ArchitectVerdicts[1].Status = "unclear" }, nil, false, false, 0, false, GateEscalate, 4, nil},
-		{"row5 done", doneAnswers(nil), nil, nil, false, false, 0, true, GateDone, 5, nil},
-		{"row5 done without budget", doneAnswers(nil), nil, nil, false, false, 0, false, GateDone, 5, nil},
-		{"edge met 0.7 unsettled", doneAnswers(map[string]float64{"met_c1": 0.7}), nil, nil, false, false, 0, true, GateFix, 4, nil},
-		{"edge met 0.71 yes", doneAnswers(map[string]float64{"met_c1": 0.71}), nil, nil, false, false, 0, true, GateDone, 5, nil},
-		{"edge met 0.3 unsettled", doneAnswers(map[string]float64{"met_c1": 0.3}), nil, nil, false, false, 0, true, GateFix, 4, nil},
-		{"edge met 0.29 no", doneAnswers(map[string]float64{"met_c1": 0.29}), nil, nil, false, false, 0, true, GateFix, 3, nil},
-		{"edge deviates 0.7 unsettled", doneAnswers(map[string]float64{"deviates": 0.7}), nil, nil, false, false, 0, true, GateFix, 4, nil},
-		{"edge deviates 0.3 unsettled", doneAnswers(map[string]float64{"deviates": 0.3}), nil, nil, false, false, 0, true, GateFix, 4, nil},
-		{"edge deviates 0.29 no", doneAnswers(map[string]float64{"deviates": 0.29}), nil, nil, false, false, 0, true, GateDone, 5, nil},
+		{"row1 checks failed", nil, convergeAnswers(nil), nil, nil, false, true, 0, true, GateLoop, 1, nil},
+		{"row1 blockers", nil, convergeAnswers(nil), nil, nil, false, false, 2, true, GateLoop, 1, nil},
+		{"row1 beats judge error", nil, nil, nil, boom, true, true, 0, true, GateLoop, 1, nil},
+		{"row2 judge error", nil, nil, nil, boom, false, false, 0, true, GateEscalate, 2, []string{"boom"}},
+		{"row2 no judge", nil, nil, nil, errNoJudge, false, false, 0, true, GateEscalate, 2, []string{"jev is not configured"}},
+		{"row2 over limit", nil, convergeAnswers(nil), nil, nil, true, false, 0, true, GateEscalate, 2, []string{"context limit"}},
+		{"row2 unanswered met", nil, map[string]float64{"met_c1": 0.9}, nil, nil, false, false, 0, true, GateEscalate, 2, []string{"met_c2"}},
+		{"row2 unanswered gap_valid", []convergeGap{gapMissing}, map[string]float64{"met_c1": 0.9, "met_c2": 0.9}, nil, nil, false, false, 0, true, GateEscalate, 2, []string{"gap_valid_C1-G1"}},
+		{"row2 no criteria", nil, convergeAnswers(nil), func(in *ConvergeGateInput) { in.Criteria = nil }, nil, false, false, 0, true, GateEscalate, 2, []string{"no acceptance criteria to judge against"}},
+		{"row3 valid gap appends", []convergeGap{gapMissing}, convergeAnswers(map[string]float64{"gap_valid_C1-G1": 0.9}), nil, nil, false, false, 0, true, GateAppend, 3, []string{"gap C1-G1"}},
+		{"row3 valid gap citing a criterion appends", []convergeGap{gapACOnly}, convergeAnswers(map[string]float64{"gap_valid_C1-G4": 0.9}), nil, nil, false, false, 0, true, GateAppend, 3, nil},
+		{"row3 unmet criterion appends", nil, convergeAnswers(map[string]float64{"met_c2": 0.1}), nil, nil, false, false, 0, true, GateAppend, 3, []string{"does not implement acceptance criterion c2 (show the cart total)"}},
+		{"row3 beats row4", nil, convergeAnswers(map[string]float64{"met_c1": 0.5, "met_c2": 0.1}), nil, nil, false, false, 0, true, GateAppend, 3, nil},
+		{"row3 no budget escalates", []convergeGap{gapMissing}, convergeAnswers(map[string]float64{"gap_valid_C1-G1": 0.9}), nil, nil, false, false, 0, false, GateEscalate, 3, []string{"gap C1-G1"}},
+		{"row3 non-blocking gaps are not asked", []convergeGap{gapPartial}, convergeAnswers(nil), nil, nil, false, false, 0, true, GateConverged, 5, nil},
+		{"row4 unsettled met escalates", nil, convergeAnswers(map[string]float64{"met_c1": 0.5}), nil, nil, false, false, 0, true, GateEscalate, 4, []string{"it is unclear whether the diff implements acceptance criterion c1 (add items to the cart)"}},
+		{"row4 unsettled met escalates even without budget", nil, convergeAnswers(map[string]float64{"met_c1": 0.5}), nil, nil, false, false, 0, false, GateEscalate, 4, nil},
+		{"unsettled gap_valid is a note, not an append", []convergeGap{gapMissing}, convergeAnswers(map[string]float64{"gap_valid_C1-G1": 0.5}), nil, nil, false, false, 0, true, GateConverged, 5, nil},
+		{"row5 converged", nil, convergeAnswers(nil), nil, nil, false, false, 0, true, GateConverged, 5, nil},
+		{"row5 gap judged not real", []convergeGap{gapMissing}, convergeAnswers(nil), nil, nil, false, false, 0, true, GateConverged, 5, nil},
+		{"row5 converged without budget", nil, convergeAnswers(nil), nil, nil, false, false, 0, false, GateConverged, 5, nil},
+		{"edge met 0.7 unsettled", nil, convergeAnswers(map[string]float64{"met_c1": 0.7}), nil, nil, false, false, 0, true, GateEscalate, 4, nil},
+		{"edge met 0.71 yes", nil, convergeAnswers(map[string]float64{"met_c1": 0.71}), nil, nil, false, false, 0, true, GateConverged, 5, nil},
+		{"edge met 0.3 unsettled", nil, convergeAnswers(map[string]float64{"met_c1": 0.3}), nil, nil, false, false, 0, true, GateEscalate, 4, nil},
+		{"edge met 0.29 no", nil, convergeAnswers(map[string]float64{"met_c1": 0.29}), nil, nil, false, false, 0, true, GateAppend, 3, nil},
+		{"edge gap_valid 0.71 yes", []convergeGap{gapMissing}, convergeAnswers(map[string]float64{"gap_valid_C1-G1": 0.71}), nil, nil, false, false, 0, true, GateAppend, 3, nil},
+		{"edge gap_valid 0.7 unsettled", []convergeGap{gapMissing}, convergeAnswers(map[string]float64{"gap_valid_C1-G1": 0.7}), nil, nil, false, false, 0, true, GateConverged, 5, nil},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			in := doneInput()
-			in.ArchitectVerdicts = metVerdicts()
+			in := convergeInput(c.gaps...)
 			if c.mod != nil {
 				c.mod(&in)
 			}
-			_, asked := doneGateState(in)
-			got := decideDoneGate(in, asked, c.answers, c.err, c.over, c.failed, c.blockers, c.budget)
+			_, asked := convergeGateState(in)
+			got := decideConvergeGate(in, asked, c.answers, c.err, c.over, c.failed, c.blockers, c.budget)
 			if got.Outcome != c.outcome || got.Row != c.row {
 				t.Fatalf("got %+v, want %s row %d", got, c.outcome, c.row)
 			}
@@ -241,19 +248,28 @@ func TestDecideDoneGate(t *testing.T) {
 	}
 }
 
-func TestDecideDoneGateAskedQuestions(t *testing.T) {
-	in := doneInput()
-	_, asked := doneGateState(in)
+func TestDecideConvergeGateReportsWhatIsValid(t *testing.T) {
+	in := convergeInput(gapMissing, gapACOnly)
+	_, asked := convergeGateState(in)
+	got := decideConvergeGate(in, asked, convergeAnswers(map[string]float64{"gap_valid_C1-G1": 0.9, "gap_valid_C1-G4": 0.5, "met_c2": 0.1}), nil, false, false, 0, true)
+	if !reflect.DeepEqual(got.Valid, []string{"C1-G1"}) || !reflect.DeepEqual(got.Unmet, []string{"c2"}) || len(got.Builder) != 1 || !strings.Contains(got.Builder[0], "C1-G4") {
+		t.Fatalf("valid, unmet and the unsettled gap's note: %+v", got)
+	}
+}
+
+func TestDecideConvergeGateAskedQuestions(t *testing.T) {
+	in := convergeInput(gapMissing)
+	_, asked := convergeGateState(in)
 	for id := range asked {
-		a := doneAnswers(nil)
+		a := convergeAnswers(nil)
 		delete(a, id)
-		got := decideDoneGate(in, asked, a, nil, false, false, 0, true)
+		got := decideConvergeGate(in, asked, a, nil, false, false, 0, true)
 		if got.Outcome != GateEscalate || got.Row != 2 || !strings.Contains(got.Note, id) {
 			t.Errorf("without %s: %+v", id, got)
 		}
 	}
-	a := doneAnswers(map[string]float64{"met_c9": 0, "bogus": 1})
-	if got := decideDoneGate(in, asked, a, nil, false, false, 0, true); got.Outcome != GateDone {
+	a := convergeAnswers(map[string]float64{"met_c9": 0, "bogus": 1})
+	if got := decideConvergeGate(in, asked, a, nil, false, false, 0, true); got.Outcome != GateConverged {
 		t.Fatalf("extra answers must be ignored: %+v", got)
 	}
 }
@@ -331,44 +347,32 @@ func TestPlanGateState(t *testing.T) {
 	}
 }
 
-func TestDoneGateState(t *testing.T) {
-	state, qs := doneGateState(DoneGateInput{
+func TestConvergeGateState(t *testing.T) {
+	state, qs := convergeGateState(ConvergeGateInput{
 		Criteria: []Criterion{{"c1", "a"}, {"c2", "b"}},
+		Gaps:     []convergeGap{gapMissing, gapPartial},
 		Diff:     []FileDiff{{Path: "a.go", Added: 1, Hunks: "+x\n"}},
 	})
-	for _, k := range []string{"acceptance_criteria", "spec", "diff", "diff_trimmed", "checks", "open_findings", "architect_verdicts", "deviations", "foreman_notes"} {
+	for _, k := range []string{"acceptance_criteria", "spec", "plan", "diff", "diff_trimmed", "checks", "open_findings", "gaps"} {
 		if _, ok := state[k]; !ok {
 			t.Errorf("state missing %s", k)
 		}
 	}
-	for _, id := range []string{"met_c1", "met_c2", "deviates", "notes_unresolved"} {
-		q, ok := qs[id]
-		if !ok || q.Criteria == nil {
+	for _, id := range []string{"met_c1", "met_c2", "gap_valid_C1-G1"} {
+		if q, ok := qs[id]; !ok || q.Criteria == nil || q.Criteria.True == "" || q.Criteria.False == "" {
 			t.Errorf("question %s missing or without criteria", id)
 		}
 	}
-	if len(qs) != 4 {
-		t.Errorf("questions: %d", len(qs))
+	if len(qs) != 3 {
+		t.Errorf("one question per blocking gap and per criterion, got %d", len(qs))
 	}
-	if q := qs["met_c1"]; !strings.Contains(q.Instructions, "diff implement") || strings.Contains(q.Instructions+q.Criteria.True+q.Criteria.False, "architect") {
-		t.Errorf("met_ must judge the diff only: %+v", q)
+	if q := qs["met_c1"]; !strings.Contains(q.Instructions, "diff implement") {
+		t.Errorf("met_ must judge the diff: %+v", q)
 	}
 	raw, _ := json.Marshal(state)
-	if !strings.Contains(string(raw), `"architect_verdicts":[]`) || !strings.Contains(string(raw), `"deviations":[]`) || !strings.Contains(string(raw), `"checks":[]`) || !strings.Contains(string(raw), `"diff_trimmed":[]`) {
-		t.Errorf("nil slices must marshal as []: %s", raw)
-	}
-}
-
-func TestDoneGateStateCarriesArchitectData(t *testing.T) {
-	state, _ := doneGateState(DoneGateInput{
-		Criteria:          []Criterion{{"c1", "a"}},
-		ArchitectVerdicts: []ArchitectVerdict{{CriterionID: "c1", Status: "met", Evidence: "see a.go"}},
-		Deviations:        []string{"extra endpoint"},
-	})
-	raw, _ := json.Marshal(state)
-	for _, want := range []string{`"architect_verdicts":[{"criterion_id":"c1","status":"met","evidence":"see a.go"}]`, `"deviations":["extra endpoint"]`} {
+	for _, want := range []string{`"checks":[]`, `"open_findings":[]`, `"diff_trimmed":[]`, `"plan":{}`, `"id":"C1-G2"`} {
 		if !strings.Contains(string(raw), want) {
-			t.Errorf("state missing %s: %s", want, raw)
+			t.Errorf("state lacks %s: %s", want, raw)
 		}
 	}
 }
@@ -467,9 +471,9 @@ func TestTrimHunks(t *testing.T) {
 			t.Fatalf("out=%+v trimmed=%v", out, trimmed)
 		}
 	})
-	t.Run("through doneGateState", func(t *testing.T) {
+	t.Run("through convergeGateState", func(t *testing.T) {
 		big := []FileDiff{{Path: "big.go", Hunks: strings.Repeat("0123456789\n", diffHunkBudget/11+100)}}
-		state, _ := doneGateState(DoneGateInput{Criteria: []Criterion{{"c1", "a"}}, Diff: big})
+		state, _ := convergeGateState(ConvergeGateInput{Criteria: []Criterion{{"c1", "a"}}, Diff: big})
 		if tr := state["diff_trimmed"].([]string); len(tr) != 1 || tr[0] != "big.go" {
 			t.Fatalf("diff_trimmed=%v", tr)
 		}
@@ -557,14 +561,6 @@ func TestNoulJSONShape(t *testing.T) {
 	raw, _ := json.Marshal(map[string]Noul{"a": {Instructions: "q", Criteria: &NoulCriteria{True: "t", False: "f"}}, "b": {Instructions: "q"}})
 	if string(raw) != `{"a":{"instructions":"q","criteria":{"true":"t","false":"f"}},"b":{"instructions":"q"}}` {
 		t.Fatalf("shape: %s", raw)
-	}
-}
-
-func TestArchitectStatusIsCaseInsensitive(t *testing.T) {
-	for in, want := range map[string]string{"MET": "met", " Not_Met ": "not_met", "Unclear": "unclear", "bogus": "unclear"} {
-		if got, given := architectStatus([]ArchitectVerdict{{CriterionID: "c1", Status: in}}, "c1"); got != want || !given {
-			t.Errorf("%q: got %q given=%v want %q", in, got, given, want)
-		}
 	}
 }
 

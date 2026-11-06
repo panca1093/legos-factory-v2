@@ -200,15 +200,15 @@ describe("currentReason", () => {
         into("QUEUED"),
         into("IMPLEMENTING"),
         into("NEEDS_HUMAN_REVIEW"),
-        ev("readiness_needs_human_review", "Done gate wants a human"),
+        ev("readiness_needs_human_review", "Converge gate wants a human"),
       ]),
-    ).toBe("Done gate wants a human");
+    ).toBe("Converge gate wants a human");
   });
   it("accepts the causing event logged just before the transition", () => {
     expect(
       currentReason(review, [
         into("IMPLEMENTING"),
-        ev("done_gate", "x", { outcome: "escalate", note: "note" }),
+        ev("converge_gate", "x", { outcome: "escalate", note: "note" }),
         into("NEEDS_HUMAN_REVIEW"),
       ]),
     ).toBe("note");
@@ -218,7 +218,7 @@ describe("currentReason", () => {
       currentReason(review, [
         ev("plan_escalated", "old plan reason"),
         into("IMPLEMENTING"),
-        ev("done_gate", "Done gate: escalate (row 3)", {
+        ev("converge_gate", "Converge gate: escalate (row 3)", {
           outcome: "escalate",
           row: 3,
         }),
@@ -370,7 +370,7 @@ describe("NowCard", () => {
     expect(
       currentIssues(order, [
         into("NEEDS_HUMAN_REVIEW"),
-        ev("done_gate", "x", { outcome: "escalate", note: "x", issues: null }),
+        ev("converge_gate", "x", { outcome: "escalate", note: "x", issues: null }),
       ]),
     ).toEqual([]);
   });

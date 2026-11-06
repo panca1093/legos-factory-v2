@@ -86,33 +86,18 @@ func TestImplementPromptNamesTaskScopeAndOffLimitTasks(t *testing.T) {
 	}
 }
 
-func TestImplementPromptRendersDoneGateNote(t *testing.T) {
-	wo := &model.WorkOrder{Title: "t"}
-	p := implementPrompt(wo, model.Job{Payload: map[string]any{"reason": "fix_done_gate", "note": "acceptance criterion c2 (rounds) is not covered"}}, nil)
-	for _, want := range []string{"final review", "acceptance criterion c2 (rounds) is not covered", "do not weaken tests"} {
-		if !strings.Contains(p, want) {
-			t.Fatalf("prompt missing %q:\n%s", want, p)
-		}
-	}
-	plain := implementPrompt(wo, model.Job{Payload: map[string]any{"reason": "fix_done_gate"}}, nil)
-	if !strings.Contains(plain, "requires remediation") {
-		t.Fatalf("a fix without a note falls back to the generic prompt:\n%s", plain)
-	}
-}
-
-func TestReviewAndVerifyPromptsNumberTheCriteria(t *testing.T) {
+func TestReviewAndConvergePromptsNumberTheCriteria(t *testing.T) {
 	wo := &model.WorkOrder{Title: "t", Acceptance: "- rounds half up\n- never floats"}
 	for name, p := range map[string]string{
 		"review":   foremanReviewPrompt(wo, nil, nil, false),
-		"verify":   architectVerifyPrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, "go test → PASS"),
-		"validate": foremanValidatePrompt(wo, "(none open)", "c1: met", "go test → PASS"),
+		"converge": convergePrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, "go test → PASS"),
 	} {
 		if !strings.Contains(p, "c1: rounds half up\nc2: never floats") {
 			t.Errorf("%s prompt lacks the numbered criteria:\n%s", name, p)
 		}
 	}
-	if p := architectVerifyPrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, ""); !strings.Contains(p, "--- a.go (+1 -0)") || !strings.Contains(p, "+x") {
-		t.Errorf("verify prompt lacks the diff:\n%s", p)
+	if p := convergePrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, ""); !strings.Contains(p, "--- a.go (+1 -0)") || !strings.Contains(p, "+x") {
+		t.Errorf("converge prompt lacks the diff:\n%s", p)
 	}
 }
 

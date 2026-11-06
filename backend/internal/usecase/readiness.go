@@ -5,31 +5,32 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
 	"legos-factory/backend/internal/model"
 )
 
-// handleEvaluate runs the done gate (SPEC section 7) while the order is still
-// in SPECIALIST_REVIEW, so a fix can return to the Builder, then decides
-// merge readiness. Without a Judge the gate is skipped and readiness stays
-// the deterministic rule set.
+// handleEvaluate runs the converge gate (contract-flow SPEC section 6) while
+// the order is still in SPECIALIST_REVIEW, so appended tasks can return to the
+// Builder, then decides merge readiness. Without a Judge the gate is skipped
+// and readiness stays the deterministic rule set.
 func (f *Factory) handleEvaluate(ctx context.Context, job model.Job) error {
 	wo, err := f.WO.Get(ctx, job.WOID)
 	if err != nil {
 		return err
 	}
 	if wo.State == model.StateImplementing {
-		return f.resumeDoneGateFix(ctx, wo) // a retry after a fix got only partway
+		return f.resumeAppend(ctx, wo) // a retry after an append got only partway
 	}
 	if wo.State != model.StateSpecialistReview {
 		return nil // superseded or already evaluated
 	}
 	var escalation []string
 	if f.Judge != nil {
-		fixed, note, err := f.doneGate(ctx, wo, lastAttempt(job))
-		if err != nil || fixed {
+		handled, note, err := f.convergeGate(ctx, wo)
+		if err != nil || handled {
 			return err
 		}
 		escalation = note
@@ -47,57 +48,38 @@ func (f *Factory) handleEvaluate(ctx context.Context, job model.Job) error {
 	return f.evaluateReadiness(ctx, wo, false, escalation)
 }
 
-// doneGate has the Foreman write validation notes, asks Jev and applies the done
-// truth table. fixed reports that the order went back to the Builder; a
-// non-empty escalation is the reason a human must decide.
-func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry bool) (fixed bool, escalation []string, err error) {
+// convergeGate asks Jev about the Architect's gaps and applies the converge
+// truth table. handled reports that the order left SPECIALIST_REVIEW's
+// readiness path (tasks appended, or parked for a human answer); a non-empty
+// escalation is the reason a human must decide.
+func (f *Factory) convergeGate(ctx context.Context, wo *model.WorkOrder) (handled bool, escalation []string, err error) {
 	criteria := splitCriteria(wo.Acceptance)
+	appends, err := f.convergeAppends(ctx, wo.ID)
+	if err != nil {
+		return false, nil, err
+	}
 	report := f.currentArchitectReport(wo)
+	if report != nil && report.Round <= appends {
+		report = nil // that round already acted on this report
+	}
 	if len(criteria) == 0 || report == nil {
-		note := "the Architect's verification is missing for this revision"
+		note := "the Architect's converge report is missing for this revision"
 		if len(criteria) == 0 {
 			note = "no acceptance criteria to judge against"
 		}
 		out := GateOutcome{Outcome: GateEscalate, Row: 2, Note: note}
-		f.recordGate(wo.ID, "done", map[string]any{}, nil, JudgeResult{}, out, errors.New(note))
+		f.recordGate(wo.ID, "converge", map[string]any{}, nil, JudgeResult{}, out, errors.New(note))
 		return false, []string{note}, nil
 	}
-	checksTxt, checksFailed := f.checksText(ctx, wo)
+	_, checksFailed := f.checksText(ctx, wo)
 	findings, err := f.Findings.List(ctx, wo.ID)
 	if err != nil {
 		return false, nil, err
 	}
 	var open []GateFinding
-	var findingsTxt strings.Builder
-	for _, fd := range findings {
-		if fd.Status == model.FindingOpen || fd.Status == model.FindingConfirmed || fd.Status == model.FindingEscalated {
-			open = append(open, GateFinding{Severity: fd.Severity, Path: fd.Location, Message: fd.Title + ": " + fd.Detail})
-			fmt.Fprintf(&findingsTxt, "[%s] %s — %s (%s)\n", fd.Severity, fd.Title, fd.Detail, fd.Location)
-		}
+	for _, fd := range openFindings(findings) {
+		open = append(open, GateFinding{Severity: fd.Severity, Path: fd.Location, Message: fd.Title + ": " + fd.Detail})
 	}
-	if findingsTxt.Len() == 0 {
-		findingsTxt.WriteString("(none open)\n")
-	}
-
-	f.event(wo.ID, "foreman", "validation_started", "Foreman validating the finished work", nil)
-	var v validationReply
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+wo.Spec, f.workspaceDir(wo.ID), wo.KBBaseSHA)
-	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman,
-		foremanValidatePrompt(wo, findingsTxt.String(), reportText(*report), checksTxt)+kbText,
-		map[string]string{"stage": "validate"}, "", &v, runOpts{Audit: audit, Prime: foremanPrime(wo)})
-	if err != nil {
-		if !errors.Is(err, model.ErrPermanent) && !lastTry {
-			return false, nil, err // transient: the job requeues
-		}
-		note := "Foreman validation failed: " + err.Error()
-		out := GateOutcome{Outcome: GateEscalate, Row: 2, Note: note}
-		f.recordGate(wo.ID, "done", map[string]any{}, nil, JudgeResult{}, out, errors.New(note))
-		return false, []string{note}, nil
-	}
-	f.Catalog.Record(ctx, wo, model.KnowledgePlanReview, model.TrustAIInterpretation, "foreman",
-		"Foreman validation notes", v.Notes, "run:"+runID)
-	f.event(wo.ID, "foreman", "foreman_validated", "Foreman validation notes ready", map[string]any{"notes": v.Notes, "run_id": runID})
-
 	diff, derr := f.Sandbox.Diff(ctx, f.workspaceDir(wo.ID))
 	if derr != nil {
 		f.event(wo.ID, "factory", "diff_unavailable", derr.Error(), nil)
@@ -111,37 +93,27 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry boo
 	if err != nil {
 		return false, nil, err
 	}
-	in := DoneGateInput{
-		Criteria: criteria, Spec: wo.Spec, Diff: diff, Checks: gateChecks, OpenFindings: open,
-		ArchitectVerdicts: report.Verdicts, Deviations: report.Deviations, ForemanNotes: v.Notes,
+	tasks, err := f.WO.Plan(ctx, wo.ID)
+	if err != nil {
+		return false, nil, err
 	}
-	state, qs := doneGateState(in)
+	in := ConvergeGateInput{
+		Criteria: criteria, Spec: wo.Spec, Tasks: gateTasks(tasks), Diff: diff, Checks: gateChecks,
+		OpenFindings: open, Gaps: append(slices.Clone(report.Gaps), citedFindingGaps(findings, criteria)...),
+	}
+	state, qs := convergeGateState(in)
 	res, over, jerr := f.askJudge(ctx, state, qs)
-	out := decideDoneGate(in, qs, res.Answers, jerr, over, checksFailed, openBlockers, wo.ReviewFixes < MaxRevisionCycles)
-	f.recordGate(wo.ID, "done", state, qs, res, out, jerr)
+	out := decideConvergeGate(in, qs, res.Answers, jerr, over, checksFailed, openBlockers, appends < MaxConvergeAppends)
+	f.recordGate(wo.ID, "converge", state, qs, res, out, jerr)
 
-	switch out.Outcome {
-	case GateFix:
-		// state and revision bump land in one UPDATE: a retry that finds IMPLEMENTING completes the fix (resumeDoneGateFix)
-		newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
-		if err := f.stepWith(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "factory", "Done gate requested a fix; returning to builder",
-			map[string]any{"revision": newRev, "commit_sha": "", "review_fixes": fixes}); err != nil {
+	if out.Outcome != GateConverged && out.Outcome != GateLoop {
+		if err := f.setBuilderNotes(ctx, wo.ID, "converge", convergeNotes(in, out)); err != nil {
 			return false, nil, err
 		}
-		wo.Revision, wo.CommitSHA, wo.ReviewFixes = newRev, "", fixes
-		note := out.Note + architectFixes(report)
-		issues := slices.DeleteFunc(slices.Clone(out.Issues), func(s string) bool { return slices.Contains(out.InReport, s) })
-		if strings.TrimSpace(v.Notes) != "" {
-			issues = append(issues, foremanNotesPrefix+v.Notes)
-		}
-		payload := map[string]any{"reason": "fix_done_gate", "note": note}
-		evPayload := map[string]any{"revision": newRev, "reason": "fix_done_gate", "note": note}
-		if items := fixItems(openFindings(findings), report, issues, ""); len(items) > 0 {
-			b := f.withEarlierFixes(ctx, wo.ID, newRev, items)
-			payload["brief"], evPayload["brief"], evPayload["items"] = b, b, items
-		}
-		f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: done gate requests a fix: %s", newRev, out.Note), evPayload)
-		return true, nil, f.enqueuePayload(ctx, JobImplement, wo.ID, payload)
+	}
+	switch out.Outcome {
+	case GateAppend:
+		return true, nil, f.appendRound(ctx, wo, in, out, report)
 	case GateEscalate:
 		if len(out.Issues) == 0 {
 			return false, []string{out.Note}, nil
@@ -151,39 +123,210 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry boo
 	return false, nil, nil
 }
 
-// resumeDoneGateFix finishes a fix whose evaluate job failed after the order
-// had already returned to IMPLEMENTING: it queues the Builder unless one is
-// already queued.
-func (f *Factory) resumeDoneGateFix(ctx context.Context, wo *model.WorkOrder) error {
+var citesMarker = regexp.MustCompile(`\(cites ([^)]*)\)$`)
+
+// citedFindingGaps turn the open non-blocker findings that cite an acceptance criterion into
+// gaps, so Jev, not the Inspector, decides whether they send work back.
+func citedFindingGaps(findings []model.Finding, criteria []Criterion) []convergeGap {
+	var out []convergeGap
+	for _, fd := range openFindings(findings) {
+		m := citesMarker.FindStringSubmatch(strings.TrimSpace(fd.Detail))
+		if fd.Severity == model.SeverityBlocker || m == nil || !citesCriterion(m[1], criteria) {
+			continue
+		}
+		out = append(out, convergeGap{ID: fd.ID, Type: "partial", Layer: "code", Cites: m[1], Evidence: fd.Location, Fix: fd.Title + ": " + fd.Detail})
+	}
+	return out
+}
+
+// convergeNotes are what the next Builder run should keep in mind without being blocked by it:
+// the gaps that are not blocking and the blocking ones Jev could not settle.
+func convergeNotes(in ConvergeGateInput, out GateOutcome) []string {
+	blocking := map[string]bool{}
+	for _, g := range blockingGaps(in.Gaps, in.Criteria) {
+		blocking[g.ID] = true
+	}
+	var notes []string
+	for _, g := range in.Gaps {
+		if !blocking[g.ID] {
+			notes = append(notes, gapLine(g))
+		}
+	}
+	return append(notes, out.Builder...)
+}
+
+var evidencePath = regexp.MustCompile(`[A-Za-z0-9_][A-Za-z0-9_./-]*\.[A-Za-z0-9]+`)
+
+// evidencePaths are the file paths a gap's evidence names ("round.go:12" gives "round.go").
+func evidencePaths(evidence string) []string {
+	var out []string
+	for _, p := range evidencePath.FindAllString(evidence, -1) {
+		if !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// appendRound turns the valid gaps into work. A code gap becomes a new plan task; a
+// contract gap amends the spec and, when its evidence names files, also becomes a task;
+// a requirement gap goes to the Foreman, and to a human when the Foreman escalates.
+// Earlier tasks are never rewritten. With tasks to build the order returns to the
+// Builder, otherwise converge runs again on the amended contract.
+func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in ConvergeGateInput, out GateOutcome, report *architectReport) error {
+	if fresh, err := f.WO.Get(ctx, wo.ID); err == nil {
+		wo.Clarifications, wo.Spec = fresh.Clarifications, fresh.Spec
+	}
+	plan, err := f.WO.Plan(ctx, wo.ID)
+	if err != nil {
+		return err
+	}
+	var added []model.Task
+	next := len(plan)
+	addTask := func(key, title, objective string, scope []string) {
+		if slices.ContainsFunc(plan, func(t model.Task) bool { return strings.HasPrefix(t.Title, key) }) {
+			return // a retry of this round already appended it
+		}
+		id := func() string { return fmt.Sprintf("%s_t%d", wo.ID, next) }
+		for next++; slices.ContainsFunc(plan, func(t model.Task) bool { return t.ID == id() }); next++ {
+		}
+		t := model.Task{ID: id(), WOID: wo.ID, Title: title, Objective: objective, Role: "builder", Scope: scope, Deps: []string{}}
+		plan, added = append(plan, t), append(added, t)
+	}
+	covered := map[string]bool{}
+	var contract, requirement []convergeGap
+	for _, g := range in.Gaps {
+		if !slices.Contains(out.Valid, g.ID) {
+			continue
+		}
+		for _, c := range citedCriteria(g.Cites, in.Criteria) {
+			covered[c] = true
+		}
+		objective := fmt.Sprintf("%s\nEvidence: %s\nGap %s (%s) against %s.", g.Fix, g.Evidence, g.ID, g.Type, g.Cites)
+		key := "Close gap " + g.ID + ":"
+		switch g.Layer {
+		case "code":
+			addTask(key, key+" "+truncateText(g.Fix, 60), objective, evidencePaths(g.Evidence))
+		case "contract":
+			contract = append(contract, g)
+			if paths := evidencePaths(g.Evidence); len(paths) > 0 {
+				addTask(key, key+" "+truncateText(g.Fix, 60), objective, paths)
+			}
+		default:
+			requirement = append(requirement, g)
+		}
+	}
+	for _, c := range in.Criteria {
+		if slices.Contains(out.Unmet, c.ID) && !covered[c.ID] {
+			key := fmt.Sprintf("Close criterion %s (C%d)", c.ID, report.Round)
+			addTask(key, key, fmt.Sprintf("Acceptance criterion %s is not met by the change: %s\nImplement what it requires.", c.ID, c.Text), nil)
+		}
+	}
+	if len(added) > 0 {
+		if err := f.WO.AppendPlan(ctx, wo.ID, added); err != nil {
+			return err
+		}
+	}
+	for _, g := range contract {
+		q := fmt.Sprintf("Converge gap %s (%s): what should the spec say?", g.ID, g.Cites)
+		if findClarification(wo.Clarifications, q) != nil {
+			continue
+		}
+		if err := f.recordBuildAnswer(ctx, wo, "", q, g.Fix, "converge found the contract "+g.Type+": "+g.Evidence, "architect", "", true); err != nil {
+			return err
+		}
+	}
+	tasks, err := f.WO.Plan(ctx, wo.ID)
+	if err != nil {
+		return err
+	}
+	done, err := f.Runs.CompletedBuilderTasks(ctx, wo.ID)
+	if err != nil {
+		return err
+	}
+	build := len(model.ReadyTasks(tasks, done)) > 0
+
+	parked := false
+	for _, g := range requirement {
+		q := fmt.Sprintf("Converge gap %s (%s): the change %s the requirement as written (%s). Proposed resolution: %s. What should the requirement be?", g.ID, g.Cites, g.Type, g.Evidence, g.Fix)
+		if findClarification(wo.Clarifications, q) != nil {
+			continue
+		}
+		r, runID, err := f.askForeman(ctx, wo, "architect", q, "", repoFacts(ctx, f.workspaceDir(wo.ID)), false)
+		if err != nil {
+			return err
+		}
+		if r.Decision == "ANSWER" {
+			if err := f.recordBuildAnswer(ctx, wo, "", q, r.Answer, r.Reason, "foreman", runID, true); err != nil {
+				return err
+			}
+			continue
+		}
+		f.event(wo.ID, "foreman", "clarification_escalated", r.Reason, map[string]any{"run_id": runID})
+		parked = true
+		fields := map[string]any{"architect_report": ""}
+		if build {
+			fields["revision"], fields["commit_sha"] = wo.Revision+1, ""
+		}
+		if err := f.WO.UpdateFields(ctx, wo.ID, fields); err != nil {
+			return err
+		}
+		if build {
+			wo.Revision, wo.CommitSHA = wo.Revision+1, ""
+		}
+		// the human's answer resumes through resumeBuilder, which queues the new tasks or re-verifies
+		wo.ClarifTask = "converge"
+		if err := f.askHuman(ctx, wo, "architect", q); err != nil {
+			return err
+		}
+		break
+	}
+
+	record := func() {
+		f.event(wo.ID, "factory", "converge_append", fmt.Sprintf("Converge round %d: %d valid gap(s), %d task(s) appended", report.Round, len(out.Valid), len(added)),
+			map[string]any{"round": report.Round, "gaps": out.Valid, "unmet": out.Unmet, "tasks": taskIDs(added), "revision": wo.Revision, "parked": parked})
+	}
+	switch {
+	case parked:
+		record()
+		return nil
+	case build:
+		newRev := wo.Revision + 1
+		if err := f.stepWith(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "factory", "Converge appended tasks; returning to builder",
+			map[string]any{"revision": newRev, "commit_sha": ""}); err != nil {
+			return err
+		}
+		wo.Revision, wo.CommitSHA = newRev, ""
+		record()
+		return f.maybeAdvanceAfterImplementation(ctx, wo)
+	}
+	// nothing to build: converge alone judges the amended contract again, as the next round
+	if err := f.enqueuePayload(ctx, JobInspect, wo.ID, map[string]any{"converge_only": true, "round": report.Round + 1}); err != nil {
+		return err
+	}
+	record()
+	return nil
+}
+
+func taskIDs(tasks []model.Task) []string {
+	ids := make([]string, len(tasks))
+	for i, t := range tasks {
+		ids[i] = t.ID
+	}
+	return ids
+}
+
+// resumeAppend finishes an append whose evaluate job failed after the order had
+// already returned to IMPLEMENTING: it queues the new tasks unless a remediation
+// build is already queued.
+func (f *Factory) resumeAppend(ctx context.Context, wo *model.WorkOrder) error {
 	if f.Sched.HasActive(ctx, wo.ID, "", JobImplement) {
 		return nil
 	}
-	note := f.doneGateNote(ctx, wo)
-	if note == "" {
-		note = "The done gate asked for a fix; its reasons are in the last done_gate event of the activity trail."
-	}
-	payload := map[string]any{"reason": "fix_done_gate", "note": note}
-	if b := f.storedBrief(ctx, wo); b != "" {
-		payload["brief"] = b
-	}
-	return f.enqueuePayload(ctx, JobImplement, wo.ID, payload)
+	return f.maybeAdvanceAfterImplementation(ctx, wo)
 }
 
-// architectFixes lists the Architect's suggested fixes for unmet criteria, for the Builder's fix note.
-func architectFixes(r *architectReport) string {
-	var b strings.Builder
-	for _, v := range r.Verdicts {
-		if strings.ToLower(strings.TrimSpace(v.Status)) != "met" && v.Fix != "" {
-			fmt.Fprintf(&b, "\n- %s: %s", v.CriterionID, v.Fix)
-		}
-	}
-	if b.Len() == 0 {
-		return ""
-	}
-	return "\n\nThe Architect's suggested fixes:" + b.String()
-}
-
-// currentArchitectReport is the stored Architect verification when it was made on the order's current revision.
+// currentArchitectReport is the stored converge report when it was made on the order's current revision.
 func (f *Factory) currentArchitectReport(wo *model.WorkOrder) *architectReport {
 	if wo.ArchitectReport == "" {
 		return nil
@@ -215,7 +358,7 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 	case len(escalation) > 0:
 		decision = "NEEDS_HUMAN_REVIEW"
 		issues = escalation
-		reason = "The done gate needs a human decision: " + joinNotes(issues)
+		reason = "The converge gate needs a human decision: " + joinNotes(issues)
 		if checkCount == 0 {
 			reason += " (no verification evidence is recorded for the current revision either)"
 		}

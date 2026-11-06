@@ -11,7 +11,8 @@ export interface AgentStep {
   at: string;
   message?: string; // a human message steered into the run
 }
-export type AgentRunStatus = "running" | "stalled" | "finished" | "asked" | "failed";
+export type AgentRunStatus =
+  "running" | "stalled" | "finished" | "asked" | "failed";
 export interface AgentRunGroup {
   type: "run";
   id: string;
@@ -98,18 +99,18 @@ export interface GateSummary {
 }
 const gateTones: Record<string, string> = {
   approve: "green",
-  done: "green",
+  converged: "green",
   revise: "orange",
-  fix: "orange",
+  append: "orange",
   escalate: "red",
   loop: "",
 };
 // A Jev gate event's outcome, truth-table row and code-built note; null for any other event.
 export function gateSummary(e: WOEvent): GateSummary | null {
-  if (e.kind !== "plan_gate" && e.kind !== "done_gate") return null;
+  if (e.kind !== "plan_gate" && e.kind !== "converge_gate") return null;
   const outcome = String(e.payload?.outcome ?? "");
   return {
-    gate: e.kind === "plan_gate" ? "Plan gate" : "Done gate",
+    gate: e.kind === "plan_gate" ? "Plan gate" : "Converge gate",
     outcome,
     row: Number(e.payload?.row) || 0,
     note: String(e.payload?.note ?? e.payload?.error ?? ""),
@@ -117,12 +118,12 @@ export function gateSummary(e: WOEvent): GateSummary | null {
   };
 }
 
-// Why the flow asked a human: the latest plan escalation or escalating done gate.
+// Why the flow asked a human: the latest plan escalation or escalating converge gate.
 export function escalationReason(events: WOEvent[]): string {
   for (const e of [...events].reverse()) {
     if (e.kind === "plan_escalated") return e.message;
     const g = gateSummary(e);
-    if (g?.outcome === "escalate" && g.gate === "Done gate")
+    if (g?.outcome === "escalate" && g.gate === "Converge gate")
       return g.note || e.message;
   }
   return "";
@@ -131,7 +132,7 @@ export function escalationReason(events: WOEvent[]): string {
 const reasonKinds = (o: WorkOrder): string[] => {
   switch (o.state) {
     case "NEEDS_HUMAN_REVIEW":
-      return ["readiness_needs_human_review", "done_gate"];
+      return ["readiness_needs_human_review", "converge_gate"];
     case "ARCHITECT_REVIEW":
       return o.plan_review === "approved" ? ["plan_escalated"] : [];
     case "WAITING_FOR_HUMAN":
@@ -162,7 +163,7 @@ export function currentReason(
   return reasonOf(o, events, hasMore).text;
 }
 
-// The done gate's reasons one by one, as the backend listed them; empty for events logged before it did.
+// The converge gate's reasons one by one, as the backend listed them; empty for events logged before it did.
 export function currentIssues(
   o: WorkOrder,
   events: WOEvent[],
@@ -194,7 +195,7 @@ function reasonOf(
   for (let i = events.length - 1; i >= from; i--) {
     const e = events[i];
     if (!kinds.includes(e.kind)) continue;
-    if (e.kind !== "done_gate") return { text: e.message, event: e };
+    if (e.kind !== "converge_gate") return { text: e.message, event: e };
     const g = gateSummary(e);
     if (g?.outcome === "escalate")
       return { text: g.note || e.message, event: e };
@@ -209,32 +210,36 @@ export function lastMessage(events: WOEvent[], ...kinds: string[]): string {
   );
 }
 
+export interface ConvergeGap {
+  id: string;
+  type: string;
+  layer: string;
+  cites: string;
+  evidence: string;
+  fix: string;
+}
 export interface ArchitectReport {
   revision: number;
-  verdicts: {
-    criterion_id: string;
-    status: string;
-    evidence: string;
-    gap?: string;
-    fix?: string;
-  }[];
-  deviations: string[];
+  round: number;
+  gaps: ConvergeGap[];
+  converged: boolean;
 }
 export function architectReport(events: WOEvent[]): ArchitectReport | null {
-  const e = [...events].reverse().find((x) => x.kind === "architect_verified");
+  const e = [...events].reverse().find((x) => x.kind === "converge_report");
   if (!e) return null;
   return {
     revision: Number(e.payload?.revision) || 0,
-    verdicts: (e.payload?.verdicts as ArchitectReport["verdicts"]) ?? [],
-    deviations: (e.payload?.deviations as string[]) ?? [],
+    round: Number(e.payload?.round) || 0,
+    gaps: (e.payload?.gaps as ConvergeGap[]) ?? [],
+    converged: Boolean(e.payload?.converged),
   };
 }
 
-// Prefills Request changes with the Architect's fixes for criteria it did not accept.
+// Prefills Request changes with the Architect's fixes for the gaps it found.
 export function changeRequestDraft(r: ArchitectReport | null): string {
-  return (r?.verdicts ?? [])
-    .filter((v) => v.status !== "met" && v.fix)
-    .map((v) => `${v.criterion_id}: ${v.fix}`)
+  return (r?.gaps ?? [])
+    .filter((g) => g.fix)
+    .map((g) => `${g.cites || g.id}: ${g.fix}`)
     .join("\n\n");
 }
 

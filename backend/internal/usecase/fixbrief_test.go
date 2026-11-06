@@ -11,47 +11,31 @@ import (
 )
 
 func TestFixBriefNumbersEverySourceInFull(t *testing.T) {
-	long := strings.Repeat("x", 300)
-	report := &architectReport{
-		Verdicts: []ArchitectVerdict{
-			{CriterionID: "c1", Status: "met", Evidence: "fine"},
-			{CriterionID: "c2", Status: "not_met", Evidence: "round.go uses floats", Gap: "no int path", Fix: "use int64"},
-		},
-		Deviations: []string{"deviation " + long},
-	}
 	findings := []model.Finding{{Severity: "minor", Title: "naming", Detail: "rename x", Location: "a.go:3"}}
-	b := fixBrief(findings, report, []string{"gate issue"}, "please redo")
-	for _, want := range []string{"1. ", "please redo", "gate issue", "[minor] naming", "rename x", "a.go:3", "c2", "round.go uses floats", "no int path", "use int64", long} {
+	b := fixBrief(findings, "please redo")
+	for _, want := range []string{"1. ", "please redo", "[minor] naming", "rename x", "a.go:3"} {
 		if !strings.Contains(b, want) {
 			t.Fatalf("brief missing %q:\n%s", want, b)
 		}
 	}
-	if strings.Contains(b, "fine") {
-		t.Fatalf("met verdicts do not belong in the brief:\n%s", b)
-	}
-	if fixBrief(nil, nil, nil, "") != "" {
+	if fixBrief(nil, "") != "" {
 		t.Fatal("an empty brief must render as empty")
 	}
 }
 
 func TestImplementPromptCarriesSpecAndBriefOnEveryFixPath(t *testing.T) {
-	long := strings.Repeat("d", 200)
-	brief := fixBrief(
-		[]model.Finding{{Severity: "blocker", Title: "nil deref", Detail: "x", Location: "svc.go:9"}},
-		&architectReport{Verdicts: []ArchitectVerdict{{CriterionID: "c1", Status: "unclear", Evidence: "evidence-text"}}, Deviations: []string{long}},
-		nil, "human-reason-text")
+	brief := fixBrief([]model.Finding{{Severity: "blocker", Title: "nil deref", Detail: "x", Location: "svc.go:9"}}, "human-reason-text")
 	wo := &model.WorkOrder{Title: "t", Spec: "SPEC-BODY"}
 	tasks := []model.Task{{Title: "plan-task", Objective: "o"}}
 	for _, p := range []map[string]any{
 		{"reason": "fix_findings"},
 		{"reason": "human_revision"},
 		{"reason": "human_retry"},
-		{"reason": "fix_done_gate", "note": "n"},
 		{"reason": "fix_failed_verification", "failed_checks": "Check \"go test\""},
 	} {
 		p["brief"] = brief
 		got := implementPrompt(wo, model.Job{Payload: p}, tasks)
-		for _, want := range []string{"SPEC-BODY", "plan-task", "nil deref", "svc.go:9", "human-reason-text", "evidence-text", long, "N: fixed (file:line)", "N: not fixed because"} {
+		for _, want := range []string{"SPEC-BODY", "plan-task", "nil deref", "svc.go:9", "human-reason-text", "N: fixed (file:line)", "N: not fixed because"} {
 			if !strings.Contains(got, want) {
 				t.Errorf("%v prompt missing %q:\n%s", p["reason"], want, got)
 			}
@@ -79,30 +63,11 @@ func TestHumanRevisionPayloadCarriesTheReason(t *testing.T) {
 	}
 }
 
-func TestDoneGateFixPayloadCarriesFullVerdictAndDeviation(t *testing.T) {
-	long := strings.Repeat("z", 200)
-	report := `{"revision":0,"verdicts":[{"criterion_id":"c1","status":"not_met","evidence":"evidence-text","gap":"gap-text","fix":"fix-text"}],"deviations":["` + long + `"]}`
-	r := doneRig(t, &fakeJudge{}, report)
-	r.evaluate(t)
-	p := r.q.payloads[len(r.q.payloads)-1]
-	b, _ := p["brief"].(string)
-	for _, want := range []string{"evidence-text", "gap-text", "fix-text", long} {
-		if !strings.Contains(b, want) {
-			t.Fatalf("brief missing %q:\n%s", want, b)
-		}
-	}
-	if got := r.f.retryPayload(context.Background(), r.reload(t)); got["brief"] != b {
-		t.Fatalf("retry lost the brief: %v", got)
-	}
-}
-
-const unmetVerify = `{"verdicts":[{"criterion_id":"c1","status":"not_met","evidence":"evidence-text","gap":"gap-text","fix":"fix-text"}],"deviations":["deviation-text"]}`
-
 func lastPayload(r *rig) map[string]any { return r.q.payloads[len(r.q.payloads)-1] }
 
-func TestInspectFixBriefCarriesTheArchitectReportAndOnlyThisInspection(t *testing.T) {
+func TestInspectFixBriefCarriesOnlyThisInspection(t *testing.T) {
 	ctx := context.Background()
-	h := &replyHarness{verify: unmetVerify,
+	h := &replyHarness{
 		inspect: `{"findings":[{"severity":"blocker","title":"NEW-FINDING","detail":"d","location":"round.go:1"}]}`}
 	r := inspectRig(t, h)
 	if err := r.f.Runs.Start(ctx, "run_old", r.wo.ID, "", "inspector", "h"); err != nil {
@@ -119,7 +84,7 @@ func TestInspectFixBriefCarriesTheArchitectReportAndOnlyThisInspection(t *testin
 	if p["reason"] != "fix_findings" {
 		t.Fatalf("payload %v", p)
 	}
-	for _, want := range []string{"NEW-FINDING", "evidence-text", "gap-text", "fix-text", "deviation-text"} {
+	for _, want := range []string{"NEW-FINDING"} {
 		if !strings.Contains(b, want) {
 			t.Fatalf("brief missing %q:\n%s", want, b)
 		}
@@ -160,20 +125,6 @@ func TestRetryRemediationAfterRequestedChangesKeepsTheHumanReason(t *testing.T) 
 	last := q.payloads[len(q.payloads)-1]
 	if b, _ := last["brief"].(string); last["reason"] != "human_retry" || !strings.Contains(b, "use the old format") {
 		t.Fatalf("retry payload %v", last)
-	}
-}
-
-func TestDoneGateBriefStatesEachFactOnce(t *testing.T) {
-	long := strings.Repeat("z", 200)
-	report := `{"revision":0,"verdicts":[{"criterion_id":"c1","status":"not_met","evidence":"evidence-text","gap":"gap-text","fix":"fix-text"}],"deviations":["` + long + `"]}`
-	r := doneRig(t, &fakeJudge{}, report)
-	r.evaluate(t)
-	b, _ := lastPayload(r)["brief"].(string)
-	if strings.Contains(b, "as not met") || strings.Count(b, "outside the spec or plan") != 1 || strings.Count(b, "criterion c1") != 1 {
-		t.Fatalf("brief repeats the Architect's findings:\n%s", b)
-	}
-	if !strings.Contains(b, long) {
-		t.Fatalf("the deviation must stay in full:\n%s", b)
 	}
 }
 
@@ -226,32 +177,16 @@ func seedFix(t *testing.T, r *rig, rev int, brief string) {
 	r.f.event(r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": rev, "brief": brief})
 }
 
-func atRevision(t *testing.T, r *rig, rev int) {
-	t.Helper()
-	ctx := context.Background()
-	report := strings.Replace(unmetVerifyReport, `"revision":0`, fmt.Sprintf(`"revision":%d`, rev), 1)
-	if err := r.wos.UpdateFields(ctx, r.wo.ID, map[string]any{"revision": rev, "architect_report": report}); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.f.Quality.Save(ctx, model.QualityCheck{ID: "qc_rev", WOID: r.wo.ID, Name: "go-test", Command: "go test ./...", Outcome: "PASS", Revision: int64(rev)}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-const unmetVerifyReport = `{"revision":0,"verdicts":[{"criterion_id":"c1","status":"not_met","evidence":"evidence-text","gap":"gap-text","fix":"fix-text"}],"deviations":[]}`
-
 const earlierHeading = "Already addressed in earlier revisions — keep these fixes intact, do not undo or regress them:"
 
 func TestFixBriefCarriesEarlierRevisionsFixesForward(t *testing.T) {
-	r := doneRig(t, &fakeJudge{}, unmetVerifyReport)
+	r := newRig(t)
 	seedFix(t, r, 1, "1. ITEM-A\n2. ITEM-B\n   Missing: B-detail")
 	seedFix(t, r, 2, "1. ITEM-A\n2. ITEM-C\n\n"+earlierHeading+"\n- ITEM-A")
-	atRevision(t, r, 2)
-	r.evaluate(t)
-	b, _ := lastPayload(r)["brief"].(string)
+	b := r.f.withEarlierFixes(context.Background(), r.wo.ID, 3, []string{"CURRENT"})
 	head, tail, ok := strings.Cut(b, earlierHeading)
-	if !ok || !strings.Contains(head, "1. ") || !strings.Contains(head, "evidence-text") {
-		t.Fatalf("current items must stay numbered and complete above the section:\n%s", b)
+	if !ok || !strings.HasPrefix(head, "1. CURRENT") {
+		t.Fatalf("current items must stay numbered above the section:\n%s", b)
 	}
 	for _, want := range []string{"- ITEM-A", "- ITEM-B\n   Missing: B-detail", "- ITEM-C"} {
 		if !strings.Contains(tail, want) {
@@ -264,13 +199,11 @@ func TestFixBriefCarriesEarlierRevisionsFixesForward(t *testing.T) {
 }
 
 func TestFixBriefCarriesOnlyTheThreeMostRecentEarlierRevisions(t *testing.T) {
-	r := doneRig(t, &fakeJudge{}, unmetVerifyReport)
+	r := newRig(t)
 	for rev := 1; rev <= 4; rev++ {
 		seedFix(t, r, rev, fmt.Sprintf("1. REV%d-ITEM", rev))
 	}
-	atRevision(t, r, 4)
-	r.evaluate(t)
-	b, _ := lastPayload(r)["brief"].(string)
+	b := r.f.withEarlierFixes(context.Background(), r.wo.ID, 5, []string{"CURRENT"})
 	for _, want := range []string{"REV2-ITEM", "REV3-ITEM", "REV4-ITEM"} {
 		if !strings.Contains(b, want) {
 			t.Fatalf("brief missing %q:\n%s", want, b)
@@ -282,16 +215,15 @@ func TestFixBriefCarriesOnlyTheThreeMostRecentEarlierRevisions(t *testing.T) {
 }
 
 func TestFixBriefWithoutEarlierRevisionsHasNoSection(t *testing.T) {
-	r := doneRig(t, &fakeJudge{}, unmetVerifyReport)
-	r.evaluate(t)
-	if b, _ := lastPayload(r)["brief"].(string); strings.Contains(b, "Already addressed") {
+	r := newRig(t)
+	if b := r.f.withEarlierFixes(context.Background(), r.wo.ID, 1, []string{"CURRENT"}); strings.Contains(b, "Already addressed") {
 		t.Fatalf("unexpected section:\n%s", b)
 	}
 }
 
 func TestFindingsAndHumanBriefsCarryEarlierFixesAndRetryDoesNotDoubleAppend(t *testing.T) {
 	ctx := context.Background()
-	h := &replyHarness{verify: unmetVerify,
+	h := &replyHarness{
 		inspect: `{"findings":[{"severity":"blocker","title":"NEW-FINDING","detail":"d","location":"round.go:1"}]}`}
 	r := inspectRig(t, h)
 	seedFix(t, r, 1, "1. ITEM-A")
@@ -348,14 +280,14 @@ func TestHumanReasonWithOwnNumberedListStaysOneEarlierItem(t *testing.T) {
 	}
 }
 
-func TestEarlierFixesDropReraisedItemsAndForemanNotes(t *testing.T) {
+func TestEarlierFixesDropReraisedItems(t *testing.T) {
 	ctx := context.Background()
-	r := doneRig(t, &fakeJudge{}, unmetVerifyReport)
-	seedFix(t, r, 1, "1. ITEM-A\n2. ITEM-B\n3. "+foremanNotesPrefix+"hm")
-	r.f.event(r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": 1, "items": []string{"ITEM-A", "ITEM-B", foremanNotesPrefix + "hm"}})
+	r := newRig(t)
+	seedFix(t, r, 1, "1. ITEM-A\n2. ITEM-B")
+	r.f.event(r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": 1, "items": []string{"ITEM-A", "ITEM-B"}})
 	b := r.f.withEarlierFixes(ctx, r.wo.ID, 2, []string{"ITEM-A"})
 	head, tail, _ := strings.Cut(b, earlierHeading)
-	if !strings.HasPrefix(head, "1. ITEM-A") || strings.Contains(tail, "ITEM-A") || !strings.Contains(tail, "- ITEM-B") || strings.Contains(b, "validation notes") {
+	if !strings.HasPrefix(head, "1. ITEM-A") || strings.Contains(tail, "ITEM-A") || !strings.Contains(tail, "- ITEM-B") {
 		t.Fatalf("brief:\n%s", b)
 	}
 }

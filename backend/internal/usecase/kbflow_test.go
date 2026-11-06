@@ -17,12 +17,12 @@ import (
 )
 
 const (
-	planJSON    = `{"decision":"APPROVE","summary":"s","spec":"sp","tasks":[{"id":"t1","title":"Round money","objective":"o","role":"builder"}]}`
-	reviewJSON  = `{"notes":"ok","findings":[],"coverage":[]}`
-	verifyJSON  = `{"verdicts":[{"criterion_id":"c1","status":"met","evidence":"round.go rounds to integer rupiah"}],"deviations":[]}`
-	noFindings  = `{"findings":[]}`
-	moneyDoc    = "# Money\n\nMoney is integer rupiah; never use floats for rounding.\n"
-	routingBody = "---\ntype: Reviewer Routing\nroutes:\n  - paths: [\"src/**/*.ts\", \"!src/**/*.test.ts\"]\n    reviewers: [backend]\n  - paths: [\"**/*.test.ts\"]\n    reviewers: [testing]\n---\n\n# Routing\n"
+	planJSON     = `{"decision":"APPROVE","summary":"s","spec":"sp","tasks":[{"id":"t1","title":"Round money","objective":"o","role":"builder"}]}`
+	reviewJSON   = `{"notes":"ok","findings":[],"coverage":[]}`
+	convergeJSON = `{"gaps":[],"converged":true}`
+	noFindings   = `{"findings":[]}`
+	moneyDoc     = "# Money\n\nMoney is integer rupiah; never use floats for rounding.\n"
+	routingBody  = "---\ntype: Reviewer Routing\nroutes:\n  - paths: [\"src/**/*.ts\", \"!src/**/*.test.ts\"]\n    reviewers: [backend]\n  - paths: [\"**/*.test.ts\"]\n    reviewers: [testing]\n---\n\n# Routing\n"
 )
 
 type replyHarness struct {
@@ -30,11 +30,11 @@ type replyHarness struct {
 	prompts  map[string][]string // by role
 	specials []string
 	reqs     map[string]model.AgentRequest // by session id
-	verify   string                        // overrides the Architect verification reply
+	converge string                        // overrides the Architect converge reply
 	inspect  string                        // overrides the Inspector reply
 	foreman  string                        // overrides the Foreman reply
-	archErr  error                         // fails the Architect verification run
-	archBoom bool                          // panics in the Architect verification run
+	archErr  error                         // fails the Architect converge run
+	archBoom bool                          // panics in the Architect converge run
 }
 
 func (*replyHarness) Name() string { return "fake" }
@@ -67,16 +67,16 @@ func (h *replyHarness) Result(_ context.Context, id string) (model.AgentResult, 
 	if h.foreman != "" && req.Role == model.AgentForeman {
 		text = h.foreman
 	}
-	if req.Role == model.AgentArchitect && req.Context["stage"] == "verify" {
+	if req.Role == model.AgentArchitect && req.Context["stage"] == "converge" {
 		if h.archBoom {
-			panic("scripted verification crash")
+			panic("scripted converge crash")
 		}
 		if h.archErr != nil {
 			return model.AgentResult{}, h.archErr
 		}
-		text = verifyJSON
-		if h.verify != "" {
-			text = h.verify
+		text = convergeJSON
+		if h.converge != "" {
+			text = h.converge
 		}
 	}
 	return model.AgentResult{Text: text}, nil

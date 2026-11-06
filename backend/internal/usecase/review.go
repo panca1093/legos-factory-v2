@@ -253,6 +253,32 @@ func (f *Factory) storeBuilderNotes(ctx context.Context, wo *model.WorkOrder, fi
 	return nil
 }
 
+// setBuilderNotes replaces the notes a source (inspector, converge) left earlier in the
+// clarification log with the given ones; the Builder prompt already prints that log.
+func (f *Factory) setBuilderNotes(ctx context.Context, woID, source string, notes []string) error {
+	fresh, err := f.WO.Get(ctx, woID)
+	if err != nil {
+		return err
+	}
+	title := "Note from " + source
+	log, hadNotes := []model.Clarification{}, false
+	for _, c := range fresh.Clarifications {
+		if c.By == builderNotesBy && c.Question == title {
+			hadNotes = true
+		} else {
+			log = append(log, c)
+		}
+	}
+	if len(notes) == 0 && !hadNotes {
+		return nil
+	}
+	for _, n := range notes {
+		log = append(log, model.Clarification{Question: title, Answer: n, By: builderNotesBy})
+	}
+	raw, _ := json.Marshal(log)
+	return f.WO.UpdateFields(ctx, woID, map[string]any{"clarif_log": string(raw)})
+}
+
 func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []model.Task, findings []reviewFinding, coverage []reviewCoverage) error {
 	in := PlanGateInput{
 		Request:       wo.Title + "\n\n" + wo.Objective,

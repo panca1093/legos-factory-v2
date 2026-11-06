@@ -239,48 +239,46 @@ func (r *reviewReply) text() string {
 	return strings.TrimSpace(b.String())
 }
 
-// validationReply is the Foreman's notes on whether the finished work is done.
-type validationReply struct {
-	Notes string `json:"notes"`
+// convergeGap is one difference between the change and the contract. The id is
+// assigned by the factory: the model reuses "G1" every round.
+type convergeGap struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Layer    string `json:"layer"`
+	Cites    string `json:"cites"`
+	Evidence string `json:"evidence"`
+	Fix      string `json:"fix"`
 }
 
-func (r *validationReply) validate() error {
-	if strings.TrimSpace(r.Notes) == "" {
-		return errors.New("notes is required")
+const maxConvergeGaps = 10
+
+// convergeReply is the Architect's comparison of the change with the contract.
+type convergeReply struct {
+	Gaps      []convergeGap `json:"gaps"`
+	Converged bool          `json:"converged"`
+}
+
+func (r *convergeReply) validate() error {
+	if r.Gaps == nil {
+		return errors.New("gaps is required (use [] when there are none)")
 	}
-	return nil
-}
-
-// verifyReply is the Architect's check of the built result against its spec
-// and plan.
-type verifyReply struct {
-	Verdicts   []ArchitectVerdict `json:"verdicts"`
-	Deviations []string           `json:"deviations"`
-}
-
-func (r *verifyReply) validate() error {
-	if r.Verdicts == nil {
-		return errors.New("verdicts is required (one entry per acceptance criterion)")
+	if len(r.Gaps) > maxConvergeGaps {
+		return fmt.Errorf("at most %d gaps, got %d", maxConvergeGaps, len(r.Gaps))
 	}
-	for i := range r.Verdicts {
-		v := &r.Verdicts[i]
-		v.CriterionID = strings.TrimSpace(v.CriterionID)
-		v.Evidence, v.Gap, v.Fix = strings.TrimSpace(v.Evidence), strings.TrimSpace(v.Gap), strings.TrimSpace(v.Fix)
-		v.Status = strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(strings.TrimSpace(v.Status)), "-", "_"), " ", "_")
-		if v.CriterionID == "" {
-			return fmt.Errorf("verdicts[%d] needs a criterion_id", i)
-		}
-		if err := oneOf(fmt.Sprintf("verdicts[%d].status", i), v.Status, "met", "not_met", "unclear"); err != nil {
+	for i := range r.Gaps {
+		g := &r.Gaps[i]
+		g.Type, g.Layer = strings.ToLower(strings.TrimSpace(g.Type)), strings.ToLower(strings.TrimSpace(g.Layer))
+		g.Cites, g.Evidence, g.Fix = strings.TrimSpace(g.Cites), strings.TrimSpace(g.Evidence), strings.TrimSpace(g.Fix)
+		if err := oneOf(fmt.Sprintf("gaps[%d].type", i), g.Type, "missing", "partial", "contradicts", "unrequested"); err != nil {
 			return err
 		}
-	}
-	var deviations []string
-	for _, d := range r.Deviations {
-		if d = strings.TrimSpace(d); d != "" {
-			deviations = append(deviations, d)
+		if err := oneOf(fmt.Sprintf("gaps[%d].layer", i), g.Layer, "code", "contract", "requirement"); err != nil {
+			return err
+		}
+		if g.Evidence == "" {
+			return fmt.Errorf("gaps[%d] needs evidence (file:line or a test name)", i)
 		}
 	}
-	r.Deviations = deviations
 	return nil
 }
 
@@ -392,6 +390,7 @@ type findingItem struct {
 	Title    string `json:"title"`
 	Detail   string `json:"detail"`
 	Location string `json:"location"`
+	Cites    string `json:"cites,omitempty"`
 }
 
 // findingsReply is an Inspector's review.

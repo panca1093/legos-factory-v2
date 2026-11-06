@@ -232,8 +232,33 @@ func (r *WorkOrderRepo) ReplacePlan(ctx context.Context, woID string, tasks []mo
 	if _, err := tx.ExecContext(ctx, `DELETE FROM plan_tasks WHERE work_order_id = ?`, woID); err != nil {
 		return err
 	}
+	if err := insertTasks(ctx, tx, woID, tasks, 0); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// AppendPlan adds tasks after the existing ones; the earlier tasks are left as they are.
+func (r *WorkOrderRepo) AppendPlan(ctx context.Context, woID string, tasks []model.Task) error {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var next int
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(seq) + 1, 0) FROM plan_tasks WHERE work_order_id = ?`, woID).Scan(&next); err != nil {
+		return err
+	}
+	if err := insertTasks(ctx, tx, woID, tasks, next); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertTasks(ctx context.Context, tx *sql.Tx, woID string, tasks []model.Task, firstSeq int) error {
 	now := time.Now().Unix()
 	for i, t := range tasks {
+		i += firstSeq
 		if t.ID == "" {
 			t.ID = fmt.Sprintf("task_%s_%d", woID, i+1)
 		}
@@ -252,7 +277,7 @@ func (r *WorkOrderRepo) ReplacePlan(ctx context.Context, woID string, tasks []mo
 			}
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (r *WorkOrderRepo) Plan(ctx context.Context, woID string) ([]model.Task, error) {

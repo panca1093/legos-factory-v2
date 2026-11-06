@@ -263,59 +263,40 @@ Respond with ONLY a JSON object:
 		wo.Title, wo.Objective, criteriaSection(splitCriteria(wo.Acceptance)), briefSection(wo)+clarification(wo), wo.Spec, scopedTaskList(tasks), task, shape)
 }
 
-func architectVerifyPrompt(wo *model.WorkOrder, tasks []model.Task, diff []FileDiff, checks string) string {
-	return fmt.Sprintf(`You are the Architect. The Builders finished the plan you wrote. Verify the built result against
-your own spec and plan. You may read the repository.
+// convergePrompt asks the Architect to compare the change with the contract. Earlier "done" claims are not input:
+// every gap must stand on the diff, the checks or the repository.
+func convergePrompt(wo *model.WorkOrder, tasks []model.Task, diff []FileDiff, checks string) string {
+	return fmt.Sprintf(`You are the Architect. The Builders finished the tasks below. Compare the change with the contract
+and list every gap. Do not trust any earlier claim that work is done: check the diff, the check results and the
+repository yourself. You may read the repository.
 
 Work order: %s
 
 Acceptance criteria:
 %s
-Spec:
+Spec (with its amendments; the acceptance table maps each criterion to its verification):
 %s
 
-Plan:
+Tasks built so far:
 %s
 Check results:
 %s
 Diff against the base:
 %s
-For every acceptance criterion above, report whether the change meets it: "met", "not_met" or
-"unclear". A human reads this, so keep each field short and plain:
-- evidence: at most three sentences naming the files and what they do.
-- gap: only when not_met or unclear; one or two sentences on what is missing or wrong.
-- fix: only when not_met or unclear; the concrete change the builder should make, as short steps.
-Report as deviations any work that goes beyond your spec or plan, or that departs from it, one
-sentence each.
+A gap is a difference between the change and the contract:
+- type: "missing" (the contract asks for it, the change lacks it), "partial" (done in part), "contradicts" (the change
+  does the opposite), "unrequested" (the change adds what the contract does not ask for).
+- layer: "code" when the change is wrong or incomplete (a Builder task fixes it), "contract" when the spec is silent,
+  wrong or ambiguous (the spec is amended), "requirement" when the requirement itself is wrong or undecided (the Foreman decides).
+- cites: the acceptance criterion ("c3") or spec section ("spec §2") the gap is measured against. Cite a criterion only when it is unmet.
+- evidence: "file:line" or the test name that shows the gap. A gap without evidence is not a gap.
+- fix: one or two sentences on what must change.
+At most %d gaps, the most important first. Set "converged" to true when no gap needs work.
 
 Respond with ONLY a JSON object:
-{"verdicts":[{"criterion_id":"c1","status":"met"|"not_met"|"unclear","evidence":"<files and what they do>","gap":"<what is missing>","fix":"<change to make>"}],
- "deviations":["<work outside the spec or plan>"]}`,
-		wo.Title, criteriaSection(splitCriteria(wo.Acceptance)), wo.Spec, scopedTaskList(tasks), checks, diffSection(diff))
-}
-
-func foremanValidatePrompt(wo *model.WorkOrder, findings, report, checks string) string {
-	return fmt.Sprintf(`You are the Foreman. The work below passed its checks and was reviewed. Judge whether it is done.
-
-Work order: %s
-Objective:
-%s
-Acceptance criteria:
-%s
-%s
-Check results:
-%s
-Inspector findings:
-%s
-Architect's verification:
-%s
-You may read the repository. You do not decide: write validation notes only. A separate gate decides
-from them. Say which acceptance criteria you consider met and name every problem that is not fixed yet,
-or say plainly that you found none.
-
-Respond with ONLY a JSON object:
-{"notes":"<whether the work is done and what is still wrong>"}`,
-		wo.Title, wo.Objective, criteriaSection(splitCriteria(wo.Acceptance)), briefSection(wo)+clarification(wo), checks, findings, report)
+{"gaps":[{"type":"missing|partial|contradicts|unrequested","layer":"code|contract|requirement","cites":"c3 | spec §2","evidence":"file:line or test name","fix":"..."}],
+ "converged":true|false}`,
+		wo.Title, criteriaSection(splitCriteria(wo.Acceptance)), wo.Spec, scopedTaskList(tasks), checks, diffSection(diff), maxConvergeGaps)
 }
 
 // taskSection names a plan task's own objective and scope and lists the other
@@ -362,7 +343,7 @@ func specSection(wo *model.WorkOrder) string {
 	return "\nSpec (the Architect verifies the result against this):\n" + wo.Spec + "\n"
 }
 
-// planNotesSection is for Builder prompts only: no other role is shown the plan review's notes.
+// planNotesSection is for Builder prompts only: no other role is shown the review notes.
 func planNotesSection(wo *model.WorkOrder) string {
 	var notes []string
 	for _, c := range wo.Clarifications {
@@ -373,7 +354,7 @@ func planNotesSection(wo *model.WorkOrder) string {
 	if len(notes) == 0 {
 		return ""
 	}
-	return "\nPlan review notes (do not block the work; keep them in mind):\n" + strings.Join(notes, "\n") + "\n"
+	return "\nReview notes (do not block the work; keep them in mind):\n" + strings.Join(notes, "\n") + "\n"
 }
 
 // fixContext is what every fix prompt shares: the spec, the plan and the numbered brief.
@@ -407,20 +388,6 @@ Acceptance criteria:
 %s%s
 %s`,
 			wo.Title, failed, wo.Objective, wo.Acceptance, clarification(wo), fixCtx, tail)
-	}
-	if note, _ := job.Payload["note"].(string); reason == "fix_done_gate" && note != "" {
-		return fmt.Sprintf(`You are the Builder. The final review of work order %q found the change incomplete.
-
-Fix what the review found; do not weaken tests or edit .legos/checks.json to make it pass:
-%s
-
-Objective: %s
-
-Acceptance criteria:
-%s
-%s%s
-%s`,
-			wo.Title, note, wo.Objective, wo.Acceptance, clarification(wo), fixCtx, tail)
 	}
 	if reason != "" {
 		return fmt.Sprintf(`You are the Builder. Work order %q requires remediation.
@@ -507,8 +474,9 @@ Changed files:
 %s
 
 Respond with ONLY:
-{"findings":[{"severity":"blocker"|"major"|"minor"|"info","title":"...","detail":"...","location":"file:line"}]}
+{"findings":[{"severity":"blocker"|"major"|"minor"|"info","title":"...","detail":"...","location":"file:line","cites":"c2"}]}
 
-Report only findings within your focus that are supported by evidence in the workspace. If there are none, report an empty findings list.`,
+Report only findings within your focus that are supported by evidence in the workspace. If there are none, report an empty findings list.
+Only a blocker, or a finding that cites an acceptance criterion in "cites" (leave it out otherwise; cite only a criterion the change does not meet), sends the work back to the Builder. Every other finding is a note for the next Builder run.`,
 		pick.Specialty, wo.Title, pick.Reason, focusOf(pick.Specialty), wo.Objective, wo.Acceptance, clarification(wo), changed)
 }

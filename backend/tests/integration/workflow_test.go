@@ -71,12 +71,13 @@ func hasEvent(events []string, kind string) bool {
 }
 
 // scriptedJudge answers like a Jev that finds nothing wrong, optionally
-// sending the first plan back or asking for one fix at the done gate. It is a
+// sending the first plan back or asking for one append at the converge gate. It is a
 // fake: the real TypeSafe API is never called from tests.
 type scriptedJudge struct {
 	mu          sync.Mutex
 	revisePlan  bool
 	fixDone     bool
+	gapValid    bool
 	planCalls   int
 	doneCalls   int
 	lastRequest []byte
@@ -101,6 +102,11 @@ func (j *scriptedJudge) Ask(_ context.Context, state any, qs map[string]usecase.
 		j.doneCalls++
 		if j.fixDone && j.doneCalls == 1 {
 			answers["met_c1"] = 0.1
+		}
+		for id := range qs {
+			if j.gapValid && j.doneCalls == 1 && strings.HasPrefix(id, "gap_valid_") {
+				answers[id] = 0.9
+			}
 		}
 	}
 	raw, _ := json.Marshal(map[string]any{"state": state, "questions": qs})
@@ -226,7 +232,7 @@ func TestJevGatedLifecycleNeedsNoHumanUntilThePRDecision(t *testing.T) {
 	var gates []string
 	for _, e := range evs {
 		switch {
-		case e.Kind == "plan_gate" || e.Kind == "done_gate":
+		case e.Kind == "plan_gate" || e.Kind == "converge_gate":
 			if e.Actor != "jev" || e.Payload["request"] == nil || e.Payload["row"] == nil {
 				t.Fatalf("a gate event carries its actor, exact request and table row: %+v", e)
 			}
@@ -239,20 +245,20 @@ func TestJevGatedLifecycleNeedsNoHumanUntilThePRDecision(t *testing.T) {
 			t.Fatalf("no human decision was needed: %+v", e)
 		}
 	}
-	if strings.Join(gates, ",") != "plan_gate:approve,done_gate:fix,done_gate:done" {
+	if strings.Join(gates, ",") != "plan_gate:approve,converge_gate:append,converge_gate:converged" {
 		t.Fatalf("gate sequence %v", gates)
 	}
 	kinds := ta.eventKinds(t, id)
-	for _, kind := range []string{"architect_verified", "foreman_validated", "fix_requested", "readiness_ready", "plan_reviewed"} {
+	for _, kind := range []string{"converge_report", "converge_append", "fix_requested", "readiness_ready", "plan_reviewed"} {
 		if !hasEvent(kinds, kind) {
 			t.Fatalf("missing %s: %v", kind, kinds)
 		}
 	}
 	if w := ta.workOrder(t, id); w["revision"].(float64) != 2 {
-		t.Fatalf("blocker fix + done-gate fix = revision 2, got %v", w["revision"])
+		t.Fatalf("blocker fix + converge append = revision 2, got %v", w["revision"])
 	}
 	if !strings.Contains(string(judge.lastRequest), "greeter/greeter.go") {
-		t.Fatalf("the done gate must send the diff: %.300s", judge.lastRequest)
+		t.Fatalf("the converge gate must send the diff: %.300s", judge.lastRequest)
 	}
 
 	// specialists are chosen from the changed files and tag their findings
@@ -321,4 +327,30 @@ func TestManualPauseHoldsAnOrder(t *testing.T) {
 		t.Fatalf("resume: %d %s", status, body)
 	}
 	ta.awaitState(t, manual, "NEEDS_HUMAN_REVIEW", 60*time.Second)
+}
+
+func TestConvergeGapAppendsATaskEndToEnd(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	ta := boot(t)
+	ta.a.Server.Factory.Judge = &scriptedJudge{gapValid: true}
+	proj := ta.createProject(t, "Greeter", fixtureRepo(t))
+	id := ta.createWOWith(t, proj, "[converge-gap] Make the greeter greeting function available.")
+	if status, _ := ta.do(t, "POST", "/api/v1/work-orders/"+id+"/plan/generate", ""); status != 202 {
+		t.Fatal("plan generate")
+	}
+	ta.awaitState(t, id, "NEEDS_HUMAN_REVIEW", 120*time.Second)
+	var gates []string
+	for _, e := range ta.activity(t, id) {
+		if e.Kind == "converge_gate" {
+			gates = append(gates, fmt.Sprint(e.Payload["outcome"]))
+		}
+	}
+	if strings.Join(gates, ",") != "append,converged" {
+		t.Fatalf("converge gates %v", gates)
+	}
+	if kinds := ta.eventKinds(t, id); !hasEvent(kinds, "converge_append") {
+		t.Fatalf("missing converge_append: %v", kinds)
+	}
 }

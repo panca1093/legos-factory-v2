@@ -469,7 +469,7 @@ func TestPlanReviewNotesReachOnlyTheBuilder(t *testing.T) {
 	if findClarification(wo.Clarifications, "Note from plan review (high, c1)") != nil {
 		t.Fatal("a note is not an answer")
 	}
-	if p := implementPrompt(wo, model.Job{TaskID: "x"}, nil); !strings.Contains(p, "Plan review notes") || !strings.Contains(p, "name the message") {
+	if p := implementPrompt(wo, model.Job{TaskID: "x"}, nil); !strings.Contains(p, "Review notes") || !strings.Contains(p, "name the message") {
 		t.Fatalf("the Builder prompt carries the notes:\n%s", p)
 	}
 }

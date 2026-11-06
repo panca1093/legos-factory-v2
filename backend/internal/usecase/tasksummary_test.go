@@ -247,9 +247,13 @@ func (e summaryEnv) seedFindings(t *testing.T, woID string, n int, title string)
 	}
 }
 
-func (e summaryEnv) setReport(t *testing.T, woID string, rev int, deviations []string) {
+func (e summaryEnv) setReport(t *testing.T, woID string, rev int, fixes []string) {
 	t.Helper()
-	raw, _ := json.Marshal(architectReport{Revision: rev, Deviations: deviations})
+	var gaps []convergeGap
+	for _, f := range fixes {
+		gaps = append(gaps, convergeGap{Type: "partial", Layer: "code", Cites: "spec", Evidence: "x.go", Fix: f})
+	}
+	raw, _ := json.Marshal(architectReport{Revision: rev, Gaps: gaps})
 	if err := e.wos.UpdateFields(context.Background(), woID, map[string]any{"architect_report": string(raw)}); err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +273,7 @@ func TestOnlyCurrentRevisionDeviationsListed(t *testing.T) {
 	}
 
 	env.setReport(t, wo.ID, 2, []string{"fresh deviation"})
-	if got := env.f.currentArchitectReport(mustGet(t, env, wo.ID)); got == nil || got.Deviations[0] != "fresh deviation" {
+	if got := env.f.currentArchitectReport(mustGet(t, env, wo.ID)); got == nil || got.Gaps[0].Fix != "fresh deviation" {
 		t.Fatalf("current report not visible: %+v", got)
 	}
 }

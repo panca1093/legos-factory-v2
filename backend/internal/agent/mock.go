@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -96,8 +95,8 @@ func (h *MockHarness) execute(ctx context.Context, req model.AgentRequest) (mode
 	}
 	switch req.Role {
 	case model.AgentArchitect:
-		if req.Context["stage"] == "verify" {
-			return h.architectVerify(req, res)
+		if req.Context["stage"] == "converge" {
+			return h.converge(req, res)
 		}
 		if h.invalidOnce(req) {
 			res.Text = `Here is the plan: {"decision":"MAYBE"}`
@@ -126,6 +125,22 @@ func (h *MockHarness) execute(ctx context.Context, req model.AgentRequest) (mode
 	}
 }
 
+// converge finds no gap, except one code gap for objectives marked "[converge-gap]"
+// on the first revision that reaches the gate with the fix already in.
+func (h *MockHarness) converge(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
+	obj := req.Context["objective"]
+	h.mu.Lock()
+	gap := strings.Contains(obj, "[converge-gap]") && req.Context["revision"] == "1" && !h.invalidSent["gap:"+obj]
+	h.invalidSent["gap:"+obj] = h.invalidSent["gap:"+obj] || gap
+	h.mu.Unlock()
+	if !gap {
+		return finishJSON(res, map[string]any{"gaps": []any{}, "converged": true})
+	}
+	return finishJSON(res, map[string]any{"converged": false, "gaps": []map[string]string{{
+		"type": "missing", "layer": "code", "cites": "c1", "evidence": "greeter/greeter.go:1", "fix": "Handle the empty name.",
+	}}})
+}
+
 // invalidOnce scripts one schema-invalid reply for objectives marked
 // "[invalid-reply]", to exercise the corrective retry.
 func (h *MockHarness) invalidOnce(req model.AgentRequest) bool {
@@ -143,8 +158,8 @@ func (h *MockHarness) invalidOnce(req model.AgentRequest) bool {
 }
 
 // foremanReview writes the intake brief and answers Architect questions ("[foreman-answer]"
-// answers them, otherwise it escalates), then writes review and validation
-// notes. It never decides: the plan and done gates decide in code.
+// answers them, otherwise it escalates), then writes review
+// notes. It never decides: the plan and converge gates decide in code.
 func (h *MockHarness) foremanReview(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
 	obj := req.Context["objective"]
 	switch {
@@ -158,32 +173,11 @@ func (h *MockHarness) foremanReview(req model.AgentRequest, res model.AgentResul
 		return finishJSON(res, map[string]any{"decision": "ANSWER", "answer": "Use the documented default."})
 	case req.Context["stage"] == "answer":
 		return finishJSON(res, map[string]any{"decision": "ESCALATE", "reason": "A product decision is needed."})
-	case req.Context["stage"] == "validate":
-		return finishJSON(res, map[string]any{"notes": "Scripted validation: the work matches the acceptance criteria."})
 	}
 	return finishJSON(res, map[string]any{
 		"findings": []any{},
 		"coverage": []map[string]string{{"criterion": "c1", "verification": "check"}},
 	})
-}
-
-var bulletLine = regexp.MustCompile(`^\s*(?:[-*]|\d+[.)])\s+`)
-
-// architectVerify marks every acceptance criterion met, numbered c1..cn like
-// the factory numbers them: one per bullet line, or c1 for plain text.
-func (h *MockHarness) architectVerify(req model.AgentRequest, res model.AgentResult) (model.AgentResult, error) {
-	n := 0
-	for _, line := range strings.Split(req.Context["acceptance"], "\n") {
-		if bulletLine.MatchString(line) {
-			n++
-		}
-	}
-	n = max(n, 1)
-	verdicts := make([]map[string]string, n)
-	for i := range verdicts {
-		verdicts[i] = map[string]string{"criterion_id": fmt.Sprintf("c%d", i+1), "status": "met", "evidence": "Scripted verification of greeter/greeter.go."}
-	}
-	return finishJSON(res, map[string]any{"verdicts": verdicts, "deviations": []string{}})
 }
 
 // architectPlan decomposes the objective into a plan. When the objective
