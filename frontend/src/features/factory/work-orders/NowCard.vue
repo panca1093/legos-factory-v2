@@ -10,7 +10,7 @@ import {
   taskState,
 } from "../../../composables/presentation";
 import ActorBadge from "../ActorBadge.vue";
-import { escalationReason, lastMessage } from "../runs/agentActivity";
+import { currentReason } from "../runs/agentActivity";
 const props = defineProps<{
   order: WorkOrder;
   tasks: Task[];
@@ -34,8 +34,13 @@ const paused = computed(() => !!props.order.paused_at),
   finished = computed(() => isFinished(props.order)),
   status = computed(() => orderStatus(props.order)),
   ship = computed(() => shipState(props.order)),
-  reason = computed(() => escalationReason(props.events)),
-  last = computed(() => props.events.at(-1)),
+  reason = computed(() => currentReason(props.order, props.events)),
+  last = computed(() =>
+    props.events.reduce<WOEvent | undefined>(
+      (a, e) => (!a || e.id >= a.id ? e : a),
+      undefined,
+    ),
+  ),
   done = computed(
     () =>
       props.tasks.filter((t) => taskState(t.id, props.runs) === "completed")
@@ -168,10 +173,7 @@ const headline = computed(() => {
       </template>
       <template v-else-if="order.state === 'WAITING_FOR_HUMAN'">
         <p class="fx-reason">
-          {{
-            lastMessage(events, "escalated", "clarification_escalated") ||
-            "Review found something it could not settle."
-          }}
+          {{ reason || "Review found something it could not settle." }}
         </p>
         <button class="lg-btn primary small" @click="emit('goto', 'review')">
           Open Review
@@ -179,10 +181,7 @@ const headline = computed(() => {
       </template>
       <template v-else-if="order.state === 'BLOCKED'">
         <p class="fx-reason" data-test="blocked-reason">
-          {{
-            lastMessage(events, "readiness_blocked") ||
-            "The factory blocked this order."
-          }}
+          {{ reason || "The factory blocked this order." }}
         </p>
         <button class="lg-btn small" @click="emit('goto', 'review')">
           Open Review

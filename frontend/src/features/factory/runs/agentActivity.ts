@@ -1,4 +1,4 @@
-import type { WOEvent } from "../../../types/api";
+import type { WOEvent, WorkOrder } from "../../../types/api";
 
 export interface AgentTool {
   name: string;
@@ -123,6 +123,56 @@ export function escalationReason(events: WOEvent[]): string {
     const g = gateSummary(e);
     if (g?.outcome === "escalate" && g.gate === "Done gate")
       return g.note || e.message;
+  }
+  return "";
+}
+
+const reasonKinds = (o: WorkOrder): string[] => {
+  switch (o.state) {
+    case "NEEDS_HUMAN_REVIEW":
+      return ["readiness_needs_human_review", "done_gate"];
+    case "ARCHITECT_REVIEW":
+      return o.plan_review === "approved" ? ["plan_escalated"] : [];
+    case "WAITING_FOR_HUMAN":
+      return [
+        "clarification_requested",
+        "clarification_escalated",
+        "escalated",
+      ];
+    case "BLOCKED":
+      return ["readiness_blocked", "escalated"];
+    case "READY":
+      return o.pr_closed_at && !o.pr_merged_at
+        ? ["pr_closed"]
+        : o.pr_track_failed_at
+          ? ["pr_track_failed"]
+          : [];
+    default:
+      return [];
+  }
+};
+
+// Why the order waits right now. The causing event can be logged just before its state_changed, so the window opens after the transition preceding the current state's entry.
+export function currentReason(o: WorkOrder, events: WOEvent[]): string {
+  const kinds = reasonKinds(o);
+  if (!kinds.length) return "";
+  const lastTransition = (end: number, to?: string) => {
+    for (let i = end - 1; i >= 0; i--)
+      if (
+        events[i].kind === "state_changed" &&
+        (to === undefined || events[i].payload?.to === to)
+      )
+        return i;
+    return -1;
+  };
+  const entry = lastTransition(events.length, o.state);
+  const from = entry < 0 ? 0 : lastTransition(entry) + 1;
+  for (let i = events.length - 1; i >= from; i--) {
+    const e = events[i];
+    if (!kinds.includes(e.kind)) continue;
+    if (e.kind !== "done_gate") return e.message;
+    const g = gateSummary(e);
+    if (g?.outcome === "escalate") return g.note || e.message;
   }
   return "";
 }

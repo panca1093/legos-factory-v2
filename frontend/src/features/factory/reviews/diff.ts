@@ -1,4 +1,4 @@
-import type { Run } from "../../../types/api";
+import type { Run, WODiff } from "../../../types/api";
 
 export interface DiffLine {
   t: "add" | "del" | "ctx";
@@ -16,6 +16,11 @@ export interface DiffFile {
   del: number;
   hunks: DiffHunk[];
   note?: string;
+  status?: "added" | "modified" | "deleted" | "renamed";
+  oldPath?: string;
+  binary?: boolean;
+  truncated?: boolean;
+  lockfile?: boolean;
 }
 
 const HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
@@ -151,4 +156,28 @@ export function splitRows(h: DiffHunk): [DiffLine | null, DiffLine | null][] {
   }
   flush();
   return rows;
+}
+
+const LOCKFILE =
+  /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|go\.sum|Cargo\.lock|poetry\.lock|Gemfile\.lock|composer\.lock|uv\.lock)$/;
+
+// A patch may omit its file header, which the parser needs to open a file; the API's counts and flags win over what the parser derives.
+export function diffFromApi(d: WODiff): DiffFile[] {
+  return d.files.map((f) => {
+    const patch = f.patch ?? "";
+    const text = /^(diff --git |--- )/m.test(patch)
+      ? patch
+      : `--- a/${f.old_path || f.path}\n+++ b/${f.path}\n${patch}`;
+    return {
+      path: f.path,
+      oldPath: f.old_path || undefined,
+      status: f.status,
+      add: f.additions,
+      del: f.deletions,
+      hunks: f.binary ? [] : parseUnifiedDiff(text).flatMap((x) => x.hunks),
+      binary: f.binary,
+      truncated: f.truncated,
+      lockfile: LOCKFILE.test(f.path),
+    };
+  });
 }

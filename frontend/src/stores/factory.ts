@@ -15,6 +15,7 @@ import {
   type Task,
   type WorkOrder,
   type WOEvent,
+  type WODiff,
 } from "../types/api";
 
 export interface WODetail {
@@ -34,6 +35,9 @@ export const useFactory = defineStore("factory", {
     credentialsConfigured: true,
     detail: null as WODetail | null,
     events: [] as WOEvent[],
+    eventsHasMore: false,
+    diffSeq: 0,
+    diff: null as WODiff | null,
     quality: [] as QualityCheck[],
     findings: [] as Finding[],
     loading: false,
@@ -79,6 +83,9 @@ export const useFactory = defineStore("factory", {
       this.selectedID = "";
       this.detail = null;
       this.events = [];
+      this.eventsHasMore = false;
+      this.diffSeq++;
+      this.diff = null;
       this.quality = [];
       this.findings = [];
       this.loading = false;
@@ -207,6 +214,9 @@ export const useFactory = defineStore("factory", {
       if (this.selectedID !== id) {
         this.detail = null;
         this.events = [];
+        this.eventsHasMore = false;
+        this.diffSeq++;
+        this.diff = null;
         this.quality = [];
         this.findings = [];
       }
@@ -216,7 +226,9 @@ export const useFactory = defineStore("factory", {
       try {
         const [detail, events, quality, findings] = await Promise.all([
           api.get<WODetail>(`/api/v1/work-orders/${id}`),
-          api.get<{ events: WOEvent[] }>(`/api/v1/work-orders/${id}/activity`),
+          api.get<{ events: WOEvent[]; has_more?: boolean }>(
+            `/api/v1/work-orders/${id}/activity`,
+          ),
           api.get<{ checks: QualityCheck[] }>(
             `/api/v1/work-orders/${id}/quality`,
           ),
@@ -233,11 +245,27 @@ export const useFactory = defineStore("factory", {
         this.quality = quality.checks ?? [];
         this.findings = findings.findings ?? [];
         this.events = events.events ?? [];
+        this.eventsHasMore = !!events.has_more;
       } catch (e) {
         if (request === this.requestID)
           this.error = e instanceof Error ? e.message : String(e);
       } finally {
         if (request === this.requestID) this.loading = false;
+      }
+    },
+    async loadDiff(id: string) {
+      const seq = ++this.diffSeq;
+      try {
+        const diff = await api.get<WODiff>(`/api/v1/work-orders/${id}/diff`);
+        if (seq === this.diffSeq)
+          this.diff = { ...diff, files: diff.files ?? [] };
+      } catch (e) {
+        if (seq === this.diffSeq)
+          this.diff = {
+            available: false,
+            reason: e instanceof Error ? e.message : String(e),
+            files: [],
+          };
       }
     },
     async reloadDetail() {

@@ -14,9 +14,10 @@ const props = withDefaults(
     tasks?: Task[];
     canRetry?: boolean;
     revision?: number;
+    hasMore?: boolean;
     steer?: (runID: string, message: string) => Promise<unknown>;
   }>(),
-  { tasks: () => [], canRetry: false, steer: undefined },
+  { tasks: () => [], canRetry: false, steer: undefined, hasMore: false },
 );
 const emit = defineEmits<{ retry: [taskID: string]; retryRemediation: [] }>();
 // The graph already shows every task; the list stays only for retry and remediation.
@@ -156,6 +157,9 @@ const taskTitle = computed(
         </article></template
       ></TransitionGroup
     >
+    <p v-if="hasMore" class="tiny muted fx-more" data-test="activity-more">
+      Earlier events are not shown.
+    </p>
     <div v-if="history.length && !shown.length" class="empty">
       No events match this filter.
     </div>
@@ -210,6 +214,9 @@ const taskTitle = computed(
   overscroll-behavior: contain;
   margin: 0 -8px;
   padding: 4px 8px 0;
+}
+.fx-more {
+  margin: var(--space-2) 0 0;
 }
 .fx-tl:empty {
   display: none;

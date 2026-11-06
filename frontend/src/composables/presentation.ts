@@ -1,4 +1,4 @@
-import type { WorkOrder, WorkOrderState } from "../types/api";
+import type { Project, WorkOrder, WorkOrderState } from "../types/api";
 export const crew = [
   { id: "foreman", name: "Foreman", job: "Orchestration", color: "#F2AA6B" },
   {
@@ -219,3 +219,29 @@ export const publishLabel = (p: {
         ? `Connection · ${p.remote_repo || p.github_repo}`
         : "Connection"
       : "Local only";
+
+// What Approve does for a project, by how it publishes.
+export function publishNote(
+  p?: Pick<
+    Project,
+    "publish_via" | "github_repo" | "remote_repo" | "git_connection_id"
+  >,
+): { text: string; remote: boolean } {
+  const via = p?.publish_via ?? (p?.git_connection_id ? "connection" : "none");
+  if (via === "gh")
+    return {
+      text: `Approving pushes the branch and opens a pull request on GitHub${p?.github_repo ? ` (${p.github_repo})` : ""} with your gh login.`,
+      remote: true,
+    };
+  if (via === "connection") {
+    const repo = p?.remote_repo || p?.github_repo;
+    return {
+      text: `Approving pushes the branch and opens a pull request${repo ? ` on ${repo}` : ""} through the project's connection.`,
+      remote: true,
+    };
+  }
+  return {
+    text: "This records a local decision. No pull request is created for this project.",
+    remote: false,
+  };
+}

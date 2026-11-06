@@ -850,6 +850,10 @@
 .fx-sl code.empty {
   background: var(--surface-2);
 }
+.fx-dnote {
+  margin: 0;
+  padding: 8px 12px;
+}
 .fx-hh {
   padding: 2px 12px;
   background: var(--info-soft);

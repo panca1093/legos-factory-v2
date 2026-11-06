@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { Check, ExternalLink, MessageSquare, X } from "lucide-vue-next";
-import type { Run } from "../../../types/api";
+import type { Run, WODiff } from "../../../types/api";
 import type { shipState } from "../../../composables/presentation";
 import DiffView from "./DiffView.vue";
-import { diffFromRuns } from "./diff";
+import { diffFromApi, diffFromRuns } from "./diff";
 const props = defineProps<{
   runs: Run[];
   state: string;
@@ -12,7 +12,8 @@ const props = defineProps<{
   busy: boolean;
   ship?: ReturnType<typeof shipState>;
   reason?: string;
-  publishTo?: string;
+  publishNote?: string;
+  diff?: WODiff | null;
   prUrl?: string;
   prRef?: string;
   sourceRef?: string;
@@ -21,7 +22,10 @@ const emit = defineEmits<{
   decision: ["approve" | "request_changes" | "decline"];
 }>();
 const builders = computed(() => props.runs.filter((r) => r.kind === "builder")),
-  files = computed(() => diffFromRuns(props.runs));
+  available = computed(() => !!props.diff?.available),
+  files = computed(() =>
+    available.value ? diffFromApi(props.diff!) : diffFromRuns(props.runs),
+  );
 const canDecide = computed(
   () => props.canWrite && props.state === "NEEDS_HUMAN_REVIEW" && !props.busy,
 );
@@ -81,25 +85,47 @@ const shipNote: Record<string, string> = {
       <p v-if="reason && ship?.key === 'approval'" class="fx-reason">
         <strong>Why you are asked:</strong> {{ reason }}
       </p>
-      <p v-if="ship?.key === 'approval' && publishTo" class="small muted">
-        Approving pushes the verified commit to a work branch and opens a pull
-        request on {{ publishTo }}.
-      </p>
-      <p v-else-if="ship?.key === 'approval'" class="small muted">
-        This records a local decision. No pull request is created for this
-        project.
+      <p v-if="ship?.key === 'approval'" class="small muted">
+        {{
+          publishNote ||
+          "This records a local decision. No pull request is created for this project."
+        }}
       </p>
       <p v-else-if="ship" class="small muted">{{ shipNote[ship.key] }}</p>
       <p v-if="sourceRef" class="tiny muted">
         Source issue: {{ sourceRef.replace("jira:", "") }}
       </p>
     </section>
-    <DiffView v-if="files.length" :files="files" />
-    <details class="fx-card" :open="!files.length">
+    <DiffView
+      v-if="files.length"
+      :files="files"
+      :meta="
+        available
+          ? {
+              base: diff?.base,
+              head: diff?.head,
+              revision: diff?.revision,
+              truncated: diff?.truncated,
+            }
+          : undefined
+      "
+    />
+    <p v-else-if="available" class="fx-card small muted" data-test="diff-empty">
+      This work order has no file changes against {{ diff?.base?.slice(0, 7) }}.
+    </p>
+    <p
+      v-else-if="diff?.reason"
+      class="fx-card small muted"
+      data-test="diff-unavailable"
+    >
+      {{ diff.reason }}
+    </p>
+    <details v-if="!available" class="fx-card" :open="!files.length">
       <summary class="fx-sum"><h3>Builder output</h3></summary>
       <p class="help">
-        Recorded harness output. The backend does not expose a repository diff,
-        so file-level changes appear only when a run printed a unified diff.
+        Recorded harness output. A repository diff is not available for this
+        work order, so file-level changes appear only when a run printed a
+        unified diff.
       </p>
       <details
         v-for="r in builders"
