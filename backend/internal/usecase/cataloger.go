@@ -50,11 +50,6 @@ func clipRunes(s string, max int) string {
 	return s
 }
 
-// Relevant returns prior knowledge for the Architect; it is empty until retrieval reads documents.
-func (c *Cataloger) Relevant(ctx context.Context, wo *model.WorkOrder) []model.KnowledgeRecord {
-	return nil
-}
-
 // Completed logs the work order's terminal line; body names the summary document.
 func (c *Cataloger) Completed(ctx context.Context, wo *model.WorkOrder, outcome, body string) string {
 	return c.Record(ctx, wo, model.KnowledgeWorkOrderCompleted, model.TrustVerified, "cataloger",
@@ -301,19 +296,6 @@ func clip(s string, max int) string {
 		cut--
 	}
 	return s[:cut] + "…"
-}
-
-// knowledgePrompt renders prior records for an agent prompt, labelled by trust.
-func knowledgePrompt(records []model.KnowledgeRecord) string {
-	if len(records) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("\n\nPrior knowledge from this project (trust in brackets; ai_interpretation is NOT authoritative):\n")
-	for _, k := range records {
-		fmt.Fprintf(&b, "- [%s] %s: %s (ref knowledge:%s)\n", k.Trust, k.Title, truncate(oneLine(k.Body), 300), k.ID)
-	}
-	return b.String()
 }
 
 var secretPatterns = []*regexp.Regexp{

@@ -51,14 +51,14 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 	}
 	f.event(wo.ID, "architect", "planning_started", "Architect drafting plan", nil)
 
-	prior := f.Catalog.Relevant(ctx, wo)
+	prior := f.relevantDocs(ctx, wo)
 	priorRefs := make([]string, 0, len(prior))
-	for _, k := range prior {
-		priorRefs = append(priorRefs, "knowledge:"+k.ID)
+	for _, d := range prior {
+		priorRefs = append(priorRefs, "kb:"+d.ID)
 	}
 	if len(prior) > 0 {
 		f.event(wo.ID, "cataloger", "knowledge_retrieved",
-			fmt.Sprintf("%d prior project record(s) provided to the Architect", len(prior)), map[string]any{"refs": priorRefs})
+			fmt.Sprintf("%d prior project document(s) provided to the Architect", len(prior)), map[string]any{"refs": priorRefs})
 	}
 
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "", woQuery(wo), f.workspaceDir(wo.ID), wo.KBBaseSHA)
@@ -68,7 +68,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 		return err
 	}
 	var plan planReply
-	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes, facts, prev)+knowledgePrompt(prior)+kbText,
+	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes, facts, prev)+f.priorKnowledgePrompt(prior)+kbText,
 		map[string]string{"clarification_answer": wo.ClarifAnswer, "clarification_log": clarificationLog(wo)}, "", &plan, runOpts{Audit: audit})
 	if err != nil {
 		return err

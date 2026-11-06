@@ -109,7 +109,7 @@ func TestRecordFailureIsNotPropagated(t *testing.T) {
 func TestNilCatalogerIsNoop(t *testing.T) {
 	var c *Cataloger
 	wo := &model.WorkOrder{ProjectID: "p1"}
-	if c.Record(context.Background(), wo, "k", model.TrustVerified, "x", "t", "b") != "" || c.Relevant(context.Background(), wo) != nil {
+	if c.Record(context.Background(), wo, "k", model.TrustVerified, "x", "t", "b") != "" {
 		t.Fatal("nil cataloger must be a no-op")
 	}
 }
