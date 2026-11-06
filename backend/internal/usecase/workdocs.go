@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -103,8 +104,8 @@ func (f *Factory) workDocState(ctx context.Context, wo *model.WorkOrder) (have m
 	have = map[string]bool{}
 	docs, err := f.KB.Idx.List(ctx, model.KBQuery{
 		ProjectID: wo.ProjectID, Sources: []string{model.KBSourceFactory},
-		Types: []string{model.KBTypeBrief, model.KBTypeSpec, model.KBTypeTaskDAG, model.KBTypeTaskSummary},
-		Limit: workDocLimit,
+		Types:    []string{model.KBTypeBrief, model.KBTypeSpec, model.KBTypeTaskDAG, model.KBTypeTaskSummary},
+		OriginID: wo.ID, Limit: workDocLimit,
 	})
 	if err != nil {
 		f.Log.Warn("work docs: lookup failed", "wo", wo.ID, "err", err)
@@ -125,10 +126,66 @@ func (f *Factory) workDocState(ctx context.Context, wo *model.WorkOrder) (have m
 }
 
 func workTitle(wo *model.WorkOrder) string {
-	if t := oneLine(wo.Title); t != "" {
+	if t := docLine(wo.Title, 200); t != "" {
 		return t
 	}
 	return "(untitled)"
+}
+
+var (
+	localLinkRe = regexp.MustCompile(`<([^>\n]*(?:file:///|/Users/|/home/)[^>\n]*)>`)
+	headingRe   = regexp.MustCompile(`^\s{0,3}#{1,6}(\s|$)`)
+	fenceRe     = regexp.MustCompile("^\\s{0,3}(```|~~~)")
+	ruleRe      = regexp.MustCompile(`^\s*(-{3,}|={3,})\s*$`)
+	linkSyntax  = strings.NewReplacer("](", "] (", "[[", "[ [", "]:", "] :")
+)
+
+// neutralise breaks link syntax so free text can never create a link the lint gates would check.
+func neutralise(s string) string {
+	return linkSyntax.Replace(localLinkRe.ReplaceAllString(s, "($1)"))
+}
+
+// docLine makes untrusted text safe for a heading, title or one-line value: redacted, one line, no brackets, no leading #.
+func docLine(s string, max int) string {
+	s = oneLine(sanitize(s, max))
+	s = strings.NewReplacer("[", "(", "]", ")").Replace(s)
+	return neutralise(strings.TrimLeft(s, "# "))
+}
+
+// safeLine redacts and flattens text that sits inside a template line of the summary.
+func safeLine(s string) string { return neutralise(oneLine(sanitize(s, maxDocText))) }
+
+// docBlock makes untrusted multi-line text safe under a fixed ## heading: no headings or rules of its own, fences balanced.
+func docBlock(s string) string {
+	s = neutralise(strings.TrimSpace(sanitize(s, maxDocText)))
+	var out []string
+	fence := ""
+	for _, l := range strings.Split(s, "\n") {
+		l = strings.TrimRight(l, "\r")
+		if m := fenceRe.FindStringSubmatch(l); m != nil {
+			switch fence {
+			case "":
+				fence = m[1]
+			case m[1]:
+				fence = ""
+			}
+		} else if fence == "" {
+			if headingRe.MatchString(l) {
+				if t := strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(l), "#")); t != "" {
+					l = "**" + t + "**"
+				} else {
+					l = ""
+				}
+			} else if ruleRe.MatchString(l) {
+				l = ""
+			}
+		}
+		out = append(out, l)
+	}
+	if fence != "" {
+		out = append(out, fence)
+	}
+	return strings.Join(out, "\n")
 }
 
 // putWorkDoc writes one document and returns its bundle path, or "" when it could not be written.
@@ -177,7 +234,7 @@ func (f *Factory) putWorkDoc(ctx context.Context, wo *model.WorkOrder, typ, intr
 }
 
 func docText(s string) string {
-	if s = strings.TrimSpace(sanitize(s, maxDocText)); s == "" {
+	if s = strings.TrimSpace(docBlock(s)); s == "" {
 		return notRecorded
 	}
 	return s
@@ -206,10 +263,10 @@ func (f *Factory) writeBriefDoc(ctx context.Context, wo *model.WorkOrder) {
 			ctxText, cons := splitBrief(wo.Brief)
 			qa := make([]string, 0, len(wo.Clarifications)+1)
 			for _, c := range wo.Clarifications {
-				qa = append(qa, "Q: "+oneLine(sanitize(c.Question, 1000))+"\nA: "+oneLine(sanitize(c.Answer, 2000)))
+				qa = append(qa, "Q: "+docLine(c.Question, 1000)+"\nA: "+docLine(c.Answer, 2000))
 			}
 			if wo.ClarifQuestion != "" && wo.ClarifAnswer != "" {
-				qa = append(qa, "Q: "+oneLine(sanitize(wo.ClarifQuestion, 1000))+"\nA: "+oneLine(sanitize(wo.ClarifAnswer, 2000)))
+				qa = append(qa, "Q: "+docLine(wo.ClarifQuestion, 1000)+"\nA: "+docLine(wo.ClarifAnswer, 2000))
 			}
 			qaText := "none"
 			if len(qa) > 0 {
@@ -267,14 +324,14 @@ func dagBody(tasks []model.Task) string {
 		} else {
 			fmt.Fprintf(&graph, "%d ← %s\n", n, dep)
 		}
-		role, scope := t.Role, oneLine(strings.Join(t.Scope, ", "))
+		role, scope := docLine(t.Role, 50), docLine(strings.Join(t.Scope, ", "), 500)
 		if role == "" {
 			role = "builder"
 		}
 		if scope == "" {
 			scope = "not set"
 		}
-		fmt.Fprintf(&list, "### %d. %s\n\nRole: %s · Depends on: %s · Scope: %s\n\n%s\n\n", n, oneLine(sanitize(t.Title, 300)), role, dep, scope, docText(t.Objective))
+		fmt.Fprintf(&list, "### %d. %s\n\nRole: %s · Depends on: %s · Scope: %s\n\n%s\n\n", n, docLine(t.Title, 300), role, dep, scope, docText(t.Objective))
 	}
 	return "## Graph\n\n```\n" + graph.String() + "```\n\n## Tasks\n\n" + strings.TrimRight(list.String(), "\n") + "\n"
 }
@@ -288,5 +345,5 @@ func (f *Factory) writeSummaryDoc(ctx context.Context, wo *model.WorkOrder, outc
 	return f.putWorkDoc(ctx, wo, model.KBTypeTaskSummary,
 		fmt.Sprintf("This is the task summary of work order %q, which ended %s: how it ended, what is left open and what changed.", title, outcome),
 		fmt.Sprintf("Task summary for work order %q: outcome %s, final verification, open items, decisions and main changes.", title, outcome),
-		nil, func() string { return f.taskSummary(ctx, wo, outcome) + "\n" })
+		nil, func() string { return neutralise(sanitize(f.taskSummary(ctx, wo, outcome), maxDocText)) + "\n" })
 }

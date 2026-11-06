@@ -92,7 +92,7 @@ const (
 // taskSummary renders the deterministic five-section summary of wo's task.
 func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome string) string {
 	orNone := func(s string) string {
-		if s = oneLine(s); s == "" {
+		if s = docLine(s, maxDocText); s == "" {
 			return "(none)"
 		}
 		return s
@@ -124,7 +124,7 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		for _, fd := range all {
 			switch fd.Status {
 			case model.FindingOpen, model.FindingConfirmed, model.FindingEscalated:
-				lines = append(lines, clip(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 100))
+				lines = append(lines, clip(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, safeLine(fd.Title), safeLine(fd.Location)), 100))
 			}
 		}
 		for i, l := range lines {
@@ -141,7 +141,7 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 				open = append(open, more(len(r.Deviations)))
 				break
 			}
-			open = append(open, clip("- deviation: "+oneLine(d), 100))
+			open = append(open, clip("- deviation: "+safeLine(d), 100))
 		}
 	}
 	if len(open) == 0 {
@@ -178,7 +178,7 @@ func (f *Factory) decisionLines(ctx context.Context, woID string) []string {
 	lines := make([]string, 0, len(evs))
 	for i := len(evs) - 1; i >= 0; i-- {
 		line := "- " + evs[i].Kind
-		if m := oneLine(evs[i].Message); m != "" {
+		if m := safeLine(evs[i].Message); m != "" {
 			line += ": " + m
 		}
 		lines = append(lines, clip(line, 160))
@@ -214,11 +214,11 @@ func (f *Factory) finalVerification(ctx context.Context, wo *model.WorkOrder) (l
 				lines = append(lines, fmt.Sprintf("(+%d more)", len(checks)-summaryMaxChecks))
 				break
 			}
-			lines = append(lines, clip(fmt.Sprintf("- %s → %s", c.Name, c.Outcome), 120))
+			lines = append(lines, clip(safeLine(fmt.Sprintf("- %s → %s", c.Name, c.Outcome)), 120))
 		}
 		for _, c := range checks {
 			if c.Outcome != string(model.Pass) {
-				failing = append(failing, fmt.Sprintf("%s %s", c.Name, c.Outcome))
+				failing = append(failing, safeLine(fmt.Sprintf("%s %s", c.Name, c.Outcome)))
 			}
 		}
 		return lines, failing
@@ -244,7 +244,7 @@ func (f *Factory) changedFileLines(ctx context.Context, wo *model.WorkOrder) []s
 	case len(files) <= 10:
 		out := make([]string, len(files))
 		for i, p := range files {
-			out[i] = "- " + p
+			out[i] = "- " + safeLine(p)
 		}
 		return out
 	}

@@ -68,6 +68,7 @@ type KBQuery struct {
 	Text      string   // empty: no ranking, ordered by path
 	Sources   []string // empty: all
 	Types     []string // empty: all
+	OriginID  string   // empty: any; else only docs whose frontmatter origin_id matches
 	Statuses  []string // empty: stable only
 	Limit     int      // <= 0: 8 for ranked search, 200 for listing
 }

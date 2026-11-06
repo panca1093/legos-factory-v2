@@ -2,14 +2,18 @@ package usecase
 
 import (
 	"context"
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"legos-factory/backend/internal/kb"
 	"legos-factory/backend/internal/model"
+	"legos-factory/backend/internal/store"
 )
 
 func TestDocSlugAndCode(t *testing.T) {
@@ -153,6 +157,9 @@ func TestWorkOrderDocumentsAreWrittenAtTheirStages(t *testing.T) {
 	}
 	r.f.completeWO(ctx, r.reload(t), "READY")
 	sum, front, body := r.workDoc(t, model.KBTypeTaskSummary)
+	if !strings.Contains(body, "Ganti") && !strings.Contains(body, "A completely different title") {
+		t.Fatalf("written summary lacks the goal:\n%s", body)
+	}
 	if sum.Path != "projects/p1/task/"+base+"-summary.md" {
 		t.Fatalf("a changed title must not rename files: %s", sum.Path)
 	}
@@ -247,6 +254,7 @@ func TestPlanRevisionRewritesSpecAndDAG(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("rewrite must reuse the file: %v", files)
 	}
+	assertNoLint(t, r.know.Bundle.Root())
 }
 
 func TestBriefCarriesClarificationsOnApproval(t *testing.T) {
@@ -269,5 +277,164 @@ func TestWorkDocsStayCleanUnderLintWithAllFour(t *testing.T) {
 	assertNoLint(t, r.know.Bundle.Root())
 	for _, typ := range []string{model.KBTypeBrief, model.KBTypeSpec, model.KBTypeTaskDAG, model.KBTypeTaskSummary} {
 		r.workDoc(t, typ)
+	}
+}
+
+const (
+	leakPassword = "password=hunter2secret"
+	leakToken    = "sk-abcdefghijklmnop1234567890"
+)
+
+func hostileEnv(t *testing.T) (summaryEnv, *model.WorkOrder, []model.Task) {
+	t.Helper()
+	env := newSummaryEnv(t, []string{"a.go"}, true)
+	ctx := context.Background()
+	title := "## Injected\n---\nstatus: draft\n[x](../../../etc/passwd) `tick` " + leakPassword + " " + leakToken
+	obj := "## Fake heading\nuse " + leakPassword + " and " + leakToken + "\n---\n[[wiki]] [a](../../x.md) <file:///Users/x/y> a[0] ok\n```go\nunclosed"
+	acc := "- [ ] one " + leakToken + "\n[ref]: /Users/x/secret.md\n# Top"
+	wo := env.newWO(t, "wo_hostile", title, obj, acc, model.StateArchitectReview)
+	err := env.wos.UpdateFields(ctx, wo.ID, map[string]any{
+		"brief":      "Do it " + leakToken + "\n\nConstraints:\n- ## keep [api](x.md)\n\n~~~\nopen fence",
+		"spec":       "# H1\nbody " + leakPassword + "\n## H2\n```\n# comment inside fence\n```\n### H3",
+		"clarif_log": `[{"question":"## Q [x](y.md)?","answer":"A ` + leakToken + `"}]`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.seedFindings(t, wo.ID, 1, "finding "+leakPassword+" "+leakToken+" [z](q.md)")
+	tasks := []model.Task{
+		{ID: "t1", WOID: wo.ID, Seq: 0, Title: "## T1 " + leakToken, Objective: "# obj\n" + leakPassword, Role: "builder\n## x", Scope: []string{"[a](b.md)", "/Users/x " + leakToken}},
+		{ID: "t2", WOID: wo.ID, Seq: 1, Title: "Two", Objective: "o", Role: "builder", Deps: []string{"t1"}},
+	}
+	return env, mustGet(t, env, wo.ID), tasks
+}
+
+func writeHostileDocs(t *testing.T) (summaryEnv, *model.WorkOrder) {
+	env, wo, tasks := hostileEnv(t)
+	ctx := context.Background()
+	env.f.writeBriefDoc(ctx, wo)
+	env.f.writePlanDocs(ctx, wo, tasks, "human")
+	env.f.completeWO(ctx, wo, "READY")
+	return env, wo
+}
+
+func TestWorkDocsNeverWriteSecrets(t *testing.T) {
+	env, _ := writeHostileDocs(t)
+	n := 0
+	filepath.WalkDir(env.bundle.Root(), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			if d != nil && d.Name() == ".git" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		n++
+		data, _ := os.ReadFile(p)
+		for _, leak := range []string{"hunter2secret", "abcdefghijklmnop1234567890"} {
+			if strings.Contains(string(data), leak) {
+				t.Errorf("%s leaks %q:\n%s", p, leak, data)
+			}
+		}
+		return nil
+	})
+	if n < 4 {
+		t.Fatalf("expected the written documents, saw %d files", n)
+	}
+}
+
+func fenceLines(body string) (n int) {
+	for _, l := range strings.Split(body, "\n") {
+		if strings.HasPrefix(l, "```") || strings.HasPrefix(l, "~~~") {
+			n++
+		}
+	}
+	return n
+}
+
+func fixedHeadings(body string) (h2 []string, other int) {
+	fence := false
+	for _, l := range strings.Split(body, "\n") {
+		if strings.HasPrefix(l, "```") || strings.HasPrefix(l, "~~~") {
+			fence = !fence
+			continue
+		}
+		switch {
+		case fence:
+		case strings.HasPrefix(l, "## "):
+			h2 = append(h2, strings.TrimPrefix(l, "## "))
+		case strings.HasPrefix(l, "# ") || strings.HasPrefix(l, "#### ") || (strings.HasPrefix(l, "### ") && !regexp.MustCompile(`^### \d+\. `).MatchString(l)):
+			other++
+		}
+	}
+	return h2, other
+}
+
+func TestHostileInputKeepsDocumentsLintCleanAndShaped(t *testing.T) {
+	env, wo := writeHostileDocs(t)
+	assertNoLint(t, env.bundle.Root())
+	want := map[string][]string{
+		model.KBTypeBrief:       {"Request", "Context", "Constraints", "Questions and answers"},
+		model.KBTypeSpec:        {"Objective", "Acceptance criteria", "Out of scope", "Approach"},
+		model.KBTypeTaskDAG:     {"Graph", "Tasks"},
+		model.KBTypeTaskSummary: {"Goal", "Final verification", "Open items and follow-up", "Key decisions and rationale", "Main changes"},
+	}
+	for typ, headings := range want {
+		docs, err := env.f.KB.Idx.List(context.Background(), model.KBQuery{ProjectID: "p1", Sources: []string{model.KBSourceFactory}, Types: []string{typ}, OriginID: wo.ID})
+		if err != nil || len(docs) != 1 {
+			t.Fatalf("%s: %v %v", typ, docs, err)
+		}
+		front, body, err := env.bundle.Read(docs[0].Path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if front["type"] != typ || front["origin_id"] != wo.ID || front["status"] != nil || front["origin"] != "work_order" {
+			t.Fatalf("%s frontmatter: %v", typ, front)
+		}
+		h2, other := fixedHeadings(body)
+		if fmt.Sprint(h2) != fmt.Sprint(headings) || other != 0 {
+			t.Fatalf("%s headings %v (+%d stray), want %v:\n%s", typ, h2, other, headings, body)
+		}
+		if fenceLines(body)%2 != 0 {
+			t.Fatalf("%s has an unbalanced fence:\n%s", typ, body)
+		}
+	}
+}
+
+func TestPrefixLookupSurvivesManyUnrelatedDocs(t *testing.T) {
+	env := newSummaryEnv(t, nil, true)
+	ctx := context.Background()
+	wo := env.newWO(t, "wo_many", "Original title", "obj", "acc", model.StateArchitectReview)
+	for i := 0; i < workDocLimit+20; i++ {
+		rel := fmt.Sprintf("projects/p1/brief/2000-%04d.md", i)
+		raw := fmt.Sprintf("---\ntype: Brief\ntitle: other %d\norigin: work_order\norigin_id: wo_other%d\n---\n\nbody\n", i, i)
+		p, err := kb.Parse(model.KBSourceFactory, "p1", rel, []byte(raw), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := env.f.KB.Idx.(*store.KBRepo).Upsert(ctx, p, make([]float32, 512)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env.f.writeBriefDoc(ctx, wo)
+	wo.Title = "Renamed entirely"
+	env.f.writePlanDocs(ctx, wo, []model.Task{{ID: "t1", Title: "T", Objective: "o"}}, "factory")
+	docs, _ := env.f.KB.Idx.List(ctx, model.KBQuery{ProjectID: "p1", OriginID: wo.ID, Limit: 10})
+	if len(docs) != 3 {
+		t.Fatalf("want brief, spec and dag, got %+v", docs)
+	}
+	var brief string
+	for _, d := range docs {
+		if d.Type == model.KBTypeBrief {
+			brief = strings.TrimSuffix(filepath.Base(d.Path), ".md")
+		}
+	}
+	for _, d := range docs {
+		if !strings.Contains(d.Path, brief) {
+			t.Fatalf("%s must reuse the brief prefix %s", d.Path, brief)
+		}
+	}
+	_, body, _ := env.bundle.Read("projects/p1/spec/" + brief + ".md")
+	if !strings.Contains(body, "[Brief](../brief/"+brief+".md)") {
+		t.Fatalf("spec must link its brief:\n%s", body)
 	}
 }
