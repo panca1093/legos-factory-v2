@@ -48,8 +48,15 @@ const matches = (actor: string, f: FilterKey) =>
   (f === "code" && actor === "factory") ||
   (f === "agents" && isCrew(actor)) ||
   actor === f;
+// A steer is folded into the agent's run, so "You" must also match runs you steered.
+const steered = (it: (typeof history.value)[number]) =>
+  it.type === "run" && it.steps.some((st) => !!st.message);
 const shown = computed(() =>
-  history.value.filter((it) => matches(actorOf(it), filter.value)),
+  history.value.filter(
+    (it) =>
+      matches(actorOf(it), filter.value) ||
+      (filter.value === "human" && steered(it)),
+  ),
 );
 const taskTitle = computed(
   () => new Map(props.tasks.map((t) => [t.id, t.title] as const)),
@@ -69,7 +76,7 @@ const taskTitle = computed(
     <div class="section-head">
       <h2>What’s happening</h2>
       <span class="tiny muted" data-test="activity-count"
-        >{{ shown.length }} of {{ history.length }} events</span
+        >{{ shown.length }} of {{ history.length }} past events</span
       >
     </div>
     <div
@@ -101,7 +108,8 @@ const taskTitle = computed(
       name="view"
       tag="div"
       class="timeline fx-tl"
-      tabindex="0"
+      role="region"
+      :tabindex="shown.length ? 0 : undefined"
       aria-label="Activity events"
       ><template v-for="it in shown"
         ><article v-if="it.type === 'run'" :key="it.id" class="event">
@@ -196,10 +204,28 @@ const taskTitle = computed(
   margin: 0 0 var(--space-3);
 }
 .fx-tl {
-  max-height: 480px;
+  max-height: min(480px, 60dvh);
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
   margin: 0 -8px;
   padding: 4px 8px 0;
+}
+.fx-tl:empty {
+  display: none;
+}
+.fx-tl:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+  border-radius: var(--radius-md);
+}
+.fx-tl :deep(.view-leave-active) {
+  position: absolute;
+  visibility: hidden;
+}
+@media (max-width: 720px) {
+  .fx-tl {
+    overscroll-behavior: auto;
+  }
 }
 </style>

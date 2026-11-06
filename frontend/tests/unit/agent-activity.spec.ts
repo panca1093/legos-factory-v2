@@ -372,7 +372,7 @@ describe("ActivityPanel filter", () => {
       await b.trigger("click");
       return b;
     };
-    expect(count()).toBe("4 of 4 events");
+    expect(count()).toBe("4 of 4 past events");
     const code = await pick("Code");
     expect(code.attributes("aria-pressed")).toBe("true");
     expect(w.findAll("article.event").map((a) => a.find("p").text())).toEqual([
@@ -383,11 +383,30 @@ describe("ActivityPanel filter", () => {
       "Plan approved",
     ]);
     await pick("Jev");
-    expect(count()).toBe("1 of 4 events");
+    expect(count()).toBe("1 of 4 past events");
     await pick("You");
     expect(w.find("article.event p").text()).toBe("Looks good");
     await pick("All");
     expect(w.findAll("article.event")).toHaveLength(4);
+  });
+  it("keeps runs you steered under You", async () => {
+    const w = mount(ActivityPanel, {
+      props: {
+        runs: [],
+        events: [
+          ev("agent_started", { run_id: "s1" }, "builder"),
+          ev("agent_steered", { run_id: "s1" }, "human", "use util.ts"),
+          ev("agent_completed", { run_id: "s1" }, "builder"),
+          ev("agent_started", { run_id: "s2" }, "builder"),
+          ev("agent_completed", { run_id: "s2" }, "builder"),
+        ],
+      },
+    });
+    await w
+      .findAll(".fx-afilter button")
+      .find((x) => x.text() === "You")!
+      .trigger("click");
+    expect(w.findAll("article.event")).toHaveLength(1);
   });
   it("says so when nothing matches the filter", async () => {
     const w = mount(ActivityPanel, {
