@@ -96,7 +96,7 @@ func (c *Cataloger) Completed(ctx context.Context, wo *model.WorkOrder, outcome,
 		refs = append(refs, "knowledge:"+k.ID)
 	}
 	return c.Record(ctx, wo, model.KnowledgeWorkOrderCompleted, model.TrustVerified, "cataloger",
-		fmt.Sprintf("Task summary: %s (%s)", clip(oneLine(wo.Title), 120), outcome), body, refs...)
+		fmt.Sprintf("Task summary: %s (%s)", wo.Title, outcome), body, refs...)
 }
 
 // completeWO records the terminal task summary from the order's current state.
@@ -111,15 +111,66 @@ func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome s
 }
 
 const (
-	summaryBudget    = 1800
-	summaryMaxChecks = 8
-	summaryMaxItems  = 5
-	summaryItemCap   = 160
-	summaryGoalCap   = 300
+	summaryBudget   = 1800
+	summaryMaxLines = 8
+	summaryMaxItems = 5
+	summaryGoalCap  = 300
+	summaryMaxFiles = 10
 )
 
 // taskSummary renders the deterministic five-section summary of wo's task.
 func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Goal: %s\nObjective: %s\nAcceptance: %s\n\n",
+		orNone(truncate(oneLine(wo.Title), 120)), orNone(truncate(oneLine(wo.Objective), summaryGoalCap)), orNone(truncate(oneLine(wo.Acceptance), summaryGoalCap)))
+
+	b.WriteString("Final verification:\n")
+	header, checks := f.finalVerification(ctx, wo)
+	b.WriteString(header + "\n")
+	var failing []model.QualityCheck
+	var lines []string
+	for _, c := range checks {
+		lines = append(lines, truncate(fmt.Sprintf("- %s → %s", oneLine(c.Name), c.Outcome), 120))
+		if c.Outcome != string(model.Pass) {
+			failing = append(failing, c)
+		}
+	}
+	writeCapped(&b, summaryMaxLines, lines)
+
+	b.WriteString("\nOpen items / follow-up:\n")
+	empty := true
+	if outcome != "READY" {
+		b.WriteString("Outcome: " + outcome + "\n")
+		empty = false
+	}
+	var failLines, findLines, devLines []string
+	for _, c := range failing {
+		failLines = append(failLines, fmt.Sprintf("- check %s %s", oneLine(c.Name), c.Outcome))
+	}
+	if all, err := f.Findings.List(ctx, wo.ID); err == nil {
+		for _, fd := range all {
+			switch fd.Status {
+			case model.FindingOpen, model.FindingConfirmed, model.FindingEscalated:
+				findLines = append(findLines, truncate(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 160))
+			}
+		}
+	}
+	if r := f.currentArchitectReport(wo); r != nil {
+		for _, d := range r.Deviations {
+			devLines = append(devLines, truncate("- deviation: "+oneLine(d), 160))
+		}
+	}
+	for _, l := range [][]string{failLines, findLines, devLines} {
+		if len(l) > 0 {
+			empty = false
+			writeCapped(&b, summaryMaxItems, l)
+		}
+	}
+	if empty {
+		b.WriteString("none\n")
+	}
+
+	b.WriteString("\nKey decisions and rationale:\n")
 	var decisions []model.KnowledgeRecord
 	if recs, err := f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: wo.ID, Limit: 200}); err == nil {
 		for _, k := range recs {
@@ -136,77 +187,81 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		}
 		return decisions[i].ID < decisions[j].ID
 	})
-
-	verLines, failing, verNote := f.finalVerification(ctx, wo)
-	var findings []string
-	if all, err := f.Findings.List(ctx, wo.ID); err == nil {
-		for _, fd := range all {
-			switch fd.Status {
-			case model.FindingOpen, model.FindingConfirmed, model.FindingEscalated:
-				findings = append(findings, fmt.Sprintf("[%s/%s] %s (%s)", fd.Severity, fd.Status, oneLine(fd.Title), oneLine(fd.Location)))
-			}
-		}
+	if len(decisions) > summaryMaxItems {
+		decisions = decisions[:summaryMaxItems]
 	}
-	var deviations []string
-	if r := f.currentArchitectReport(wo); r != nil {
-		deviations = r.Deviations
+	if len(decisions) == 0 {
+		b.WriteString("none recorded\n")
 	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "Goal: %s\nObjective: %s\nAcceptance: %s\n\n",
-		clip(oneLine(wo.Title), 120), clip(oneLine(wo.Objective), summaryGoalCap), clip(oneLine(wo.Acceptance), summaryGoalCap))
-
-	fmt.Fprintf(&b, "Final verification: %s\n", verNote)
-	writeList(&b, summaryMaxChecks, "no verification recorded", verLines)
-
-	b.WriteString("\nOpen items / follow-up:\n")
-	var open []string
-	if outcome != "READY" {
-		open = append(open, "Outcome: "+outcome)
-	}
-	for _, c := range failing {
-		open = append(open, "Failing check: "+c)
-	}
-	for _, x := range findings {
-		open = append(open, "Open finding: "+x)
-	}
-	for _, x := range deviations {
-		open = append(open, "Deviation: "+oneLine(x))
-	}
-	writeList(&b, summaryMaxItems, "none recorded", open)
-
-	b.WriteString("\nKey decisions and rationale:\n")
-	var dec []string
 	for _, k := range decisions {
-		dec = append(dec, fmt.Sprintf("%s: %s", k.Kind, oneLine(k.Title+" — "+k.Body)))
+		b.WriteString(truncate(fmt.Sprintf("- %s: %s", k.Kind, oneLine(k.Title+" — "+k.Body)), 160) + "\n")
 	}
-	writeList(&b, summaryMaxItems, "none recorded", dec)
 
 	b.WriteString("\nMain changes:\n")
-	writeList(&b, summaryMaxItems, "none recorded", f.changedFiles(ctx, wo))
-	if b.Len() > summaryBudget {
-		return truncate(b.String(), summaryBudget-len("… [truncated]"))
+	body := b.String()
+	files, note := f.changedFiles(ctx, wo)
+	if note != "" {
+		body += note + "\n"
+	} else {
+		for i, line := range changeLines(files) {
+			if len(body)+len(line)+1 > summaryBudget {
+				body += fmt.Sprintf("(+%d more)\n", len(changeLines(files))-i)
+				break
+			}
+			body += line + "\n"
+		}
 	}
-	return b.String()
+	return truncate(body, summaryBudget)
 }
 
-func writeList(b *strings.Builder, max int, empty string, items []string) {
-	if len(items) == 0 {
-		b.WriteString("- " + empty + "\n")
-		return
+func orNone(s string) string {
+	if s == "" {
+		return "(none)"
 	}
-	for i, it := range items {
+	return s
+}
+
+func writeCapped(b *strings.Builder, max int, lines []string) {
+	for i, l := range lines {
 		if i == max {
-			fmt.Fprintf(b, "- (+%d more)\n", len(items)-max)
+			fmt.Fprintf(b, "(+%d more)\n", len(lines)-max)
 			return
 		}
-		b.WriteString("- " + clip(it, summaryItemCap) + "\n")
+		b.WriteString(l + "\n")
 	}
+}
+
+func changeLines(files []string) []string {
+	if len(files) <= summaryMaxFiles {
+		out := make([]string, len(files))
+		for i, p := range files {
+			out[i] = "- " + p
+		}
+		return out
+	}
+	counts := map[string]int{}
+	for _, p := range files {
+		dir, _, _ := strings.Cut(p, "/")
+		if !strings.Contains(p, "/") {
+			dir = "."
+		}
+		counts[dir]++
+	}
+	dirs := make([]string, 0, len(counts))
+	for d := range counts {
+		dirs = append(dirs, d)
+	}
+	sort.Strings(dirs)
+	out := make([]string, len(dirs))
+	for i, d := range dirs {
+		out[i] = fmt.Sprintf("- %s/ (%d files)", d, counts[d])
+	}
+	return out
 }
 
 // finalVerification walks revisions down from wo.Revision to the newest one
-// that has checks, returning its check lines, its failing checks and a label.
-func (f *Factory) finalVerification(ctx context.Context, wo *model.WorkOrder) (lines, failing []string, label string) {
+// that has checks, returning its header line and latest check per name.
+func (f *Factory) finalVerification(ctx context.Context, wo *model.WorkOrder) (string, []model.QualityCheck) {
 	for rev := wo.Revision; rev >= 0; rev-- {
 		stored, err := f.Quality.ForRevision(ctx, wo.ID, rev)
 		if err != nil || len(stored) == 0 {
@@ -219,54 +274,33 @@ func (f *Factory) finalVerification(ctx context.Context, wo *model.WorkOrder) (l
 				sha = c.CommitSHA
 			}
 		}
-		where := "uncommitted / not verified on this revision"
+		header := fmt.Sprintf("Revision %d, uncommitted / not verified on this revision", rev)
 		if sha != "" {
-			where = "commit " + sha
+			header = fmt.Sprintf("Revision %d, commit %s", rev, sha)
 		}
-		label = fmt.Sprintf("revision %d, %s", rev, where)
-		if rev != wo.Revision {
-			label = fmt.Sprintf("current revision %d has no checks; last verified at %s", wo.Revision, label)
+		if rev < wo.Revision {
+			header += fmt.Sprintf(" (revision %d has no checks recorded)", wo.Revision)
 		}
-		for _, c := range checks {
-			lines = append(lines, fmt.Sprintf("%s: %s", c.Name, c.Outcome))
-			if c.Outcome != string(model.Pass) {
-				failing = append(failing, fmt.Sprintf("%s (%s) → %s", c.Name, oneLine(c.Command), c.Outcome))
-			}
-		}
-		return lines, failing, label
+		return header, checks
 	}
-	return nil, nil, fmt.Sprintf("revision %d, no checks recorded", wo.Revision)
+	return "No checks recorded", nil
 }
 
-func (f *Factory) changedFiles(ctx context.Context, wo *model.WorkOrder) []string {
+// changedFiles returns the workspace diff, or a note when it cannot be read.
+func (f *Factory) changedFiles(ctx context.Context, wo *model.WorkOrder) ([]string, string) {
 	mu := f.wsLock(wo.ID)
 	if !mu.TryLock() {
-		return nil
+		return nil, "unavailable (workspace busy)"
 	}
 	files, err := f.Sandbox.ChangedFiles(ctx, f.workspaceDir(wo.ID))
 	mu.Unlock()
 	if err != nil {
-		return nil
+		return nil, fmt.Sprintf("unavailable (%v)", err)
 	}
-	return files
-}
-
-// clip cuts s to at most max bytes on a rune boundary, marking the cut with an ellipsis.
-func clip(s string, max int) string {
-	if len(s) <= max {
-		return s
+	if len(files) == 0 {
+		return nil, "none (no changes in workspace)"
 	}
-	if max <= 0 {
-		return ""
-	}
-	cut := max - len("…")
-	if cut < 0 {
-		cut = 0
-	}
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + "…"
+	return files, ""
 }
 
 // Find searches knowledge visible to u. A requested project is checked

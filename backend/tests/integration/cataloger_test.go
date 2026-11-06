@@ -164,7 +164,7 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 	if !strings.HasPrefix(done.Title, "Task summary:") {
 		t.Fatalf("completion title must start with 'Task summary:': %q", done.Title)
 	}
-	for _, want := range []string{"Goal:", "Final verification:", "Open items / follow-up:", "Key decisions and rationale:", "Main changes:", "go-test: PASS", "go-vet: PASS"} {
+	for _, want := range []string{"Goal:", "Final verification:", "Open items / follow-up:", "Key decisions and rationale:", "Main changes:", "- go-test → PASS", "- go-vet → PASS"} {
 		if !strings.Contains(done.Body, want) {
 			t.Fatalf("task summary missing %q: %s", want, done.Body)
 		}
