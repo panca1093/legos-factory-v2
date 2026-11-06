@@ -104,6 +104,8 @@ From intake until the plan gate decides, the Foreman is **one agent session**: i
 Input: brief, request, criteria, repo facts.
 Output: `planReply` gains a `spec` field (behaviour, interfaces, edge cases) next to `summary` and `tasks`. Each task gets `scope`: the files or areas it may touch.
 
+**Revisions edit the previous draft.** A re-draft (gate revise, human revision, Foreman-answer re-draft) receives the stored spec and task list (id, title, objective, scope, deps) with the notes, and is told to change only what the notes criticise, keep surviving task ids stable and say in `summary` what changed.
+
 **Follow-up questions.** When the brief is unclear, the Architect replies `CLARIFY` with a question. The question goes to the **Foreman first**:
 
 - Foreman reply `ANSWER`: the answer is stored and the Architect re-drafts.
@@ -153,7 +155,7 @@ Truth table, first matching row wins:
 | 4 | any answer unsettled | revise |
 | 5 | otherwise | approve |
 
-`revise` sends the Architect a note the code builds from the answers that triggered it (e.g. "criterion c3 is not covered; tasks t2 and t4 overlap") plus the Foreman's notes. When `plan_revisions` has reached 2, a revise outcome becomes **escalate**. A human revision (or a human answer to a clarification) resets the counter. `plan_revisions` is a column on the work order (migration 010) and is also returned in the work order JSON.
+`revise` sends the Architect a numbered note the code builds from the answers that triggered it, with nothing dropped: each criterion with its full text, and for `scope_creep` / `task_overlap` the plan's task titles and scopes. The Foreman's notes follow in full. When `plan_revisions` has reached 2, a revise outcome becomes **escalate**. A human revision (or a human answer to a clarification) resets the counter. `plan_revisions` is a column on the work order (migration 010) and is also returned in the work order JSON.
 
 Wiring: `approve` moves `ARCHITECT_REVIEW → QUEUED` with actor `factory` and queues the root tasks. `revise` moves to `PLANNING` and enqueues a plan job. `escalate` keeps the order in `ARCHITECT_REVIEW` with `plan_review = approved` (the marker the existing approve/revise UI keys on) and records a `plan_escalated` event with the reason; it does not use `WAITING_FOR_HUMAN`, which stays reserved for Architect questions. Plan task ids are sent to Jev as `t1..tn`, not the stored `wo_..._task` ids.
 

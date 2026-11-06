@@ -477,6 +477,22 @@ func criterionLabels(cs []Criterion) map[string]string {
 	return m
 }
 
+func numberNotes(notes []string) string {
+	lines := make([]string, len(notes))
+	for i, n := range notes {
+		lines[i] = fmt.Sprintf("%d. %s", i+1, n)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func planTaskTitles(tasks []PlanTask) string {
+	parts := make([]string, len(tasks))
+	for i, t := range tasks {
+		parts[i] = fmt.Sprintf("%q (%s)", t.Title, strings.Join(t.Scope, ", "))
+	}
+	return strings.Join(parts, ", ")
+}
+
 func gateFailure(noCriteria bool, judgeErr error, overLimit bool, missing []string) (string, bool) {
 	switch {
 	case noCriteria:
@@ -511,7 +527,17 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 		return GateOutcome{Outcome: GateEscalate, Row: 1, Note: note}
 	}
 	var hard, soft, risky []string
-	labels := criterionLabels(in.Criteria)
+	labels := make(map[string]string, len(in.Criteria))
+	for _, c := range in.Criteria {
+		labels[c.ID] = fmt.Sprintf("%s (%s)", c.ID, c.Text)
+	}
+	phrases := make(map[string]string, len(planPhrases))
+	for id, p := range planPhrases {
+		phrases[id] = p
+	}
+	for _, id := range []string{"scope_creep", "task_overlap"} {
+		phrases[id] += "; the plan's tasks are " + planTaskTitles(in.Tasks)
+	}
 	for _, c := range in.Criteria {
 		switch judge(answers["covers_"+c.ID]) {
 		case vNo:
@@ -523,17 +549,17 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	for _, id := range planHardIDs {
 		switch judge(answers[id]) {
 		case vYes:
-			hard = append(hard, planPhrases[id])
+			hard = append(hard, phrases[id])
 		case vUnsettled:
-			soft = append(soft, "it is unclear whether "+planPhrases[id])
+			soft = append(soft, "it is unclear whether "+phrases[id])
 		}
 	}
 	for _, id := range planRiskIDs {
 		switch judge(answers[id]) {
 		case vYes:
-			risky = append(risky, planPhrases[id])
+			risky = append(risky, phrases[id])
 		case vUnsettled:
-			soft = append(soft, "it is unclear whether "+planPhrases[id])
+			soft = append(soft, "it is unclear whether "+phrases[id])
 		}
 	}
 	if len(risky) > 0 {
@@ -542,9 +568,9 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	row, note := 0, ""
 	switch {
 	case len(hard) > 0:
-		row, note = 3, joinNotes(append(hard, soft...))
+		row, note = 3, numberNotes(append(hard, soft...))
 	case len(soft) > 0:
-		row, note = 4, joinNotes(soft)
+		row, note = 4, numberNotes(soft)
 	default:
 		return GateOutcome{Outcome: GateApprove, Row: 5, Note: ""}
 	}

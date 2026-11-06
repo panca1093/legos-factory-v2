@@ -118,15 +118,19 @@ func TestDecidePlanGateAskedQuestions(t *testing.T) {
 			t.Fatalf("got %+v", got)
 		}
 	})
-	t.Run("criterion text is truncated in notes", func(t *testing.T) {
+	t.Run("revise note is numbered, quotes full criterion text and names tasks", func(t *testing.T) {
 		long := planInput(0)
-		long.Criteria = []Criterion{{"c1", strings.Repeat("word ", 40)}}
+		text := strings.Repeat("word ", 40)
+		long.Criteria = []Criterion{{"c1", text}}
+		long.Tasks = []PlanTask{{ID: "t1", Title: "Add cart endpoint", Scope: []string{"api/cart.go"}}, {ID: "t2", Title: "Show total"}}
 		_, q := planGateState(long)
-		a := planAnswers(map[string]float64{"covers_c1": 0.1})
+		a := planAnswers(map[string]float64{"covers_c1": 0.1, "task_overlap": 0.9, "scope_creep": 0.9})
 		delete(a, "covers_c2")
 		got := decidePlanGate(long, q, a, nil, false)
-		if !strings.Contains(got.Note, "c1 (word word") || !strings.Contains(got.Note, "…)") || len(got.Note) > 200 {
-			t.Fatalf("note: %q", got.Note)
+		for _, want := range []string{"1. ", "2. ", "3. ", "c1 (" + text + ")", `"Add cart endpoint" (api/cart.go)`, `"Show total"`} {
+			if !strings.Contains(got.Note, want) {
+				t.Errorf("note %q missing %q", got.Note, want)
+			}
 		}
 	})
 }

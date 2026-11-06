@@ -103,10 +103,19 @@ func foremanPrime(wo *model.WorkOrder) string {
 	return "You are continuing a work order you already started. Your earlier decisions:" + briefSection(wo) + clarification(wo) + "\n---\n\n"
 }
 
-func planPrompt(wo *model.WorkOrder, notes, facts string) string {
+func planPrompt(wo *model.WorkOrder, notes, facts string, prev []model.Task) string {
 	extra := briefSection(wo) + clarification(wo)
+	if wo.Spec != "" || len(prev) > 0 {
+		extra += "\nPrevious draft:\nSpec:\n" + wo.Spec + "\nTasks:\n" + previousTasks(wo.ID, prev)
+	}
 	if notes != "" {
-		extra += fmt.Sprintf("\nRevise the previous draft according to: %s\n", notes)
+		extra += fmt.Sprintf(`
+Revise the previous draft according to these notes:
+%s
+
+This is a targeted edit, not a redraft: keep every part the notes do not criticise, change only what is needed,
+address every numbered item, keep task ids stable where the task survives, and say in summary what changed.
+`, notes)
 	}
 	return fmt.Sprintf(`You are the Architect of a software engineering team.
 
@@ -133,6 +142,19 @@ Rules:
 - "deps" lists ids of tasks that must complete first; the graph must be acyclic and tasks must cover the objective.
 - "scope" lists the files or areas each task may touch.
 - role is "builder" for implementation tasks.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts)
+}
+
+func previousTasks(woID string, tasks []model.Task) string {
+	var b strings.Builder
+	for _, t := range tasks {
+		deps := make([]string, len(t.Deps))
+		for i, d := range t.Deps {
+			deps[i] = strings.TrimPrefix(d, woID+"_")
+		}
+		fmt.Fprintf(&b, "- %s: %s — %s (scope: %s; deps: %s)\n", strings.TrimPrefix(t.ID, woID+"_"), t.Title, t.Objective,
+			strings.Join(t.Scope, ", "), strings.Join(deps, ", "))
+	}
+	return b.String()
 }
 
 func criteriaSection(cs []Criterion) string {

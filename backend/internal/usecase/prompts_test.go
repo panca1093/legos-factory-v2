@@ -10,7 +10,7 @@ import (
 func TestPromptsCarryClarificationAnswer(t *testing.T) {
 	wo := &model.WorkOrder{Title: "t", ClarifQuestion: "round what?", ClarifAnswer: "the discount"}
 	for name, p := range map[string]string{
-		"plan":        planPrompt(wo, "", ""),
+		"plan":        planPrompt(wo, "", "", nil),
 		"review":      foremanReviewPrompt(wo, nil),
 		"implement":   implementPrompt(wo, model.Job{TaskID: "task-1"}, nil),
 		"remediation": implementPrompt(wo, model.Job{Payload: map[string]any{"reason": "fix"}}, nil),
@@ -113,5 +113,31 @@ func TestReviewAndVerifyPromptsNumberTheCriteria(t *testing.T) {
 	}
 	if p := architectVerifyPrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, ""); !strings.Contains(p, "--- a.go (+1 -0)") || !strings.Contains(p, "+x") {
 		t.Errorf("verify prompt lacks the diff:\n%s", p)
+	}
+}
+
+func TestPlanPromptRevisionCarriesPreviousDraft(t *testing.T) {
+	wo := &model.WorkOrder{ID: "wo1", Title: "t", Spec: "the old spec body"}
+	prev := []model.Task{
+		{ID: "wo1_task-1", Title: "Add cart endpoint", Objective: "expose POST", Scope: []string{"api/cart.go"}, Deps: nil},
+		{ID: "wo1_task-2", Title: "Show total", Objective: "sum items", Scope: []string{"ui/total.go", "ui/cart.go"}, Deps: []string{"wo1_task-1"}},
+	}
+	p := planPrompt(wo, "1. criterion c1 is not covered\n2. tasks overlap", "", prev)
+	for _, want := range []string{
+		"the old spec body", "task-1", "Add cart endpoint", "expose POST", "api/cart.go",
+		"task-2", "Show total", "ui/total.go, ui/cart.go", "deps: task-1",
+		"1. criterion c1 is not covered\n2. tasks overlap",
+		"keep every part the notes do not criticise", "keep task ids stable", "say in summary what changed",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("revision prompt missing %q:\n%s", want, p)
+		}
+	}
+}
+
+func TestPlanPromptFirstDraftHasNoRevisionText(t *testing.T) {
+	p := planPrompt(&model.WorkOrder{Title: "t"}, "", "", nil)
+	if strings.Contains(p, "Previous draft") || strings.Contains(p, "task ids stable") {
+		t.Fatalf("first draft prompt has revision text:\n%s", p)
 	}
 }
