@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -29,6 +30,8 @@ type LocalHost interface {
 type Local struct {
 	Host LocalHost
 	GH   func(repo string) GitProvider
+
+	picking atomic.Bool
 }
 
 var githubRemote = regexp.MustCompile(`(?i)^(?:https?://(?:[^@/]+@)?|ssh://(?:[^@/]+@)?|git://|[^@/\s]+@)github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$`)
@@ -64,7 +67,12 @@ func absDir(p string) (string, error) {
 	return p, nil
 }
 
+// PickFolder runs under ctx, so an aborted request closes the native chooser.
 func (l *Local) PickFolder(ctx context.Context) (string, error) {
+	if !l.picking.CompareAndSwap(false, true) {
+		return "", model.ErrBusy
+	}
+	defer l.picking.Store(false)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	return l.Host.PickFolder(ctx)
@@ -139,6 +147,7 @@ func (l *Local) Clone(ctx context.Context, url, parentDir string) (*model.LocalR
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
 	if err := l.Host.Clone(ctx, url, target); err != nil {
+		_ = os.RemoveAll(target) // target did not exist before, so this only removes the partial clone
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	return l.Inspect(ctx, target)

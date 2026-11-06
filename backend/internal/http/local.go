@@ -26,6 +26,8 @@ func localError(c echo.Context, err error) error {
 	switch {
 	case errors.Is(err, usecase.ErrInvalid):
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+	case errors.Is(err, model.ErrBusy):
+		return errorJSON(c, http.StatusConflict, "BUSY", err.Error())
 	case errors.Is(err, model.ErrNotSupported):
 		return errorJSON(c, http.StatusNotImplemented, "NOT_SUPPORTED", "the folder chooser is only available on macOS; type the path instead")
 	}

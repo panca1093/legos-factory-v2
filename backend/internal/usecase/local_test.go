@@ -233,6 +233,58 @@ func TestInitAndCloneValidation(t *testing.T) {
 	}
 }
 
+type blockingHost struct {
+	fakeHost
+	entered chan struct{}
+}
+
+func (h *blockingHost) PickFolder(ctx context.Context) (string, error) {
+	h.entered <- struct{}{}
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (h *blockingHost) Clone(ctx context.Context, _, target string) error {
+	_ = os.Mkdir(target, 0o755)
+	_ = os.WriteFile(filepath.Join(target, "partial"), nil, 0o644)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestPickFolderOneAtATimeAndAbortable(t *testing.T) {
+	h := &blockingHost{entered: make(chan struct{})}
+	l := &Local{Host: h}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { _, err := l.PickFolder(ctx); done <- err }()
+	<-h.entered
+	if _, err := l.PickFolder(context.Background()); !errors.Is(err, model.ErrBusy) {
+		t.Fatalf("second pick err=%v, want ErrBusy", err)
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("aborted pick err=%v", err)
+	}
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	go func() { <-h.entered; cancel2() }()
+	if _, err := l.PickFolder(ctx2); errors.Is(err, model.ErrBusy) {
+		t.Fatal("busy flag must be released after the first pick ends")
+	}
+}
+
+func TestAbortedCloneRemovesPartialTarget(t *testing.T) {
+	parent := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	l := &Local{Host: &blockingHost{}}
+	if _, err := l.Clone(ctx, "https://github.com/acme/greeter.git", parent); err == nil {
+		t.Fatal("expected an error")
+	}
+	if _, err := os.Stat(filepath.Join(parent, "greeter")); !os.IsNotExist(err) {
+		t.Fatalf("partial clone left behind: %v", err)
+	}
+}
+
 func TestGHStatus(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
