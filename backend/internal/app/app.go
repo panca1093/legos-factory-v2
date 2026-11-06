@@ -131,7 +131,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	}
 
 	factory := &usecase.Factory{
-		WO: woRepo, Runs: runRepo, Findings: findingRepo, Quality: qualityRepo,
+		WO: woRepo, Runs: runRepo, Findings: findingRepo, CodeFacts: &store.CodeFactRepo{DB: db}, Quality: qualityRepo,
 		Proj:    projRepo,
 		Resolve: resolve, Model: modelFor,
 		Bus: bus, Usage: usageTracker,

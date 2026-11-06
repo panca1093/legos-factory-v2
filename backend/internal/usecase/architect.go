@@ -79,6 +79,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 	if err != nil {
 		return err
 	}
+	f.recordCodeFacts(ctx, wo, model.AgentArchitect, plan.CodeFacts)
 	if plan.Decision == "CLARIFY" {
 		q := plan.QuestionText
 		if q == "" {
@@ -172,6 +173,7 @@ func (f *Factory) intake(ctx context.Context, wo *model.WorkOrder, facts string)
 		return err
 	}
 	brief := r.text()
+	f.recordCodeFacts(ctx, wo, model.AgentForeman, r.CodeFacts)
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"brief": brief}); err != nil {
 		return err
 	}

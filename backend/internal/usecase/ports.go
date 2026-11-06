@@ -230,3 +230,8 @@ type JudgeResult struct {
 	Request        json.RawMessage
 	Usage          Usage
 }
+
+type CodeFactStore interface {
+	Add(ctx context.Context, woID string, facts []model.CodeFact, max int) error
+	List(ctx context.Context, woID string) ([]model.CodeFact, error)
+}

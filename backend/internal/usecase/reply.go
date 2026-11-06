@@ -106,6 +106,7 @@ type planReply struct {
 	Summary      string     `json:"summary"`
 	Spec         string     `json:"spec"`
 	Tasks        []planTask `json:"tasks"`
+	CodeFacts    []string   `json:"code_facts"`
 }
 
 func (p *planReply) validate() error {
@@ -233,6 +234,7 @@ type intakeReply struct {
 	Constraints        []string `json:"constraints"`
 	Risks              []string `json:"risks"`
 	SuggestedTaskShape string   `json:"suggested_task_shape"`
+	CodeFacts          []string `json:"code_facts"`
 }
 
 func (r *intakeReply) validate() error {
