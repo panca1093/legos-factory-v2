@@ -113,6 +113,9 @@ const budgetPercent = computed(() =>
 );
 const onChats = computed(() => route.path.startsWith("/chats"));
 const railQuery = ref("");
+watch(onChats, (on) => {
+  if (!on) railQuery.value = "";
+});
 // On the Chats page the rail is the conversation list, so it shows every chat.
 const recentChats = computed(() => {
   if (!onChats.value) return chats.chats.slice(0, 5);
@@ -249,7 +252,7 @@ async function logout() {
         />
         <nav
           class="lg-nav grow"
-          :aria-label="onChats ? 'Chats' : 'Recent chats'"
+          :aria-label="onChats ? 'All chats' : 'Recent chats'"
         >
           <RouterLink
             v-for="c in recentChats"

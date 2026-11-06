@@ -445,14 +445,12 @@ describe("rail recent chats", () => {
     useSession().user = { id: "u", name: "P", email: "p@x", role: "OWNER" };
     const w = mount(AppShell, { global: { plugins: [router] } });
     await flushPromises();
-    expect(w.findAll('nav[aria-label="Chats"] a')).toHaveLength(7);
-    await w
-      .find('.rail input[type="search"], .rail-search input')
-      .setValue("Chat 6");
+    expect(w.findAll('nav[aria-label="All chats"] a')).toHaveLength(7);
+    await w.find(".rail-search input").setValue("Chat 6");
     await flushPromises();
-    expect(w.findAll('nav[aria-label="Chats"] a').map((a) => a.text())).toEqual(
-      ["Chat 6"],
-    );
+    expect(
+      w.findAll('nav[aria-label="All chats"] a').map((a) => a.text()),
+    ).toEqual(["Chat 6"]);
     w.unmount();
   });
 });
