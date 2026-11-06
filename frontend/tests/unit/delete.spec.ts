@@ -60,7 +60,8 @@ describe("isDeletable", () => {
       isDeletable(o({ state: "READY", pr_ref: "7", pr_closed_at: "t" })),
     ).toBe(true);
     expect(isDeletable(o({ state: "IMPLEMENTING" }))).toBe(false);
-    expect(isDeletable(o({ state: "BLOCKED" }))).toBe(false);
+    expect(isDeletable(o({ state: "BLOCKED" }))).toBe(true);
+    expect(isDeletable(o({ state: "NEEDS_HUMAN_REVIEW" }))).toBe(false);
   });
 });
 
