@@ -240,6 +240,7 @@ func (s *Server) routes() {
 	api.POST("/integrations/jira/lookup", s.requireRole(model.RoleEngineer, s.handleJiraLookup))
 
 	api.POST("/local/pick-folder", s.local(s.handleLocalPickFolder))
+	api.POST("/local/pick-folder/cancel", s.local(s.handleLocalPickCancel))
 	api.GET("/local/inspect", s.local(s.handleLocalInspect))
 	api.POST("/local/clone", s.local(s.handleLocalClone))
 	api.POST("/local/init", s.local(s.handleLocalInit))

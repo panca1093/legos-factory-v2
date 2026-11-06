@@ -45,6 +45,11 @@ func (s *Server) handleLocalPickFolder(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"path": path})
 }
 
+func (s *Server) handleLocalPickCancel(c echo.Context) error {
+	s.Local.CancelPick()
+	return c.NoContent(http.StatusNoContent)
+}
+
 func (s *Server) handleLocalInspect(c echo.Context) error {
 	r, err := s.Local.Inspect(c.Request().Context(), c.QueryParam("path"))
 	if err != nil {

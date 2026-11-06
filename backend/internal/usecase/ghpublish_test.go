@@ -142,6 +142,25 @@ func TestGitForAndAnnotateAreCached(t *testing.T) {
 	}
 }
 
+func TestCancelPickClosesChooserAndAnswersCancelled(t *testing.T) {
+	h := &blockingHost{entered: make(chan struct{})}
+	l := &Local{Host: h}
+	l.CancelPick() // nothing in flight: no-op
+	done := make(chan error)
+	go func() { _, err := l.PickFolder(context.Background()); done <- err }()
+	<-h.entered
+	l.CancelPick()
+	l.CancelPick()
+	if err := <-done; !errors.Is(err, model.ErrCancelled) {
+		t.Fatalf("err=%v, want ErrCancelled", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-h.entered; cancel() }()
+	if _, err := l.PickFolder(ctx); errors.Is(err, model.ErrBusy) || errors.Is(err, model.ErrCancelled) {
+		t.Fatalf("a later pick must start clean, err=%v", err)
+	}
+}
+
 func TestGHStatusSeparatesNetworkFromLoggedOut(t *testing.T) {
 	l := &Local{GH: func(string, string) GitProvider { return fakeGH{err: errors.Join(model.ErrGHUnreachable)} }}
 	installed, authed, _, problem := l.GHStatus(context.Background())

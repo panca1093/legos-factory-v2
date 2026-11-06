@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -31,7 +31,9 @@ type Local struct {
 	Host LocalHost
 	GH   func(repo, remoteURL string) GitProvider
 
-	picking atomic.Bool
+	mu         sync.Mutex
+	cancelPick context.CancelFunc // set while a chooser is open
+	aborted    bool               // CancelPick, not the request, ended it
 }
 
 var githubRemote = regexp.MustCompile(`(?i)^(?:https?://(?:[^@/]+@)?|ssh://(?:[^@/]+@)?|git://|[^@/\s]+@)github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$`)
@@ -68,14 +70,39 @@ func absDir(p string) (string, error) {
 }
 
 // PickFolder runs under ctx, so an aborted request closes the native chooser.
+// CancelPick does the same when a proxy keeps the aborted request alive.
 func (l *Local) PickFolder(ctx context.Context) (string, error) {
-	if !l.picking.CompareAndSwap(false, true) {
+	l.mu.Lock()
+	if l.cancelPick != nil {
+		l.mu.Unlock()
 		return "", model.ErrBusy
 	}
-	defer l.picking.Store(false)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	return l.Host.PickFolder(ctx)
+	l.cancelPick, l.aborted = cancel, false
+	l.mu.Unlock()
+
+	path, err := l.Host.PickFolder(ctx)
+
+	l.mu.Lock()
+	aborted := l.aborted
+	l.cancelPick = nil
+	l.mu.Unlock()
+	cancel()
+	if aborted {
+		return "", model.ErrCancelled
+	}
+	return path, err
+}
+
+// CancelPick closes the chooser in flight, if any; the pending PickFolder
+// then reports ErrCancelled.
+func (l *Local) CancelPick() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.cancelPick != nil {
+		l.aborted = true
+		l.cancelPick()
+	}
 }
 
 // Inspect describes path; when it is not a git repo, its direct child repos

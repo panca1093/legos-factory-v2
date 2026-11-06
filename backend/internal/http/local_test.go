@@ -32,6 +32,7 @@ func TestLocalRoutesAreDevOnlyAndEngineerOnly(t *testing.T) {
 	}
 	routes := [][2]string{
 		{http.MethodPost, "/api/v1/local/pick-folder"},
+		{http.MethodPost, "/api/v1/local/pick-folder/cancel"},
 		{http.MethodGet, "/api/v1/local/inspect?path=/"},
 		{http.MethodPost, "/api/v1/local/clone"},
 		{http.MethodPost, "/api/v1/local/init"},
@@ -51,6 +52,12 @@ func TestLocalRoutesAreDevOnlyAndEngineerOnly(t *testing.T) {
 	}
 	if rec := call(http.MethodPost, "/api/v1/local/pick-folder", eng); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"cancelled":true`) {
 		t.Errorf("pick-folder cancel: %d %s", rec.Code, rec.Body)
+	}
+	if rec := call(http.MethodPost, "/api/v1/local/pick-folder/cancel", viewer); rec.Code != http.StatusForbidden {
+		t.Errorf("viewer cancel: %d", rec.Code)
+	}
+	if rec := call(http.MethodPost, "/api/v1/local/pick-folder/cancel", eng); rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+		t.Errorf("idle cancel: %d %q", rec.Code, rec.Body)
 	}
 	if rec := call(http.MethodGet, "/api/v1/local/gh", eng); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"installed":false`) {
 		t.Errorf("gh: %d %s", rec.Code, rec.Body)
