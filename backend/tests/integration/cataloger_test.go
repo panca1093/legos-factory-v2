@@ -122,10 +122,15 @@ func TestCatalogerJournalIsAProjectLog(t *testing.T) {
 			t.Fatalf("no per-revision %s lines expected:\n%s", kind, log)
 		}
 	}
-	if !strings.Contains(log, "Task summary: Greeter greeting (READY) — Goal: Greeter greeting") {
-		t.Fatalf("completion line must carry the summary:\n%s", log)
+	if !strings.Contains(log, "Task summary: Greeter greeting (READY) — summary document: projects/"+p1+"/task/") {
+		t.Fatalf("completion line must name the summary document:\n%s", log)
 	}
 	projDir := filepath.Join(ta.a.Server.Catalog.Bundle.Root(), "projects", p1)
+	for _, glob := range []string{"brief/20*.md", "spec/20*.md", "task/20*-dag.md", "task/20*-summary.md"} {
+		if got, _ := filepath.Glob(filepath.Join(projDir, glob)); len(got) != 1 {
+			t.Fatalf("want one work order document matching %s, got %v", glob, got)
+		}
+	}
 	if kn, _ := filepath.Glob(filepath.Join(projDir, "*", "kn_*.md")); len(kn) != 0 {
 		t.Fatalf("no kn_ record files may be written: %v", kn)
 	}

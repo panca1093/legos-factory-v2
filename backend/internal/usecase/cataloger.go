@@ -55,21 +55,25 @@ func (c *Cataloger) Relevant(ctx context.Context, wo *model.WorkOrder) []model.K
 	return nil
 }
 
-// Completed logs the task summary as the work order's terminal line.
+// Completed logs the work order's terminal line; body names the summary document.
 func (c *Cataloger) Completed(ctx context.Context, wo *model.WorkOrder, outcome, body string) string {
 	return c.Record(ctx, wo, model.KnowledgeWorkOrderCompleted, model.TrustVerified, "cataloger",
 		fmt.Sprintf("Task summary: %s (%s)", wo.Title, outcome), body)
 }
 
-// completeWO records the terminal task summary from the order's current state.
+// completeWO writes the terminal task summary document from the order's current state and logs it.
 func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome string) {
-	if f.Catalog == nil {
+	if f.Catalog == nil && f.KB == nil {
 		return
 	}
 	if cur, err := f.WO.Get(ctx, wo.ID); err == nil {
 		wo = cur
 	}
-	f.Catalog.Completed(ctx, wo, outcome, f.taskSummary(ctx, wo, outcome))
+	note := "summary document not written"
+	if rel := f.writeSummaryDoc(ctx, wo, outcome); rel != "" {
+		note = "summary document: " + rel
+	}
+	f.Catalog.Completed(ctx, wo, outcome, note)
 }
 
 var decisionEventKinds = []string{
@@ -95,13 +99,14 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 	}
 	more := func(n int) string { return fmt.Sprintf("(+%d more)", n-summaryMaxItems) }
 
-	goal := fitLines("Goal: "+clip(orNone(wo.Title), 100), []string{
+	goal := fitLines("## Goal", []string{
+		clip(orNone(wo.Title), 100),
 		"Objective: " + clip(orNone(wo.Objective), 150),
 		"Acceptance: " + clip(orNone(wo.Acceptance), 150),
 	}, 450)
 
 	verLines, failing := f.finalVerification(ctx, wo)
-	ver := fitLines("Final verification:", verLines, 300)
+	ver := fitLines("## Final verification", verLines, 300)
 
 	var open []string
 	if outcome != "READY" {
@@ -142,15 +147,15 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 	if len(open) == 0 {
 		open = []string{"none"}
 	}
-	openSection := fitLines("Open items / follow-up:", open, 450)
+	openSection := fitLines("## Open items and follow-up", open, 450)
 
 	decLines := f.decisionLines(ctx, wo.ID)
 	if len(decLines) == 0 {
 		decLines = []string{"none recorded"}
 	}
-	dec := fitLines("Key decisions and rationale:", decLines, 350)
+	dec := fitLines("## Key decisions and rationale", decLines, 350)
 
-	body := strings.Join([]string{goal, ver, openSection, dec}, "\n\n") + "\n\nMain changes:"
+	body := strings.Join([]string{goal, ver, openSection, dec}, "\n\n") + "\n\n## Main changes"
 	for _, l := range f.changedFileLines(ctx, wo) {
 		if len(body)+1+len(l) > summaryBudget {
 			body += "\n(+more)"

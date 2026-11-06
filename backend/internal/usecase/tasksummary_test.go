@@ -55,6 +55,7 @@ func newSummaryEnv(t *testing.T, files []string, withCatalog bool) summaryEnv {
 	}
 	if withCatalog {
 		env.f.Catalog = &Cataloger{Bundle: bundle, Log: slog.Default()}
+		env.f.KB = &KB{Bundle: bundle, Idx: &store.KBRepo{DB: db}, Emb: kb.HashEmbedder{}, Log: slog.Default()}
 	}
 	return env
 }
@@ -106,7 +107,7 @@ func (e summaryEnv) event(t *testing.T, woID, actor, kind, message string) {
 	}
 }
 
-var summaryHeaders = []string{"Goal:", "Final verification:", "Open items / follow-up:", "Key decisions and rationale:", "Main changes:"}
+var summaryHeaders = []string{"## Goal", "## Final verification", "## Open items and follow-up", "## Key decisions and rationale", "## Main changes"}
 
 func requireHeadersInOrder(t *testing.T, body string) {
 	t.Helper()
@@ -138,7 +139,7 @@ func TestReadyAfterFailThenPassWritesOneSummary(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want exactly one work_order_completed log line, got %d", len(got))
 	}
-	if !strings.Contains(got[0], "(cataloger) — Task summary: Ship it (READY) — Goal: Ship it") {
+	if !strings.Contains(got[0], "(cataloger) — Task summary: Ship it (READY) — summary document: projects/p1/task/") {
 		t.Fatalf("log line: %q", got[0])
 	}
 	body := env.summary(t, wo.ID, "READY")
@@ -146,7 +147,7 @@ func TestReadyAfterFailThenPassWritesOneSummary(t *testing.T) {
 	if !strings.Contains(body, "Revision 1, commit deadbeef1234") {
 		t.Fatalf("missing revision-1 commit:\n%s", body)
 	}
-	dec := body[strings.Index(body, "Key decisions and rationale:"):strings.Index(body, "Main changes:")]
+	dec := body[strings.Index(body, "## Key decisions and rationale"):strings.Index(body, "## Main changes")]
 	if !strings.Contains(dec, "- finding_disputed: nil check: false positive") {
 		t.Fatalf("seeded decision missing under Key decisions:\n%s", body)
 	}
@@ -176,7 +177,7 @@ func TestCancelAfterFailedVerificationShowsEarlierFailAsUncommitted(t *testing.T
 	if !strings.Contains(body, "Revision 0, uncommitted / not verified on this revision (revision 1 has no checks recorded)") || !strings.Contains(body, "- test → FAIL") {
 		t.Fatalf("earlier FAIL not shown as uncommitted:\n%s", body)
 	}
-	open := body[strings.Index(body, "Open items / follow-up:"):strings.Index(body, "Key decisions")]
+	open := body[strings.Index(body, "## Open items and follow-up"):strings.Index(body, "## Key decisions")]
 	if !strings.Contains(open, "Outcome: CANCELLED") || !strings.Contains(open, "- check test FAIL") {
 		t.Fatalf("open items: %s", open)
 	}
@@ -226,7 +227,7 @@ func TestOversizedWorkOrderStaysWithinBudget(t *testing.T) {
 		t.Fatalf("body %d bytes exceeds budget", len(body))
 	}
 	requireHeadersInOrder(t, body)
-	if head := body[:strings.Index(body, "Main changes:")]; strings.Contains(head, "[truncated]") {
+	if head := body[:strings.Index(body, "## Main changes")]; strings.Contains(head, "[truncated]") {
 		t.Fatalf("leading sections truncated:\n%s", body)
 	}
 }
