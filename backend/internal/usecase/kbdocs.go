@@ -144,7 +144,7 @@ func (s *KBDocs) Related(ctx context.Context, projectID, text string, limit int)
 	}
 	var out []model.KBDoc
 	for _, h := range hits {
-		if h.SeeAlso == "" {
+		if h.SeeAlso == "" && (h.Doc.Source != model.KBSourceFactory || factoryListTypes[h.Doc.Type]) {
 			out = append(out, h.Doc)
 		}
 	}
@@ -249,11 +249,14 @@ func (s *KBDocs) Update(ctx context.Context, u *model.User, id string, front map
 	if t, _ := front["type"].(string); strings.TrimSpace(t) == "" {
 		return nil, fmt.Errorf("%w: frontmatter needs a type", ErrInvalid)
 	}
+	if t, _ := front["type"].(string); !factoryListTypes[strings.TrimSpace(t)] {
+		return nil, fmt.Errorf("%w: type %q is not a Knowledge document type", ErrInvalid, t)
+	}
 	cur, _, err := s.KB.Bundle.Read(d.Path)
 	if err != nil {
 		return nil, err
 	}
-	for _, k := range []string{"status", "verified", "generated"} {
+	for _, k := range []string{"status", "verified", "generated", "origin", "origin_id"} {
 		delete(front, k)
 		if v, ok := cur[k]; ok {
 			front[k] = v

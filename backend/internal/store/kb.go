@@ -36,6 +36,23 @@ type kbQuerier interface {
 
 const kbCols = `d.id, d.source, d.project_id, d.path, d.commit_sha, d.content_hash, d.type, d.status, d.trust, d.title, d.description, d.meta, d.indexed_at`
 
+func (r *KBRepo) Projects(ctx context.Context, source string) ([]string, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT DISTINCT project_id FROM kb_docs WHERE source = ? AND project_id IS NOT NULL`, source)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (r *KBRepo) Hashes(ctx context.Context, source, projectID string) (map[string]string, error) {
 	q := `SELECT path, content_hash FROM kb_docs WHERE source = ? AND project_id IS NULL`
 	args := []any{source}

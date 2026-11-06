@@ -29,10 +29,16 @@ func SyncFactory(ctx context.Context, idx Index, emb Embedder, b *Bundle) (SyncS
 		return SyncStats{}, err
 	}
 	groups := map[string][]file{"": nil}
+	known, err := idx.Projects(ctx, model.KBSourceFactory)
+	if err != nil {
+		return SyncStats{}, err
+	}
+	for _, pid := range known {
+		groups[pid] = nil
+	}
 	for _, f := range files {
 		pid := ProjectOf(f.rel)
 		if isJournal(f.rel) {
-			groups[pid] = groups[pid]
 			continue
 		}
 		groups[pid] = append(groups[pid], f)

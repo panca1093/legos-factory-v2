@@ -261,7 +261,7 @@ func TestKBDocsRelatedScopesAndDropsSeeAlso(t *testing.T) {
 	put := func(source, project, path, title, body string, links ...string) {
 		d := model.KBParsed{KBDoc: model.KBDoc{
 			ID: source + ":" + project + ":" + path, Source: source, ProjectID: project, Path: path, CommitSHA: "c", ContentHash: path,
-			Type: "Doc", Status: model.KBStatusStable, Trust: model.KBTrustUnverified, Title: title, Links: links, Meta: map[string]any{},
+			Type: model.KBTypeNote, Status: model.KBStatusStable, Trust: model.KBTrustUnverified, Title: title, Links: links, Meta: map[string]any{},
 		}, Body: body}
 		if err := repo.Upsert(ctx, d, nil); err != nil {
 			t.Fatal(err)

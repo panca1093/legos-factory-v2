@@ -236,6 +236,17 @@ func (f *fakeIndex) Delete(_ context.Context, id string) error {
 	f.deleted = append(f.deleted, id)
 	return nil
 }
+func (f *fakeIndex) Projects(_ context.Context, source string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range f.docs {
+		if d.Source == source && d.ProjectID != "" && !seen[d.ProjectID] {
+			seen[d.ProjectID] = true
+			out = append(out, d.ProjectID)
+		}
+	}
+	return out, nil
+}
 func (f *fakeIndex) Get(context.Context, string) (*model.KBDoc, error) { return nil, nil }
 func (f *fakeIndex) Search(context.Context, model.KBQuery, []float32) ([]model.KBHit, error) {
 	return nil, nil
@@ -321,6 +332,7 @@ func TestSyncFactoryNeverIndexesJournal(t *testing.T) {
 	}
 	stale("p1", "projects/p1/journal/wo_1/001-plan.md")
 	stale("p2", "projects/p2/journal/wo_2/001-plan.md")
+	stale("p3", "projects/p3/journal/wo_3/001-plan.md")
 	if _, err := SyncFactory(ctx, idx, HashEmbedder{}, b); err != nil {
 		t.Fatal(err)
 	}

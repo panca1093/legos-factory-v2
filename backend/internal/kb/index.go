@@ -15,6 +15,8 @@ import (
 type Index interface {
 	// Hashes returns path → content_hash for every doc of one source and project.
 	Hashes(ctx context.Context, source, projectID string) (map[string]string, error)
+	// Projects lists the project ids that have docs of one source.
+	Projects(ctx context.Context, source string) ([]string, error)
 	// Upsert replaces a doc, its links, its keyword entry and its vector.
 	Upsert(ctx context.Context, d model.KBParsed, vec []float32) error
 	// Touch records that an unchanged doc was seen at commitSHA.

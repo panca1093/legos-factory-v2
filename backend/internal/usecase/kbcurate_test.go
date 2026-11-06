@@ -33,7 +33,7 @@ func TestKBDocsFactoryAllowListAndReadOnly(t *testing.T) {
 	wo := map[string]any{"origin": "work_order"}
 	put("factory", "brief/a.md", model.KBTypeBrief, wo)
 	put("factory", "task/a-dag.md", model.KBTypeTaskDAG, wo)
-	put("factory", "notes/n.md", model.KBTypeNote, map[string]any{"origin": "manual"})
+	put("factory", "projects/p1/notes/n.md", model.KBTypeNote, map[string]any{"origin": "manual"})
 	put("factory", "playbooks/p.md", model.KBTypePlaybook, nil)
 	put("factory", "journal/j.md", model.KBTypeJournalEntry, nil)
 	put("factory", "misc/x.md", "Whatever", nil)
@@ -45,6 +45,7 @@ func TestKBDocsFactoryAllowListAndReadOnly(t *testing.T) {
 	}
 	if _, err := bundle.WriteMany([]kb.File{
 		{Path: "journal/j.md", Front: map[string]any{"type": model.KBTypeJournalEntry}, Body: "# J\n"},
+		{Path: "projects/p1/notes/n.md", Front: map[string]any{"type": model.KBTypeNote, "origin": "chat", "origin_id": "chat_1"}, Body: "# N\n"},
 		{Path: "brief/a.md", Front: map[string]any{"type": model.KBTypeBrief, "origin": "work_order"}, Body: "# B\n"},
 	}, "seed"); err != nil {
 		t.Fatal(err)
@@ -52,7 +53,7 @@ func TestKBDocsFactoryAllowListAndReadOnly(t *testing.T) {
 	s := &KBDocs{KB: &KB{Bundle: bundle, Idx: kb.Index(repo), Emb: kb.HashEmbedder{}}, Proj: projRepo,
 		Projects: &Projects{Store: projRepo, Members: &store.MemberRepo{DB: db}, Users: &store.UserRepo{DB: db}}}
 	u := &model.User{ID: "u1", Role: model.RoleOwner}
-	want := strings.Fields("factory:p1:brief/a.md factory:p1:notes/n.md factory:p1:playbooks/p.md factory:p1:task/a-dag.md repo:p1:docs/r.md")
+	want := strings.Fields("factory:p1:brief/a.md factory:p1:projects/p1/notes/n.md factory:p1:playbooks/p.md factory:p1:task/a-dag.md repo:p1:docs/r.md")
 	for _, q := range []string{"", "zebra"} {
 		docs, err := s.List(ctx, u, KBListParams{ProjectID: "p1", Q: q})
 		if err != nil {
@@ -92,5 +93,42 @@ func TestKBDocsFactoryAllowListAndReadOnly(t *testing.T) {
 	}
 	if err := s.Delete(ctx, u, "factory:p1:brief/a.md"); !errors.Is(err, ErrKBReadOnly) {
 		t.Fatalf("delete: %v", err)
+	}
+	if _, err := s.Approve(ctx, u, "factory:p1:brief/a.md", ""); !errors.Is(err, ErrKBReadOnly) {
+		t.Fatalf("approve: %v", err)
+	}
+	if err := s.Discard(ctx, u, "factory:p1:brief/a.md"); !errors.Is(err, ErrKBReadOnly) {
+		t.Fatalf("discard: %v", err)
+	}
+	if _, err := s.Reset(ctx, u, "factory:p1:brief/a.md"); !errors.Is(err, ErrKBReadOnly) {
+		t.Fatalf("reset: %v", err)
+	}
+
+	noteID := "factory:p1:projects/p1/notes/n.md"
+	forged := map[string]any{"type": model.KBTypeNote, "origin": "work_order", "origin_id": "wo_x"}
+	if _, err := s.Update(ctx, u, noteID, forged, "edited"); err != nil {
+		t.Fatalf("note update: %v", err)
+	}
+	if front, _, _ := bundle.Read("projects/p1/notes/n.md"); front["origin"] != "chat" || front["origin_id"] != "chat_1" {
+		t.Fatalf("origin must survive an edit: %v", front)
+	}
+	if d, _ := s.KB.Idx.Get(ctx, noteID); d == nil || d.ReadOnly {
+		t.Fatalf("a PUT must not lock a doc: %+v", d)
+	}
+	if _, err := s.Update(ctx, u, noteID, map[string]any{"type": model.KBTypeJournalEntry}, "x"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("type outside the allow-list: %v", err)
+	}
+
+	rel, err := s.Related(ctx, "p1", "zebra", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range rel {
+		if d.Source == "factory" && !factoryListTypes[d.Type] {
+			t.Fatalf("related leaked %s (%s)", d.ID, d.Type)
+		}
+	}
+	if len(rel) != len(want)-1 {
+		t.Fatalf("related: %d docs", len(rel))
 	}
 }
