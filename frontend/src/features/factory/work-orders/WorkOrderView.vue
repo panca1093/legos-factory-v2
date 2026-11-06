@@ -154,9 +154,10 @@ async function act(fn: () => Promise<unknown>) {
   }
 }
 function open(value: typeof modal.value) {
+  const report = architectReport(factory.events);
   notes.value =
-    value === "request_changes"
-      ? changeRequestDraft(architectReport(factory.events))
+    value === "request_changes" && report?.revision === order.value?.revision
+      ? changeRequestDraft(report)
       : "";
   actionError.value = "";
   modal.value = value;
