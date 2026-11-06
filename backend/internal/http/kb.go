@@ -6,6 +6,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/usecase"
 )
 
@@ -82,4 +83,16 @@ func (s *Server) handleKBDelete(c echo.Context) error {
 		return mapDomainError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (s *Server) handleProjectKBScope(c echo.Context) error {
+	var req model.ProjectKBScopeRequest
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
+	}
+	p, err := s.Projects.SetKBScope(c.Request().Context(), currentUser(c), c.Param("id"), req)
+	if err != nil {
+		return integrationError(c, err)
+	}
+	return c.JSON(http.StatusOK, p)
 }

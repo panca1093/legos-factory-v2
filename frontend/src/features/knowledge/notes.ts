@@ -181,3 +181,27 @@ export function inNotebook(d: KBDoc, key: string): boolean {
     key === NB_ALL || key === NB_DRAFTS || `p:${d.project_id ?? ""}` === key
   );
 }
+
+export const TYPE_CHIPS = [
+  { key: "all", label: "All", types: [] as string[] },
+  { key: "brief", label: "Brief", types: ["Brief"] },
+  { key: "spec", label: "Spec", types: ["Spec"] },
+  { key: "task", label: "Task", types: ["Task DAG", "Task Summary"] },
+  { key: "notes", label: "Notes", types: ["Note"] },
+];
+
+export const inTypeChip = (d: KBDoc, key: string) => {
+  const types = TYPE_CHIPS.find((c) => c.key === key)?.types;
+  return !types?.length || types.includes(d.type);
+};
+
+export const isProjectNotebook = (key: string) =>
+  key.startsWith("p:") && key !== "p:";
+
+const ORIGINS: Record<string, string> = {
+  work_order: "Work order",
+  chat: "Chat",
+  handoff: "Handoff",
+  manual: "Manual",
+};
+export const originLabel = (d: KBDoc) => ORIGINS[d.meta?.origin ?? ""] ?? "";
