@@ -61,10 +61,11 @@ func judge(p float64) verdict {
 }
 
 type GateOutcome struct {
-	Outcome string
-	Row     int
-	Note    string   // code-built revise/fix/escalate reason
-	Issues  []string // the done gate's reasons one by one; Note joins them
+	Outcome  string
+	Row      int
+	Note     string   // code-built revise/fix/escalate reason
+	Issues   []string // the done gate's reasons one by one; Note joins them
+	InReport []string // the Issues that restate the Architect's report, which the fix brief carries in full
 }
 
 type Criterion struct{ ID, Text string }
@@ -629,7 +630,7 @@ func decideDoneGate(in DoneGateInput, asked map[string]Noul, answers map[string]
 	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
 		return GateOutcome{Outcome: GateEscalate, Row: 2, Note: note}
 	}
-	var hard, soft []string
+	var hard, soft, inReport []string
 	labels := criterionLabels(in.Criteria)
 	for _, c := range in.Criteria {
 		switch judge(answers["met_"+c.ID]) {
@@ -641,8 +642,10 @@ func decideDoneGate(in DoneGateInput, asked map[string]Noul, answers map[string]
 		switch status, given := architectStatus(in.ArchitectVerdicts, c.ID); {
 		case status == "not_met":
 			hard = append(hard, fmt.Sprintf("the Architect reports acceptance criterion %s as not met", labels[c.ID]))
+			inReport = append(inReport, hard[len(hard)-1])
 		case status == "unclear" && given:
 			soft = append(soft, fmt.Sprintf("the Architect is unsure whether acceptance criterion %s is met", labels[c.ID]))
+			inReport = append(inReport, soft[len(soft)-1])
 		case !given:
 			soft = append(soft, fmt.Sprintf("the Architect gave no verdict for acceptance criterion %s", labels[c.ID]))
 		}
@@ -658,6 +661,7 @@ func decideDoneGate(in DoneGateInput, asked map[string]Noul, answers map[string]
 	for _, d := range in.Deviations {
 		if strings.TrimSpace(d) != "" {
 			hard = append(hard, fmt.Sprintf("the Architect reports work outside the spec or plan: %s", truncateText(d, 80)))
+			inReport = append(inReport, hard[len(hard)-1])
 		}
 	}
 	row, issues := 0, []string(nil)
@@ -673,7 +677,7 @@ func decideDoneGate(in DoneGateInput, asked map[string]Noul, answers map[string]
 	if !fixBudgetLeft {
 		outcome = GateEscalate
 	}
-	return GateOutcome{Outcome: outcome, Row: row, Note: joinNotes(issues), Issues: issues}
+	return GateOutcome{Outcome: outcome, Row: row, Note: joinNotes(issues), Issues: issues, InReport: inReport}
 }
 
 // gateEvent builds the audit payload for an actor "jev" event: the exact

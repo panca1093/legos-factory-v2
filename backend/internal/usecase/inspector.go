@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -131,10 +132,13 @@ func (f *Factory) retryPayload(ctx context.Context, wo *model.WorkOrder) map[str
 	payload := f.withBrief(ctx, wo, map[string]any{"reason": "human_retry"}, nil, "")
 	if note := f.doneGateNote(ctx, wo); note != "" {
 		p := map[string]any{"reason": "fix_done_gate", "note": note}
-		if b := f.doneGateBrief(ctx, wo); b != "" {
+		if b := f.storedBrief(ctx, wo); b != "" {
 			p["brief"] = b
 		}
 		return p
+	}
+	if b := f.storedBrief(ctx, wo); b != "" {
+		payload["brief"] = b
 	}
 	if wo.VerifyFailures == 0 || wo.Revision < 1 {
 		return payload
@@ -171,8 +175,23 @@ func (f *Factory) doneGateNote(ctx context.Context, wo *model.WorkOrder) string 
 	return f.doneGateField(ctx, wo, "note")
 }
 
-func (f *Factory) doneGateBrief(ctx context.Context, wo *model.WorkOrder) string {
-	return f.doneGateField(ctx, wo, "brief")
+// storedBrief is the brief of the remediation that opened the order's current revision, for a retry after that remediation failed.
+func (f *Factory) storedBrief(ctx context.Context, wo *model.WorkOrder) string {
+	var best *model.Event
+	for _, kind := range []string{"fix_requested", "revision_requested"} {
+		e, err := f.WO.LatestEvent(ctx, wo.ID, kind)
+		if err != nil || e == nil {
+			continue
+		}
+		if rev, _ := e.Payload["revision"].(float64); int(rev) == wo.Revision && (best == nil || e.ID > best.ID) {
+			best = e
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	b, _ := best.Payload["brief"].(string)
+	return b
 }
 
 func (f *Factory) doneGateField(ctx context.Context, wo *model.WorkOrder, key string) string {
@@ -300,13 +319,28 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		}
 		return nil
 	}
-	payload := f.withBrief(ctx, wo, map[string]any{"reason": "fix_findings"}, nil, "") // before the revision bump: the report is stored under the current one
+	// read after architectVerify stored its report, and before the revision bump: the report is stored under the current one
+	cur, err := f.WO.Get(ctx, wo.ID)
+	if err != nil {
+		return err
+	}
+	var all []model.Finding
+	if f.Findings != nil {
+		all, _ = f.Findings.List(ctx, wo.ID)
+	}
+	payload := map[string]any{"reason": "fix_findings"}
+	evPayload := map[string]any{}
+	if b := fixBrief(fromRuns(openFindings(all), runIDs), f.currentArchitectReport(cur), nil, ""); b != "" {
+		payload["brief"] = b
+		evPayload["brief"] = b
+	}
 	newRev, fixes := wo.Revision+1, wo.ReviewFixes+1
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "review_fixes": fixes}); err != nil {
 		return err
 	}
 	wo.Revision, wo.CommitSHA, wo.ReviewFixes = newRev, "", fixes
-	f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: requesting bounded remediation", newRev), nil)
+	evPayload["revision"], evPayload["reason"] = newRev, "fix_findings"
+	f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: requesting bounded remediation", newRev), evPayload)
 	if err := f.step(ctx, wo, model.StateSpecialistReview, model.StateImplementing, "factory", "Fix required; returning to builder"); err != nil {
 		return err
 	}
@@ -475,6 +509,17 @@ func openFindings(all []model.Finding) []model.Finding {
 		}
 	}
 	return open
+}
+
+// fromRuns keeps the findings raised by the given inspection runs.
+func fromRuns(fs []model.Finding, runIDs []string) []model.Finding {
+	var out []model.Finding
+	for _, fd := range fs {
+		if slices.Contains(runIDs, fd.RunID) {
+			out = append(out, fd)
+		}
+	}
+	return out
 }
 
 // withBrief adds the order's fix brief to a Builder payload when there is one.

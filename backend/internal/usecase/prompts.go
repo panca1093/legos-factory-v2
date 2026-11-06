@@ -353,10 +353,10 @@ Objective: %s
 
 Acceptance criteria:
 %s
-%s%s
+%s%s%s
 Implement the change and any behavioral tests needed to satisfy the criteria.
 %s`,
-			wo.Title, reason, wo.Objective, wo.Acceptance, clarification(wo), fixCtx, tail)
+			wo.Title, reason, wo.Objective, wo.Acceptance, clarification(wo), fixCtx, taskSection(job, tasks), tail)
 	}
 	return fmt.Sprintf(`You are the Builder. Implement task %q of work order %q.
 

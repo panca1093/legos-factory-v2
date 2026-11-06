@@ -169,7 +169,7 @@ Unchanged except:
 - The Builder prompt names the task's own title, objective and `scope`, and lists the other tasks' titles as "other tasks — do not implement these".
 - On a retry after failed checks, the Builder gets the failing check's name, command and the tail of its output.
 - Every Builder prompt carries the spec (the one the Architect verifies against) and, on fix paths, the plan.
-- Every fix path (`fix_findings`, `human_revision`, `human_retry`, `fix_done_gate`) sends one numbered **fix brief** in the job payload, nothing filtered or truncated: the human's reason, the done-gate issues and the Foreman's notes, all open findings (severity, title, detail, location), every non-`met` Architect verdict of the current revision (evidence, gap, fix) and every deviation.
+- Every fix path (`fix_findings`, `human_revision`, `human_retry`, `fix_done_gate`) sends one numbered **fix brief** in the job payload, nothing filtered or truncated: the human's reason, the done-gate issues and the Foreman's notes, all open findings (severity, title, detail, location), every non-`met` Architect verdict of the current revision (evidence, gap, fix) and every deviation. Open findings are those of the current inspection. The brief is stored in the `fix_requested` / `revision_requested` event, so a human retry after a failed fix build resends it. A retried plan task keeps its task section.
 - The Builder must address every numbered item and answer in its one-line reply with `N: fixed (file:line)` or `N: not fixed because <reason>`; the reply is not parsed.
 
 ### 6. Verification (factory + Inspector ∥ Architect)
@@ -185,7 +185,7 @@ The Foreman agent writes validation notes (`{"notes": "..."}`) from the Inspecto
 
 If there are no acceptance criteria, or the Architect report is missing or was made on an older revision, the done gate escalates without a Foreman run or a Jev request. If the Foreman validation itself fails permanently (or on the job's last attempt) the gate records an escalation `Foreman validation failed: …` and readiness continues to `NEEDS_HUMAN_REVIEW`; the order is never left in `SPECIALIST_REVIEW`.
 
-The inspection's own findings stay open until the gate has decided (earlier revisions' findings are resolved by the clean inspection), so `open_findings` reflects the current inspection. The `evaluate` job is idempotent: it does nothing unless the order is in `SPECIALIST_REVIEW`, and finishes a half-done fix when it finds the order already back in `IMPLEMENTING`. A human retry after a failed fix build keeps the gate's note. Without a Judge the done gate (and the Foreman validation run) is skipped entirely.
+The inspection's own findings stay open until the gate has decided (earlier revisions' findings are resolved by the clean inspection), so `open_findings` reflects the current inspection. The `evaluate` job is idempotent: it does nothing unless the order is in `SPECIALIST_REVIEW`, and finishes a half-done fix when it finds the order already back in `IMPLEMENTING`. A human retry after a failed fix build keeps the gate's note and brief. Without a Judge the done gate (and the Foreman validation run) is skipped entirely.
 
 The factory sends one Jev request. State: criteria, spec, a diff summary (per file: path, lines changed, the hunks up to a size budget; lock and generated files keep counts only), check results, open findings, the Architect verdicts (`architect_verdicts`: criterion, `met`/`not_met`/`unclear`, evidence) and `deviations`, and the Foreman notes.
 

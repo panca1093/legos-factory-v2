@@ -146,7 +146,11 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		if err := f.WO.UpdateFields(ctx, woID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": 0, "review_fixes": 0}); err != nil {
 			return err
 		}
-		f.event(woID, "human", "revision_requested", reason, map[string]any{"revision": newRev})
+		evPayload := map[string]any{"revision": newRev}
+		if b, ok := payload["brief"]; ok {
+			evPayload["brief"] = b
+		}
+		f.event(woID, "human", "revision_requested", reason, evPayload)
 		if err := f.step(ctx, wo, model.StateNeedsHumanReview, model.StateImplementing, "human", "Changes requested; invalidating prior quality approval"); err != nil {
 			return err
 		}

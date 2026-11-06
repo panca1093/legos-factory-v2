@@ -130,7 +130,7 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry boo
 		}
 		wo.Revision, wo.CommitSHA, wo.ReviewFixes = newRev, "", fixes
 		note := out.Note + architectFixes(report)
-		issues := slices.Clone(out.Issues)
+		issues := slices.DeleteFunc(slices.Clone(out.Issues), func(s string) bool { return slices.Contains(out.InReport, s) })
 		if strings.TrimSpace(v.Notes) != "" {
 			issues = append(issues, "The Foreman's validation notes: "+v.Notes)
 		}
@@ -162,7 +162,7 @@ func (f *Factory) resumeDoneGateFix(ctx context.Context, wo *model.WorkOrder) er
 		note = "The done gate asked for a fix; its reasons are in the last done_gate event of the activity trail."
 	}
 	payload := map[string]any{"reason": "fix_done_gate", "note": note}
-	if b := f.doneGateBrief(ctx, wo); b != "" {
+	if b := f.storedBrief(ctx, wo); b != "" {
 		payload["brief"] = b
 	}
 	return f.enqueuePayload(ctx, JobImplement, wo.ID, payload)

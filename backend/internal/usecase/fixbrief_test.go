@@ -94,3 +94,128 @@ func TestDoneGateFixPayloadCarriesFullVerdictAndDeviation(t *testing.T) {
 		t.Fatalf("retry lost the brief: %v", got)
 	}
 }
+
+const unmetVerify = `{"verdicts":[{"criterion_id":"c1","status":"not_met","evidence":"evidence-text","gap":"gap-text","fix":"fix-text"}],"deviations":["deviation-text"]}`
+
+func lastPayload(r *rig) map[string]any { return r.q.payloads[len(r.q.payloads)-1] }
+
+func TestInspectFixBriefCarriesTheArchitectReportAndOnlyThisInspection(t *testing.T) {
+	ctx := context.Background()
+	h := &replyHarness{verify: unmetVerify,
+		inspect: `{"findings":[{"severity":"blocker","title":"NEW-FINDING","detail":"d","location":"round.go:1"}]}`}
+	r := inspectRig(t, h)
+	if err := r.f.Runs.Start(ctx, "run_old", r.wo.ID, "", "inspector", "h"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.Findings.Create(ctx, model.Finding{ID: "fnd_old", RunID: "run_old", WOID: r.wo.ID, Severity: "major", Title: "OLD-FINDING", Status: model.FindingOpen}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.handleInspect(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	p := lastPayload(r)
+	b, _ := p["brief"].(string)
+	if p["reason"] != "fix_findings" {
+		t.Fatalf("payload %v", p)
+	}
+	for _, want := range []string{"NEW-FINDING", "evidence-text", "gap-text", "fix-text", "deviation-text"} {
+		if !strings.Contains(b, want) {
+			t.Fatalf("brief missing %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(b, "OLD-FINDING") {
+		t.Fatalf("an earlier inspection's finding leaked into the brief:\n%s", b)
+	}
+	if got := r.f.retryPayload(ctx, r.reload(t)); got["brief"] != b {
+		t.Fatalf("a human retry lost the fix brief: %v", got)
+	}
+}
+
+func TestRetryRemediationAfterRequestedChangesKeepsTheHumanReason(t *testing.T) {
+	ctx := context.Background()
+	f, wo, wos := monitorFactory(t, nil)
+	q := &fakeQueue{}
+	f.Sched, f.Findings = q, &store.FindingRepo{DB: wos.DB}
+	if err := wos.ReplacePlan(ctx, wo.ID, []model.Task{{ID: "T1", WOID: wo.ID, Title: "a", Role: "builder"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wos.UpdateState(ctx, wo.ID, model.StateNeedsHumanReview); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.HumanPRDecision(ctx, wo.ID, "request_changes", "use the old format"); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []func() error{
+		func() error { return f.Runs.Start(ctx, "run_t1", wo.ID, "T1", "builder", "h") },
+		func() error { return f.Runs.Complete(ctx, "run_t1", model.AgentResult{}) },
+		func() error { return f.Runs.Start(ctx, "run_fix", wo.ID, "", "builder", "h") },
+		func() error { return f.Runs.Fail(ctx, "run_fix", "boom") },
+		func() error { return f.RetryRemediation(ctx, wo.ID, "human") },
+	} {
+		if err := step(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	last := q.payloads[len(q.payloads)-1]
+	if b, _ := last["brief"].(string); last["reason"] != "human_retry" || !strings.Contains(b, "use the old format") {
+		t.Fatalf("retry payload %v", last)
+	}
+}
+
+func TestDoneGateBriefStatesEachFactOnce(t *testing.T) {
+	long := strings.Repeat("z", 200)
+	report := `{"revision":0,"verdicts":[{"criterion_id":"c1","status":"not_met","evidence":"evidence-text","gap":"gap-text","fix":"fix-text"}],"deviations":["` + long + `"]}`
+	r := doneRig(t, &fakeJudge{}, report)
+	r.evaluate(t)
+	b, _ := lastPayload(r)["brief"].(string)
+	if strings.Contains(b, "as not met") || strings.Count(b, "outside the spec or plan") != 1 || strings.Count(b, "criterion c1") != 1 {
+		t.Fatalf("brief repeats the Architect's findings:\n%s", b)
+	}
+	if !strings.Contains(b, long) {
+		t.Fatalf("the deviation must stay in full:\n%s", b)
+	}
+}
+
+func TestPlanRevisionResumeSendsTheGateNoteAndForemanReview(t *testing.T) {
+	r := reviewRig(t, &fakeJudge{over: map[string]float64{"scope_creep": 0.9}})
+	r.f.Sched = &failOnceQueue{fakeQueue: r.q, fail: true}
+	if err := r.f.handleReview(context.Background(), model.Job{WOID: r.wo.ID}); err == nil {
+		t.Fatal("the lost enqueue must fail the job")
+	}
+	if err := r.f.handleReview(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	notes, _ := lastPayload(r)["notes"].(string)
+	if !strings.Contains(notes, "the plan includes work the request does not ask for") || !strings.Contains(notes, "Foreman review: ok") || strings.Contains(notes, "activity trail") {
+		t.Fatalf("resume notes %q", notes)
+	}
+}
+
+func TestRetryTaskKeepsTheTaskSectionAndBrief(t *testing.T) {
+	ctx := context.Background()
+	f, wo, wos := monitorFactory(t, nil)
+	q := &fakeQueue{}
+	f.Sched, f.Findings = q, &store.FindingRepo{DB: wos.DB}
+	tasks := []model.Task{{ID: "T1", WOID: wo.ID, Title: "task-one", Objective: "obj-one", Role: "builder"}, {ID: "T2", WOID: wo.ID, Title: "task-two", Role: "builder", Deps: []string{"T1"}}}
+	if err := wos.ReplacePlan(ctx, wo.ID, tasks); err != nil {
+		t.Fatal(err)
+	}
+	if err := wos.UpdateState(ctx, wo.ID, model.StateImplementing); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Runs.Start(ctx, "r1", wo.ID, "", "inspector", "h"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Findings.Create(ctx, model.Finding{ID: "f1", RunID: "r1", WOID: wo.ID, Severity: "major", Title: "OPEN-FINDING", Status: model.FindingOpen}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.RetryTask(ctx, wo.ID, "T1", "human"); err != nil {
+		t.Fatal(err)
+	}
+	got := implementPrompt(wo, model.Job{TaskID: "T1", Payload: q.payloads[0]}, tasks)
+	for _, want := range []string{"Your task: task-one", "obj-one", "do not implement these", "task-two", "OPEN-FINDING"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("retry prompt missing %q:\n%s", want, got)
+		}
+	}
+}
