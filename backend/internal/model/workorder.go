@@ -44,10 +44,10 @@ var transitions = map[State][]State{
 	StateDecomposition:    {StatePlanGeneration, StateCancelled},
 	StatePlanGeneration:   {StateArchitectReview, StateCancelled},
 	StateArchitectReview:  {StatePlanning, StateWaitingForHuman, StateQueued, StateCancelled},
-	StateWaitingForHuman:  {StatePlanning, StateCancelled},
+	StateWaitingForHuman:  {StatePlanning, StateImplementing, StateCancelled},
 	StatePlanning:         {StatePlanGeneration, StateWaitingForHuman, StateCancelled},
 	StateQueued:           {StateImplementing, StateCancelled},
-	StateImplementing:     {StateVerifying, StateCancelled},
+	StateImplementing:     {StateVerifying, StateWaitingForHuman, StateCancelled},
 	StateVerifying:        {StateSpecialistReview, StateImplementing, StateCancelled},
 	StateSpecialistReview: {StateImplementing, StatePRPreparation, StateWaitingForHuman, StateCancelled},
 	StatePRPreparation:    {StateMergeReadiness, StateCancelled},
@@ -96,6 +96,7 @@ type WorkOrder struct {
 	PausedAt        *time.Time `json:"paused_at,omitempty"`
 	PauseReason     string     `json:"pause_reason,omitempty"`
 	ClarifQuestion  string     `json:"clarif_question,omitempty"`
+	ClarifTask      string     `json:"-"` // plan task whose Builder question waits on a human; empty for a planning question
 	ClarifAnswer    string     `json:"clarif_answer,omitempty"`
 	Revision        int        `json:"revision"`
 	CommitSHA       string     `json:"commit_sha,omitempty"`
@@ -128,4 +129,5 @@ type Clarification struct {
 	Question string `json:"question"`
 	Answer   string `json:"answer"`
 	By       string `json:"by,omitempty"`
+	Task     string `json:"task,omitempty"` // plan task whose Builder asked it
 }

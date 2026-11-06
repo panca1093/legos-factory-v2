@@ -83,6 +83,12 @@ func (r *JobRepo) Requeue(ctx context.Context, id string, runAfter time.Time, er
 		runAfter.Unix(), errMsg, time.Now().Unix(), id)
 }
 
+// Release puts a job back to PENDING without spending an attempt.
+func (r *JobRepo) Release(ctx context.Context, id string) {
+	_, _ = r.DB.ExecContext(ctx, `UPDATE jobs SET state = 'PENDING', run_after = 0, updated_at = ? WHERE id = ?`,
+		time.Now().Unix(), id)
+}
+
 func (r *JobRepo) SetState(ctx context.Context, id string, state model.JobState) {
 	_, _ = r.DB.ExecContext(ctx, `UPDATE jobs SET state = ?, updated_at = ? WHERE id = ?`,
 		string(state), time.Now().Unix(), id)
