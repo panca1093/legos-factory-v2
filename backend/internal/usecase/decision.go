@@ -67,6 +67,7 @@ func (f *Factory) approvePlan(ctx context.Context, wo *model.WorkOrder, actor, m
 	}
 	f.Catalog.Record(ctx, wo, model.KnowledgePlanApproved, trust, actor,
 		fmt.Sprintf("Plan approved for %q (%d tasks) by %s", wo.Title, len(tasks), actor), taskList(tasks))
+	f.writePlanDocs(ctx, cur, tasks, actor)
 	return nil
 }
 

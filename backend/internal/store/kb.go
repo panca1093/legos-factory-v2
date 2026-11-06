@@ -329,6 +329,10 @@ func kbFilter(q model.KBQuery) (string, []any) {
 	}
 	in("d.source", q.Sources)
 	in("d.type", q.Types)
+	if q.OriginID != "" {
+		where = append(where, `json_extract(d.meta, '$.origin_id') = ?`)
+		args = append(args, q.OriginID)
+	}
 	statuses := q.Statuses
 	if len(statuses) == 0 {
 		statuses = []string{model.KBStatusStable}

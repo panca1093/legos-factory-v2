@@ -170,6 +170,7 @@ func (f *Factory) intake(ctx context.Context, wo *model.WorkOrder, facts string)
 		return err
 	}
 	wo.Brief = brief
+	f.writeBriefDoc(ctx, wo)
 	f.event(wo.ID, "foreman", "brief_ready", "Foreman brief ready", map[string]any{"brief": brief, "run_id": runID})
 	return nil
 }

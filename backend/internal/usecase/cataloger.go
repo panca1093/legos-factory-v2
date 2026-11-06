@@ -55,21 +55,25 @@ func (c *Cataloger) Relevant(ctx context.Context, wo *model.WorkOrder) []model.K
 	return nil
 }
 
-// Completed logs the task summary as the work order's terminal line.
+// Completed logs the work order's terminal line; body names the summary document.
 func (c *Cataloger) Completed(ctx context.Context, wo *model.WorkOrder, outcome, body string) string {
 	return c.Record(ctx, wo, model.KnowledgeWorkOrderCompleted, model.TrustVerified, "cataloger",
 		fmt.Sprintf("Task summary: %s (%s)", wo.Title, outcome), body)
 }
 
-// completeWO records the terminal task summary from the order's current state.
+// completeWO writes the terminal task summary document from the order's current state and logs it.
 func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome string) {
-	if f.Catalog == nil {
+	if f.Catalog == nil && f.KB == nil {
 		return
 	}
 	if cur, err := f.WO.Get(ctx, wo.ID); err == nil {
 		wo = cur
 	}
-	f.Catalog.Completed(ctx, wo, outcome, f.taskSummary(ctx, wo, outcome))
+	note := "summary document not written"
+	if rel := f.writeSummaryDoc(ctx, wo, outcome); rel != "" {
+		note = "summary document: " + rel
+	}
+	f.Catalog.Completed(ctx, wo, outcome, note)
 }
 
 var decisionEventKinds = []string{
@@ -88,20 +92,21 @@ const (
 // taskSummary renders the deterministic five-section summary of wo's task.
 func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome string) string {
 	orNone := func(s string) string {
-		if s = oneLine(s); s == "" {
+		if s = docLine(s, maxDocText); s == "" {
 			return "(none)"
 		}
 		return s
 	}
 	more := func(n int) string { return fmt.Sprintf("(+%d more)", n-summaryMaxItems) }
 
-	goal := fitLines("Goal: "+clip(orNone(wo.Title), 100), []string{
+	goal := fitLines("## Goal", []string{
+		clip(orNone(wo.Title), 100),
 		"Objective: " + clip(orNone(wo.Objective), 150),
 		"Acceptance: " + clip(orNone(wo.Acceptance), 150),
 	}, 450)
 
 	verLines, failing := f.finalVerification(ctx, wo)
-	ver := fitLines("Final verification:", verLines, 300)
+	ver := fitLines("## Final verification", verLines, 300)
 
 	var open []string
 	if outcome != "READY" {
@@ -119,7 +124,7 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 		for _, fd := range all {
 			switch fd.Status {
 			case model.FindingOpen, model.FindingConfirmed, model.FindingEscalated:
-				lines = append(lines, clip(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, oneLine(fd.Title), oneLine(fd.Location)), 100))
+				lines = append(lines, clip(fmt.Sprintf("- [%s] %s (%s)", fd.Severity, safeLine(fd.Title), safeLine(fd.Location)), 100))
 			}
 		}
 		for i, l := range lines {
@@ -136,21 +141,21 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 				open = append(open, more(len(r.Deviations)))
 				break
 			}
-			open = append(open, clip("- deviation: "+oneLine(d), 100))
+			open = append(open, clip("- deviation: "+safeLine(d), 100))
 		}
 	}
 	if len(open) == 0 {
 		open = []string{"none"}
 	}
-	openSection := fitLines("Open items / follow-up:", open, 450)
+	openSection := fitLines("## Open items and follow-up", open, 450)
 
 	decLines := f.decisionLines(ctx, wo.ID)
 	if len(decLines) == 0 {
 		decLines = []string{"none recorded"}
 	}
-	dec := fitLines("Key decisions and rationale:", decLines, 350)
+	dec := fitLines("## Key decisions and rationale", decLines, 350)
 
-	body := strings.Join([]string{goal, ver, openSection, dec}, "\n\n") + "\n\nMain changes:"
+	body := strings.Join([]string{goal, ver, openSection, dec}, "\n\n") + "\n\n## Main changes"
 	for _, l := range f.changedFileLines(ctx, wo) {
 		if len(body)+1+len(l) > summaryBudget {
 			body += "\n(+more)"
@@ -173,7 +178,7 @@ func (f *Factory) decisionLines(ctx context.Context, woID string) []string {
 	lines := make([]string, 0, len(evs))
 	for i := len(evs) - 1; i >= 0; i-- {
 		line := "- " + evs[i].Kind
-		if m := oneLine(evs[i].Message); m != "" {
+		if m := safeLine(evs[i].Message); m != "" {
 			line += ": " + m
 		}
 		lines = append(lines, clip(line, 160))
@@ -209,11 +214,11 @@ func (f *Factory) finalVerification(ctx context.Context, wo *model.WorkOrder) (l
 				lines = append(lines, fmt.Sprintf("(+%d more)", len(checks)-summaryMaxChecks))
 				break
 			}
-			lines = append(lines, clip(fmt.Sprintf("- %s → %s", c.Name, c.Outcome), 120))
+			lines = append(lines, clip(safeLine(fmt.Sprintf("- %s → %s", c.Name, c.Outcome)), 120))
 		}
 		for _, c := range checks {
 			if c.Outcome != string(model.Pass) {
-				failing = append(failing, fmt.Sprintf("%s %s", c.Name, c.Outcome))
+				failing = append(failing, safeLine(fmt.Sprintf("%s %s", c.Name, c.Outcome)))
 			}
 		}
 		return lines, failing
@@ -239,7 +244,7 @@ func (f *Factory) changedFileLines(ctx context.Context, wo *model.WorkOrder) []s
 	case len(files) <= 10:
 		out := make([]string, len(files))
 		for i, p := range files {
-			out[i] = "- " + p
+			out[i] = "- " + safeLine(p)
 		}
 		return out
 	}
