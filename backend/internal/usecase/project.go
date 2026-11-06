@@ -3,6 +3,8 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 
 	"legos-factory/backend/internal/model"
 )
@@ -49,6 +51,40 @@ func (p *Projects) Get(ctx context.Context, u *model.User, id string) (*model.Pr
 		return nil, err
 	}
 	return p.Store.Get(ctx, id)
+}
+
+// SetKBScope validates and stores the project's Knowledge include/exclude globs.
+func (p *Projects) SetKBScope(ctx context.Context, u *model.User, id string, req model.ProjectKBScopeRequest) (*model.Project, error) {
+	if err := p.Authorize(ctx, u, id); err != nil {
+		return nil, err
+	}
+	inc, err := cleanGlobs(req.KBInclude)
+	if err != nil {
+		return nil, err
+	}
+	exc, err := cleanGlobs(req.KBExclude)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.Store.SetKBScope(ctx, id, inc, exc); err != nil {
+		return nil, err
+	}
+	return p.Store.Get(ctx, id)
+}
+
+func cleanGlobs(in []string) ([]string, error) {
+	out := []string{}
+	for _, g := range in {
+		g = strings.TrimSpace(g)
+		switch {
+		case g == "":
+		case strings.HasPrefix(g, "/") || strings.Contains(g, "\\") || strings.Contains(g, ".."):
+			return nil, fmt.Errorf("%w: glob %q must be a relative pattern without a leading /, backslash or ..", ErrInvalid, g)
+		default:
+			out = append(out, g)
+		}
+	}
+	return out, nil
 }
 
 func (p *Projects) List(ctx context.Context, u *model.User) ([]model.Project, error) {

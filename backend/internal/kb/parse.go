@@ -207,6 +207,31 @@ func trustOf(verified any) string {
 	return model.KBTrustUnverified
 }
 
+// GlobMatch reports whether the slash-separated path matches the pattern: "*" and "?" stay within a segment, "**" crosses segments.
+func GlobMatch(pattern, p string) bool {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); i++ {
+		switch c := pattern[i]; {
+		case strings.HasPrefix(pattern[i:], "**/"):
+			b.WriteString("(?:.*/)?")
+			i += 2
+		case strings.HasPrefix(pattern[i:], "**"):
+			b.WriteString(".*")
+			i++
+		case c == '*':
+			b.WriteString("[^/]*")
+		case c == '?':
+			b.WriteString("[^/]")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(c)))
+		}
+	}
+	b.WriteString("$")
+	re, err := regexp.Compile(b.String())
+	return err == nil && re.MatchString(p)
+}
+
 func verifiers(v any) []string {
 	switch x := v.(type) {
 	case string:

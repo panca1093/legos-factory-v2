@@ -694,3 +694,28 @@
 .nb-item .nb-pill {
   padding: 0 6px;
 }
+
+.nb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.nb-chip {
+  border: 1px solid var(--line);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.nb-chip:hover {
+  color: var(--ink);
+}
+.nb-chip.on {
+  background: var(--tint);
+  border-color: transparent;
+  color: var(--accent);
+}

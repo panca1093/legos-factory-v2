@@ -85,6 +85,7 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 	}
 	text := strings.TrimSpace(p.Q)
 	seen := map[string]bool{}
+	scopes := map[string]*model.Project{}
 	var hits []model.KBHit
 	for _, pid := range pids {
 		q.ProjectID = pid
@@ -106,6 +107,9 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 		}
 		for _, h := range found {
 			if h.Doc.Source == model.KBSourceFactory && !factoryListTypes[h.Doc.Type] {
+				continue
+			}
+			if h.Doc.Source == model.KBSourceRepo && !s.inKBScope(ctx, scopes, h.Doc) {
 				continue
 			}
 			if !seen[h.Doc.ID] {
@@ -134,6 +138,26 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 		out = out[:kbListLimit]
 	}
 	return out, nil
+}
+
+func (s *KBDocs) inKBScope(ctx context.Context, cache map[string]*model.Project, d model.KBDoc) bool {
+	pr, ok := cache[d.ProjectID]
+	if !ok {
+		pr, _ = s.Proj.Get(ctx, d.ProjectID)
+		cache[d.ProjectID] = pr
+	}
+	if pr == nil {
+		return true
+	}
+	matches := func(globs []string) bool {
+		for _, g := range globs {
+			if kb.GlobMatch(g, d.Path) {
+				return true
+			}
+		}
+		return false
+	}
+	return (len(pr.KBInclude) == 0 || matches(pr.KBInclude)) && !matches(pr.KBExclude)
 }
 
 // Related ranks documents by keyword match alone: factory-wide plus projectID's, stable only.

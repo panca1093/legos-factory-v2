@@ -69,10 +69,14 @@ import NoteReader from "./NoteReader.vue";
 import {
   highlight,
   inNotebook,
+  inTypeChip,
+  isProjectNotebook,
+  originLabel,
   NB_ALL,
   NB_DRAFTS,
   notebooksOf,
   snippet,
+  TYPE_CHIPS,
   when,
 } from "./notes";
 import "./knowledge.css";
@@ -88,6 +92,7 @@ const docs = ref<KBDoc[]>([]),
 const q = ref(""),
   nb = ref(NB_ALL),
   status = ref("stable"),
+  chip = ref("all"),
   openId = ref(""),
   openTitle = ref(""),
   discuss = ref(false),
@@ -111,7 +116,11 @@ const notebooks = computed(() =>
   notebooksOf(visible.value, projectName, draftCount.value),
 );
 const list = computed(() => {
-  const l = visible.value.filter((d) => inNotebook(d, nb.value));
+  const l = visible.value.filter(
+    (d) =>
+      inNotebook(d, nb.value) &&
+      (!isProjectNotebook(nb.value) || inTypeChip(d, chip.value)),
+  );
   return q.value.trim() ? l : [...l].sort((a, b) => ts(b) - ts(a));
 });
 
@@ -226,6 +235,7 @@ function setNb(key: string) {
   editState.value = null;
   const wasDrafts = nb.value === NB_DRAFTS;
   nb.value = key;
+  chip.value = "all";
   pinned = "";
   if (wasDrafts || key === NB_DRAFTS) {
     docs.value = [];
@@ -333,6 +343,28 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
             ><span class="n">{{ b.count }}</span>
           </button>
         </div>
+        <div
+          v-if="isProjectNotebook(nb)"
+          class="nb-chips"
+          role="group"
+          aria-label="Filter by type"
+        >
+          <button
+            v-for="c in TYPE_CHIPS"
+            :key="c.key"
+            type="button"
+            class="nb-chip"
+            :class="{ on: chip === c.key }"
+            :aria-pressed="chip === c.key"
+            :data-test="`kb-chip-${c.key}`"
+            @click="
+              chip = c.key;
+              syncOpen();
+            "
+          >
+            {{ c.label }}
+          </button>
+        </div>
         <select
           v-if="nb !== NB_DRAFTS"
           :value="status"
@@ -368,6 +400,9 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
             <!-- eslint-enable vue/no-v-html -->
             <span class="m"
               ><span class="tag">{{ d.type || "untyped" }}</span
+              ><span v-if="originLabel(d)" data-test="kb-origin">{{
+                originLabel(d)
+              }}</span
               ><span
                 v-if="d.status !== 'stable'"
                 class="nb-pill"
