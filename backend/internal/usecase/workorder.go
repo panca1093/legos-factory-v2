@@ -22,9 +22,24 @@ type WorkOrders struct {
 	Sandbox      Sandbox
 	Integrations *Integrations
 	Settings     SettingsReader
+	// Chats resolves source_chat_id; nil rejects any chat link.
+	Chats interface {
+		Get(ctx context.Context, id string) (*model.Chat, error)
+	}
 }
 
 func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.CreateWorkOrderRequest) (*model.WorkOrder, error) {
+	if req.SourceChatID != "" {
+		if w.Chats == nil {
+			return nil, model.ErrChatNotFound
+		}
+		if ch, err := w.Chats.Get(ctx, req.SourceChatID); err != nil || ch.UserID != u.ID {
+			if err == nil {
+				err = model.ErrChatNotFound
+			}
+			return nil, err
+		}
+	}
 	proj, err := w.Projects.Get(ctx, u, req.ProjectID)
 	if err != nil {
 		return nil, err
@@ -44,6 +59,7 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 		BuilderModel:   req.BuilderModel,
 		InspectorModel: req.InspectorModel,
 		SourceRef:      req.SourceRef,
+		SourceChatID:   req.SourceChatID,
 		ForemanModel:   foreman,
 		ArchitectModel: architect,
 		CreatedBy:      u.ID,
@@ -82,6 +98,9 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 	if err := w.Store.Create(ctx, wo); err != nil {
 		_ = w.Sandbox.Destroy(ctx, wo.ID)
 		return nil, err
+	}
+	if wo.SourceChatID != "" {
+		_, _ = w.Store.AppendEvent(ctx, wo.ID, u.ID, "created_from_chat", "Created from a chat conversation", map[string]any{"chat_id": wo.SourceChatID})
 	}
 	return wo, nil
 }

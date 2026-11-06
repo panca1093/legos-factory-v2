@@ -33,6 +33,12 @@ const (
 	chatTurnEstimate = 50_000 // micros reserved per turn, as for a factory agent run
 )
 
+// ErrDraftFailed means the model did not return a usable work order draft.
+var ErrDraftFailed = errors.New("could not draft a work order from this chat")
+
+// titleWait is how long a finished reply waits for its generated title.
+var titleWait = 5 * time.Second
+
 // ErrChatBusy means the conversation is already answering a message.
 var ErrChatBusy = errors.New("this chat is already answering a message")
 
@@ -65,6 +71,12 @@ type Chat struct {
 	Default func(ctx context.Context) string
 	// Dir is the empty directory chat agents run in.
 	Dir string
+	// Related finds knowledge documents for the related-knowledge panel; nil means none.
+	Related interface {
+		Related(ctx context.Context, projectID, text string, limit int) ([]model.KBDoc, error)
+	}
+	// Gen runs one cheap, tool-less model call; nil uses Harness.
+	Gen func(ctx context.Context, modelRef, prompt string) (model.AgentResult, error)
 
 	mu    sync.Mutex // busy, turns and ses
 	busy  map[string]bool
@@ -161,8 +173,8 @@ func (c *Chat) Get(ctx context.Context, u *model.User, id string) (*model.Chat, 
 	return c.own(ctx, u, id)
 }
 
-// Update renames a chat and/or changes its model; nil leaves a field alone.
-func (c *Chat) Update(ctx context.Context, u *model.User, id string, title, modelRef *string) (*model.Chat, error) {
+// Update renames a chat, changes its model and/or its project ("" clears it); nil leaves a field alone.
+func (c *Chat) Update(ctx context.Context, u *model.User, id string, title, modelRef, projectID *string) (*model.Chat, error) {
 	if _, err := c.own(ctx, u, id); err != nil {
 		return nil, err
 	}
@@ -173,6 +185,11 @@ func (c *Chat) Update(ctx context.Context, u *model.User, id string, title, mode
 	ch, err := c.own(ctx, u, id)
 	if err != nil {
 		return nil, err
+	}
+	if projectID != nil && *projectID != "" && *projectID != ch.ProjectID {
+		if err := c.Projects.Authorize(ctx, u, *projectID); err != nil {
+			return nil, err
+		}
 	}
 	if title != nil {
 		t := strings.TrimSpace(*title)
@@ -190,6 +207,11 @@ func (c *Chat) Update(ctx context.Context, u *model.User, id string, title, mode
 	}
 	if err := c.Store.Update(ctx, id, ch.Title, ch.Model); err != nil {
 		return nil, err
+	}
+	if projectID != nil && *projectID != ch.ProjectID {
+		if err := c.Store.SetProject(ctx, id, *projectID); err != nil {
+			return nil, err
+		}
 	}
 	return c.Store.Get(ctx, id)
 }
@@ -382,8 +404,15 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	if err := c.Store.AddMessage(ctx, um); err != nil {
 		return err
 	}
+	var titled <-chan string
+	var fallback string
 	if len(history) == 0 && ch.Title == defaultChatTitle {
-		_ = c.Store.Rename(ctx, id, titleFrom(um.Content))
+		fallback = fallbackTitle(um.Content)
+		if fallback == "" {
+			fallback = defaultChatTitle
+		}
+		_ = c.Store.Rename(ctx, id, fallback)
+		titled = c.generateTitle(ctx, u, ch, um.Content, fallback)
 	}
 
 	// the harness calls onText from its own goroutine; once finished is set
@@ -427,6 +456,29 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 			UserID: u.ID, Role: string(model.AgentChat), Provider: provider, Model: modelID,
 			TokensIn: res.TokensIn, TokensOut: res.TokensOut, CostMicros: res.CostMicros, Source: res.CostSource,
 		})
+	}
+	if titled != nil {
+		var expired <-chan time.Time
+		if err == nil {
+			expired = time.After(titleWait)
+		} else {
+			e := make(chan time.Time)
+			close(e)
+			expired = e
+		}
+		var t string
+		select {
+		case t = <-titled:
+		default:
+			select {
+			case t = <-titled:
+			case <-expired:
+				t = fallback
+			}
+		}
+		if t != "" {
+			send(ChatEvent{Kind: "title", Text: t})
+		}
 	}
 	am := &model.ChatMessage{ChatID: id, Role: "assistant", Attachments: []model.ChatAttachment{}, CreatedAt: time.Now()}
 	if err != nil {
@@ -594,8 +646,27 @@ func (c *Chat) compose(ctx context.Context, u *model.User, in ChatSend) (string,
 	return b.String(), atts, nil
 }
 
-func titleFrom(s string) string {
-	return truncateRunes(strings.Join(strings.Fields(s), " "), chatTitleRunes)
+// fallbackTitle is the first sentence of s, cut at a word boundary.
+func fallbackTitle(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	s = strings.Join(strings.Fields(s), " ")
+	for i, r := range s {
+		if (r == '.' || r == '?' || r == '!') && (i+1 == len(s) || s[i+1] == ' ') {
+			s = s[:i]
+			break
+		}
+	}
+	if r := []rune(s); len(r) > fallbackTitleRunes {
+		cut := string(r[:fallbackTitleRunes])
+		if i := strings.LastIndexByte(cut, ' '); i > 0 && r[fallbackTitleRunes] != ' ' {
+			cut = cut[:i]
+		}
+		s = cut
+	}
+	return strings.TrimRight(s, " .,;:!?-")
 }
 
 func truncateRunes(s string, n int) string {

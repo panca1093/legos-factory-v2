@@ -59,9 +59,24 @@ func (r *ChatRepo) Update(ctx context.Context, id, title, modelRef string) error
 	return err
 }
 
+func (r *ChatRepo) SetProject(ctx context.Context, id, projectID string) error {
+	_, err := r.DB.ExecContext(ctx, `UPDATE chats SET project_id = ? WHERE id = ?`, nullStr(projectID), id)
+	return err
+}
+
 func (r *ChatRepo) Rename(ctx context.Context, id, title string) error {
 	_, err := r.DB.ExecContext(ctx, `UPDATE chats SET title = ? WHERE id = ?`, title, id)
 	return err
+}
+
+// RenameIf renames only while the title is still from, reporting whether it did.
+func (r *ChatRepo) RenameIf(ctx context.Context, id, from, to string) (bool, error) {
+	res, err := r.DB.ExecContext(ctx, `UPDATE chats SET title = ? WHERE id = ? AND title = ?`, to, id, from)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 func (r *ChatRepo) Touch(ctx context.Context, id string) error {

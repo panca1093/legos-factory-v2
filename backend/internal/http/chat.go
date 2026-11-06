@@ -22,6 +22,8 @@ func chatError(c echo.Context, err error) error {
 		return errorJSON(c, http.StatusTooManyRequests, "CHAT_BUSY", err.Error())
 	case errors.Is(err, usecase.ErrChatBudget):
 		return errorJSON(c, http.StatusConflict, "BUDGET_EXHAUSTED", err.Error())
+	case errors.Is(err, usecase.ErrDraftFailed):
+		return errorJSON(c, http.StatusBadGateway, "DRAFT_FAILED", err.Error())
 	case errors.Is(err, usecase.ErrChatUnavailable):
 		return errorJSON(c, http.StatusServiceUnavailable, "CHAT_UNAVAILABLE", err.Error())
 	}
@@ -62,13 +64,14 @@ func (s *Server) handleGetChat(c echo.Context) error {
 
 func (s *Server) handleUpdateChat(c echo.Context) error {
 	var req struct {
-		Title *string `json:"title"`
-		Model *string `json:"model"`
+		Title     *string `json:"title"`
+		Model     *string `json:"model"`
+		ProjectID *string `json:"project_id"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
-	ch, err := s.Chat.Update(c.Request().Context(), currentUser(c), c.Param("id"), req.Title, req.Model)
+	ch, err := s.Chat.Update(c.Request().Context(), currentUser(c), c.Param("id"), req.Title, req.Model, req.ProjectID)
 	if err != nil {
 		return chatError(c, err)
 	}
@@ -88,6 +91,22 @@ func (s *Server) handleChatMessages(c echo.Context) error {
 		return chatError(c, err)
 	}
 	return c.JSON(http.StatusOK, map[string]any{"messages": msgs})
+}
+
+func (s *Server) handleChatWorkOrderDraft(c echo.Context) error {
+	d, err := s.Chat.DraftWorkOrder(c.Request().Context(), currentUser(c), c.Param("id"))
+	if err != nil {
+		return chatError(c, err)
+	}
+	return c.JSON(http.StatusOK, d)
+}
+
+func (s *Server) handleChatRelatedKnowledge(c echo.Context) error {
+	docs, err := s.Chat.RelatedKnowledge(c.Request().Context(), currentUser(c), c.Param("id"))
+	if err != nil {
+		return chatError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"docs": docs})
 }
 
 func (s *Server) handleChatModels(c echo.Context) error {
@@ -127,6 +146,8 @@ func (s *Server) handleChatSend(c echo.Context) error {
 		switch ev.Kind {
 		case "delta":
 			payload["text"] = ev.Text
+		case "title":
+			payload["title"] = ev.Text
 		case "error":
 			payload["message"], payload["error"] = ev.Message, ev.Error
 		default:

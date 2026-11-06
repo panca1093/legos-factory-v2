@@ -148,6 +148,9 @@ func newChatRig(t *testing.T, h Harness) *chatRig {
 			}, nil
 		},
 		Default: func(context.Context) string { return "anthropic/opus" },
+		Gen: func(context.Context, string, string) (model.AgentResult, error) {
+			return model.AgentResult{}, errors.New("no titler")
+		},
 	}}
 }
 
@@ -183,11 +186,11 @@ func TestChatLifecycleAndOwnership(t *testing.T) {
 		t.Fatalf("unknown model: %v", err)
 	}
 	title := "Renamed"
-	if got, err := r.chat.Update(ctx, r.ana, ch.ID, &title, nil); err != nil || got.Title != "Renamed" {
+	if got, err := r.chat.Update(ctx, r.ana, ch.ID, &title, nil, nil); err != nil || got.Title != "Renamed" {
 		t.Fatalf("rename: %v %+v", err, got)
 	}
 	empty := " "
-	if _, err := r.chat.Update(ctx, r.ana, ch.ID, &empty, nil); !errors.Is(err, ErrInvalid) {
+	if _, err := r.chat.Update(ctx, r.ana, ch.ID, &empty, nil, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("blank title: %v", err)
 	}
 	if list, _ := r.chat.List(ctx, r.ana); len(list) != 2 {
@@ -205,7 +208,7 @@ func TestChatLifecycleAndOwnership(t *testing.T) {
 	}
 	_, err = r.chat.Get(ctx, r.bob, ch.ID)
 	notFound("get", err)
-	_, err = r.chat.Update(ctx, r.bob, ch.ID, &title, nil)
+	_, err = r.chat.Update(ctx, r.bob, ch.ID, &title, nil, nil)
 	notFound("update", err)
 	_, err = r.chat.Messages(ctx, r.bob, ch.ID)
 	notFound("messages", err)
@@ -234,7 +237,9 @@ func TestChatSendStreamsAndPersists(t *testing.T) {
 	}
 	var streamed string
 	for _, e := range evs {
-		streamed += e.Text
+		if e.Kind == "delta" {
+			streamed += e.Text
+		}
 	}
 	last := evs[len(evs)-1].Message
 	if streamed != "Four is the answer" || last.Content != streamed || last.Usage.TokensOut != 5 || last.Usage.Model != "anthropic/opus" {
@@ -245,7 +250,7 @@ func TestChatSendStreamsAndPersists(t *testing.T) {
 		t.Fatalf("persisted: %+v", msgs)
 	}
 	got, _ := r.chat.Get(ctx, r.ana, ch.ID)
-	if got.Title != "what is 2+2?" {
+	if got.Title != "what is 2+2" {
 		t.Fatalf("title: %q", got.Title)
 	}
 	req := h.starts[0]
@@ -263,7 +268,7 @@ func TestChatSendStreamsAndPersists(t *testing.T) {
 	if !strings.Contains(second, "User: what is 2+2?") || !strings.Contains(second, "Assistant: Four is the answer") || !strings.HasSuffix(second, "and 3+3?") {
 		t.Fatalf("a harness without sessions gets history in the prompt: %q", second)
 	}
-	if got, _ := r.chat.Get(ctx, r.ana, ch.ID); got.Title != "what is 2+2?" {
+	if got, _ := r.chat.Get(ctx, r.ana, ch.ID); got.Title != "what is 2+2" {
 		t.Fatalf("title changed to %q", got.Title)
 	}
 }
@@ -290,7 +295,7 @@ func TestChatKeepsOneSessionPerConversation(t *testing.T) {
 
 	h.gone = false
 	model2 := "anthropic/haiku"
-	if _, err := r.chat.Update(ctx, r.ana, ch.ID, nil, &model2); err != nil {
+	if _, err := r.chat.Update(ctx, r.ana, ch.ID, nil, &model2, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(h.closed) != 2 || h.closed[1] != "s2" {
@@ -481,7 +486,7 @@ func TestChatUpdateWaitsOutATurnAndSendRechecksAllowedModel(t *testing.T) {
 	go func() { r.send(t, r.ana, ch.ID, ChatSend{Content: "one"}); close(done) }()
 	<-h.inRun
 	title := "t"
-	if _, err := r.chat.Update(ctx, r.ana, ch.ID, &title, nil); !errors.Is(err, ErrChatBusy) {
+	if _, err := r.chat.Update(ctx, r.ana, ch.ID, &title, nil, nil); !errors.Is(err, ErrChatBusy) {
 		t.Fatalf("update while answering: %v", err)
 	}
 	close(h.gate)

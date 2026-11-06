@@ -126,6 +126,21 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 	return out, nil
 }
 
+// Related ranks documents by keyword match alone: factory-wide plus projectID's, stable only.
+func (s *KBDocs) Related(ctx context.Context, projectID, text string, limit int) ([]model.KBDoc, error) {
+	hits, err := s.KB.Idx.Search(ctx, model.KBQuery{ProjectID: projectID, Text: text, Limit: limit}, nil)
+	if err != nil {
+		return nil, err
+	}
+	var out []model.KBDoc
+	for _, h := range hits {
+		if h.SeeAlso == "" {
+			out = append(out, h.Doc)
+		}
+	}
+	return out, nil
+}
+
 // doc loads an indexed document u may see; anything else is not found.
 func (s *KBDocs) doc(ctx context.Context, u *model.User, id string) (*model.KBDoc, error) {
 	d, err := s.KB.Idx.Get(ctx, id)
