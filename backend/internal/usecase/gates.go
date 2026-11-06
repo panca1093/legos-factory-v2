@@ -306,11 +306,13 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 			"A task changes how API keys, tokens, passwords or encryption keys are stored, loaded, passed or logged.",
 			"No task changes secret handling; using an already configured secret unchanged does not count."),
 	}
-	qs["critical_resolved"] = Noul{
-		Instructions: "Is every critical finding in analysis addressed by spec or by a task in plan?",
-		Criteria: yn(
-			"analysis has no critical finding, or each critical finding is answered by a rule in spec or by a task in plan.",
-			"analysis has a critical finding that neither spec nor any task in plan addresses."),
+	if hasCritical(in.Findings) { // with no critical finding the question is vacuous and Jev answers it unsettled
+		qs["critical_resolved"] = Noul{
+			Instructions: "Is every critical finding in analysis addressed by spec or by a task in plan?",
+			Criteria: yn(
+				"analysis has no critical finding, or each critical finding is answered by a rule in spec or by a task in plan.",
+				"analysis has a critical finding that neither spec nor any task in plan addresses."),
+		}
 	}
 	qs["open_questions"] = Noul{
 		Instructions: "Does spec still contain an open question or a behaviour that the Architect guessed?",
@@ -554,6 +556,9 @@ func planTaskTitles(tasks []PlanTask) string {
 // answers to other ids are ignored.
 func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]float64, judgeErr error, overLimit bool) GateOutcome {
 	required := append(append([]string{}, planFixedIDs...), planRiskIDs...)
+	if !hasCritical(in.Findings) {
+		required = slices.DeleteFunc(required, func(id string) bool { return id == "critical_resolved" })
+	}
 	for _, c := range in.Criteria {
 		required = append(required, "covers_"+c.ID, "verified_"+c.ID)
 	}
@@ -589,10 +594,11 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	if len(criticals) > 0 {
 		criticalNote = "; critical findings the spec or a task must address: " + strings.Join(criticals, " | ")
 	}
-	switch judge(answers["critical_resolved"]) {
-	case vNo:
+	switch {
+	case !hasCritical(in.Findings):
+	case judge(answers["critical_resolved"]) == vNo:
 		hard = append(hard, "a critical finding is not addressed by the spec or any task"+criticalNote)
-	case vUnsettled:
+	case judge(answers["critical_resolved"]) == vUnsettled:
 		soft = append(soft, "it is unclear whether every critical finding is addressed"+criticalNote)
 	}
 	if judge(answers["open_questions"]) == vYes {
@@ -733,4 +739,8 @@ func gateEvent(gate string, state any, questions map[string]Noul, res JudgeResul
 		p["error"] = judgeErr.Error()
 	}
 	return p
+}
+
+func hasCritical(fs []reviewFinding) bool {
+	return slices.ContainsFunc(fs, func(f reviewFinding) bool { return f.Severity == "critical" })
 }

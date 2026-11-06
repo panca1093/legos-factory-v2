@@ -570,3 +570,17 @@ func TestUsageJSONTags(t *testing.T) {
 		t.Fatalf("usage json: %s", raw)
 	}
 }
+
+// wo_731fdd9d-e79: with no critical finding Jev answered critical_resolved unsettled and the gate revised, then escalated.
+func TestPlanGateSkipsCriticalResolvedWithoutACritical(t *testing.T) {
+	in := PlanGateInput{Request: "r", Criteria: testCriteria, Findings: testFindings[1:]}
+	_, qs := planGateState(in)
+	if _, ok := qs["critical_resolved"]; ok {
+		t.Fatal("critical_resolved must not be asked when the analysis has no critical finding")
+	}
+	answers := planAnswers(nil)
+	delete(answers, "critical_resolved")
+	if out := decidePlanGate(in, qs, answers, nil, false); out.Outcome != GateApprove {
+		t.Fatalf("no critical and every other answer clean must approve: %+v", out)
+	}
+}
