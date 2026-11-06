@@ -44,6 +44,11 @@ func TestParseCodeFact(t *testing.T) {
 		{"no separator here", model.CodeFact{}, false},
 		{"a.go:x — bad line", model.CodeFact{}, false},
 		{"two words — claim", model.CodeFact{}, false},
+		{"./a/../b.go:5 — normalised", model.CodeFact{Path: "b.go", Line: 5, Claim: "normalised"}, true},
+		{"/etc/passwd:1 — absolute", model.CodeFact{}, false},
+		{"../x.go:1 — escapes", model.CodeFact{}, false},
+		{"a.go:10-20 — range", model.CodeFact{Path: "a.go", Line: 10, Claim: "range"}, true},
+		{"a.go:1 — one\r\ntwo\tthree", model.CodeFact{Path: "a.go", Line: 1, Claim: "one two three"}, true},
 	}
 	for _, c := range cases {
 		got, ok := parseCodeFact(c.in)

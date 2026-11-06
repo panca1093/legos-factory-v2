@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"legos-factory/backend/internal/kb"
 	"legos-factory/backend/internal/model"
@@ -33,13 +35,18 @@ func parseCodeFact(s string) (model.CodeFact, bool) {
 	if !ok || loc == "" || claim == "" || strings.ContainsAny(loc, " \n") {
 		return model.CodeFact{}, false
 	}
-	f := model.CodeFact{Path: loc, Claim: strings.ReplaceAll(claim, "\n", " ")}
+	f := model.CodeFact{Path: loc, Claim: strings.Join(strings.FieldsFunc(claim, unicode.IsControl), " ")}
 	if p, l, ok := strings.Cut(loc, ":"); ok {
-		n, err := strconv.Atoi(l)
+		first, _, _ := strings.Cut(l, "-")
+		n, err := strconv.Atoi(first)
 		if err != nil || p == "" {
 			return model.CodeFact{}, false
 		}
 		f.Path, f.Line = p, n
+	}
+	f.Path = path.Clean(strings.TrimPrefix(f.Path, "./"))
+	if f.Claim == "" || path.IsAbs(f.Path) || f.Path == ".." || strings.HasPrefix(f.Path, "../") {
+		return model.CodeFact{}, false
 	}
 	return f, true
 }
@@ -111,9 +118,9 @@ func (f *Factory) codeFactsText(ctx context.Context, wo *model.WorkOrder) string
 	return b.String()
 }
 
-// changedSince lists paths that differ between sha and HEAD; nil when git cannot tell, which makes every fact at sha stale.
+// changedSince lists paths that differ between sha and the working tree, so uncommitted edits count; nil when git cannot tell, which makes every fact at sha stale.
 func changedSince(dir, sha string) map[string]bool {
-	out, err := exec.Command("git", "-C", dir, "diff", "--name-only", sha+"..HEAD").Output()
+	out, err := exec.Command("git", "-C", dir, "diff", "--no-renames", "--name-only", sha).Output()
 	if err != nil {
 		return nil
 	}

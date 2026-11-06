@@ -10,7 +10,7 @@ import (
 
 type CodeFactRepo struct{ DB *sql.DB }
 
-// Add stores facts, replacing any earlier fact on the same path and line, and keeps only the newest max per work order.
+// Add stores facts, replacing any earlier fact on the same path and line (line-less facts only when the claim matches too), and keeps only the newest max per work order.
 func (r *CodeFactRepo) Add(ctx context.Context, woID string, facts []model.CodeFact, max int) error {
 	tx, err := r.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -18,7 +18,7 @@ func (r *CodeFactRepo) Add(ctx context.Context, woID string, facts []model.CodeF
 	}
 	defer tx.Rollback()
 	for _, f := range facts {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM code_facts WHERE wo_id = ? AND path = ? AND line = ?`, woID, f.Path, f.Line); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM code_facts WHERE wo_id = ? AND path = ? AND line = ? AND (line > 0 OR claim = ?)`, woID, f.Path, f.Line, f.Claim); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO code_facts (wo_id, path, line, claim, by_role, sha, created_at) VALUES (?,?,?,?,?,?,?)`,
