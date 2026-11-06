@@ -59,6 +59,7 @@ const browseBtn = ref<HTMLButtonElement>(),
 let controller: AbortController | null = null;
 let intent: Intent = "browse";
 let workBack: Step = "home";
+let picking = false;
 const gitConnections = computed(() =>
   factory.connections.filter(
     (c) =>
@@ -111,9 +112,16 @@ const title = computed(() =>
       : "Add a project",
 );
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-function reset() {
+function stopPick() {
+  if (picking) {
+    picking = false;
+    void api.post("/api/v1/local/pick-folder/cancel").catch(() => {});
+  }
   controller?.abort();
   controller = null;
+}
+function reset() {
+  stopPick();
   step.value = "probing";
   busy.value = false;
   error.value = "";
@@ -151,7 +159,7 @@ watch(
   (open) => {
     document.removeEventListener("keydown", enter);
     if (!open) {
-      controller?.abort();
+      stopPick();
       return;
     }
     reset();
@@ -173,7 +181,7 @@ watch(step, async () => {
 });
 onBeforeUnmount(() => {
   document.removeEventListener("keydown", enter);
-  controller?.abort();
+  stopPick();
 });
 const aborted = (e: unknown) =>
   e instanceof DOMException && e.name === "AbortError";
@@ -184,6 +192,7 @@ async function choose(target: Intent): Promise<string | null> {
   const before = step.value;
   step.value = "waiting";
   const ctl = (controller = new AbortController());
+  picking = true;
   try {
     const res = await api.post<{ path?: string; cancelled?: boolean }>(
       "/api/v1/local/pick-folder",
@@ -204,13 +213,17 @@ async function choose(target: Intent): Promise<string | null> {
     }
     return null;
   } finally {
-    if (controller === ctl) controller = null;
+    if (controller === ctl) {
+      controller = null;
+      picking = false;
+    }
   }
 }
-function cancelWait() {
-  controller?.abort();
-  controller = null;
+async function cancelWait() {
+  stopPick();
   step.value = intent === "browse" ? "home" : intent;
+  await nextTick();
+  if (step.value === "home") browseBtn.value?.focus();
 }
 function cancelWork() {
   controller?.abort();

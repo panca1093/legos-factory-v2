@@ -372,3 +372,42 @@ it("lets a slow clone be cancelled", async () => {
   expect(document.querySelector("#ap-url")).toBeTruthy();
   w.unmount();
 });
+const pending = () => {
+  routes["/api/v1/local/pick-folder"] = (_u, init) =>
+    new Promise((_res, rej) =>
+      init!.signal!.addEventListener("abort", () =>
+        rej(new DOMException("aborted", "AbortError")),
+      ),
+    );
+  routes["/api/v1/local/pick-folder/cancel"] = () =>
+    new Response(null, { status: 204 });
+};
+it("tells the backend to close the native chooser on Cancel and refocuses Browse", async () => {
+  const w = await render();
+  pending();
+  void click("Browse folder");
+  await flushPromises();
+  await click("Cancel");
+  await flushPromises();
+  expect(calls).toContain("POST /api/v1/local/pick-folder/cancel");
+  expect(document.activeElement?.textContent).toContain("Browse folder");
+  w.unmount();
+});
+it("cancels a pending pick when the dialog closes, ignoring a 404", async () => {
+  const w = await render();
+  pending();
+  delete routes["/api/v1/local/pick-folder/cancel"];
+  void click("Browse folder");
+  await flushPromises();
+  await w.setProps({ open: false });
+  await flushPromises();
+  expect(calls).toContain("POST /api/v1/local/pick-folder/cancel");
+  w.unmount();
+});
+it("does not call cancel when no pick is in flight", async () => {
+  const w = await render();
+  await w.setProps({ open: false });
+  await flushPromises();
+  expect(calls.some((c) => c.includes("pick-folder/cancel"))).toBe(false);
+  w.unmount();
+});
