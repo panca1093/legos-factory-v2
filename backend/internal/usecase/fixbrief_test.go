@@ -280,14 +280,14 @@ func TestHumanReasonWithOwnNumberedListStaysOneEarlierItem(t *testing.T) {
 	}
 }
 
-func TestEarlierFixesDropReraisedItemsAndForemanNotes(t *testing.T) {
+func TestEarlierFixesDropReraisedItems(t *testing.T) {
 	ctx := context.Background()
 	r := newRig(t)
-	seedFix(t, r, 1, "1. ITEM-A\n2. ITEM-B\n3. "+foremanNotesPrefix+"hm")
-	r.f.event(r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": 1, "items": []string{"ITEM-A", "ITEM-B", foremanNotesPrefix + "hm"}})
+	seedFix(t, r, 1, "1. ITEM-A\n2. ITEM-B")
+	r.f.event(r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": 1, "items": []string{"ITEM-A", "ITEM-B"}})
 	b := r.f.withEarlierFixes(ctx, r.wo.ID, 2, []string{"ITEM-A"})
 	head, tail, _ := strings.Cut(b, earlierHeading)
-	if !strings.HasPrefix(head, "1. ITEM-A") || strings.Contains(tail, "ITEM-A") || !strings.Contains(tail, "- ITEM-B") || strings.Contains(b, "validation notes") {
+	if !strings.HasPrefix(head, "1. ITEM-A") || strings.Contains(tail, "ITEM-A") || !strings.Contains(tail, "- ITEM-B") {
 		t.Fatalf("brief:\n%s", b)
 	}
 }

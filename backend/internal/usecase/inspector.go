@@ -201,6 +201,18 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	if err != nil {
 		f.event(wo.ID, "inspector", "changed_files_unavailable", err.Error(), nil)
 	}
+	if only, _ := job.Payload["converge_only"].(bool); only && f.Judge != nil {
+		// the contract changed, not the diff: the specialists' findings still stand
+		round, _ := job.Payload["round"].(float64)
+		err := f.converge(ctx, *wo, files, int(round))
+		if err != nil {
+			err = f.retryConverge(ctx, wo, files, int(round), err)
+		}
+		if err != nil {
+			f.event(wo.ID, "architect", "converge_failed", err.Error(), nil)
+		}
+		return f.enqueue(ctx, JobEvaluate, wo.ID, "")
+	}
 	picks, routing := f.reviewers(ctx, wo, files)
 	names := make([]string, 0, len(picks))
 	for _, p := range picks {
@@ -224,7 +236,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 					f.event(wo.ID, "architect", "converge_failed", fmt.Sprintf("converge panicked: %v", r), nil)
 				}
 			}()
-			archErr = f.converge(actx, *wo, files)
+			archErr = f.converge(actx, *wo, files, 0)
 		}()
 		// an early return must neither leave the verification running nor wait for it to finish
 		defer func() {
@@ -249,8 +261,8 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		var summary strings.Builder
 		specBlockers := 0
 		for _, fd := range out.Findings {
-			if fd.Severity != model.SeverityBlocker && citesCriterion(fd.Cites, criteria) {
-				fd.Severity, fd.Detail = model.SeverityBlocker, fd.Detail+" (cites "+fd.Cites+")"
+			if f.Judge != nil && fd.Severity != model.SeverityBlocker && citesCriterion(fd.Cites, criteria) {
+				fd.Detail += fmt.Sprintf(" (cites %s)", strings.Join(citedCriteria(fd.Cites, criteria), ", "))
 			}
 			id := fmt.Sprintf("fnd_%d", time.Now().UnixNano())
 			if err := f.Findings.Create(ctx, model.Finding{
@@ -277,14 +289,16 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	wg.Wait()
 	if archErr != nil && blockers == 0 {
 		// retry only converge: requeueing the job would re-run every specialist
-		archErr = f.retryConverge(ctx, wo, files, archErr)
+		archErr = f.retryConverge(ctx, wo, files, 0, archErr)
 	}
 	if archErr != nil {
 		f.event(wo.ID, "architect", "converge_failed", archErr.Error(), nil)
 	}
 	f.event(wo.ID, "inspector", "inspection_finished", fmt.Sprintf("%d finding(s), %d blocker(s)", total, blockers), nil)
-	if err := f.setBuilderNotes(ctx, wo.ID, "inspector", notes); err != nil {
-		return err
+	if f.Judge != nil {
+		if err := f.setBuilderNotes(ctx, wo.ID, "inspector", notes); err != nil {
+			return err
+		}
 	}
 
 	if blockers == 0 {
@@ -350,14 +364,14 @@ const convergeAttempts = 3
 
 var architectRetryDelay = 5 * time.Second
 
-func (f *Factory) retryConverge(ctx context.Context, wo *model.WorkOrder, files []string, err error) error {
+func (f *Factory) retryConverge(ctx context.Context, wo *model.WorkOrder, files []string, round int, err error) error {
 	for i := 1; i < convergeAttempts && err != nil; i++ {
 		select {
 		case <-ctx.Done():
 			return err
 		case <-time.After(architectRetryDelay):
 		}
-		err = f.converge(ctx, *wo, files)
+		err = f.converge(ctx, *wo, files, round)
 	}
 	return err
 }
@@ -371,16 +385,26 @@ type architectReport struct {
 	Converged bool          `json:"converged"`
 }
 
-// convergeAppends is how many append rounds converge has used on the order.
+// convergeAppends is how many append rounds converge has used since the last human revision request.
+// Rounds are counted once each: a retried round writes its event again.
 func (f *Factory) convergeAppends(ctx context.Context, woID string) (int, error) {
-	evs, err := f.WO.EventsByKind(ctx, woID, []string{"converge_append"})
-	return len(evs), err
+	evs, err := f.WO.EventsByKind(ctx, woID, []string{"converge_append", "revision_requested"})
+	rounds := map[float64]bool{}
+	for _, e := range evs {
+		if e.Kind == "revision_requested" {
+			clear(rounds)
+			continue
+		}
+		r, _ := e.Payload["round"].(float64)
+		rounds[r] = true
+	}
+	return len(rounds), err
 }
 
 // converge has the Architect compare the built result with the contract and
-// stores the gaps for the converge gate. A failure is reported, not fatal: the
+// stores the gaps for the converge gate; round is 0 unless the caller knows it (a converge-only job). A failure is reported, not fatal: the
 // gate then has no report for this revision.
-func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []string) error {
+func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []string, round int) error {
 	dir := f.workspaceDir(wo.ID)
 	diff, err := f.Sandbox.Diff(ctx, dir)
 	if err != nil {
@@ -390,9 +414,12 @@ func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []stri
 	if err != nil {
 		return err
 	}
-	appends, err := f.convergeAppends(ctx, wo.ID)
-	if err != nil {
-		return err
+	if round == 0 {
+		appends, err := f.convergeAppends(ctx, wo.ID)
+		if err != nil {
+			return err
+		}
+		round = appends + 1
 	}
 	checks, _ := f.checksText(ctx, &wo)
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "",
@@ -407,7 +434,6 @@ func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []stri
 		}
 		return err
 	}
-	round := appends + 1
 	for i := range r.Gaps {
 		r.Gaps[i].ID = fmt.Sprintf("C%d-G%d", round, i+1)
 	}
@@ -504,8 +530,6 @@ const earlierFixRevisions = 3
 
 var briefItemStart = regexp.MustCompile(`(?m)^\d+\. `)
 
-const foremanNotesPrefix = "The Foreman's validation notes: "
-
 // storedItems are the fix items a fix_requested / revision_requested event asked for; events from before items were stored fall back to splitting the brief.
 func storedItems(p map[string]any) []string {
 	if raw, ok := p["items"].([]any); ok {
@@ -555,7 +579,7 @@ func (f *Factory) withEarlierFixes(ctx context.Context, woID string, rev int, it
 	seen := map[string]bool{}
 	for _, r := range revs {
 		for _, it := range byRev[r] {
-			if it = strings.TrimSpace(it); it != "" && !seen[it] && !current[it] && !strings.HasPrefix(it, foremanNotesPrefix) {
+			if it = strings.TrimSpace(it); it != "" && !seen[it] && !current[it] {
 				seen[it] = true
 				section.WriteString("\n- " + it)
 			}

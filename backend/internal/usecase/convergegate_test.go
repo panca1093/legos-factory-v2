@@ -118,7 +118,7 @@ func TestConvergeAppendCreatesNewTasksAndBuildsOnlyThem(t *testing.T) {
 	before, _ := r.wos.Plan(ctx, r.wo.ID)
 
 	wo := r.evaluate(t)
-	if wo.State != model.StateImplementing || wo.Revision != 1 || wo.CommitSHA != "" || wo.ReviewFixes != 0 || wo.ArchitectReport != "" {
+	if wo.State != model.StateImplementing || wo.Revision != 1 || wo.CommitSHA != "" || wo.ReviewFixes != 0 || r.f.currentArchitectReport(wo) != nil {
 		t.Fatalf("state %s revision %d fixes %d report %q", wo.State, wo.Revision, wo.ReviewFixes, wo.ArchitectReport)
 	}
 	plan, _ := r.wos.Plan(ctx, r.wo.ID)
@@ -189,7 +189,7 @@ func TestConvergeContractGapAmendsTheSpec(t *testing.T) {
 		t.Fatalf("the spec is amended with the reason: %q", wo.Spec)
 	}
 	plan, _ := r.wos.Plan(context.Background(), r.wo.ID)
-	if len(plan) != 1 || wo.State != model.StateSpecialistReview || wo.ArchitectReport != "" || r.q.enqueued[len(r.q.enqueued)-1] != "inspect:" {
+	if len(plan) != 1 || wo.State != model.StateSpecialistReview || r.q.enqueued[len(r.q.enqueued)-1] != "inspect:" || r.q.payloads[len(r.q.payloads)-1]["converge_only"] != true {
 		t.Fatalf("nothing to build, so converge runs again: state %s plan %d enqueued %v", wo.State, len(plan), r.q.enqueued)
 	}
 	if len(r.events(t, "converge_append")) != 1 {
@@ -227,7 +227,7 @@ func TestConvergeRequirementGapGoesToTheForeman(t *testing.T) {
 	r2.builtPlan(t)
 	r2.h.foreman = `{"decision":"ESCALATE","reason":"a product decision"}`
 	wo2 := r2.evaluate(t)
-	if wo2.State != model.StateWaitingForHuman || wo2.ClarifTask != "converge" || !strings.Contains(wo2.ClarifQuestion, "C1-G1") || wo2.ArchitectReport != "" {
+	if wo2.State != model.StateWaitingForHuman || wo2.ClarifTask != "converge" || !strings.Contains(wo2.ClarifQuestion, "C1-G1") {
 		t.Fatalf("state %s task %q question %q", wo2.State, wo2.ClarifTask, wo2.ClarifQuestion)
 	}
 	if len(r2.events(t, "clarification_requested")) != 1 || len(r2.events(t, "converge_append")) != 1 {
@@ -244,7 +244,7 @@ func TestConvergeRequirementGapGoesToTheForeman(t *testing.T) {
 
 func TestConvergeAppendBudgetEscalates(t *testing.T) {
 	j := &fakeJudge{over: map[string]float64{"gap_valid_C1-G1": 0.9}}
-	r := convergeRig(t, j, gapsReport(codeGapJSON))
+	r := convergeRig(t, j, strings.Replace(gapsReport(codeGapJSON), `"round":1`, `"round":3`, 1))
 	r.builtPlan(t)
 	r.markAppends(t, MaxConvergeAppends)
 	wo := r.evaluate(t)
@@ -560,22 +560,97 @@ func TestNonBlockingFindingsAreNotesForTheNextBuilder(t *testing.T) {
 	}
 }
 
-func TestFindingThatCitesACriterionBlocks(t *testing.T) {
+func TestFindingThatCitesACriterionGoesToJevNotTheBuilder(t *testing.T) {
+	ctx := context.Background()
 	h := &replyHarness{inspect: `{"findings":[{"severity":"minor","title":"Floats used","detail":"round.go uses float64","location":"round.go:3","cites":"c1"}]}`}
 	r := inspectRig(t, h)
+	j := &fakeJudge{}
+	r.f.Judge = j
+	if err := r.f.handleInspect(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	wo := r.reload(t)
+	if wo.State != model.StateSpecialistReview || wo.Revision != 0 || wo.ReviewFixes != 0 || r.q.enqueued[len(r.q.enqueued)-1] != "evaluate:" {
+		t.Fatalf("the Inspector alone does not send work back: state %s revision %d", wo.State, wo.Revision)
+	}
+	fds, _ := r.f.Findings.List(ctx, r.wo.ID)
+	if len(fds) == 0 || fds[0].Severity != "minor" {
+		t.Fatalf("severity is kept: %+v", fds)
+	}
+	id := fds[0].ID
+	r.f.Judge = &fakeJudge{over: map[string]float64{"gap_valid_" + id: 0.9}}
+	wo = r.evaluate(t)
+	plan, _ := r.wos.Plan(ctx, r.wo.ID)
+	if wo.State != model.StateImplementing || len(plan) != 2 || !strings.HasPrefix(plan[1].Title, "Close gap "+id) {
+		t.Fatalf("only a yes from Jev appends a task: state %s plan %+v", wo.State, plan)
+	}
+	if _, asked := r.f.Judge.(*fakeJudge).calls[0].qs["gap_valid_"+id]; !asked {
+		t.Fatal("the cited finding is a gap_valid question")
+	}
+}
+
+func TestInspectorWithoutJevBehavesAsBefore(t *testing.T) {
+	h := &replyHarness{inspect: `{"findings":[{"severity":"minor","title":"Floats used","detail":"d","location":"round.go:3","cites":"c1"}]}`}
+	r := inspectRig(t, h)
+	r.f.Judge = nil
 	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
 		t.Fatal(err)
 	}
 	wo := r.reload(t)
-	if wo.State != model.StateImplementing || wo.Revision != 1 || wo.ReviewFixes != 1 {
-		t.Fatalf("a finding that cites an acceptance criterion runs the existing remediation loop: state %s revision %d", wo.State, wo.Revision)
-	}
-	if last := r.q.payloads[len(r.q.payloads)-1]; last["reason"] != "fix_findings" || !strings.Contains(last["brief"].(string), "Floats used") {
-		t.Fatalf("payload %v", last)
-	}
 	fds, _ := r.f.Findings.List(context.Background(), r.wo.ID)
-	if len(fds) == 0 || fds[0].Severity != model.SeverityBlocker {
-		t.Fatalf("findings %+v", fds)
+	if wo.State != model.StateSpecialistReview || len(wo.Clarifications) != 0 || len(fds) == 0 || strings.Contains(fds[0].Detail, "cites") {
+		t.Fatalf("no notes, no marker, no promotion without Jev: %+v %+v", wo.Clarifications, fds)
+	}
+}
+
+func TestConvergeOnlyJobSkipsTheSpecialists(t *testing.T) {
+	h := &replyHarness{}
+	r := inspectRig(t, h)
+	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID, Payload: map[string]any{"converge_only": true, "round": float64(2)}}); err != nil {
+		t.Fatal(err)
+	}
+	var rep architectReport
+	_ = json.Unmarshal([]byte(r.reload(t).ArchitectReport), &rep)
+	if len(h.prompts["inspector"]) != 0 || len(h.prompts["architect"]) != 1 || rep.Round != 2 || r.q.enqueued[len(r.q.enqueued)-1] != "evaluate:" {
+		t.Fatalf("inspectors %d architect %d round %d %v", len(h.prompts["inspector"]), len(h.prompts["architect"]), rep.Round, r.q.enqueued)
+	}
+}
+
+func TestConvergeBudgetCountsRoundsOnceAndResetsOnHumanRevision(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.f.event(r.wo.ID, "factory", "converge_append", "x", map[string]any{"round": 1})
+	r.f.event(r.wo.ID, "factory", "converge_append", "x", map[string]any{"round": 1})
+	if n, _ := r.f.convergeAppends(ctx, r.wo.ID); n != 1 {
+		t.Fatalf("a retried round counts once, got %d", n)
+	}
+	r.f.event(r.wo.ID, "factory", "converge_append", "x", map[string]any{"round": 2})
+	r.f.event(r.wo.ID, "human", "revision_requested", "x", map[string]any{"revision": 3})
+	if n, _ := r.f.convergeAppends(ctx, r.wo.ID); n != 0 {
+		t.Fatalf("a human revision request starts a new budget, got %d", n)
+	}
+	r.f.event(r.wo.ID, "factory", "converge_append", "x", map[string]any{"round": 1})
+	if n, _ := r.f.convergeAppends(ctx, r.wo.ID); n != 1 {
+		t.Fatalf("got %d", n)
+	}
+}
+
+func TestConvergeReportActedOnIsNotUsedTwice(t *testing.T) {
+	j := &fakeJudge{over: map[string]float64{"gap_valid_C1-G1": 0.9}}
+	r := convergeRig(t, j, gapsReport(codeGapJSON))
+	r.builtPlan(t)
+	r.markAppends(t, 1)
+	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview || len(j.calls) != 0 {
+		t.Fatalf("state %s", wo.State)
+	}
+}
+
+func TestContractGapCitingOnlyTheSpecIsStillAmended(t *testing.T) {
+	contract := `{"id":"C1-G1","type":"partial","layer":"contract","cites":"spec §2","evidence":"spec is vague","fix":"Say it."}`
+	r := convergeRig(t, &fakeJudge{over: map[string]float64{"gap_valid_C1-G1": 0.9}}, gapsReport(contract))
+	r.builtPlan(t)
+	if wo := r.evaluate(t); !strings.Contains(wo.Spec, "Amendment: Converge gap C1-G1") {
+		t.Fatalf("spec %q", wo.Spec)
 	}
 }
 
@@ -645,5 +720,23 @@ func TestConvergeAppendBumpsTheRevisionAndAppendsOnceAcrossARetry(t *testing.T) 
 	plan, _ := r.wos.Plan(ctx, r.wo.ID)
 	if wo.State != model.StateImplementing || wo.Revision != 1 || len(plan) != 2 || r.q.enqueued[len(r.q.enqueued)-1] != "implement:"+plan[1].ID {
 		t.Fatalf("state %s rev %d plan %d enqueued %v", wo.State, wo.Revision, len(plan), r.q.enqueued)
+	}
+}
+
+func TestLostEnqueueAfterAContractAmendmentIsRecoveredOnRetry(t *testing.T) {
+	ctx := context.Background()
+	contract := `{"id":"C1-G1","type":"missing","layer":"contract","cites":"c1","evidence":"spec is silent","fix":"Say it."}`
+	r := convergeRig(t, &fakeJudge{over: map[string]float64{"gap_valid_C1-G1": 0.9}}, gapsReport(contract))
+	r.builtPlan(t)
+	r.f.Sched = &failOnceQueue{fakeQueue: r.q, fail: true}
+	if err := r.f.handleEvaluate(ctx, model.Job{WOID: r.wo.ID}); err == nil {
+		t.Fatal("the lost enqueue must fail the job")
+	}
+	if len(r.events(t, "converge_append")) != 0 || r.f.currentArchitectReport(r.reload(t)) == nil {
+		t.Fatal("the round is not spent and the report is still there")
+	}
+	wo := r.evaluate(t)
+	if n, _ := r.f.convergeAppends(ctx, r.wo.ID); n != 1 || strings.Count(wo.Spec, "Amendment:") != 1 || r.q.enqueued[len(r.q.enqueued)-1] != "inspect:" {
+		t.Fatalf("appends %d spec %q enqueued %v", n, wo.Spec, r.q.enqueued)
 	}
 }
