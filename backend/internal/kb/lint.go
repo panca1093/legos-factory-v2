@@ -20,11 +20,12 @@ type Violation struct {
 }
 
 var (
-	logHeading  = regexp.MustCompile(`^## \d{4}-\d{2}-\d{2}\s*$`)
-	lintWiki    = regexp.MustCompile(`\[\[[^\]]+\]\]`)
-	lintInline  = regexp.MustCompile(`\[[^\]\n]*\]\(([^)\n]*)\)`)
-	lintRefLink = regexp.MustCompile(`(?m)^\[[^\]\n]*\]:\s*(\S+)`)
-	externalRe  = regexp.MustCompile(`^(https?://|mailto:|tel:|#)`)
+	logHeading   = regexp.MustCompile(`^## \d{4}-\d{2}-\d{2}\s*$`)
+	lintWiki     = regexp.MustCompile(`\[\[[^\]]+\]\]`)
+	lintInline   = regexp.MustCompile(`\[[^\]\n]*\]\(([^)\n]*)\)`)
+	lintRefLink  = regexp.MustCompile(`(?m)^\[[^\]\n]*\]:\s*(\S+)`)
+	lintAutoLink = regexp.MustCompile(`<([^>\n]+)>`)
+	externalRe   = regexp.MustCompile(`^(https?://|mailto:|tel:|#)`)
 )
 
 func localPath(l string) bool {
@@ -32,7 +33,10 @@ func localPath(l string) bool {
 }
 
 // Lint checks the bundle at root against the OKF v0.1 gates [A]-[G] of loan-platform's wiki-lint.
-func Lint(root string) []Violation {
+func Lint(root string) ([]Violation, error) {
+	if fi, err := os.Stat(root); err != nil || !fi.IsDir() {
+		return nil, fmt.Errorf("bundle root %q is not a readable directory", root)
+	}
 	var vs []Violation
 	add := func(gate, rel, format string, a ...any) {
 		vs = append(vs, Violation{gate, rel, fmt.Sprintf(format, a...)})
@@ -80,6 +84,7 @@ func Lint(root string) []Violation {
 				}
 			}
 		default:
+			// stricter than the reference script, which accepts a bare null type
 			typ, _ := meta["type"].(string)
 			switch {
 			case !hasFront:
@@ -101,6 +106,11 @@ func Lint(root string) []Violation {
 		for _, m := range lintRefLink.FindAllStringSubmatch(text, -1) {
 			links = append(links, strings.TrimSpace(m[1]))
 		}
+		for _, m := range lintAutoLink.FindAllStringSubmatch(text, -1) {
+			if localPath(m[1]) {
+				add("F", rel, "absolute or local link %s", m[1])
+			}
+		}
 		for _, l := range links {
 			switch {
 			case l == "" || externalRe.MatchString(l):
@@ -121,5 +131,5 @@ func Lint(root string) []Violation {
 		return nil
 	})
 	sort.SliceStable(vs, func(i, j int) bool { return vs[i].Path < vs[j].Path })
-	return vs
+	return vs, nil
 }
