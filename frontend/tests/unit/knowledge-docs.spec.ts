@@ -65,6 +65,7 @@ function detailOf(doc: KBDoc, over: Partial<KBDocDetail> = {}): KBDocDetail {
 
 let calls: { url: string; method: string; body?: unknown }[];
 let details: Record<string, KBDocDetail>;
+let listed: KBDoc[];
 let fetchMock: ReturnType<typeof vi.fn>;
 
 const sseBody = () =>
@@ -98,6 +99,7 @@ beforeEach(() => {
   vi.spyOn(f, "refreshProjects").mockResolvedValue();
   useSession().user = { id: "u", name: "U", email: "u@x", role: "ENGINEER" };
   calls = [];
+  listed = [factoryDoc, repoDoc];
   details = {
     [factoryDoc.id]: detailOf(factoryDoc),
     [repoDoc.id]: detailOf(repoDoc),
@@ -112,14 +114,7 @@ beforeEach(() => {
     });
     const u = new URL(url, "http://x");
     if (u.pathname === "/api/v1/kb/docs") {
-      const st = u.searchParams.get("status");
-      const docs =
-        st === "draft"
-          ? [draftDoc]
-          : st === "all"
-            ? [factoryDoc, repoDoc, draftDoc]
-            : [factoryDoc, repoDoc];
-      return new Response(JSON.stringify({ docs }));
+      return new Response(JSON.stringify({ docs: listed }));
     }
     if (u.pathname === "/api/v1/kb/doc" && method === "GET")
       return new Response(JSON.stringify(details[u.searchParams.get("id")!]));
@@ -176,9 +171,8 @@ it("ignores an unknown ?doc= and falls back to the newest note", async () => {
 
 it("lists notebooks with counts and opens the newest note in the reader", async () => {
   const w = await render();
-  expect(calls[0].url).toBe("/api/v1/kb/docs?status=stable");
+  expect(calls[0].url).toBe("/api/v1/kb/docs?status=all");
   expect(w.find(".nb-books").text()).toContain("All notes2");
-  expect(w.find(".nb-books").text()).toContain("Drafts to review1");
   expect(w.find(".nb-books").text()).toContain("Greeter2");
   const rows = items(w);
   expect(rows).toHaveLength(2);
@@ -207,7 +201,7 @@ it("searches server-side after a pause and highlights the term", async () => {
   await vi.advanceTimersByTimeAsync(300);
   await flushPromises();
   expect(
-    calls.some((c) => c.url === "/api/v1/kb/docs?status=stable&q=rounding"),
+    calls.some((c) => c.url === "/api/v1/kb/docs?status=all&q=rounding"),
   ).toBe(true);
   expect(items(w)[0].html()).toContain("<mark>rounding</mark>");
   w.unmount();
@@ -270,18 +264,22 @@ it("rejects invalid frontmatter JSON without calling the API", async () => {
 });
 
 async function openDrafts(w: Awaited<ReturnType<typeof render>>) {
-  await w.find('[data-test="drafts-shortcut"]').trigger("click");
+  await w
+    .findAll(".nb-book")
+    .find((b) => b.text().startsWith("Greeter"))!
+    .trigger("click");
   await flushPromises();
-  expect(
-    calls.filter((c) => c.url.endsWith("source=factory&status=draft")).length,
-  ).toBeGreaterThan(1);
+  await w
+    .find("#kb-folder-review")
+    .find('[data-test="kb-doc"]')
+    .trigger("click");
+  await flushPromises();
 }
 
-it("keeps drafts in their own notebook and approves with a note", async () => {
+it("reviews a draft from Needs review and approves with a note", async () => {
+  listed.push(draftDoc);
   const w = await render();
   await openDrafts(w);
-  expect(items(w)).toHaveLength(1);
-  expect(items(w)[0].text()).toContain("Learned rule");
   const note = document.body.querySelector<HTMLInputElement>("#kb-note")!;
   note.value = "looks right";
   note.dispatchEvent(new Event("input"));
@@ -296,6 +294,7 @@ it("keeps drafts in their own notebook and approves with a note", async () => {
 });
 
 it("discards a draft only after confirmation", async () => {
+  listed.push(draftDoc);
   const w = await render();
   await openDrafts(w);
   await click("kb-discard");
@@ -582,27 +581,5 @@ it("ignores j/k while editing and confirms before leaving unsaved edits", async 
   await flushPromises();
   expect(w.find(".nb-item.on").text()).toContain("Money");
   confirm.mockRestore();
-  w.unmount();
-});
-
-it("filters by status and badges deprecated notes", async () => {
-  const dep = mk({
-    id: "d",
-    title: "Old",
-    status: "deprecated",
-    indexed_at: 5,
-  });
-  const base = fetchMock.getMockImplementation()!;
-  fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
-    url.includes("status=deprecated") && url.includes("/kb/docs")
-      ? new Response(JSON.stringify({ docs: [dep] }))
-      : base(url, init),
-  );
-  details[dep.id] = detailOf(dep);
-  const w = await render();
-  await w.find('[data-test="kb-status"]').setValue("deprecated");
-  await flushPromises();
-  expect(items(w)[0].text()).toContain("Old");
-  expect(items(w)[0].text()).toContain("deprecated");
   w.unmount();
 });
