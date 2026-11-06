@@ -272,6 +272,9 @@ func mapDomainError(c echo.Context, err error) error {
 	if errors.Is(err, usecase.ErrInvalid) {
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
 	}
+	if errors.Is(err, usecase.ErrKBReadOnly) {
+		return errorJSON(c, http.StatusConflict, "KB_DOC_READ_ONLY", err.Error())
+	}
 	if errors.Is(err, model.ErrStateConflict) {
 		return errorJSON(c, http.StatusConflict, "INVALID_STATE_TRANSITION", err.Error())
 	}

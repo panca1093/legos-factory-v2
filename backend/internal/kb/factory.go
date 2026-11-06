@@ -29,8 +29,18 @@ func SyncFactory(ctx context.Context, idx Index, emb Embedder, b *Bundle) (SyncS
 		return SyncStats{}, err
 	}
 	groups := map[string][]file{"": nil}
+	known, err := idx.Projects(ctx, model.KBSourceFactory)
+	if err != nil {
+		return SyncStats{}, err
+	}
+	for _, pid := range known {
+		groups[pid] = nil
+	}
 	for _, f := range files {
 		pid := ProjectOf(f.rel)
+		if isJournal(f.rel) {
+			continue
+		}
 		groups[pid] = append(groups[pid], f)
 	}
 	pids := make([]string, 0, len(groups))
@@ -53,10 +63,15 @@ func SyncFactory(ctx context.Context, idx Index, emb Embedder, b *Bundle) (SyncS
 	return total, first
 }
 
+func isJournal(rel string) bool {
+	parts := strings.Split(rel, "/")
+	return len(parts) > 3 && parts[0] == "projects" && parts[2] == "journal"
+}
+
 // IndexFactoryFile re-indexes one bundle file after a write; OKF reserved files are skipped.
 func IndexFactoryFile(ctx context.Context, idx Index, emb Embedder, b *Bundle, rel string) error {
 	rel = path.Clean(filepath.ToSlash(rel))
-	if base := path.Base(rel); base == "index.md" || base == "log.md" {
+	if base := path.Base(rel); base == "index.md" || base == "log.md" || isJournal(rel) {
 		return nil
 	}
 	data, err := readInRoot(b.root, rel)

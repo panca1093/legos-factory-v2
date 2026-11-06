@@ -27,6 +27,11 @@ const (
 	KBTypePlaybook      = "Playbook"
 	KBTypeReviewerRoute = "Reviewer Routing"
 	KBTypeJournalEntry  = "Journal Entry"
+	KBTypeBrief         = "Brief"
+	KBTypeSpec          = "Spec"
+	KBTypeTaskDAG       = "Task DAG"
+	KBTypeTaskSummary   = "Task Summary"
+	KBTypeNote          = "Note"
 )
 
 // KBDoc is one indexed markdown document: pointers and metadata, never its text.
@@ -42,6 +47,7 @@ type KBDoc struct {
 	Trust       string         `json:"trust"`
 	Title       string         `json:"title"`
 	Description string         `json:"description"`
+	ReadOnly    bool           `json:"read_only"`       // computed from meta origin: work_order
 	Meta        map[string]any `json:"meta"`            // frontmatter keys other than type, title, description, status
 	Links       []string       `json:"links,omitempty"` // target doc ids, resolved within the same source and project
 	IndexedAt   time.Time      `json:"indexed_at"`

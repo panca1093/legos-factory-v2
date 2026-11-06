@@ -288,6 +288,17 @@ func (f *fakeIndex) Delete(_ context.Context, id string) error {
 	f.deleted = append(f.deleted, id)
 	return nil
 }
+func (f *fakeIndex) Projects(_ context.Context, source string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	for _, d := range f.docs {
+		if d.Source == source && d.ProjectID != "" && !seen[d.ProjectID] {
+			seen[d.ProjectID] = true
+			out = append(out, d.ProjectID)
+		}
+	}
+	return out, nil
+}
 func (f *fakeIndex) Get(context.Context, string) (*model.KBDoc, error) { return nil, nil }
 func (f *fakeIndex) Search(context.Context, model.KBQuery, []float32) ([]model.KBHit, error) {
 	return nil, nil
@@ -350,6 +361,38 @@ func TestSyncGitFactorySkipsReserved(t *testing.T) {
 	st, _ = Sync(context.Background(), idx, HashEmbedder{}, "repo", "p", root, "s")
 	if st.Docs != 3 {
 		t.Fatalf("repo should index index.md and log.md and skip ignored: %+v", st)
+	}
+}
+
+func TestSyncFactoryNeverIndexesJournal(t *testing.T) {
+	b, err := OpenBundle(filepath.Join(t.TempDir(), "kb"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.WriteMany([]File{
+		{Path: "projects/p1/journal/wo_1/001-plan.md", Front: map[string]any{"type": "Journal Entry"}, Body: "# J\n"},
+		{Path: "projects/p2/journal/wo_2/001-plan.md", Front: map[string]any{"type": "Journal Entry"}, Body: "# J\n"},
+		{Path: "projects/p2/notes/n.md", Front: map[string]any{"type": "Note"}, Body: "# N\n"},
+	}, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	idx := &fakeIndex{docs: map[string]model.KBParsed{}}
+	stale := func(pid, p string) {
+		id := DocID("factory", pid, p)
+		idx.docs[id] = model.KBParsed{KBDoc: model.KBDoc{ID: id, Source: "factory", ProjectID: pid, Path: p, ContentHash: "old"}}
+	}
+	stale("p1", "projects/p1/journal/wo_1/001-plan.md")
+	stale("p2", "projects/p2/journal/wo_2/001-plan.md")
+	stale("p3", "projects/p3/journal/wo_3/001-plan.md")
+	if _, err := SyncFactory(ctx, idx, HashEmbedder{}, b); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := idx.docs["factory:p2:projects/p2/notes/n.md"]; !ok || len(idx.docs) != 1 {
+		t.Fatalf("docs %v", idx.docs)
+	}
+	if err := IndexFactoryFile(ctx, idx, HashEmbedder{}, b, "projects/p1/journal/wo_1/001-plan.md"); err != nil || len(idx.docs) != 1 {
+		t.Fatalf("IndexFactoryFile must skip journal: %v", err)
 	}
 }
 

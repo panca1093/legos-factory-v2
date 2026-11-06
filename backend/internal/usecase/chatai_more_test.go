@@ -201,7 +201,7 @@ func TestRelatedKnowledgeSurvivesFTSOperators(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	repo := &store.KBRepo{DB: db}
 	d := model.KBParsed{KBDoc: model.KBDoc{ID: "factory::a.md", Source: "factory", Path: "a.md", CommitSHA: "c", ContentHash: "h",
-		Type: "Doc", Status: model.KBStatusStable, Trust: model.KBTrustUnverified, Title: "Retries", Meta: map[string]any{}}, Body: "retries billing"}
+		Type: model.KBTypeNote, Status: model.KBStatusStable, Trust: model.KBTrustUnverified, Title: "Retries", Meta: map[string]any{}}, Body: "retries billing"}
 	if err := repo.Upsert(ctx, d, nil); err != nil {
 		t.Fatal(err)
 	}
