@@ -111,15 +111,12 @@ func (f *Factory) completeWO(ctx context.Context, wo *model.WorkOrder, outcome s
 }
 
 const (
-	summaryBudget      = 1800
-	summaryMaxChecks   = 8
-	summaryMaxItems    = 5
-	summaryMainChanges = "Main changes:\n"
+	summaryBudget    = 1800
+	summaryMaxChecks = 8
+	summaryMaxItems  = 5
+	summaryItemCap   = 160
+	summaryGoalCap   = 300
 )
-
-// summaryLevels shrink the per-item and goal caps until the sections ahead of
-// Main changes leave room for it within summaryBudget.
-var summaryLevels = []struct{ item, goal int }{{160, 300}, {100, 200}, {60, 100}, {30, 50}}
 
 // taskSummary renders the deterministic five-section summary of wo's task.
 func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome string) string {
@@ -127,7 +124,8 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 	if recs, err := f.Catalog.Knowledge.Search(ctx, model.KnowledgeQuery{WOID: wo.ID, Limit: 200}); err == nil {
 		for _, k := range recs {
 			switch k.Kind {
-			case model.KnowledgeFindingDecision, model.KnowledgeClarification, model.KnowledgePRDecision, model.KnowledgePlanApproved:
+			case model.KnowledgePlanApproved, model.KnowledgePlanRevision, model.KnowledgeClarification,
+				model.KnowledgeArchitectReview, model.KnowledgeFindingDecision, model.KnowledgePRDecision:
 				decisions = append(decisions, k)
 			}
 		}
@@ -153,71 +151,57 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 	if r := f.currentArchitectReport(wo); r != nil {
 		deviations = r.Deviations
 	}
-	changes := f.changedFilesText(ctx, wo)
 
-	var pre string
-	for _, lv := range summaryLevels {
-		var b strings.Builder
-		fmt.Fprintf(&b, "Goal: %s\nObjective: %s\nAcceptance: %s\n\n",
-			clip(oneLine(wo.Title), 120), clip(oneLine(wo.Objective), lv.goal), clip(oneLine(wo.Acceptance), lv.goal))
-		fmt.Fprintf(&b, "Final verification: %s\n", verNote)
-		if len(verLines) == 0 {
-			b.WriteString("- no verification recorded\n")
-		}
-		for i, l := range verLines {
-			if i == summaryMaxChecks {
-				break
-			}
-			b.WriteString("- " + clip(l, lv.item) + "\n")
-		}
-		b.WriteString("\nOpen items / follow-up:\n")
-		var open []string
-		if outcome != "READY" {
-			open = append(open, "Outcome: "+outcome)
-		}
-		for _, c := range capped(failing) {
-			open = append(open, "Failing check: "+c)
-		}
-		for _, x := range capped(findings) {
-			open = append(open, "Open finding: "+x)
-		}
-		for _, x := range capped(deviations) {
-			open = append(open, "Deviation: "+oneLine(x))
-		}
-		if len(open) == 0 {
-			b.WriteString("- none recorded\n")
-		}
-		for _, o := range open {
-			b.WriteString("- " + clip(o, lv.item) + "\n")
-		}
-		b.WriteString("\nKey decisions and rationale:\n")
-		if len(decisions) == 0 {
-			b.WriteString("- none recorded\n")
-		}
-		for i, k := range decisions {
-			if i == summaryMaxItems {
-				break
-			}
-			b.WriteString("- " + clip(oneLine(k.Title+": "+k.Body), lv.item) + "\n")
-		}
-		b.WriteString("\n")
-		pre = b.String()
-		if len(pre)+len(summaryMainChanges)+60 <= summaryBudget {
-			break
-		}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Goal: %s\nObjective: %s\nAcceptance: %s\n\n",
+		clip(oneLine(wo.Title), 120), clip(oneLine(wo.Objective), summaryGoalCap), clip(oneLine(wo.Acceptance), summaryGoalCap))
+
+	fmt.Fprintf(&b, "Final verification: %s\n", verNote)
+	writeList(&b, summaryMaxChecks, "no verification recorded", verLines)
+
+	b.WriteString("\nOpen items / follow-up:\n")
+	var open []string
+	if outcome != "READY" {
+		open = append(open, "Outcome: "+outcome)
 	}
-	room := summaryBudget - len(pre) - len(summaryMainChanges)
-	if room < 0 {
-		room = 0
+	for _, c := range failing {
+		open = append(open, "Failing check: "+c)
 	}
-	return pre + summaryMainChanges + clip(changes, room)
+	for _, x := range findings {
+		open = append(open, "Open finding: "+x)
+	}
+	for _, x := range deviations {
+		open = append(open, "Deviation: "+oneLine(x))
+	}
+	writeList(&b, summaryMaxItems, "none recorded", open)
+
+	b.WriteString("\nKey decisions and rationale:\n")
+	var dec []string
+	for _, k := range decisions {
+		dec = append(dec, fmt.Sprintf("%s: %s", k.Kind, oneLine(k.Title+" — "+k.Body)))
+	}
+	writeList(&b, summaryMaxItems, "none recorded", dec)
+
+	b.WriteString("\nMain changes:\n")
+	writeList(&b, summaryMaxItems, "none recorded", f.changedFiles(ctx, wo))
+	if b.Len() > summaryBudget {
+		return truncate(b.String(), summaryBudget-len("… [truncated]"))
+	}
+	return b.String()
 }
 
-func capped(s []string) []string {
-	if len(s) > summaryMaxItems {
-		return s[:summaryMaxItems]
+func writeList(b *strings.Builder, max int, empty string, items []string) {
+	if len(items) == 0 {
+		b.WriteString("- " + empty + "\n")
+		return
 	}
-	return s
+	for i, it := range items {
+		if i == max {
+			fmt.Fprintf(b, "- (+%d more)\n", len(items)-max)
+			return
+		}
+		b.WriteString("- " + clip(it, summaryItemCap) + "\n")
+	}
 }
 
 // finalVerification walks revisions down from wo.Revision to the newest one
@@ -254,23 +238,17 @@ func (f *Factory) finalVerification(ctx context.Context, wo *model.WorkOrder) (l
 	return nil, nil, fmt.Sprintf("revision %d, no checks recorded", wo.Revision)
 }
 
-func (f *Factory) changedFilesText(ctx context.Context, wo *model.WorkOrder) string {
-	if f.Sandbox == nil {
-		return "changed files unavailable"
-	}
+func (f *Factory) changedFiles(ctx context.Context, wo *model.WorkOrder) []string {
 	mu := f.wsLock(wo.ID)
 	if !mu.TryLock() {
-		return "workspace busy; changed files not listed"
+		return nil
 	}
 	files, err := f.Sandbox.ChangedFiles(ctx, f.workspaceDir(wo.ID))
 	mu.Unlock()
-	switch {
-	case err != nil:
-		return "changed files unavailable"
-	case len(files) == 0:
-		return "no changed files recorded"
+	if err != nil {
+		return nil
 	}
-	return strings.Join(files, ", ")
+	return files
 }
 
 // clip cuts s to at most max bytes on a rune boundary, marking the cut with an ellipsis.

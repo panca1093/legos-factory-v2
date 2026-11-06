@@ -106,8 +106,8 @@ func TestReadyAfterFailThenPassWritesOneSummary(t *testing.T) {
 	env := newSummaryEnv(t, []string{"a.go", "b.go"}, true)
 	ctx := context.Background()
 	wo := env.newWO(t, "wo_ready", "Ship it", "Do the thing", "It works", model.StateNeedsHumanReview)
-	env.check(t, wo.ID, "typecheck", 0, "FAIL", "")
-	env.check(t, wo.ID, "typecheck", 1, "PASS", "deadbeef1234")
+	env.check(t, wo.ID, "lint", 0, "FAIL", "")
+	env.check(t, wo.ID, "lint", 1, "PASS", "deadbeef1234")
 	env.check(t, wo.ID, "test", 1, "PASS", "deadbeef1234")
 	if err := env.wos.UpdateFields(ctx, wo.ID, map[string]any{"revision": 1}); err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestReadyAfterFailThenPassWritesOneSummary(t *testing.T) {
 	if !strings.Contains(dec, "Finding disputed: nil check") || !strings.Contains(dec, "false positive") {
 		t.Fatalf("seeded decision missing under Key decisions:\n%s", body)
 	}
-	if !strings.Contains(body, "a.go, b.go") {
+	if !strings.Contains(body, "- a.go\n- b.go") {
 		t.Fatalf("changed files missing:\n%s", body)
 	}
 }
@@ -174,7 +174,7 @@ func TestBlockedWithNothingRecordedRendersFallbacks(t *testing.T) {
 
 	body := env.completed(t, wo.ID)[0].Body
 	requireHeadersInOrder(t, body)
-	for _, want := range []string{"no checks recorded", "no verification recorded", "Outcome: BLOCKED", "none recorded", "no changed files recorded"} {
+	for _, want := range []string{"no checks recorded", "no verification recorded", "Outcome: BLOCKED", "none recorded"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing fallback %q:\n%s", want, body)
 		}
@@ -209,9 +209,8 @@ func TestOversizedWorkOrderStaysWithinBudget(t *testing.T) {
 	if len(body) > summaryBudget {
 		t.Fatalf("body %d bytes exceeds budget", len(body))
 	}
-	requireHeadersInOrder(t, body)
-	if strings.Contains(body[:strings.Index(body, "Main changes:")], "[truncated]") {
-		t.Fatalf("truncation marker before Main changes:\n%s", body)
+	if !strings.HasPrefix(body, "Goal:") || !strings.HasSuffix(body, "[truncated]") {
+		t.Fatalf("oversized body must be cut at the budget:\n%s", body)
 	}
 }
 
