@@ -9,6 +9,10 @@ import (
 // refusals); the scheduler marks the job FAILED immediately.
 var ErrPermanent = errors.New("permanent failure")
 
+// ErrRequeue asks the scheduler to run the job again with a fresh timeout,
+// without spending a retry attempt.
+var ErrRequeue = errors.New("requeue job")
+
 type JobState string
 
 const (

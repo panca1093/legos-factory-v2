@@ -320,7 +320,7 @@ func (f *Factory) foremanAnswers(ctx context.Context, wo *model.WorkOrder, quest
 		f.event(wo.ID, "foreman", "clarification_answered", c.Answer, map[string]any{"question": question, "repeated": true})
 		return true, nil
 	}
-	r, runID, err := f.askForeman(ctx, wo, "architect", question, "", facts)
+	r, runID, err := f.askForeman(ctx, wo, "architect", question, "", facts, true)
 	if err != nil {
 		return false, err
 	}
@@ -340,12 +340,17 @@ func (f *Factory) foremanAnswers(ctx context.Context, wo *model.WorkOrder, quest
 }
 
 // askForeman puts an agent's question to the Foreman; note is extra context for the prompt only.
-func (f *Factory) askForeman(ctx context.Context, wo *model.WorkOrder, actor, question, note, facts string) (foremanAnswerReply, string, error) {
+// Only planning questions share the Foreman's planning session; parallel Builders each get their own run.
+func (f *Factory) askForeman(ctx context.Context, wo *model.WorkOrder, actor, question, note, facts string, planning bool) (foremanAnswerReply, string, error) {
 	f.event(wo.ID, actor, "clarification_asked", question, nil)
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+question, f.workspaceDir(wo.ID), wo.KBBaseSHA)
+	opts := runOpts{Audit: audit}
+	if planning {
+		opts.Planning, opts.Prime = true, foremanPrime(wo)
+	}
 	var r foremanAnswerReply
 	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanAnswerPrompt(wo, facts, question+note)+kbText,
-		map[string]string{"stage": "answer"}, "", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})
+		map[string]string{"stage": "answer"}, "", &r, opts)
 	return r, runID, err
 }
 

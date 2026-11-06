@@ -140,6 +140,7 @@ type RunStore interface {
 	Start(ctx context.Context, id, woID, taskID, kind, harness string) error
 	Complete(ctx context.Context, id string, res model.AgentResult) error
 	Fail(ctx context.Context, id, errMsg string) error
+	Wait(ctx context.Context, id, question string) error
 	CompletedBuilderTasks(ctx context.Context, woID string) (map[string]bool, error)
 	LatestRemediationState(ctx context.Context, woID string) (string, error)
 }

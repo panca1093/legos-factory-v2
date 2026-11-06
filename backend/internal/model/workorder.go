@@ -129,4 +129,5 @@ type Clarification struct {
 	Question string `json:"question"`
 	Answer   string `json:"answer"`
 	By       string `json:"by,omitempty"`
+	Task     string `json:"task,omitempty"` // plan task whose Builder asked it
 }

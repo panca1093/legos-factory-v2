@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,18 +13,23 @@ import (
 )
 
 func TestBuilderQuestion(t *testing.T) {
-	for _, tc := range []struct{ name, text, want string }{
-		{"final line", "tried a few things\nNEEDS_CONTEXT: Round half up or down?", "Round half up or down?"},
-		{"trailing newline", "NEEDS_CONTEXT: Which locale?\n\n", "Which locale?"},
-		{"decorated", "partial\n**NEEDS_CONTEXT: Which locale?**", "Which locale?"},
-		{"done", "implemented rounding", ""},
-		{"marker mid-reply", "NEEDS_CONTEXT: Which locale?\nthen I decided anyway", ""},
-		{"empty question", "NEEDS_CONTEXT:", ""},
-		{"empty reply", "", ""},
+	for _, tc := range []struct {
+		name, text, want string
+		asked            bool
+	}{
+		{"final line", "tried a few things\nNEEDS_CONTEXT: Round half up or down?", "Round half up or down?", true},
+		{"trailing newline", "NEEDS_CONTEXT: Which locale?\n\n", "Which locale?", true},
+		{"decorated", "partial\n**NEEDS_CONTEXT: Which locale?**", "Which locale?", true},
+		{"emphasis around the colon", "**NEEDS_CONTEXT:** Which locale?", "Which locale?", true},
+		{"lower case", "needs_context: Which locale?", "Which locale?", true},
+		{"bare marker", "NEEDS_CONTEXT:", "", true},
+		{"done", "implemented rounding", "", false},
+		{"marker mid-reply", "NEEDS_CONTEXT: Which locale?\nthen I decided anyway", "", false},
+		{"empty reply", "", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := builderQuestion(tc.text); got != tc.want {
-				t.Fatalf("builderQuestion(%q) = %q; want %q", tc.text, got, tc.want)
+			if got, asked := builderQuestion(tc.text); got != tc.want || asked != tc.asked {
+				t.Fatalf("builderQuestion(%q) = %q, %v; want %q, %v", tc.text, got, asked, tc.want, tc.asked)
 			}
 		})
 	}
@@ -88,9 +94,24 @@ func askRig(t *testing.T, script map[model.AgentRole][]string) (*rig, *askHarnes
 	return r, h
 }
 
-func (r *rig) implement(t *testing.T, payload map[string]any) {
+// implement runs the task's job the way the scheduler does: an ErrRequeue runs it again.
+func (r *rig) implement(t *testing.T) {
 	t.Helper()
-	if err := r.f.handleImplement(context.Background(), model.Job{WOID: r.wo.ID, TaskID: "T1", Payload: payload}); err != nil {
+	for i := 0; i < 8; i++ {
+		err := r.f.handleImplement(context.Background(), model.Job{WOID: r.wo.ID, TaskID: "T1"})
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, model.ErrRequeue) {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("job keeps requeueing")
+}
+
+func (r *rig) setLog(t *testing.T, log string) {
+	t.Helper()
+	if err := r.wos.UpdateFields(context.Background(), r.wo.ID, map[string]any{"clarif_log": log}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -109,7 +130,7 @@ func TestArchitectAnswerAmendsSpecAndRerunsTheTask(t *testing.T) {
 		model.AgentBuilder:   {askHalfUp, "rounded"},
 		model.AgentArchitect: {archAnswer},
 	})
-	r.implement(t, nil)
+	r.implement(t)
 	wo := r.reload(t)
 	if !strings.Contains(wo.Spec, "Amendment: "+halfUp+" → Half up. (reason: the brief rounds money") || !strings.HasPrefix(wo.Spec, "SPEC") {
 		t.Fatalf("spec = %q", wo.Spec)
@@ -140,7 +161,7 @@ func TestNeedsContextRunIsNotTaskCompletion(t *testing.T) {
 		model.AgentArchitect: {archEscalate},
 		model.AgentForeman:   {archEscalate},
 	})
-	r.implement(t, nil)
+	r.implement(t)
 	runs, _ := r.f.Runs.(*store.RunRepo).List(context.Background(), r.wo.ID)
 	for _, run := range runs {
 		if run.Kind == "builder" && run.State == "completed" {
@@ -158,7 +179,7 @@ func TestArchitectEscalationGoesToTheForeman(t *testing.T) {
 		model.AgentArchitect: {archEscalate},
 		model.AgentForeman:   {`{"decision":"ANSWER","answer":"Half up."}`},
 	})
-	r.implement(t, nil)
+	r.implement(t)
 	wo := r.reload(t)
 	if len(wo.Clarifications) != 1 || wo.Clarifications[0].By != "foreman" || !strings.Contains(wo.Spec, "Amendment: "+halfUp+" → Half up. (reason: answered by the foreman)") {
 		t.Fatalf("clarifications = %+v spec = %q", wo.Clarifications, wo.Spec)
@@ -178,7 +199,7 @@ func TestForemanEscalationParksTheOrderForAHumanWhoResumesTheTask(t *testing.T) 
 		model.AgentArchitect: {archEscalate},
 		model.AgentForeman:   {archEscalate},
 	})
-	r.implement(t, nil)
+	r.implement(t)
 	wo := r.reload(t)
 	if wo.State != model.StateWaitingForHuman || wo.ClarifQuestion != halfUp || wo.ClarifTask != "T1" || r.doneTasks(t) != 0 {
 		t.Fatalf("state %s question %q task %q done %d", wo.State, wo.ClarifQuestion, wo.ClarifTask, r.doneTasks(t))
@@ -201,10 +222,10 @@ func TestForemanEscalationParksTheOrderForAHumanWhoResumesTheTask(t *testing.T) 
 		!strings.Contains(wo.Spec, "Amendment: "+halfUp+" → Half up. (reason: decided by a human)") {
 		t.Fatalf("state %s task %q clarifications %+v spec %q", wo.State, wo.ClarifTask, wo.Clarifications, wo.Spec)
 	}
-	if len(r.q.enqueued) == 0 || r.q.enqueued[0] != JobImplement+":T1" || r.q.payloads[0]["asks"] != maxBuilderQuestions+1 {
-		t.Fatalf("enqueued %v payloads %v; the task must resume with the question budget spent", r.q.enqueued, r.q.payloads)
+	if wo.Clarifications[0].Task != "T1" || len(r.q.enqueued) == 0 || r.q.enqueued[0] != JobImplement+":T1" {
+		t.Fatalf("enqueued %v; the asking task must be ready again", r.q.enqueued)
 	}
-	r.implement(t, r.q.payloads[0])
+	r.implement(t)
 	if r.doneTasks(t) != 1 || !strings.Contains(h.prompts[model.AgentBuilder][1], "A: Half up.") {
 		t.Fatal("the resumed task did not finish with the human answer in its prompt")
 	}
@@ -218,7 +239,7 @@ func TestRepeatedBuilderQuestionReusesTheStoredAnswer(t *testing.T) {
 	if err := r.wos.UpdateFields(context.Background(), r.wo.ID, map[string]any{"clarif_log": raw}); err != nil {
 		t.Fatal(err)
 	}
-	r.implement(t, nil)
+	r.implement(t)
 	if h.runs(model.AgentArchitect) != 0 || h.runs(model.AgentForeman) != 0 || h.runs(model.AgentBuilder) != 2 || r.doneTasks(t) != 1 {
 		t.Fatalf("architect %d foreman %d builder %d", h.runs(model.AgentArchitect), h.runs(model.AgentForeman), h.runs(model.AgentBuilder))
 	}
@@ -234,7 +255,7 @@ func TestQuestionCap(t *testing.T) {
 			model.AgentArchitect: {`{"decision":"ANSWER","answer":"a"}`},
 			model.AgentForeman:   {archEscalate},
 		})
-		r.implement(t, nil)
+		r.implement(t)
 		wo := r.reload(t)
 		if h.runs(model.AgentArchitect) != 2 || h.runs(model.AgentForeman) != 1 || h.runs(model.AgentBuilder) != 3 ||
 			wo.State != model.StateWaitingForHuman || wo.ClarifQuestion != "q3?" {
@@ -244,7 +265,8 @@ func TestQuestionCap(t *testing.T) {
 	})
 	t.Run("a fourth question goes straight to a human", func(t *testing.T) {
 		r, h := askRig(t, map[model.AgentRole][]string{model.AgentBuilder: {"NEEDS_CONTEXT: q4?"}})
-		r.implement(t, map[string]any{"asks": float64(maxBuilderQuestions + 1)})
+		r.setLog(t, `[{"question":"a?","answer":"x","task":"T1"},{"question":"b?","answer":"x","task":"T1"},{"question":"c?","answer":"x","task":"T1"}]`)
+		r.implement(t)
 		wo := r.reload(t)
 		if h.runs(model.AgentArchitect) != 0 || h.runs(model.AgentForeman) != 0 || wo.State != model.StateWaitingForHuman || wo.ClarifTask != "T1" {
 			t.Fatalf("architect %d foreman %d state %s", h.runs(model.AgentArchitect), h.runs(model.AgentForeman), wo.State)
