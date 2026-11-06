@@ -1,17 +1,26 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
-import { ChevronDown, ChevronRight } from "lucide-vue-next";
-import { splitRows, type DiffFile } from "./diff";
-const props = defineProps<{ files: DiffFile[] }>();
+import { computed, ref } from "vue";
+import type { DiffFile } from "./diff";
+import DiffFileView from "./DiffFileView.vue";
+const props = defineProps<{
+  files: DiffFile[];
+  resetKey?: string;
+  meta?: {
+    base?: string;
+    head?: string;
+    revision?: number;
+    truncated?: boolean;
+  };
+}>();
 const mode = ref<"unified" | "split">("unified");
-const collapsed = reactive<Record<string, boolean>>({});
+const views: Record<string, InstanceType<typeof DiffFileView> | null> = {};
 const totals = computed(() => ({
   add: props.files.reduce((n, f) => n + f.add, 0),
   del: props.files.reduce((n, f) => n + f.del, 0),
 }));
-const sign = { add: "+", del: "−", ctx: " " };
+const short = (sha?: string) => sha?.slice(0, 7);
 function jump(i: number) {
-  collapsed[props.files[i].path] = false;
+  views[props.files[i].path]?.expand();
   document.getElementById("diff-file-" + i)?.scrollIntoView({ block: "start" });
 }
 </script>
@@ -23,6 +32,13 @@ function jump(i: number) {
         ·
         <span class="fx-add">+{{ totals.add }}</span>
         <span class="fx-del"> −{{ totals.del }}</span></span
+      >
+      <span v-if="meta?.head" class="tiny muted fx-code" data-test="diff-range"
+        >{{ short(meta.base) ? short(meta.base) + "…" : ""
+        }}{{ short(meta.head)
+        }}<template v-if="meta.revision !== undefined">
+          · revision {{ meta.revision }}</template
+        ></span
       >
       <div class="fx-seg" role="group" aria-label="Diff layout">
         <button
@@ -41,6 +57,9 @@ function jump(i: number) {
         </button>
       </div>
     </div>
+    <p v-if="meta?.truncated" class="notice" data-test="diff-truncated">
+      This diff is too large to show in full; some files or lines are omitted.
+    </p>
     <div class="fx-diff-body">
       <nav class="fx-files" aria-label="Changed files">
         <button
@@ -55,65 +74,17 @@ function jump(i: number) {
         </button>
       </nav>
       <div class="fx-diff-files">
-        <section
+        <div
           v-for="(f, i) in files"
           :id="'diff-file-' + i"
-          :key="f.path"
-          class="fx-dfile"
-          data-test="diff-file"
+          :key="(resetKey ?? '') + ':' + f.path"
         >
-          <header>
-            <button
-              class="fx-icon"
-              :aria-expanded="!collapsed[f.path]"
-              :aria-label="
-                (collapsed[f.path] ? 'Expand ' : 'Collapse ') + f.path
-              "
-              @click="collapsed[f.path] = !collapsed[f.path]"
-            >
-              <ChevronRight v-if="collapsed[f.path]" class="icon" /><ChevronDown
-                v-else
-                class="icon"
-              />
-            </button>
-            <span class="path">{{ f.path }}</span
-            ><span v-if="f.note" class="fx-code">{{ f.note }}</span
-            ><span class="fx-add">+{{ f.add }}</span
-            ><span class="fx-del">−{{ f.del }}</span>
-          </header>
-          <div
-            v-if="!collapsed[f.path] && f.hunks.length"
-            class="fx-dtable"
-            :class="mode"
-          >
-            <template v-for="(h, hi) in f.hunks" :key="hi">
-              <div class="fx-hh">{{ h.header }}</div>
-              <template v-if="mode === 'unified'">
-                <div
-                  v-for="(l, li) in h.lines"
-                  :key="li"
-                  class="fx-dl"
-                  :class="l.t"
-                >
-                  <span class="ln">{{ l.o ?? "" }}</span
-                  ><span class="ln">{{ l.n ?? "" }}</span
-                  ><code
-                    ><i class="sg">{{ sign[l.t] }}</i
-                    >{{ l.s }}</code
-                  >
-                </div>
-              </template>
-              <template v-else>
-                <div v-for="(row, ri) in splitRows(h)" :key="ri" class="fx-sl">
-                  <span class="ln">{{ row[0]?.o ?? "" }}</span
-                  ><code :class="row[0]?.t ?? 'empty'">{{ row[0]?.s }}</code
-                  ><span class="ln">{{ row[1]?.n ?? "" }}</span
-                  ><code :class="row[1]?.t ?? 'empty'">{{ row[1]?.s }}</code>
-                </div>
-              </template>
-            </template>
-          </div>
-        </section>
+          <DiffFileView
+            :ref="(el) => (views[f.path] = el as never)"
+            :file="f"
+            :mode="mode"
+          />
+        </div>
       </div>
     </div>
   </div>

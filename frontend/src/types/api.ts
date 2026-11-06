@@ -252,6 +252,27 @@ export interface WOEvent {
   created_at: string;
 }
 
+export interface WODiffFile {
+  path: string;
+  old_path?: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  additions: number;
+  deletions: number;
+  binary: boolean;
+  patch: string;
+  truncated: boolean;
+}
+
+export interface WODiff {
+  available: boolean;
+  reason?: string;
+  base?: string;
+  head?: string;
+  revision?: number;
+  files: WODiffFile[];
+  truncated?: boolean;
+}
+
 export type Provider = "github" | "gitlab" | "bitbucket" | "jira";
 
 export interface Connection {

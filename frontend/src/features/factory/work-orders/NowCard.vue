@@ -10,12 +10,14 @@ import {
   taskState,
 } from "../../../composables/presentation";
 import ActorBadge from "../ActorBadge.vue";
-import { escalationReason, lastMessage } from "../runs/agentActivity";
+import ReasonText from "../ReasonText.vue";
+import { currentReason } from "../runs/agentActivity";
 const props = defineProps<{
   order: WorkOrder;
   tasks: Task[];
   runs: Run[];
   events: WOEvent[];
+  hasMore?: boolean;
   canWrite: boolean;
   canClarify: boolean;
   busy: boolean;
@@ -34,8 +36,15 @@ const paused = computed(() => !!props.order.paused_at),
   finished = computed(() => isFinished(props.order)),
   status = computed(() => orderStatus(props.order)),
   ship = computed(() => shipState(props.order)),
-  reason = computed(() => escalationReason(props.events)),
-  last = computed(() => props.events.at(-1)),
+  reason = computed(() =>
+    currentReason(props.order, props.events, props.hasMore),
+  ),
+  last = computed(() =>
+    props.events.reduce<WOEvent | undefined>(
+      (a, e) => (!a || e.id >= a.id ? e : a),
+      undefined,
+    ),
+  ),
   done = computed(
     () =>
       props.tasks.filter((t) => taskState(t.id, props.runs) === "completed")
@@ -167,35 +176,32 @@ const headline = computed(() => {
         </p>
       </template>
       <template v-else-if="order.state === 'WAITING_FOR_HUMAN'">
-        <p class="fx-reason">
-          {{
-            lastMessage(events, "escalated", "clarification_escalated") ||
-            "Review found something it could not settle."
-          }}
-        </p>
+        <ReasonText
+          :text="reason || 'Review found something it could not settle.'"
+        />
         <button class="lg-btn primary small" @click="emit('goto', 'review')">
           Open Review
         </button>
       </template>
       <template v-else-if="order.state === 'BLOCKED'">
-        <p class="fx-reason" data-test="blocked-reason">
-          {{
-            lastMessage(events, "readiness_blocked") ||
-            "The factory blocked this order."
-          }}
-        </p>
+        <ReasonText
+          data-test="blocked-reason"
+          :text="reason || 'The factory blocked this order.'"
+        />
         <button class="lg-btn small" @click="emit('goto', 'review')">
           Open Review
         </button>
       </template>
       <template v-else-if="planEscalated">
-        <p class="fx-reason">
-          <strong>Why you are asked:</strong>
-          {{ reason || "The plan gate escalated this plan." }}
-          <template v-if="order.plan_revisions"
-            >It was revised {{ order.plan_revisions }} of 2 times.</template
-          >
-        </p>
+        <ReasonText
+          label="Why you are asked:"
+          :text="reason || 'The plan gate escalated this plan.'"
+          :suffix="
+            order.plan_revisions
+              ? `It was revised ${order.plan_revisions} of 2 times.`
+              : ''
+          "
+        />
         <div class="fx-actions">
           <button
             class="lg-btn primary small"
@@ -215,12 +221,12 @@ const headline = computed(() => {
         </div>
       </template>
       <template v-else-if="order.state === 'NEEDS_HUMAN_REVIEW'">
-        <p class="fx-reason">
-          <strong>{{ ship?.label }}.</strong>
-          {{
-            reason || "The checks passed and the done gate handed this to you."
-          }}
-        </p>
+        <ReasonText
+          :label="ship?.label + '.'"
+          :text="
+            reason || 'The checks passed and the done gate handed this to you.'
+          "
+        />
         <button class="lg-btn primary small" @click="emit('goto', 'changes')">
           Review changes &amp; PR
         </button>

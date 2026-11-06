@@ -10,6 +10,7 @@ import AppDialog from "../../../components/ui/AppDialog.vue";
 import {
   money,
   orderStatus,
+  publishNote,
   shipState,
   stageIndex,
   stageTabs,
@@ -21,7 +22,7 @@ import TaskGraph from "../task-graph/TaskGraph.vue";
 import ActivityPanel from "../runs/ActivityPanel.vue";
 import ReviewPanel from "../reviews/ReviewPanel.vue";
 import ChangesPanel from "../reviews/ChangesPanel.vue";
-import { escalationReason } from "../runs/agentActivity";
+import { currentReason } from "../runs/agentActivity";
 const factory = useFactory(),
   session = useSession(),
   route = useRoute(),
@@ -101,7 +102,12 @@ const crewModels = computed(
 );
 const status = computed(() => order.value && orderStatus(order.value)),
   ship = computed(() => (order.value ? shipState(order.value) : null)),
-  reason = computed(() => escalationReason(factory.events)),
+  reason = computed(() =>
+    order.value
+      ? currentReason(order.value, factory.events, factory.eventsHasMore)
+      : "",
+  ),
+  publish = computed(() => publishNote(project.value)),
   cost = computed(() => runs.value.reduce((n, r) => n + r.cost_micros, 0));
 watch(
   id,
@@ -119,6 +125,13 @@ watch(
       unsubscribe();
     });
     await factory.loadDetail(value);
+  },
+  { immediate: true },
+);
+watch(
+  [id, tab, () => order.value?.revision, () => order.value?.commit_sha],
+  ([value, key]) => {
+    if (key === "changes" && order.value) void factory.loadDiff(value);
   },
   { immediate: true },
 );
@@ -264,6 +277,7 @@ function download() {
       :tasks="tasks"
       :runs="runs"
       :events="factory.events"
+      :has-more="factory.eventsHasMore"
       :can-write="session.canWrite"
       :can-clarify="canClarify"
       :busy="busy"
@@ -311,6 +325,7 @@ function download() {
           :tasks="tasks"
           :can-retry="session.canWrite && order.state === 'IMPLEMENTING'"
           :revision="order.revision"
+          :has-more="factory.eventsHasMore"
           :steer="
             session.canWrite
               ? (runID: string, m: string) => factory.steer(id, runID, m)
@@ -342,7 +357,10 @@ function download() {
         :busy="busy"
         :ship="ship"
         :reason="reason"
-        :publish-to="project?.git_connection_id ? project.remote_repo : ''"
+        :publish-note="publish.text"
+        :diff="factory.diff"
+        :refresh-failed="factory.diffRefreshFailed"
+        :order-id="id"
         :pr-url="order.pr_url"
         :pr-ref="order.pr_ref"
         :source-ref="order.source_ref"
@@ -364,9 +382,10 @@ function download() {
       </p>
       <p v-else-if="modal === 'approve'" class="notice">
         {{
-          project?.git_connection_id
-            ? "Approving pushes the verified commit to a work branch and opens a pull request. The work order finishes when that pull request is merged."
-            : "This records your local approval for the current work order. No pull request is created."
+          publish.remote
+            ? publish.text +
+              " The work order finishes when that pull request is merged."
+            : publish.text
         }}
       </p>
       <p v-else class="small muted">
