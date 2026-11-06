@@ -11,7 +11,7 @@ export interface AgentStep {
   at: string;
   message?: string; // a human message steered into the run
 }
-export type AgentRunStatus = "running" | "stalled" | "finished" | "failed";
+export type AgentRunStatus = "running" | "stalled" | "finished" | "asked" | "failed";
 export interface AgentRunGroup {
   type: "run";
   id: string;
@@ -79,7 +79,8 @@ export function groupActivity(events: WOEvent[]): ActivityItem[] {
         message: e.message,
       });
     else if (e.kind === "agent_stalled") run.status = "stalled";
-    else if (e.kind === "agent_completed") run.status = "finished";
+    else if (e.kind === "agent_completed")
+      run.status = e.payload?.needs_context ? "asked" : "finished";
     else if (e.kind === "agent_failed") {
       run.status = "failed";
       run.outcome = e.message;

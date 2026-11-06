@@ -21,6 +21,9 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
+	if wo.State == model.StateCancelled {
+		return nil
+	}
 	if wo.State == model.StateWaitingForHuman {
 		return nil // another task's Builder question parked the order; the human's answer re-enqueues the ready tasks
 	}
@@ -38,6 +41,9 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 	_, _, err = f.runBuilder(ctx, wo, job, provider, modelID)
 	var nc *needsContext
 	if errors.As(err, &nc) {
+		if f.cancelled(ctx, wo.ID) {
+			return nil // a cancel does not stop a running job: do not ask or requeue
+		}
 		answered, err := f.askBack(ctx, wo, job, nc.question)
 		if err != nil || !answered {
 			return err
@@ -88,7 +94,7 @@ func (f *Factory) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 			f.failRun(ctx, wo.ID, model.AgentBuilder, runID, err)
 			return res, runID, err
 		}
-		_ = f.Runs.Wait(context.WithoutCancel(ctx), runID, q)
+		_ = f.Runs.Wait(context.WithoutCancel(ctx), runID, q, res)
 		f.event(wo.ID, "builder", "agent_completed", "builder agent asked a question", map[string]any{"run_id": runID, "needs_context": true})
 		return res, runID, &needsContext{q}
 	}

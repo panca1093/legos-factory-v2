@@ -31,9 +31,10 @@ func (r *RunRepo) Fail(ctx context.Context, id, errMsg string) error {
 }
 
 // Wait closes a builder run that ended on a question; the task is not done and shows as waiting.
-func (r *RunRepo) Wait(ctx context.Context, id, question string) error {
-	_, err := r.DB.ExecContext(ctx, `UPDATE runs SET state = 'waiting', error = ?, finished_at = ? WHERE id = ?`,
-		question, time.Now().Unix(), id)
+func (r *RunRepo) Wait(ctx context.Context, id, question string, res model.AgentResult) error {
+	_, err := r.DB.ExecContext(ctx, `UPDATE runs SET state = 'waiting', error = ?, output = ?, session_ref = ?,
+		tokens_in = ?, tokens_out = ?, cache_read_tokens = ?, cache_write_tokens = ?, cost_micros = ?, finished_at = ? WHERE id = ?`,
+		question, res.Text, res.SessionRef, res.TokensIn, res.TokensOut, res.CacheRead, res.CacheWrite, res.CostMicros, time.Now().Unix(), id)
 	return err
 }
 

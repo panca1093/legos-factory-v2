@@ -23,9 +23,23 @@ const steps = computed(() => props.run.steps.filter((s) => !s.message).length);
           })
         }}</time></span
       >
-      <span class="pill" :class="run.status === 'failed' ? 'red' : 'green'">{{
-        run.status === "failed" ? "Failed" : "Done"
-      }}</span>
+      <span
+        class="pill"
+        :class="
+          run.status === 'failed'
+            ? 'red'
+            : run.status === 'asked'
+              ? ''
+              : 'green'
+        "
+        >{{
+          run.status === "failed"
+            ? "Failed"
+            : run.status === "asked"
+              ? "Asked a question"
+              : "Done"
+        }}</span
+      >
     </summary>
     <div class="agent-transcript">
       <template v-for="s in run.steps" :key="`${s.at}-${s.n}`"
