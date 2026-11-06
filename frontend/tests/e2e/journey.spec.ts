@@ -36,9 +36,15 @@ test.afterAll(() =>
   repos.forEach((dir) => rmSync(dir, { recursive: true, force: true })),
 );
 async function createProject(page: Page, name: string) {
+  await page.route("**/api/v1/local/**", (route) =>
+    route.fulfill({
+      status: 404,
+      json: { error: { code: "NOT_AVAILABLE", message: "not available" } },
+    }),
+  );
   await page.getByRole("link", { name: "Factory", exact: true }).click();
   await page
-    .getByRole("button", { name: "New project", exact: true })
+    .getByRole("button", { name: "Add project", exact: true })
     .first()
     .click();
   await page.fill("#prj-name", name);

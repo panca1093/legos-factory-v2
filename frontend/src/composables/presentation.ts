@@ -199,3 +199,17 @@ export function taskState(
       ?.state.toLowerCase() ?? "waiting"
   );
 }
+export const publishLabel = (p: {
+  publish_via?: string;
+  github_repo?: string;
+  remote_repo?: string;
+}) =>
+  p.publish_via === "gh"
+    ? p.github_repo
+      ? `gh · ${p.github_repo}`
+      : "GitHub"
+    : p.publish_via === "connection" || (!p.publish_via && p.remote_repo)
+      ? p.remote_repo || p.github_repo
+        ? `Connection · ${p.remote_repo || p.github_repo}`
+        : "Connection"
+      : "Local only";
