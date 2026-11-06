@@ -412,9 +412,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 			fallback = defaultChatTitle
 		}
 		_ = c.Store.Rename(ctx, id, fallback)
-		tctx, tcancel := context.WithTimeout(ctx, chatTurnTimeout)
-		defer tcancel()
-		titled = c.generateTitle(tctx, u, ch, um.Content, fallback)
+		titled = c.generateTitle(ctx, u, ch, um.Content, fallback)
 	}
 
 	// the harness calls onText from its own goroutine; once finished is set
@@ -460,14 +458,26 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		})
 	}
 	if titled != nil {
+		var expired <-chan time.Time
+		if err == nil {
+			expired = time.After(titleWait)
+		} else {
+			e := make(chan time.Time)
+			close(e)
+			expired = e
+		}
+		var t string
 		select {
-		case t := <-titled:
-			if t != "" {
-				_ = c.Store.Rename(ctx, id, t)
-				send(ChatEvent{Kind: "title", Text: t})
+		case t = <-titled:
+		default:
+			select {
+			case t = <-titled:
+			case <-expired:
+				t = fallback
 			}
-		case <-time.After(titleWait):
-			send(ChatEvent{Kind: "title", Text: fallback})
+		}
+		if t != "" {
+			send(ChatEvent{Kind: "title", Text: t})
 		}
 	}
 	am := &model.ChatMessage{ChatID: id, Role: "assistant", Attachments: []model.ChatAttachment{}, CreatedAt: time.Now()}

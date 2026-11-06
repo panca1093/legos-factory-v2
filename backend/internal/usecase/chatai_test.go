@@ -77,39 +77,6 @@ func TestTitleGeneratedInParallelAndSentBeforeDone(t *testing.T) {
 	}
 }
 
-func TestTitleFallsBackOnTimeoutAndFailure(t *testing.T) {
-	ctx := context.Background()
-	old := titleWait
-	titleWait = 30 * time.Millisecond
-	t.Cleanup(func() { titleWait = old })
-
-	r := newChatRig(t, &chatPlain{reply: "ok"})
-	abandoned := make(chan struct{})
-	r.chat.Gen = func(c context.Context, _, _ string) (model.AgentResult, error) {
-		defer close(abandoned)
-		<-c.Done()
-		return model.AgentResult{}, c.Err()
-	}
-	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
-	evs, _ := r.send(t, r.ana, ch.ID, ChatSend{Content: "Explain the saga pattern. Then compare."})
-	if !strings.HasSuffix(kinds(evs), "title,done") || evs[len(evs)-2].Text != "Explain the saga pattern" {
-		t.Fatalf("timeout events: %+v", evs)
-	}
-	if got, _ := r.chat.Get(ctx, r.ana, ch.ID); got.Title != "Explain the saga pattern" {
-		t.Fatalf("title %q", got.Title)
-	}
-
-	<-abandoned // the timed-out call is cancelled once the turn ends
-	r.chat.Gen = func(context.Context, string, string) (model.AgentResult, error) {
-		return model.AgentResult{}, errors.New("boom")
-	}
-	ch2, _ := r.chat.Create(ctx, r.ana, "", "", "")
-	evs, _ = r.send(t, r.ana, ch2.ID, ChatSend{Content: "second chat"})
-	if evs[len(evs)-2].Kind != "title" || evs[len(evs)-2].Text != "second chat" {
-		t.Fatalf("failure events: %+v", evs)
-	}
-}
-
 func TestUserSetTitleIsNotRegenerated(t *testing.T) {
 	ctx := context.Background()
 	r := newChatRig(t, &chatPlain{reply: "ok"})

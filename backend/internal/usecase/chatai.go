@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -18,6 +19,9 @@ const (
 	draftTranscript    = 24000 // runes of conversation sent to the draft call, newest kept
 	relatedMessages    = 4
 	relatedLimit       = 5
+	draftTitleRunes    = 120
+	draftBodyRunes     = 8000
+	titleTimeout       = 2 * time.Minute
 )
 
 // WorkOrderDraft is a work order proposed from a conversation.
@@ -34,20 +38,22 @@ type RelatedDoc struct {
 	Snippet string `json:"snippet"`
 }
 
-// cheapModel prefers a haiku model the workspace allows, else the chat's own.
-func (c *Chat) cheapModel(ctx context.Context, ch *model.Chat) string {
+// cheapModel prefers a haiku model the workspace allows, else the chat's own;
+// ok is false when that fallback is itself no longer allowed.
+func (c *Chat) cheapModel(ctx context.Context, ch *model.Chat) (ref string, ok bool) {
+	allowed := c.allowedModels(ctx)
 	if c.Models != nil {
 		if infos, err := c.listModels(ctx); err == nil {
-			allowed := c.allowedModels(ctx)
 			for _, m := range infos {
 				id := m.ProviderID + "/" + m.ModelID
 				if strings.Contains(strings.ToLower(m.ModelID), "haiku") && (len(allowed) == 0 || allowed[id]) {
-					return id
+					return id, true
 				}
 			}
 		}
 	}
-	return c.resolve(ctx, ch)
+	ref = c.resolve(ctx, ch)
+	return ref, ref == "" || len(allowed) == 0 || allowed[ref]
 }
 
 func (c *Chat) gen(ctx context.Context, modelRef, prompt string) (model.AgentResult, error) {
@@ -81,21 +87,33 @@ func (c *Chat) genRecorded(ctx context.Context, u *model.User, modelRef, prompt 
 	return res, err
 }
 
-// generateTitle titles the chat from its first message in the background; the
-// channel yields the fallback when generation fails.
+// generateTitle titles the chat from its first message in the background and
+// outlives the turn so its cost is always recorded. The channel yields the
+// fallback when generation fails, or "" when the stored title is no longer the
+// fallback (the user renamed the chat meanwhile).
 func (c *Chat) generateTitle(ctx context.Context, u *model.User, ch *model.Chat, text, fallback string) <-chan string {
 	out := make(chan string, 1)
-	modelRef := c.cheapModel(ctx, ch)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), titleTimeout)
 	go func() {
-		prompt := "Write a title of at most 6 words for a conversation that starts with the message below. " +
-			"Use the same language as the message. Reply with the title only: no quotes, no trailing punctuation.\n\n<message>\n" +
-			truncateRunes(text, 2000) + "\n</message>"
-		res, err := c.genRecorded(ctx, u, modelRef, prompt)
-		if t := cleanTitle(res.Text); err == nil && t != "" {
-			out <- t
+		defer cancel()
+		modelRef, ok := c.cheapModel(ctx, ch)
+		if !ok {
+			out <- fallback
 			return
 		}
-		out <- fallback
+		prompt := "Write a title of at most 6 words for a conversation that starts with the message below. " +
+			"Use the same language as the message. Reply with the title only: no quotes, no trailing punctuation.\n\n<message>\n" +
+			strings.ReplaceAll(truncateRunes(text, 2000), "</message>", "<\\/message>") + "\n</message>"
+		res, err := c.genRecorded(ctx, u, modelRef, prompt)
+		t := cleanTitle(res.Text)
+		if err != nil || t == "" {
+			out <- fallback
+			return
+		}
+		if renamed, err := c.Store.RenameIf(ctx, ch.ID, fallback, t); err != nil || !renamed {
+			t = ""
+		}
+		out <- t
 	}()
 	return out
 }
@@ -129,6 +147,14 @@ func (c *Chat) DraftWorkOrder(ctx context.Context, u *model.User, id string) (*W
 	if err != nil {
 		return nil, err
 	}
+	if !c.startTurn() {
+		return nil, ErrChatSaturated
+	}
+	defer c.endTurn()
+	modelRef, ok := c.cheapModel(ctx, ch)
+	if !ok {
+		return nil, fmt.Errorf("%w: model %q is no longer allowed; pick another one for this chat", ErrInvalid, modelRef)
+	}
 	if c.Usage != nil {
 		release, ok := c.Usage.Reserve(chatTurnEstimate)
 		if !ok {
@@ -146,10 +172,9 @@ func (c *Chat) DraftWorkOrder(ctx context.Context, u *model.User, id string) (*W
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatTurnTimeout)
 	defer cancel()
-	modelRef := c.cheapModel(ctx, ch)
 	prompt := "Turn the conversation below into one software work order. Reply with a single JSON object and nothing else, with exactly these string keys: " +
 		`"title" (short, imperative), "objective" (what to build and why, in a few sentences) and "acceptance" (verifiable acceptance criteria, one per line). ` +
-		"Write in the language the user used.\n\n<conversation>\n" + transcript + "</conversation>"
+		"Write in the language the user used.\n\n<conversation>\n" + strings.ReplaceAll(transcript, "</conversation>", "<\\/conversation>") + "</conversation>"
 	var lastErr error
 	for range 2 {
 		res, err := c.genRecorded(ctx, u, modelRef, prompt)
@@ -189,8 +214,8 @@ func boundedTranscript(msgs []model.ChatMessage) string {
 }
 
 func parseDraft(text string) (*WorkOrderDraft, error) {
-	i, j := strings.IndexByte(text, '{'), strings.LastIndexByte(text, '}')
-	if i < 0 || j < i {
+	i := strings.IndexByte(text, '{')
+	if i < 0 {
 		return nil, fmt.Errorf("reply has no JSON object")
 	}
 	var raw struct {
@@ -198,10 +223,10 @@ func parseDraft(text string) (*WorkOrderDraft, error) {
 		Objective  string `json:"objective"`
 		Acceptance any    `json:"acceptance"`
 	}
-	if err := json.Unmarshal([]byte(text[i:j+1]), &raw); err != nil {
+	if err := json.NewDecoder(strings.NewReader(text[i:])).Decode(&raw); err != nil {
 		return nil, fmt.Errorf("reply is not valid JSON: %v", err)
 	}
-	d := &WorkOrderDraft{Title: strings.TrimSpace(raw.Title), Objective: strings.TrimSpace(raw.Objective)}
+	d := &WorkOrderDraft{Title: truncateRunes(strings.TrimSpace(raw.Title), draftTitleRunes), Objective: truncateRunes(strings.TrimSpace(raw.Objective), draftBodyRunes)}
 	switch a := raw.Acceptance.(type) {
 	case string:
 		d.Acceptance = strings.TrimSpace(a)
@@ -214,6 +239,7 @@ func parseDraft(text string) (*WorkOrderDraft, error) {
 		}
 		d.Acceptance = strings.Join(lines, "\n")
 	}
+	d.Acceptance = truncateRunes(d.Acceptance, draftBodyRunes)
 	if d.Title == "" || d.Objective == "" {
 		return nil, fmt.Errorf("reply lacks a title or objective")
 	}
