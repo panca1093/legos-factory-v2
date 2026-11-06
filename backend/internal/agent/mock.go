@@ -150,10 +150,9 @@ func (h *MockHarness) foremanReview(req model.AgentRequest, res model.AgentResul
 	switch {
 	case req.Context["stage"] == "intake":
 		return finishJSON(res, map[string]any{
-			"brief":                "Scripted brief: " + firstSentence(obj),
-			"constraints":          []string{"Keep existing behaviour unchanged."},
-			"risks":                []string{},
-			"suggested_task_shape": "Small tasks, one per acceptance criterion",
+			"outcome":     "Scripted brief: " + firstSentence(obj),
+			"constraints": []string{"Keep existing behaviour unchanged."},
+			"assumptions": []string{"One task per acceptance criterion."},
 		})
 	case req.Context["stage"] == "answer" && strings.Contains(obj, "[foreman-answer]"):
 		return finishJSON(res, map[string]any{"decision": "ANSWER", "answer": "Use the documented default."})

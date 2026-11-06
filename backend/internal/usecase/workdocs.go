@@ -265,7 +265,7 @@ func (f *Factory) writeBriefDoc(ctx context.Context, wo *model.WorkOrder) {
 			for _, c := range wo.Clarifications {
 				qa = append(qa, "Q: "+docLine(c.Question, 1000)+"\nA: "+docLine(c.Answer, 2000))
 			}
-			if wo.ClarifQuestion != "" && wo.ClarifAnswer != "" {
+			if wo.ClarifQuestion != "" && wo.ClarifAnswer != "" && findClarification(wo.Clarifications, wo.ClarifQuestion) == nil {
 				qa = append(qa, "Q: "+docLine(wo.ClarifQuestion, 1000)+"\nA: "+docLine(wo.ClarifAnswer, 2000))
 			}
 			qaText := "none"

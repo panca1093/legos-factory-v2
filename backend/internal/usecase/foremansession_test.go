@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	intakeJSON   = `{"brief":"Round money in integer rupiah","constraints":["keep API"],"risks":[],"suggested_task_shape":"one task"}`
+	intakeJSON   = `{"outcome":"Round money in integer rupiah","constraints":["keep API"],"assumptions":["one task"]}`
 	clarifyJSON  = `{"decision":"CLARIFY","question_text":"Round half up or down?"}`
 	answerJSON   = `{"decision":"ANSWER","answer":"Half up."}`
 	escalateJSON = `{"decision":"ESCALATE","reason":"product call"}`
@@ -32,6 +32,7 @@ type sessHarness struct {
 	reqs      map[string]model.AgentRequest // last request by session id
 	architect []string                      // replies in order; the last repeats
 	answer    string
+	intakes   []string // intake replies in order; the last repeats
 	review    string // overrides the Foreman review reply
 	starts    []model.AgentRequest
 	conts     []string // "session: prompt"
@@ -55,7 +56,14 @@ func (h *sessHarness) text(req model.AgentRequest) string {
 	case model.AgentForeman:
 		switch req.Context["stage"] {
 		case "intake":
-			return intakeJSON
+			reply := intakeJSON
+			if len(h.intakes) > 0 {
+				reply = h.intakes[0]
+				if len(h.intakes) > 1 {
+					h.intakes = h.intakes[1:]
+				}
+			}
+			return reply
 		case "answer":
 			return h.answer
 		}

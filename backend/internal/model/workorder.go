@@ -122,8 +122,9 @@ type WorkOrder struct {
 	Clarifications []Clarification `json:"clarifications,omitempty"` // Foreman answers to Architect questions
 }
 
-// Clarification is one Architect question the Foreman answered.
+// Clarification is one question and its answer; By is "human" when a person answered.
 type Clarification struct {
 	Question string `json:"question"`
 	Answer   string `json:"answer"`
+	By       string `json:"by,omitempty"`
 }

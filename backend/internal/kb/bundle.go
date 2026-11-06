@@ -1,7 +1,9 @@
 package kb
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -26,6 +28,23 @@ var (
 	jakarta    = time.FixedZone("WIB", 7*3600)
 	now        = time.Now
 )
+
+// supersededDefaults lists sha256 sums of earlier shipped defaults. A seeded file that still matches
+// one was never edited, so OpenBundle replaces it with the current default.
+var supersededDefaults = map[string][]string{
+	"playbooks/all/how-we-work.md": {"26f65f768aa276c424f93046ac6957039736d26f3843be04ddafff15671cb4c3"},
+}
+
+func isSuperseded(rel string, data []byte) bool {
+	sum := sha256.Sum256(data)
+	got := hex.EncodeToString(sum[:])
+	for _, h := range supersededDefaults[rel] {
+		if h == got {
+			return true
+		}
+	}
+	return false
+}
 
 // Clock is the time the logs use: it is now() in Asia/Jakarta.
 func Clock() time.Time { return now().In(jakarta) }
@@ -60,7 +79,7 @@ func OpenBundle(root string, seed bool) (*Bundle, error) {
 			return err
 		}
 		rel := strings.TrimPrefix(p, "defaults/")
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err == nil {
+		if old, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel))); err == nil && !isSuperseded(rel, old) {
 			return nil
 		}
 		data, err := defaultsFS.ReadFile(p)

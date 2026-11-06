@@ -13,12 +13,12 @@ import (
 func clarification(wo *model.WorkOrder) string {
 	var b strings.Builder
 	if len(wo.Clarifications) > 0 {
-		b.WriteString("\nThe Foreman answered these questions:\n")
+		b.WriteString("\nQuestions answered so far:\n")
 		for _, c := range wo.Clarifications {
 			fmt.Fprintf(&b, "Q: %s\nA: %s\n", c.Question, c.Answer)
 		}
 	}
-	if wo.ClarifAnswer != "" {
+	if wo.ClarifAnswer != "" && findClarification(wo.Clarifications, wo.ClarifQuestion) == nil {
 		fmt.Fprintf(&b, "\nA human answered a clarification:\nQ: %s\nA: %s\n", wo.ClarifQuestion, wo.ClarifAnswer)
 	}
 	return b.String()
@@ -62,15 +62,26 @@ Objective:
 
 Acceptance criteria:
 %s
+%s%s
+The brief says WHAT and WHY, never HOW. No file paths, line numbers or code. Keep it under %d words.
+If a brief exists above, update it in place: fold in the answers, drop the questions they settle,
+keep the rest. Do not start over.
 
-%s
+Open questions are real unknowns that only a human can settle. At most %d, ranked scope >
+security > behaviour > technical, each with options and a recommended answer. Anything else you
+can settle with a reasonable default: record it under assumptions.
+
 Respond with ONLY a JSON object (no prose, no code fences):
 
-{"brief":"<what to build and where, in your words>",
+{"outcome":"<what must be true when this is done, in one or two sentences>",
+ "why":"<the reason the request exists>",
+ "domain_invariants":["<rules of the domain that must keep holding>"],
+ "surfaces_touched":["<the user-facing or system-facing areas this changes>"],
  "constraints":["<behaviour or interfaces that must not change>"],
- "risks":["<what could go wrong>"],
- "suggested_task_shape":"<how to cut the work into tasks>"}`,
-		wo.Title, wo.Objective, wo.Acceptance, facts)
+ "out_of_scope":["<what this work order must not do>"],
+ "assumptions":["<default you chose for something unsaid>"],
+ "open_questions":[{"question":"<one question>","options":["<a>","<b>"],"recommended":"<your pick and why>"}]}`,
+		wo.Title, wo.Objective, wo.Acceptance, briefSection(wo)+clarification(wo), facts, briefWords, maxOpenQuestions)
 }
 
 func foremanAnswerPrompt(wo *model.WorkOrder, facts, question string) string {
@@ -128,20 +139,29 @@ Acceptance criteria:
 %s
 %s
 %s
-Decompose this objective into the smallest set of implementation tasks.
+Write the contract (spec) and decompose it into the smallest set of implementation tasks.
 Respond with ONLY a JSON object (no prose, no code fences) matching:
 
 {"decision":"APPROVE"|"CLARIFY",
  "summary":"<one line>",
- "spec":"<behaviour, interfaces and edge cases; required when decision is APPROVE>",
+ "spec":"<markdown contract, required when decision is APPROVE>",
  "tasks":[{"id":"task-1","title":"...","objective":"...","role":"builder","deps":["task-1"],"scope":["<file or area this task may touch>"]}],
  "question_text":"<only when decision is CLARIFY: the single question that must be answered>"}
 
+The spec is under %d words, with these sections in order:
+## Behaviour rules — numbered, one testable rule each.
+## Decisions — a table with the columns "# | Decision | Why | Rejected alternative", one row per real choice.
+## Interface contract — what callers or users see: names, inputs, outputs, errors. No code.
+## Out of scope — what this work must not do.
+## Acceptance — a table with the columns "AC | Verification | Kind". Every acceptance criterion has a row. Kind is "test" (a named automated test) or "check" (how a reviewer confirms it from the diff and the check output).
+The spec says what and why. No file paths, line numbers or code in it.
+
+Each task objective is under %d words. Cite spec sections ("Behaviour rule 2") instead of restating them. "scope" lists the files or areas the task may touch; file paths belong here, not in the spec.
+
 Rules:
-- If a product decision cannot be inferred from the objective or the brief, use decision CLARIFY and ask — never invent product requirements.
+- If the behaviour is unclear and the objective, the brief and the clarifications do not settle it, use decision CLARIFY and ask — never guess or invent requirements. Choices about how, inside your role, are yours: decide and put them in the Decisions table.
 - "deps" lists ids of tasks that must complete first; the graph must be acyclic and tasks must cover the objective.
-- "scope" lists the files or areas each task may touch.
-- role is "builder" for implementation tasks.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts)
+- role is "builder" for implementation tasks.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts, specWords, taskWords)
 }
 
 func previousTasks(woID string, tasks []model.Task) string {

@@ -39,12 +39,12 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 	}
 	f.syncRepo(ctx, wo, true)
 	facts := repoFacts(ctx, f.workspaceDir(wo.ID))
-	if wo.State == model.StateRequirement {
-		if wo.Brief == "" {
-			if err := f.intake(ctx, wo, facts); err != nil {
-				return err
-			}
+	if (wo.State == model.StateRequirement && wo.Brief == "") || strings.Contains(wo.Brief, openQuestionsHeader) {
+		if err := f.intake(ctx, wo, facts); err != nil || wo.State == model.StateWaitingForHuman {
+			return err
 		}
+	}
+	if wo.State == model.StateRequirement {
 		if err := f.step(ctx, wo, model.StateRequirement, model.StateDecomposition, "factory", "Decomposing into tasks"); err != nil {
 			return err
 		}
@@ -74,10 +74,20 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 		return err
 	}
 	var plan planReply
-	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes, facts, prev)+f.priorKnowledgePrompt(ctx, prior)+kbText,
-		map[string]string{"clarification_answer": wo.ClarifAnswer, "clarification_log": clarificationLog(wo)}, "", &plan, runOpts{Audit: audit})
+	prompt := planPrompt(wo, notes, facts, prev) + f.priorKnowledgePrompt(ctx, prior) + kbText
+	extra := map[string]string{"clarification_answer": wo.ClarifAnswer, "clarification_log": clarificationLog(wo)}
+	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, prompt, extra, "", &plan, runOpts{Audit: audit})
 	if err != nil {
 		return err
+	}
+	if over := planOverBudget(&plan); over != "" {
+		var shorter planReply
+		if _, id, err := f.runStructured(ctx, wo, model.AgentArchitect, prompt+rewriteAsk(over, plan), extra, "", &shorter, runOpts{Audit: audit}); err == nil && shorter.Decision == "APPROVE" {
+			plan, runID = shorter, id
+		}
+		if over = planOverBudget(&plan); over != "" {
+			f.event(wo.ID, "architect", "budget_exceeded", "Plan accepted over budget: "+over, nil)
+		}
 	}
 	if plan.Decision == "CLARIFY" {
 		q := plan.QuestionText
@@ -161,15 +171,88 @@ func findClarification(list []model.Clarification, question string) *model.Clari
 // before the next one goes to a human.
 const maxForemanAnswers = 2
 
-// intake has the Foreman turn the request into the brief the Architect plans from.
+// Word budgets for the artifacts agents write (docs/contract-flow/SPEC.md); the check allows 20% slack on the "~" figures.
+const (
+	briefWords = 350
+	specWords  = 750
+	taskWords  = 150
+	// maxHumanQuestions is how many questions one work order may put to a human.
+	maxHumanQuestions = 5
+)
+
+func overBudget(label, text string, budget int) string {
+	if n := len(strings.Fields(text)); n*5 > budget*6 {
+		return fmt.Sprintf("%s is %d words (budget %d)", label, n, budget)
+	}
+	return ""
+}
+
+func planOverBudget(p *planReply) string {
+	if p.Decision != "APPROVE" {
+		return ""
+	}
+	over := []string{overBudget("spec", p.Spec, specWords)}
+	for i, t := range p.Tasks {
+		over = append(over, overBudget(fmt.Sprintf("task %d objective", i+1), t.Objective, taskWords))
+	}
+	var out []string
+	for _, o := range over {
+		if o != "" {
+			out = append(out, o)
+		}
+	}
+	return strings.Join(out, "; ")
+}
+
+func rewriteAsk(over string, draft any) string {
+	raw, _ := json.Marshal(draft)
+	return "\n\nYour draft is over budget: " + over + ". Rewrite it within the budget: cut detail, keep every decision, rule and open question. Your draft:\n" +
+		string(raw) + "\nReply with ONLY the JSON object."
+}
+
+func humanAnswers(wo *model.WorkOrder) int {
+	n := 0
+	for _, c := range wo.Clarifications {
+		if c.By == "human" {
+			n++
+		}
+	}
+	return n
+}
+
+func unresolved(qs []openQuestion) []string {
+	out := make([]string, 0, len(qs))
+	for _, q := range qs {
+		out = append(out, "Unanswered, default taken: "+q.ask())
+	}
+	return out
+}
+
+// intake has the Foreman turn the request into the brief the Architect plans from. With open questions
+// it parks the order for a human, one question at a time; the answer re-enters here and updates the brief.
 func (f *Factory) intake(ctx context.Context, wo *model.WorkOrder, facts string) error {
 	f.event(wo.ID, "foreman", "intake_started", "Foreman briefing the Architect", nil)
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo), f.workspaceDir(wo.ID), wo.KBBaseSHA)
 	var r intakeReply
-	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, intakePrompt(wo, facts)+kbText,
-		map[string]string{"stage": "intake"}, "", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})
+	prompt := intakePrompt(wo, facts) + kbText
+	extra := map[string]string{"stage": "intake"}
+	opts := runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)}
+	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, prompt, extra, "", &r, opts)
 	if err != nil {
 		return err
+	}
+	if over := overBudget("brief", r.text(), briefWords); over != "" {
+		var shorter intakeReply
+		if _, id, err := f.runStructured(ctx, wo, model.AgentForeman, prompt+rewriteAsk(over, r), extra, "", &shorter, opts); err == nil {
+			r, runID = shorter, id
+		}
+		if over = overBudget("brief", r.text(), briefWords); over != "" {
+			f.event(wo.ID, "foreman", "budget_exceeded", "Brief accepted over budget: "+over, nil)
+		}
+	}
+	if humanAnswers(wo) >= maxHumanQuestions {
+		r.Assumptions = append(r.Assumptions, unresolved(r.OpenQuestions)...)
+		r.OpenQuestions = nil
 	}
 	brief := r.text()
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"brief": brief}); err != nil {
@@ -178,7 +261,15 @@ func (f *Factory) intake(ctx context.Context, wo *model.WorkOrder, facts string)
 	wo.Brief = brief
 	f.writeBriefDoc(ctx, wo)
 	f.event(wo.ID, "foreman", "brief_ready", "Foreman brief ready", map[string]any{"brief": brief, "run_id": runID})
-	return nil
+	if len(r.OpenQuestions) == 0 {
+		return nil
+	}
+	if wo.State == model.StateRequirement {
+		if err := f.step(ctx, wo, model.StateRequirement, model.StateDecomposition, "factory", "Brief needs a human answer"); err != nil {
+			return err
+		}
+	}
+	return f.askHuman(ctx, wo, "foreman", r.OpenQuestions[0].ask())
 }
 
 // foremanAnswers sends an Architect question to the Foreman. It reports true when

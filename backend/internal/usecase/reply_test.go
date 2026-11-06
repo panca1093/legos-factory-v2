@@ -41,16 +41,24 @@ func TestDecodeReplyRejectsSchemaViolations(t *testing.T) {
 
 func TestIntakeAnswerAndSpecSchemas(t *testing.T) {
 	var in intakeReply
-	if err := decodeReply(`{"brief":" ","constraints":["a"]}`, &in); err == nil {
-		t.Fatal("a blank brief must fail")
+	if err := decodeReply(`{"outcome":" ","constraints":["a"]}`, &in); err == nil {
+		t.Fatal("a blank outcome must fail")
 	}
-	if err := decodeReply(`{"brief":"Build X","constraints":["keep Y"],"risks":["Z"],"suggested_task_shape":"small"}`, &in); err != nil {
+	if err := decodeReply(`{"outcome":"Build X","open_questions":[{"question":"Which?"}]}`, &in); err == nil {
+		t.Fatal("an open question without a recommended answer must fail")
+	}
+	if err := decodeReply(`{"outcome":"Build X","why":"W","domain_invariants":["I"],"surfaces_touched":["S"],"constraints":["keep Y"],"out_of_scope":["O"],"assumptions":["A"],
+		"open_questions":[{"question":"q1","recommended":"r"},{"question":"q2","recommended":"r"},{"question":"q3","recommended":"r"},{"question":"q4","recommended":"r"}]}`, &in); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Build X", "Constraints:\n- keep Y", "Risks:\n- Z", "Suggested task shape: small"} {
+	for _, want := range []string{"Build X", "Why: W", "Domain invariants:\n- I", "Surfaces touched:\n- S", "Constraints:\n- keep Y",
+		"Out of scope:\n- O", "Assumptions:\n- A", "Open questions:\n- q1 Recommended: r.\n- q2"} {
 		if !strings.Contains(in.text(), want) {
 			t.Fatalf("brief text lacks %q:\n%s", want, in.text())
 		}
+	}
+	if len(in.OpenQuestions) != 3 || strings.Contains(in.text(), "q4") {
+		t.Fatalf("open questions are capped at 3: %+v", in.OpenQuestions)
 	}
 	var a foremanAnswerReply
 	if err := decodeReply(`{"decision":"ANSWER"}`, &a); err == nil {
