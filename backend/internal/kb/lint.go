@@ -95,6 +95,9 @@ func Lint(root string) ([]Violation, error) {
 				add("A", rel, "missing or empty type")
 			}
 		}
+		if path.Base(rel) == "log.md" { // log lines hold free text, not real links
+			return nil
+		}
 		text := string(data)
 		if n := len(lintWiki.FindAllString(text, -1)); n > 0 {
 			add("E", rel, "%d [[wikilink]] left", n)

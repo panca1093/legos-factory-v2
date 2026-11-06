@@ -48,6 +48,18 @@ func TestLintMissingRoot(t *testing.T) {
 	}
 }
 
+func TestLintIgnoresLinkLookalikesInLogs(t *testing.T) {
+	line := "* 10:00 `wo_1` **findings** (inspector) — see [x](missing.md), [[foo]] and </Users/x/y>\n"
+	vs := lintFixture(t, map[string]string{"projects/p/log.md": "# Log\n\n## 2026-11-06\n\n" + line})
+	if len(vs) != 0 {
+		t.Fatalf("log text is not links: %+v", vs)
+	}
+	vs = lintFixture(t, map[string]string{"projects/p/log.md": "# Log\n\n## yesterday\n\n" + line})
+	if len(vs) != 1 || vs[0].Gate != "D" {
+		t.Fatalf("[D] still applies to logs: %+v", vs)
+	}
+}
+
 func TestLintQueryLinkStripped(t *testing.T) {
 	vs := lintFixture(t, map[string]string{"a.md": "---\ntype: Note\n---\n\n[x](sub/b.md?v=1) [y](sub/b.md?v=1#h)\n"})
 	if len(vs) != 0 {

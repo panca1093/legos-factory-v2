@@ -115,7 +115,7 @@ func newRig(t *testing.T) *rig {
 	projects := &store.ProjectRepo{DB: db}
 	q := &fakeQueue{}
 	f.Proj, f.KB, f.Sched, f.Findings, f.Quality = projects, know, q, &store.FindingRepo{DB: db}, &store.QualityRepo{DB: db}
-	f.Catalog = &Cataloger{Knowledge: &JournalStore{KB: know, Proj: projects}, Proj: projects, Settings: &store.SettingsRepo{DB: db}, Log: slog.Default()}
+	f.Catalog = &Cataloger{Bundle: bundle, Log: slog.Default()}
 	f.Model = func(model.AgentRole, *model.WorkOrder) (string, string) { return "p", "m" }
 	f.DataDir = t.TempDir()
 	f.Sandbox = filesSandbox{}
@@ -413,8 +413,19 @@ func TestSimilarClarificationProposesDraft(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	prev := &model.WorkOrder{ID: "wo_prev", ProjectID: "p1", Title: "Earlier"}
-	r.f.Catalog.Record(ctx, prev, model.KnowledgeClarification, model.TrustHumanDecision, "human",
-		"Clarification: Should discount rounding go up or down?", "Question: Should discount rounding go up or down?\nAnswer: Always round down.")
+	prev.CreatedBy = r.wo.CreatedBy
+	if err := r.wos.Create(ctx, prev); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.wos.AppendEvent(ctx, prev.ID, "human", "clarification_answered", "Always round down.",
+		map[string]any{"question": "Should discount rounding go up or down?"}); err != nil {
+		t.Fatal(err)
+	}
+	// newer than the human answer, so it is met first and must be skipped
+	if _, err := r.wos.AppendEvent(ctx, prev.ID, "foreman", "clarification_answered", "Always round UP.",
+		map[string]any{"question": "Should discount rounding go up or down?"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateWaitingForHuman); err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +440,7 @@ func TestSimilarClarificationProposesDraft(t *testing.T) {
 		t.Fatalf("draft: %+v", d)
 	}
 	_, body, _ := r.know.Bundle.Read(d.Path)
-	if !strings.Contains(body, "The Foreman asked a similar question before") || !strings.Contains(body, "Always round down.") || !strings.Contains(body, "Round down as well.") {
+	if !strings.Contains(body, "The Foreman asked a similar question before") || !strings.Contains(body, "Always round down.") || !strings.Contains(body, "Round down as well.") || strings.Contains(body, "round UP") {
 		t.Fatalf("body: %s", body)
 	}
 }

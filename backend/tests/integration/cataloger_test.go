@@ -4,28 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
-
-	"legos-factory/backend/internal/model"
 )
-
-type knowledgeRecord struct {
-	ID         string   `json:"id"`
-	ProjectID  string   `json:"project_id"`
-	WOID       string   `json:"work_order_id"`
-	CommitSHA  string   `json:"commit_sha"`
-	RepoURL    string   `json:"repo_url"`
-	Kind       string   `json:"kind"`
-	Trust      string   `json:"trust"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	SourceRefs []string `json:"source_refs"`
-}
 
 var sha40 = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -61,29 +47,27 @@ func (ta *testApp) plan(t *testing.T, woID string) {
 	ta.awaitReviewed(t, woID)
 }
 
-func (ta *testApp) knowledge(t *testing.T, session, query string) (int, []knowledgeRecord) {
+func (ta *testApp) projectLog(projectID string) string {
+	data, _ := os.ReadFile(filepath.Join(ta.a.Server.Catalog.Bundle.Root(), "projects", projectID, "log.md"))
+	return string(data)
+}
+
+func awaitLogLine(t *testing.T, ta *testApp, projectID, want string) string {
 	t.Helper()
-	status, body := ta.doAs(t, session, "GET", "/api/v1/knowledge"+query, "")
-	var out struct {
-		Records []knowledgeRecord `json:"records"`
-	}
-	if status == 200 {
-		if err := json.Unmarshal([]byte(body), &out); err != nil {
-			t.Fatalf("knowledge json: %v %s", err, body)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, l := range strings.Split(ta.projectLog(projectID), "\n") {
+			if strings.Contains(l, want) {
+				return l
+			}
 		}
+		time.Sleep(150 * time.Millisecond)
 	}
-	return status, out.Records
+	t.Fatalf("no log line containing %q in:\n%s", want, ta.projectLog(projectID))
+	return ""
 }
 
-func byKind(records []knowledgeRecord) map[string][]knowledgeRecord {
-	m := map[string][]knowledgeRecord{}
-	for _, k := range records {
-		m[k.Kind] = append(m[k.Kind], k)
-	}
-	return m
-}
-
-func TestCatalogerKnowledgeLifecycle(t *testing.T) {
+func TestCatalogerJournalIsAProjectLog(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test")
 	}
@@ -91,18 +75,7 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 	dataDir := t.TempDir()
 	ta := bootAt(t, dataDir)
 
-	if status, body := ta.do(t, "PUT", "/api/v1/settings", `{"cataloger_summaries":true}`); status != 200 {
-		t.Fatalf("enable summaries: %d %s", status, body)
-	}
-
 	p1 := ta.createProject(t, "Greeter", repo)
-	legacy := &model.KnowledgeRecord{
-		ProjectID: p1, RepoURL: repo, Kind: "verification", Trust: model.TrustVerified, Actor: "builder",
-		Title: "Verification passed on revision 0 at legacy", Body: "legacy PASS record kept untouched",
-	}
-	if err := ta.a.Server.Catalog.Knowledge.Insert(context.Background(), legacy); err != nil {
-		t.Fatalf("seed legacy record: %v", err)
-	}
 	wo1 := ta.createWO(t, p1, "Greeter greeting", "Make the greeter greeting function available so the fixture contract test passes.")
 	ta.plan(t, wo1)
 	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+wo1+"/plan/decisions", `{"decision":"approve"}`); status != 202 {
@@ -127,74 +100,45 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 		t.Fatal("verified commit must not reach the source repository")
 	}
 
-	// DoD 1 + 2: durable records linked to the work order, commit and decisions
-	_, recs := ta.knowledge(t, ta.session, "?project_id="+p1+"&work_order_id="+wo1)
-	kinds := byKind(recs)
-	for kind, trust := range map[string]string{
-		"architect_review": "ai_interpretation", "plan_approved": "human_decision", "findings": "ai_interpretation",
-		"readiness": "verified", "pr_decision": "human_decision", "work_order_completed": "verified",
+	// the journal is one line per record in projects/<pid>/log.md
+	awaitLogLine(t, ta, p1, "`"+wo1+"` **work_order_completed** (cataloger)")
+	log := ta.projectLog(p1)
+	if !strings.HasPrefix(log, "# Log\n\n## ") {
+		t.Fatalf("project log must be an OKF log:\n%s", log)
+	}
+	for kind, actor := range map[string]string{
+		"architect_review": "architect", "plan_approved": "human", "findings": "inspector",
+		"readiness": "factory", "pr_decision": "human", "work_order_completed": "cataloger",
 	} {
-		if len(kinds[kind]) == 0 {
-			t.Fatalf("missing %s record; have %v", kind, keys(kinds))
-		}
-		if kinds[kind][0].Trust != trust {
-			t.Fatalf("%s trust = %s, want %s", kind, kinds[kind][0].Trust, trust)
+		if !strings.Contains(log, "`"+wo1+"` **"+kind+"** ("+actor+")") {
+			t.Fatalf("missing %s line:\n%s", kind, log)
 		}
 	}
-	for _, k := range recs {
-		if k.WOID != wo1 || k.ProjectID != p1 || k.RepoURL != repo {
-			t.Fatalf("record not linked to its origin: %+v", k)
-		}
-		if strings.HasPrefix(k.Title, "Verification passed on revision") {
-			t.Fatalf("per-revision verification journal must not be written: %+v", k)
-		}
+	if n := strings.Count(log, "**work_order_completed**"); n != 1 {
+		t.Fatalf("want exactly one task summary line, got %d:\n%s", n, log)
 	}
 	for _, kind := range []string{"verification", "implementation"} {
-		if len(kinds[kind]) != 0 {
-			t.Fatalf("no new %s records expected for the work order: %+v", kind, kinds[kind])
+		if strings.Contains(log, "**"+kind+"**") {
+			t.Fatalf("no per-revision %s lines expected:\n%s", kind, log)
 		}
 	}
-	if len(kinds["work_order_completed"]) != 1 {
-		t.Fatalf("want exactly one task summary, got %+v", kinds["work_order_completed"])
+	if !strings.Contains(log, "Task summary: Greeter greeting (READY) — Goal: Greeter greeting") {
+		t.Fatalf("completion line must carry the summary:\n%s", log)
 	}
-	done := kinds["work_order_completed"][0]
-	if done.CommitSHA != woSHA || len(done.SourceRefs) == 0 {
-		t.Fatalf("completion must link the commit and prior records: %+v", done)
+	projDir := filepath.Join(ta.a.Server.Catalog.Bundle.Root(), "projects", p1)
+	if kn, _ := filepath.Glob(filepath.Join(projDir, "*", "kn_*.md")); len(kn) != 0 {
+		t.Fatalf("no kn_ record files may be written: %v", kn)
 	}
-	if !strings.HasPrefix(done.Title, "Task summary:") {
-		t.Fatalf("completion title must start with 'Task summary:': %q", done.Title)
+	if _, err := os.Stat(filepath.Join(projDir, "journal")); !os.IsNotExist(err) {
+		t.Fatalf("no journal directory may be created: %v", err)
 	}
-	for _, want := range []string{"Goal:", "Final verification:", "Open items / follow-up:", "Key decisions and rationale:", "Main changes:", "- go-test → PASS", "- go-vet → PASS"} {
-		if !strings.Contains(done.Body, want) {
-			t.Fatalf("task summary missing %q: %s", want, done.Body)
-		}
-	}
-	if strings.Contains(done.Body, "typecheck") {
-		t.Fatalf("task summary must use the fixture's check names, not typecheck: %s", done.Body)
-	}
-	if pr := kinds["pr_decision"][0]; pr.CommitSHA != woSHA || !contains(pr.SourceRefs, "pr:local:"+wo1+"@"+woSHA) {
-		t.Fatalf("PR decision must reference the local PR and commit: %+v", pr)
+	if root, _ := os.ReadFile(filepath.Join(ta.a.Server.Catalog.Bundle.Root(), "log.md")); strings.Contains(string(root), "pr_decision") {
+		t.Fatalf("project log lines must not reach the root log:\n%s", root)
 	}
 
-	// pre-existing journal entries are never rewritten
-	_, seededAfter := ta.knowledge(t, ta.session, "?project_id="+p1+"&q=legacy")
-	var got *knowledgeRecord
-	for i := range seededAfter {
-		if seededAfter[i].ID == legacy.ID {
-			got = &seededAfter[i]
-		}
-	}
-	if got == nil || got.Title != legacy.Title || got.Body != legacy.Body || got.Kind != "verification" {
-		t.Fatalf("legacy record changed: before %+v after %+v", legacy, got)
-	}
-
-	// per-revision verification history stays in the quality checks and run events
-	if status, body := ta.do(t, "GET", "/api/v1/work-orders/"+wo1+"/quality", ""); status != 200 || !strings.Contains(body, `"commit_sha":"`+woSHA+`"`) {
-		t.Fatalf("final-revision checks must be stamped with the commit: %d %s", status, tail(body, 600))
-	}
-
+	// decisions the summary reads are events
 	evs := ta.eventKinds(t, wo1)
-	for _, kind := range []string{"verification_started", "verification_passed"} {
+	for _, kind := range []string{"plan_approved", "pr_approved", "verification_started", "verification_passed"} {
 		if !hasEvent(evs, kind) {
 			t.Fatalf("run log must keep %s; have %v", kind, evs)
 		}
@@ -202,46 +146,20 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 	if !hasEvent(evs, "check_pass") && !hasEvent(evs, "check_passed") {
 		t.Fatalf("run log must keep per-check events; have %v", evs)
 	}
-
-	// optional AI summary: one run, non-authoritative, citing its sources
-	summary := awaitKnowledge(t, ta, "?work_order_id="+wo1+"&trust=ai_interpretation", "summary")
-	if !strings.Contains(summary.Title, "AI-generated") || !hasPrefix(summary.SourceRefs, "knowledge:") || !hasPrefix(summary.SourceRefs, "run:") {
-		t.Fatalf("summary must be labelled and cite sources: %+v", summary)
+	if status, body := ta.do(t, "GET", "/api/v1/work-orders/"+wo1+"/quality", ""); status != 200 || !strings.Contains(body, `"commit_sha":"`+woSHA+`"`) {
+		t.Fatalf("final-revision checks must be stamped with the commit: %d %s", status, tail(body, 600))
 	}
 
-	// DoD 3: a later work order in the same project retrieves that knowledge during planning
-	wo2 := ta.createWO(t, p1, "Greeter greeting follow-up", "Extend the greeter greeting function for the fixture contract test.")
-	ta.plan(t, wo2)
-	refs := retrievedRefs(t, ta, wo2)
-	ids := map[string]bool{}
-	for _, k := range recs {
-		ids["knowledge:"+k.ID] = true
-	}
-	hit := false
-	for _, r := range refs {
-		hit = hit || ids[r]
-	}
-	if !hit {
-		t.Fatalf("second work order should retrieve work order 1 knowledge, got refs %v", refs)
+	// the record endpoints are gone
+	for _, path := range []string{"/api/v1/knowledge", "/api/v1/knowledge/kn_x"} {
+		if status, _ := ta.do(t, "GET", path, ""); status != 404 {
+			t.Fatalf("GET %s: want 404, got %d", path, status)
+		}
 	}
 
-	// a different project never sees it
-	p2 := ta.createProject(t, "Other", fixtureRepo(t))
-	wo3 := ta.createWO(t, p2, "Greeter greeting elsewhere", "Make the greeter greeting function available so the fixture contract test passes.")
-	ta.plan(t, wo3)
-	if refs := retrievedRefs(t, ta, wo3); len(refs) != 0 {
-		t.Fatalf("knowledge leaked across projects: %v", refs)
-	}
-
-	// DoD 4: project and workspace boundaries
+	// project and workspace boundaries
 	eng := ta.loginAs(t, "eng@example.com", "Eng")
-	if status, recs := ta.knowledge(t, eng, ""); status != 200 || len(recs) != 0 {
-		t.Fatalf("non-member must see no knowledge: %d %d", status, len(recs))
-	}
-	for _, path := range []string{
-		"/api/v1/knowledge?project_id=" + p1, "/api/v1/knowledge/" + done.ID,
-		"/api/v1/projects/" + p1, "/api/v1/work-orders/" + wo1, "/api/v1/work-orders/" + wo1 + "/activity",
-	} {
+	for _, path := range []string{"/api/v1/projects/" + p1, "/api/v1/work-orders/" + wo1, "/api/v1/work-orders/" + wo1 + "/activity"} {
 		if status, body := ta.doAs(t, eng, "GET", path, ""); status != 404 {
 			t.Fatalf("non-member GET %s: want 404, got %d %s", path, status, body)
 		}
@@ -258,29 +176,13 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 	if status, body := ta.do(t, "POST", "/api/v1/projects/"+p1+"/members", `{"email":"eng@example.com"}`); status != 200 {
 		t.Fatalf("owner adds member: %d %s", status, body)
 	}
-	_, visible := ta.knowledge(t, eng, "")
-	if len(visible) == 0 {
-		t.Fatal("member should now see p1 knowledge")
-	}
-	for _, k := range visible {
-		if k.ProjectID != p1 {
-			t.Fatalf("member of p1 saw %s knowledge", k.ProjectID)
-		}
-	}
-	if status, _ := ta.doAs(t, eng, "GET", "/api/v1/knowledge?project_id="+p2, ""); status != 404 {
-		t.Fatalf("p2 knowledge must stay hidden, got %d", status)
-	}
 
-	// DoD 5: knowledge survives a restart
-	_, before := ta.knowledge(t, ta.session, "?project_id="+p1)
+	// the log survives a restart
+	before := ta.projectLog(p1)
 	ta.stop()
 	ta2 := bootAt(t, dataDir)
-	_, after := ta2.knowledge(t, ta2.session, "?project_id="+p1)
-	if len(after) == 0 || len(after) != len(before) {
-		t.Fatalf("knowledge lost across restart: before %d after %d", len(before), len(after))
-	}
-	if _, found := ta2.knowledge(t, ta2.session, "?project_id="+p1+"&q=greeter"); len(found) == 0 {
-		t.Fatal("keyword search must work after restart")
+	if after := ta2.projectLog(p1); after != before {
+		t.Fatalf("project log changed across restart:\n%s\n---\n%s", before, after)
 	}
 }
 
@@ -298,48 +200,6 @@ func (ta *testApp) loginAs(t *testing.T, email, name string) string {
 	return sid
 }
 
-func retrievedRefs(t *testing.T, ta *testApp, woID string) []string {
-	t.Helper()
-	status, body := ta.do(t, "GET", "/api/v1/work-orders/"+woID+"/activity", "")
-	if status != 200 {
-		t.Fatalf("activity: %d %s", status, body)
-	}
-	var out struct {
-		Events []struct {
-			Kind    string         `json:"kind"`
-			Payload map[string]any `json:"payload"`
-		} `json:"events"`
-	}
-	json.Unmarshal([]byte(body), &out)
-	var refs []string
-	for _, e := range out.Events {
-		if e.Kind != "knowledge_retrieved" {
-			continue
-		}
-		list, _ := e.Payload["refs"].([]any)
-		for _, r := range list {
-			refs = append(refs, fmt.Sprint(r))
-		}
-	}
-	return refs
-}
-
-func awaitKnowledge(t *testing.T, ta *testApp, query, kind string) knowledgeRecord {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		_, recs := ta.knowledge(t, ta.session, query)
-		for _, k := range recs {
-			if k.Kind == kind {
-				return k
-			}
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	t.Fatalf("no %s knowledge record for %s", kind, query)
-	return knowledgeRecord{}
-}
-
 func gitOut(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
@@ -347,30 +207,4 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %s", args, out)
 	}
 	return strings.TrimSpace(string(out))
-}
-
-func contains(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
-
-func hasPrefix(list []string, prefix string) bool {
-	for _, s := range list {
-		if strings.HasPrefix(s, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func keys(m map[string][]knowledgeRecord) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
 }

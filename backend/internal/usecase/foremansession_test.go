@@ -376,7 +376,7 @@ func TestCancelClosesTheForemanSession(t *testing.T) {
 	h := &sessHarness{answer: answerJSON}
 	r := sessionRig(t, h)
 	r.f.Sched = &fakeQueue{}
-	r.f.Catalog = &Cataloger{Knowledge: &JournalStore{KB: r.know, Proj: r.f.Proj}, Proj: r.f.Proj, Settings: nil, Log: r.f.Log}
+	r.f.Catalog = &Cataloger{Bundle: r.know.Bundle, Log: r.f.Log}
 	r.plan(t)
 	if err := r.f.Cancel(ctx, r.wo.ID); err != nil {
 		t.Fatal(err)

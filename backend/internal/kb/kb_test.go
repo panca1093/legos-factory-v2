@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"legos-factory/backend/internal/model"
 )
@@ -181,6 +182,57 @@ func TestBundleResetAndRejects(t *testing.T) {
 		}
 		if _, err := b.Remove(bad, "m"); err == nil {
 			t.Errorf("Remove(%q) must fail", bad)
+		}
+	}
+}
+
+func TestBundleAppendWritesProjectLogOnly(t *testing.T) {
+	root := t.TempDir()
+	b, err := OpenBundle(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func(orig func() time.Time) { now = orig }(now)
+	day := func(s string) {
+		now = func() time.Time { d, _ := time.ParseInLocation("2006-01-02 15:04", s, jakarta); return d }
+	}
+
+	day("2026-11-05 23:50")
+	if _, err := b.Append("projects/p1/log.md", Clock(), "* 23:50 `a` **k** (x) — first", "m1"); err != nil {
+		t.Fatal(err)
+	}
+	day("2026-11-06 00:10")
+	if _, err := b.Append("projects/p1/log.md", Clock(), "* 00:10 `a`\n **k** (x) — second", "m2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.Append("projects/p1/log.md", Clock(), "* 00:11 `a` **k** (x) — third", "m3"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, _ := os.ReadFile(filepath.Join(root, "projects", "p1", "log.md"))
+	want := "# Log\n\n## 2026-11-06\n\n* 00:11 `a` **k** (x) — third\n* 00:10 `a` **k** (x) — second\n\n## 2026-11-05\n\n* 23:50 `a` **k** (x) — first\n"
+	if string(got) != want {
+		t.Fatalf("project log:\n%s\nwant:\n%s", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(root, "log.md")); !os.IsNotExist(err) {
+		t.Fatalf("root log must not be touched by Append: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "projects", "p1", "index.md")); !os.IsNotExist(err) {
+		t.Fatalf("Append must not generate an index: %v", err)
+	}
+	if out, _ := b.git("log", "--format=%s"); out != "m3\nm2\nm1\n" {
+		t.Fatalf("one commit per append: %q", out)
+	}
+
+	if _, err := b.Write("projects/p1/doc.md", map[string]any{"title": "d"}, "x", "wrote doc"); err != nil {
+		t.Fatal(err)
+	}
+	if root, _ := os.ReadFile(filepath.Join(root, "log.md")); strings.Count(string(root), "* **Update**") != 1 {
+		t.Fatalf("Write still logs once to the root log:\n%s", root)
+	}
+	for _, bad := range []string{"log.md", "projects/log.md", "projects/p1/x.md", "projects/../log.md", "projects/p1/sub/log.md", "../log.md"} {
+		if _, err := b.Append(bad, Clock(), "x", "m"); err == nil {
+			t.Fatalf("Append(%q) should be refused", bad)
 		}
 	}
 }
