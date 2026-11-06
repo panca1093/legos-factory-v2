@@ -118,6 +118,47 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	return &wo, nil
 }
 
+// Delete removes the order only if it still matches the snapshot the usecase
+// checked and no job is claimed or running; runs, events, findings, checks,
+// plan tasks and jobs cascade, usage and knowledge records keep their rows
+// with wo_id cleared.
+func (r *WorkOrderRepo) Delete(ctx context.Context, wo *model.WorkOrder) error {
+	return deleteSnapshot(ctx, r.DB, wo)
+}
+
+type execQuerier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func unixOrNil(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.Unix()
+}
+
+func deleteSnapshot(ctx context.Context, q execQuerier, wo *model.WorkOrder) error {
+	res, err := q.ExecContext(ctx, `DELETE FROM work_orders WHERE id = ? AND state = ? AND pr_ref = ?
+		AND pr_merged_at IS ? AND pr_closed_at IS ? AND pr_track_failed_at IS ?
+		AND NOT EXISTS (SELECT 1 FROM jobs WHERE wo_id = work_orders.id AND state IN ('CLAIMED','RUNNING'))`,
+		wo.ID, string(wo.State), wo.PRRef, unixOrNil(wo.PRMergedAt), unixOrNil(wo.PRClosedAt), unixOrNil(wo.PRTrackFailedAt))
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return nil
+	}
+	var present int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM work_orders WHERE id = ?`, wo.ID).Scan(&present); err != nil {
+		return err
+	}
+	if present == 0 {
+		return model.ErrWorkOrderNotFound
+	}
+	return fmt.Errorf("%w: WO %s changed or still has a running job; try again once it has stopped", model.ErrStateConflict, wo.ID)
+}
+
 // UpdateState persists a state change; the conditional WHERE makes the
 // validated transition atomic (a concurrent writer cannot double-apply it).
 func (r *WorkOrderRepo) UpdateState(ctx context.Context, id string, s model.State) error {

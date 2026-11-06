@@ -1,6 +1,7 @@
 package app
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -18,5 +19,13 @@ func TestLoadConfigTypeSafeModel(t *testing.T) {
 	c, err := LoadConfig()
 	if err != nil || c.TypeSafeModel != "jev-1.14.0" {
 		t.Fatalf("pinned model: %v %+v", err, c)
+	}
+}
+
+func TestLoadConfigMakesDataDirAbsolute(t *testing.T) {
+	t.Setenv("FACTORY_DATA_DIR", "./data")
+	c, err := LoadConfig()
+	if err != nil || !filepath.IsAbs(c.DataDir) {
+		t.Fatalf("data dir %q err %v", c.DataDir, err)
 	}
 }

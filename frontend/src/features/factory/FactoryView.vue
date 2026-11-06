@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { Plus, Folder, Laptop, X } from "lucide-vue-next";
+import {
+  Plus,
+  Folder,
+  Laptop,
+  X,
+  MoreHorizontal,
+  Trash2,
+} from "lucide-vue-next";
 import "./factory.css";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
@@ -11,8 +18,10 @@ import SearchField from "../../components/ui/SearchField.vue";
 import ActorBadge from "./ActorBadge.vue";
 import NewWorkOrderDrawer from "./work-orders/NewWorkOrderDrawer.vue";
 import AddProjectDialog from "./work-orders/AddProjectDialog.vue";
+import DeleteDialog from "./work-orders/DeleteDialog.vue";
 import {
   actorOf,
+  isDeletable,
   isFinished,
   orderStatus,
   projectColor,
@@ -23,7 +32,9 @@ import {
   isRunning,
   isTodo,
 } from "../../composables/presentation";
+import { useToast } from "../../composables/useToast";
 import type { WorkOrder } from "../../types/api";
+const { toast } = useToast();
 const factory = useFactory(),
   session = useSession(),
   route = useRoute(),
@@ -32,6 +43,10 @@ const search = ref(""),
   help = ref(false),
   newProject = ref(false),
   profile = ref(false),
+  menu = ref(false),
+  deleting = ref(false),
+  deleteBusy = ref(false),
+  deleteError = ref(""),
   error = ref(""),
   loading = ref(false);
 const projectID = computed(() =>
@@ -43,6 +58,36 @@ const status = computed(() =>
 const selected = computed(() =>
   factory.projects.find((p) => p.id === projectID.value),
 );
+const projectOrders = computed(() =>
+  factory.workOrders.filter((w) => w.project_id === selected.value?.id),
+);
+const activeCount = computed(
+  () => projectOrders.value.filter((w) => !isDeletable(w)).length,
+);
+const blocked = computed(() =>
+  activeCount.value
+    ? `${activeCount.value} work order${activeCount.value === 1 ? " is" : "s are"} still active. Cancel or finish ${activeCount.value === 1 ? "it" : "them"} before deleting this project.`
+    : "",
+);
+function askDelete() {
+  deleteError.value = "";
+  deleting.value = true;
+}
+async function confirmDelete() {
+  if (!selected.value) return;
+  deleteBusy.value = true;
+  deleteError.value = "";
+  try {
+    await factory.deleteProject(selected.value.id);
+    deleting.value = false;
+    setQuery("project", "all");
+    toast("Project deleted");
+  } catch (e) {
+    deleteError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    deleteBusy.value = false;
+  }
+}
 const showNew = computed(() => route.query.new === "1");
 const filtered = computed(() =>
   factory.workOrders.filter(
@@ -214,6 +259,21 @@ onMounted(load);
       >
         Project profile
       </button>
+      <Popover v-if="selected && session.canWrite" v-model:open="menu">
+        <template #trigger="{ toggle }"
+          ><button
+            class="lg-btn small ghost"
+            aria-label="Project actions"
+            aria-haspopup="true"
+            :aria-expanded="menu"
+            @click="toggle"
+          >
+            <MoreHorizontal class="icon" /></button
+        ></template>
+        <button class="danger-text" @click="askDelete">
+          <Trash2 class="icon" />Delete project…
+        </button>
+      </Popover>
       <SearchField
         v-model="search"
         label="Filter work orders"
@@ -316,6 +376,30 @@ onMounted(load);
       }
     "
   />
+  <DeleteDialog
+    :open="deleting"
+    title="Delete this project?"
+    confirm-label="Delete project"
+    :busy="deleteBusy"
+    :blocked="blocked"
+    :error="deleteError"
+    @close="deleting = false"
+    @confirm="confirmDelete"
+  >
+    <p class="small">
+      <strong>{{ selected?.name }}</strong> and
+      <strong data-test="delete-count"
+        >{{ projectOrders.length }} work order{{
+          projectOrders.length === 1 ? "" : "s"
+        }}</strong
+      >
+      with their history will be permanently deleted. This cannot be undone.
+    </p>
+    <p class="small muted">
+      Your local folders and any GitHub pull requests or branches are not
+      touched.
+    </p>
+  </DeleteDialog>
   <AppDialog
     :open="profile"
     :title="selected?.name ?? 'Project'"

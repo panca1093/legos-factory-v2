@@ -64,6 +64,15 @@ export const isTodo = (w: WorkOrder) =>
 export const isRunning = (w: WorkOrder) =>
   !isFinished(w) && !isNeedsYou(w) && !isTodo(w);
 export const isActive = (w: WorkOrder) => !isFinished(w);
+// Mirrors the server rule for DELETE /work-orders/:id (409 otherwise).
+export const isDeletable = (w: WorkOrder) =>
+  w.state === "CANCELLED" ||
+  w.state === "BLOCKED" ||
+  (w.state === "READY" &&
+    (!w.pr_ref ||
+      !!w.pr_merged_at ||
+      !!w.pr_closed_at ||
+      !!w.pr_track_failed_at));
 
 export const stages = ["Brief", "Plan", "Build", "Review", "Ship"] as const;
 export const stageTabs = ["plan", "plan", "progress", "review", "changes"];

@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 import { subscribe, type LiveEvent } from "../services/events/sse";
 import {
   api,
+  ApiError,
   type Connection,
   type Finding,
   type IssueDraft,
@@ -17,6 +18,10 @@ import {
   type WOEvent,
   type WODiff,
 } from "../types/api";
+
+const ignoreGone = (e: unknown) => {
+  if (!(e instanceof ApiError && e.status === 404)) throw e;
+};
 
 export interface WODetail {
   work_order: WorkOrder;
@@ -212,6 +217,20 @@ export const useFactory = defineStore("factory", {
       ];
       await this.refreshWorkOrders().catch(() => {});
       return res;
+    },
+    async deleteWorkOrder(id: string) {
+      await api.del(`/api/v1/work-orders/${id}`).catch(ignoreGone);
+      this.workOrders = this.workOrders.filter((w) => w.id !== id);
+      if (this.selectedID === id) this.clearDetail();
+    },
+    async deleteProject(id: string) {
+      await api.del(`/api/v1/projects/${id}`).catch(ignoreGone);
+      const gone = new Set(
+        this.workOrders.filter((w) => w.project_id === id).map((w) => w.id),
+      );
+      this.projects = this.projects.filter((p) => p.id !== id);
+      this.workOrders = this.workOrders.filter((w) => !gone.has(w.id));
+      if (gone.has(this.selectedID)) this.clearDetail();
     },
     async loadDetail(id: string) {
       const request = ++this.requestID;
