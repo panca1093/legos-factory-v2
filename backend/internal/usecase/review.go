@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -41,44 +42,153 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 		return err
 	}
 	f.event(wo.ID, "foreman", "plan_review_started", "Foreman reviewing the Architect's plan", nil)
+	var prev []reviewFinding
+	scoped := false
+	if wo.PlanRevisions > 0 { // a re-review inside the same gate budget checks the last round's criticals only
+		if e, err := f.WO.LatestEvent(ctx, wo.ID, "plan_reviewed"); err == nil && e != nil {
+			prev, scoped = payloadFindings(e.Payload), true
+		}
+	}
 	var r reviewReply
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+taskList(tasks), f.workspaceDir(wo.ID), wo.KBBaseSHA)
-	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanReviewPrompt(wo, tasks)+kbText,
+	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanReviewPrompt(wo, tasks, criticals(prev), scoped)+kbText,
 		map[string]string{"stage": "review", "clarification_answer": wo.ClarifAnswer},
 		"", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})
 	if err != nil {
 		return err
 	}
+	findings := r.Findings
+	if scoped {
+		findings = mergeFindings(prev, r)
+	}
+	r.Findings = findings
 	review := r.text()
 	f.Catalog.Record(ctx, wo, model.KnowledgePlanReview, model.TrustAIInterpretation, "foreman",
 		"Foreman plan review notes", review, "run:"+runID)
-	f.event(wo.ID, "foreman", "plan_reviewed", "Foreman review notes ready", map[string]any{"notes": review, "run_id": runID})
-	return f.planGate(ctx, wo, tasks, review)
+	f.event(wo.ID, "foreman", "plan_reviewed", "Foreman review notes ready", map[string]any{"notes": review, "findings": findings, "coverage": r.Coverage, "run_id": runID})
+	if asked, err := f.settleRequirementFindings(ctx, wo, findings, prev); asked || err != nil {
+		return err
+	}
+	return f.planGate(ctx, wo, tasks, findings, r.Coverage)
 }
 
-// planRevisionNotes rebuilds the Architect's revision note from the stored gate and Foreman events of the revision that was requested.
+func criticals(fs []reviewFinding) []reviewFinding {
+	var out []reviewFinding
+	for _, f := range fs {
+		if f.Severity == "critical" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// payloadFindings reads the findings back from a stored plan_reviewed event.
+func payloadFindings(payload map[string]any) []reviewFinding {
+	raw, _ := json.Marshal(payload["findings"])
+	var out []reviewFinding
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+// mergeFindings is the analysis after a scoped re-review: the previous
+// findings minus the criticals the Foreman marked resolved, plus new ones.
+// A critical without a status stays unresolved.
+func mergeFindings(prev []reviewFinding, r reviewReply) []reviewFinding {
+	resolved := map[string]bool{}
+	for _, s := range r.Resolved {
+		resolved[s.ID] = s.Status == "resolved"
+	}
+	out := []reviewFinding{}
+	for _, f := range prev {
+		if f.Severity != "critical" || !resolved[f.ID] {
+			out = append(out, f)
+		}
+	}
+	return append(out, r.Findings...)
+}
+
+// settleRequirementFindings handles the Foreman's own findings. A new
+// requirement-layer critical either asks the human (returns asked) or amends
+// the brief with its fix; the Architect then revises through the gate.
+func (f *Factory) settleRequirementFindings(ctx context.Context, wo *model.WorkOrder, findings, prev []reviewFinding) (asked bool, err error) {
+	seen := map[string]bool{}
+	for _, p := range prev {
+		seen[p.ID] = true
+	}
+	var amends []string
+	for _, fd := range criticals(findings) {
+		if fd.Layer != "requirement" || seen[fd.ID] {
+			continue
+		}
+		if q := strings.TrimSpace(fd.Question); q != "" {
+			return true, f.askHuman(ctx, wo, "foreman", q)
+		}
+		amends = append(amends, "- "+strings.TrimSpace(fd.Fix))
+	}
+	if len(amends) == 0 {
+		return false, nil
+	}
+	brief := strings.TrimRight(wo.Brief, "\n") + "\n\nAmendments from plan review:\n" + strings.Join(amends, "\n")
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"brief": brief}); err != nil {
+		return false, err
+	}
+	wo.Brief = brief
+	f.writeBriefDoc(ctx, wo)
+	f.event(wo.ID, "foreman", "brief_amended", "Foreman amended the brief after plan review", map[string]any{"amendments": amends})
+	return false, nil
+}
+
+// planRevisionNotes rebuilds the Architect's revision note from the stored gate event of the revision that was requested.
 func (f *Factory) planRevisionNotes(ctx context.Context, wo *model.WorkOrder) string {
 	e, err := f.WO.LatestEvent(ctx, wo.ID, "plan_revision_requested")
 	if err != nil || e == nil {
 		return "Plan gate requested a revision; see the last plan_gate event in the activity trail."
 	}
-	notes := "Plan gate: " + e.Message
-	if r, err := f.WO.LatestEvent(ctx, wo.ID, "plan_reviewed"); err == nil && r != nil {
-		if s, _ := r.Payload["notes"].(string); s != "" {
-			notes += "\n\nForeman review: " + s
-		}
-	}
-	return notes
+	return "Plan gate: " + e.Message
 }
 
-func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []model.Task, review string) error {
+// builderNotesBy marks the clarification entries that carry the plan review's high and low notes to the Builder.
+const builderNotesBy = "plan_review"
+
+// storeBuilderNotes replaces the previous review notes in the clarification log with the current ones; the Builder prompt already prints that log.
+func (f *Factory) storeBuilderNotes(ctx context.Context, wo *model.WorkOrder, findings []reviewFinding, gateNotes []string) error {
+	log, hadNotes := []model.Clarification{}, false
+	for _, c := range wo.Clarifications {
+		if c.By == builderNotesBy {
+			hadNotes = true
+		} else {
+			log = append(log, c)
+		}
+	}
+	kept := len(log)
+	for _, fd := range findings {
+		if fd.Severity != "critical" {
+			log = append(log, model.Clarification{Question: fmt.Sprintf("Note from plan review (%s, %s)", fd.Severity, strings.TrimSpace(fd.Cites)), Answer: strings.TrimSpace(fd.Issue) + " " + strings.TrimSpace(fd.Fix), By: builderNotesBy})
+		}
+	}
+	for _, n := range gateNotes {
+		log = append(log, model.Clarification{Question: "Note from plan gate", Answer: n, By: builderNotesBy})
+	}
+	if len(log) == kept && !hadNotes {
+		return nil
+	}
+	raw, _ := json.Marshal(log)
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"clarif_log": string(raw)}); err != nil {
+		return err
+	}
+	wo.Clarifications = log
+	return nil
+}
+
+func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []model.Task, findings []reviewFinding, coverage []reviewCoverage) error {
 	in := PlanGateInput{
 		Request:       wo.Title + "\n\n" + wo.Objective,
 		Criteria:      splitCriteria(wo.Acceptance),
 		Brief:         wo.Brief,
 		Spec:          wo.Spec,
 		Tasks:         gateTasks(tasks),
-		ForemanReview: review,
+		Findings:      findings,
+		Coverage:      coverage,
 		PlanRevisions: wo.PlanRevisions,
 	}
 	state, qs := planGateState(in)
@@ -89,6 +199,9 @@ func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []mod
 	}
 	switch out.Outcome {
 	case GateApprove:
+		if err := f.storeBuilderNotes(ctx, wo, findings, out.Builder); err != nil {
+			return err
+		}
 		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "approved"}); err != nil {
 			return err
 		}
@@ -100,8 +213,11 @@ func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []mod
 			return err
 		}
 		f.event(wo.ID, "factory", "plan_revision_requested", out.Note, map[string]any{"revision": revisions})
-		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": "Plan gate: " + out.Note + "\n\nForeman review: " + review})
+		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": "Plan gate: " + out.Note})
 	default: // escalate: the order stays in ARCHITECT_REVIEW and the human approves or revises
+		if err := f.storeBuilderNotes(ctx, wo, findings, out.Builder); err != nil {
+			return err
+		}
 		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "approved"}); err != nil {
 			return err
 		}

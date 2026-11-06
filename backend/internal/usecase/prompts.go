@@ -209,9 +209,41 @@ func diffSection(files []FileDiff) string {
 	return b.String()
 }
 
-func foremanReviewPrompt(wo *model.WorkOrder, tasks []model.Task) string {
+// foremanReviewPrompt asks for the contract analysis. On a re-review (scoped)
+// prev holds the critical findings of the last round and the Foreman only
+// checks those, plus a short regression scan.
+func foremanReviewPrompt(wo *model.WorkOrder, tasks []model.Task, prev []reviewFinding, scoped bool) string {
+	task := `Analyse the contract (spec, acceptance criteria and plan) against the brief. Read only; you do not approve
+or reject: a separate gate decides from your findings. Report at most 10 findings. Severity:
+- critical: a defect that stops the Builder from building the right thing. It MUST cite the contract
+  ("c2", "spec: decisions 3", "brief: constraint 1"); a critical finding without a citation is invalid.
+- high / low: worth knowing, does not block. These go to the Builder as notes.
+Layer: "contract" when the spec or plan is incomplete or wrong (the Architect fixes it); "requirement"
+when the brief itself is wrong or silent (you fix it). For a requirement finding put the brief change in "fix",
+or put the question in "question" when only a human can decide it.
+Also state, for every acceptance criterion, how the spec's AC -> verification table verifies it: "test", "check" or "missing".`
+	shape := `{"findings":[{"id":"F1","severity":"critical|high|low","layer":"contract|requirement","cites":"c2","issue":"...","fix":"...","question":"only for a requirement finding that needs a human"}],
+ "coverage":[{"criterion":"c1","verification":"test|check|missing"}]}`
+	if scoped {
+		var b strings.Builder
+		for _, f := range prev {
+			b.WriteString("- " + findingLine(f) + "\n")
+		}
+		if b.Len() == 0 {
+			b.WriteString("(none)\n")
+		}
+		task = `This is a re-review after the Architect revised the contract. Do NOT run a fresh full review.
+1. For each previous critical finding below, say whether the revised contract resolves it.
+2. Run a short regression scan for problems the revision introduced. A new critical finding is allowed only
+   when it cites the contract; anything else is high or low.
+Previous critical findings:
+` + b.String()
+		shape = `{"resolved":[{"id":"F1","status":"resolved|unresolved"}],
+ "findings":[<only NEW findings from the regression scan, same shape as before; [] when none>],
+ "coverage":[{"criterion":"c1","verification":"test|check|missing"}]}`
+	}
 	return fmt.Sprintf(`You are the Foreman, orchestrating a software engineering team. The Architect drafted
-the plan below. Review it independently before any code is written.
+the contract below. Review it independently before any code is written.
 
 Work order: %s
 Objective:
@@ -224,16 +256,11 @@ Architect's spec:
 
 Plan:
 %s
-Check requirement completeness, task dependencies, scope and assumptions, edge cases,
-risks, testing strategy and coverage of every acceptance criterion.
-
-You do not approve or reject the plan: write your review notes only. A separate gate decides
-from them. Name every problem you find and say plainly when you find none.
+%s
 
 Respond with ONLY a JSON object:
-{"notes":"<issues found, or that the plan is sound>",
- "coverage":[{"criterion":"c1","remark":"<which task covers it, or that none does>"}]}`,
-		wo.Title, wo.Objective, criteriaSection(splitCriteria(wo.Acceptance)), briefSection(wo)+clarification(wo), wo.Spec, scopedTaskList(tasks))
+%s`,
+		wo.Title, wo.Objective, criteriaSection(splitCriteria(wo.Acceptance)), briefSection(wo)+clarification(wo), wo.Spec, scopedTaskList(tasks), task, shape)
 }
 
 func architectVerifyPrompt(wo *model.WorkOrder, tasks []model.Task, diff []FileDiff, checks string) string {

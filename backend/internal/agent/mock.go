@@ -162,8 +162,8 @@ func (h *MockHarness) foremanReview(req model.AgentRequest, res model.AgentResul
 		return finishJSON(res, map[string]any{"notes": "Scripted validation: the work matches the acceptance criteria."})
 	}
 	return finishJSON(res, map[string]any{
-		"notes":    "Scripted review: the plan covers the acceptance criteria.",
-		"coverage": []map[string]string{{"criterion": "c1", "remark": "Covered by the implementation task."}},
+		"findings": []any{},
+		"coverage": []map[string]string{{"criterion": "c1", "verification": "check"}},
 	})
 }
 

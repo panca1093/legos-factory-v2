@@ -263,6 +263,9 @@ func (f *Factory) writeBriefDoc(ctx context.Context, wo *model.WorkOrder) {
 			ctxText, cons := splitBrief(wo.Brief)
 			qa := make([]string, 0, len(wo.Clarifications)+1)
 			for _, c := range wo.Clarifications {
+				if c.By == builderNotesBy {
+					continue
+				}
 				qa = append(qa, "Q: "+docLine(c.Question, 1000)+"\nA: "+docLine(c.Answer, 2000))
 			}
 			if wo.ClarifQuestion != "" && wo.ClarifAnswer != "" && findClarification(wo.Clarifications, wo.ClarifQuestion) == nil {
