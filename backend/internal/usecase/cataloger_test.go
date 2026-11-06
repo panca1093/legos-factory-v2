@@ -171,3 +171,22 @@ func TestProjectAccessRule(t *testing.T) {
 		t.Fatalf("unknown email: %v", err)
 	}
 }
+
+func TestSanitizeRedactsPrefixedKeysBearerAndURLCredentials(t *testing.T) {
+	cases := map[string]string{
+		"DB_PASSWORD=hunter2":                   "hunter2",
+		"client_secret: abc123":                 "abc123",
+		"token=zzz9":                            "zzz9",
+		"Authorization: Bearer abcdef123":       "abcdef123",
+		"url postgres://user:s3cret@db.local/x": "s3cret",
+		`{"api_key": "k-123456"}`:               "k-123456",
+	}
+	for in, leak := range cases {
+		if out := sanitize(in, 500); strings.Contains(out, leak) || !strings.Contains(out, "REDACTED") {
+			t.Fatalf("%q -> %q", in, out)
+		}
+	}
+	if out := sanitize("see https://example.com/docs/page for details", 500); out != "see https://example.com/docs/page for details" {
+		t.Fatalf("plain URL altered: %q", out)
+	}
+}

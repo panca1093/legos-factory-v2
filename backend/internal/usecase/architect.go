@@ -62,13 +62,19 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 	}
 
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "", woQuery(wo), f.workspaceDir(wo.ID), wo.KBBaseSHA)
+	if ids, ok := audit["kb_docs"].([]string); ok {
+		for _, d := range prior {
+			ids = append(ids, d.ID)
+		}
+		audit["kb_docs"] = ids
+	}
 	notes, _ := job.Payload["notes"].(string)
 	prev, err := f.WO.Plan(ctx, wo.ID)
 	if err != nil {
 		return err
 	}
 	var plan planReply
-	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes, facts, prev)+f.priorKnowledgePrompt(prior)+kbText,
+	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, planPrompt(wo, notes, facts, prev)+f.priorKnowledgePrompt(ctx, prior)+kbText,
 		map[string]string{"clarification_answer": wo.ClarifAnswer, "clarification_log": clarificationLog(wo)}, "", &plan, runOpts{Audit: audit})
 	if err != nil {
 		return err

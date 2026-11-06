@@ -300,7 +300,8 @@ func clip(s string, max int) string {
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
-	regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|secret|password|passwd|authorization)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)`),
+	regexp.MustCompile(`(?i)([A-Za-z0-9_-]*(?:api[_-]?key|access[_-]?token|token|secret|password|passwd|authorization))(["']?\s*[:=]\s*)("[^"]*"|'[^']*'|(?:bearer\s+|basic\s+)?\S+)`),
+	regexp.MustCompile(`\b([a-z][a-z0-9+.-]*://)[^\s/:@]+:[^\s/@]+@`),
 	regexp.MustCompile(`\b(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16})\b`),
 }
 
@@ -309,7 +310,8 @@ var secretPatterns = []*regexp.Regexp{
 func sanitize(s string, max int) string {
 	s = secretPatterns[0].ReplaceAllString(s, "[REDACTED PRIVATE KEY]")
 	s = secretPatterns[1].ReplaceAllString(s, "$1$2[REDACTED]")
-	s = secretPatterns[2].ReplaceAllString(s, "[REDACTED]")
+	s = secretPatterns[2].ReplaceAllString(s, "${1}[REDACTED]@")
+	s = secretPatterns[3].ReplaceAllString(s, "[REDACTED]")
 	return truncate(strings.TrimSpace(s), max)
 }
 
