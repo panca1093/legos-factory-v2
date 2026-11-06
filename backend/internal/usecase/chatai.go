@@ -81,7 +81,8 @@ func (c *Chat) genRecorded(ctx context.Context, u *model.User, modelRef, prompt 
 		provider, modelID := SplitModelRef(modelRef)
 		_ = c.Usage.Record(context.WithoutCancel(ctx), model.UsageRecord{
 			UserID: u.ID, Role: string(model.AgentChat), Provider: provider, Model: modelID,
-			TokensIn: res.TokensIn, TokensOut: res.TokensOut, CostMicros: res.CostMicros, Source: res.CostSource,
+			TokensIn: res.TokensIn, TokensOut: res.TokensOut, CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
+			CostMicros: res.CostMicros, Source: res.CostSource,
 		})
 	}
 	return res, err

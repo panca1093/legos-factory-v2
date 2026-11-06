@@ -1,4 +1,4 @@
-import type { WOEvent, WorkOrder } from "../../../types/api";
+import type { Run, WOEvent, WorkOrder } from "../../../types/api";
 
 export interface AgentTool {
   name: string;
@@ -280,4 +280,35 @@ export function duration(fromISO: string, toMs: number): string {
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
   return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+// Price weights relative to fresh input (Anthropic: cache read 0.1x, 5-minute cache write 1.25x, output 5x).
+const cacheWeights = { fresh: 1, read: 0.1, write: 1.25, out: 5 };
+
+export interface RunCacheSplit {
+  fresh: number;
+  read: number;
+  write: number;
+  readMicros: number; // estimated share of cost_micros
+  writeMicros: number;
+}
+
+// Splits a run's measured cost across cache read/write by price weight; the harness reports only the total.
+export function runCacheSplit(r: Run): RunCacheSplit | null {
+  const read = r.cache_read_tokens ?? 0;
+  const write = r.cache_write_tokens ?? 0;
+  if (read + write === 0) return null;
+  const fresh = Math.max(0, r.tokens_in - read - write);
+  const w = cacheWeights;
+  const units =
+    fresh * w.fresh + read * w.read + write * w.write + r.tokens_out * w.out;
+  const share = (n: number) =>
+    units > 0 ? Math.round((r.cost_micros * n) / units) : 0;
+  return {
+    fresh,
+    read,
+    write,
+    readMicros: share(read * w.read),
+    writeMicros: share(write * w.write),
+  };
 }

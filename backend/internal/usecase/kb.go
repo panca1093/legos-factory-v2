@@ -92,7 +92,7 @@ func (k *KB) SyncRepo(ctx context.Context, projectID, dir string, force bool) (s
 func (k *KB) Playbooks(ctx context.Context, projectID, role, specialty, dir, baseSHA string) []model.KBDoc {
 	var out []model.KBDoc
 	match := func(meta map[string]any) bool {
-		if metaStr(meta, "role") != role {
+		if r := metaStr(meta, "role"); r != role && r != playbookAllRoles {
 			return false
 		}
 		s := metaStr(meta, "specialty")
@@ -223,9 +223,13 @@ func (k *KB) Context(ctx context.Context, projectID, role, specialty, query, dir
 	}
 }
 
+// playbookAllRoles is the role value of a playbook every agent role receives.
+const playbookAllRoles = "all"
+
 var agentRoles = map[string]bool{
 	string(model.AgentArchitect): true, string(model.AgentForeman): true,
 	string(model.AgentBuilder): true, string(model.AgentInspector): true,
+	playbookAllRoles: true,
 }
 
 func playbookHeading(source string) string {

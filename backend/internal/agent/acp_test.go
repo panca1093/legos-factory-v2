@@ -211,7 +211,7 @@ func TestACPRunReportsStepsTextAndUsage(t *testing.T) {
 	if streamed.String() != res.Text {
 		t.Fatalf("OnText streamed %q, result text %q", streamed.String(), res.Text)
 	}
-	if res.TokensIn != 5000 || res.TokensOut != 20 || res.CostMicros != 12300 || res.CostSource != "measured" || res.SessionRef != "fake-ses" {
+	if res.TokensIn != 5000 || res.TokensOut != 20 || res.CacheRead != 4000 || res.CacheWrite != 900 || res.CostMicros != 12300 || res.CostSource != "measured" || res.SessionRef != "fake-ses" {
 		t.Fatalf("result = %+v", res)
 	}
 }
@@ -247,7 +247,7 @@ func TestACPClaudeReadOnlyRolesStartInPlanModeWithoutWriteTools(t *testing.T) {
 			t.Fatalf("%s: meta %q: %v", r, s.Meta, err)
 		}
 		o := meta.ClaudeCode.Options
-		if strings.Join(o.Tools, ",") != "Read,Grep,Glob" || strings.Join(o.SettingSources, ",") != "user" || !o.StrictMcpConfig ||
+		if strings.Join(o.Tools, ",") != "Read,Grep,Glob" || !strings.Contains(s.Meta, `"settingSources":[]`) || !o.StrictMcpConfig ||
 			!strings.Contains(strings.Join(o.DisallowedTools, ","), "Bash") || !strings.Contains(strings.Join(o.DisallowedTools, ","), "Write") {
 			t.Fatalf("%s: options = %+v", r, o)
 		}
@@ -259,8 +259,8 @@ func TestACPClaudeReadOnlyRolesStartInPlanModeWithoutWriteTools(t *testing.T) {
 	if !strings.Contains(chat.Meta, `"tools":[]`) || !strings.Contains(chat.Meta, `"Read"`) || !strings.Contains(chat.Meta, `"WebFetch"`) || chat.Set != "model=sonnet,mode=plan" {
 		t.Fatalf("chat must get no tools: meta %q, set %q", chat.Meta, chat.Set)
 	}
-	if b := run(model.AgentBuilder); b.Meta != "" || b.Set != "model=sonnet" {
-		t.Fatalf("builder must keep the default session: meta %q, set %q", b.Meta, b.Set)
+	if b := run(model.AgentBuilder); b.Meta != `{"claudeCode":{"options":{"settingSources":["project","local"]}}}` || b.Set != "model=sonnet" {
+		t.Fatalf("builder must keep its tools and the repo settings but not the user's: meta %q, set %q", b.Meta, b.Set)
 	}
 }
 

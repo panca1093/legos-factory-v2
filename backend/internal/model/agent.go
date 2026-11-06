@@ -45,8 +45,10 @@ type AgentTool struct {
 type AgentResult struct {
 	Text       string
 	SessionRef string
-	TokensIn   int64
+	TokensIn   int64 // total input, cache reads and writes included
 	TokensOut  int64
+	CacheRead  int64
+	CacheWrite int64
 	CostMicros int64
 	CostSource string // "measured" | "estimated" | "unknown"
 }

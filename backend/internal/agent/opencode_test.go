@@ -151,7 +151,7 @@ func TestFullSessionLifecycle(t *testing.T) {
 	if res.Text != "plan JSON here" {
 		t.Fatalf("unexpected result text: %q", res.Text)
 	}
-	if res.TokensIn != 350 || res.TokensOut != 20 {
+	if res.TokensIn != 350 || res.TokensOut != 20 || res.CacheRead != 300 || res.CacheWrite != 40 {
 		t.Fatalf("tokens not parsed: %+v", res)
 	}
 	if res.CostMicros != 500000 || res.CostSource != "measured" {

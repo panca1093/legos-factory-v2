@@ -7,9 +7,10 @@ import {
   groupActivity,
   liveRuns,
   liveVerb,
+  runCacheSplit,
   toolLine,
 } from "../../src/features/factory/runs/agentActivity";
-import type { WOEvent } from "../../src/types/api";
+import type { Run, WOEvent } from "../../src/types/api";
 
 let id = 0;
 const ev = (
@@ -470,6 +471,79 @@ describe("gate events", () => {
     expect(gate.text()).toContain("tasks overlap");
     expect(w.find(".avatar.system").exists()).toBe(true);
     expect(w.text()).toContain("Jev");
+    w.unmount();
+  });
+});
+
+describe("runCacheSplit", () => {
+  const run = (over: Partial<Run>): Run => ({
+    id: "r1",
+    task_id: null,
+    kind: "foreman",
+    state: "completed",
+    harness: "claude-acp",
+    tokens_in: 0,
+    tokens_out: 0,
+    cache_read_tokens: 0,
+    cache_write_tokens: 0,
+    cost_micros: 0,
+    created_at: "",
+    ...over,
+  });
+
+  it("returns null when the harness reported no cache tokens", () => {
+    expect(runCacheSplit(run({ tokens_in: 500, cost_micros: 10 }))).toBeNull();
+  });
+
+  it("splits the measured cost by price weight", () => {
+    // units: fresh 100*1 + read 10000*0.1 + write 400*1.25 + out 100*5 = 2100
+    const s = runCacheSplit(
+      run({
+        tokens_in: 10500,
+        cache_read_tokens: 10000,
+        cache_write_tokens: 400,
+        tokens_out: 100,
+        cost_micros: 2_100_000,
+      }),
+    )!;
+    expect(s.fresh).toBe(100);
+    expect(s.readMicros).toBe(1_000_000);
+    expect(s.writeMicros).toBe(500_000);
+  });
+
+  it("shows the split on the run row", () => {
+    const w = mount(ActivityPanel, {
+      props: {
+        events: [],
+        runs: [
+          run({
+            tokens_in: 10500,
+            cache_read_tokens: 10000,
+            cache_write_tokens: 400,
+            tokens_out: 100,
+            cost_micros: 2_100_000,
+          }),
+        ],
+      },
+    });
+    const line = w.find('[data-test="run-cache"]').text();
+    expect(line).toContain("10000 cache read (≈$1.00)");
+    expect(line).toContain("400 cache write (≈$0.50)");
+    w.unmount();
+  });
+
+  it("leaves out the dollar estimate when the cost is unknown", () => {
+    const w = mount(ActivityPanel, {
+      props: {
+        events: [],
+        runs: [
+          run({ tokens_in: 10500, cache_read_tokens: 10000, tokens_out: 100 }),
+        ],
+      },
+    });
+    const line = w.find('[data-test="run-cache"]').text();
+    expect(line).toContain("10000 cache read");
+    expect(line).not.toContain("≈");
     w.unmount();
   });
 });

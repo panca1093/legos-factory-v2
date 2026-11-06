@@ -96,13 +96,19 @@ func acpRoleConfig(role model.AgentRole) string {
 
 // claudeReadOnlyMeta is session/new `_meta` for read-only roles on claude-agent-acp:
 // `tools` makes the write and exec tools absent (so no allow rule can grant them),
-// "user" settings keep the user's ~/.claude but drop project and local settings,
-// and strictMcpConfig drops MCP servers from .mcp.json and settings.
+// no setting sources keeps the user's ~/.claude (hooks, plugins, CLAUDE.md) and the
+// repo's settings out, and strictMcpConfig drops MCP servers from .mcp.json and settings.
+// The shared working rules reach every role as the "How we work" factory playbook instead.
 var claudeReadOnlyMeta = map[string]any{"claudeCode": map[string]any{"options": map[string]any{
 	"tools":           []string{"Read", "Grep", "Glob"},
 	"disallowedTools": []string{"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent", "Task"},
-	"settingSources":  []string{"user"},
+	"settingSources":  []string{},
 	"strictMcpConfig": true,
+}}}
+
+// claudeBuilderMeta keeps the repo's own settings and CLAUDE.md for the builder but drops the user's ~/.claude.
+var claudeBuilderMeta = map[string]any{"claudeCode": map[string]any{"options": map[string]any{
+	"settingSources": []string{"project", "local"},
 }}}
 
 // claudeChatMeta gives the chat role no tools at all.
@@ -132,10 +138,14 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 	conn.role, conn.workspace, conn.onStep, conn.onText = req.Role, req.WorkspaceDir, req.OnStep, req.OnText
 	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder
 	var meta map[string]any
-	if claudeReadOnly {
-		meta = claudeReadOnlyMeta
-		if req.Role == model.AgentChat {
+	if h.Provider == "claude" {
+		switch req.Role {
+		case model.AgentBuilder:
+			meta = claudeBuilderMeta
+		case model.AgentChat:
 			meta = claudeChatMeta
+		default:
+			meta = claudeReadOnlyMeta
 		}
 	}
 	ns, err := conn.newSession(ctx, req.WorkspaceDir, meta)
@@ -454,6 +464,8 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 		// inputTokens excludes cache reads/writes, which carry nearly all of a cached prompt
 		TokensIn:   res.Usage.InputTokens + res.Usage.CachedReadTokens + res.Usage.CachedWriteTokens,
 		TokensOut:  res.Usage.OutputTokens,
+		CacheRead:  res.Usage.CachedReadTokens,
+		CacheWrite: res.Usage.CachedWriteTokens,
 		CostMicros: int64((c.cost - r.costBase) * 1_000_000), CostSource: "unknown",
 	}
 	if c.costSeen {

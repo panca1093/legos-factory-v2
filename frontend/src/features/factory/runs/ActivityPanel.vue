@@ -6,7 +6,12 @@ import type { WOEvent, Run, Task } from "../../../types/api";
 import AgentLiveCard from "./AgentLiveCard.vue";
 import AgentRunCard from "./AgentRunCard.vue";
 import PlanProgress from "./PlanProgress.vue";
-import { gateSummary, groupActivity, liveRuns } from "./agentActivity";
+import {
+  gateSummary,
+  groupActivity,
+  liveRuns,
+  runCacheSplit,
+} from "./agentActivity";
 const props = withDefaults(
   defineProps<{
     events: WOEvent[];
@@ -193,6 +198,22 @@ const taskTitle = computed(
           ><span class="tiny muted"
             >{{ money(r.cost_micros) }} ·
             {{ r.tokens_in + r.tokens_out }} tokens</span
+          ><span
+            v-if="runCacheSplit(r)"
+            class="tiny muted"
+            data-test="run-cache"
+            :title="'Cost split is an estimate from price weights; the agent reports only the total.'"
+            >· {{ runCacheSplit(r)!.fresh }} fresh in ·
+            {{ runCacheSplit(r)!.read }} cache read<template
+              v-if="r.cost_micros > 0"
+            >
+              (≈{{ money(runCacheSplit(r)!.readMicros) }})</template
+            >
+            · {{ runCacheSplit(r)!.write }} cache write<template
+              v-if="r.cost_micros > 0"
+            >
+              (≈{{ money(runCacheSplit(r)!.writeMicros) }})</template
+            ></span
           >
         </summary>
         <pre class="output terminal">{{

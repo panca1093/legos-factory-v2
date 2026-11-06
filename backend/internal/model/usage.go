@@ -11,6 +11,8 @@ type UsageRecord struct {
 	Model      string    `json:"model"`
 	TokensIn   int64     `json:"tokens_in"`
 	TokensOut  int64     `json:"tokens_out"`
+	CacheRead  int64     `json:"cache_read_tokens"`
+	CacheWrite int64     `json:"cache_write_tokens"`
 	CostMicros int64     `json:"cost_micros"`
 	Source     string    `json:"source"` // measured|estimated|unknown
 	CreatedAt  time.Time `json:"created_at"`
