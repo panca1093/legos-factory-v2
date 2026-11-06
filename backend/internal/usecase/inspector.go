@@ -401,6 +401,11 @@ func (f *Factory) latestChecks(ctx context.Context, wo *model.WorkOrder) ([]mode
 	if err != nil {
 		return nil, err
 	}
+	return latestPerName(stored), nil
+}
+
+// latestPerName keeps each check name's last entry, in stored order.
+func latestPerName(stored []model.QualityCheck) []model.QualityCheck {
 	latest := map[string]int{}
 	for i, c := range stored {
 		latest[c.Name] = i
@@ -411,7 +416,7 @@ func (f *Factory) latestChecks(ctx context.Context, wo *model.WorkOrder) ([]mode
 			out = append(out, c)
 		}
 	}
-	return out, nil
+	return out
 }
 
 // checksText renders the current check results for a prompt and reports whether any failed.
