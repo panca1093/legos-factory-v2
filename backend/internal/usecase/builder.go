@@ -29,16 +29,11 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 		return err
 	}
 	provider, modelID := f.Model(model.AgentBuilder, wo)
-	res, runID, err := f.runBuilder(ctx, wo, job, provider, modelID)
+	_, _, err = f.runBuilder(ctx, wo, job, provider, modelID)
 	if err != nil {
 		return err
 	}
 	f.event(wo.ID, "builder", "task_completed", fmt.Sprintf("Task %s implemented", job.TaskID), nil)
-	title := fmt.Sprintf("Task %s implemented", job.TaskID)
-	if job.TaskID == "" {
-		title = fmt.Sprintf("Remediation implemented (revision %d)", wo.Revision)
-	}
-	f.Catalog.Record(ctx, wo, model.KnowledgeImplementation, model.TrustAIInterpretation, "builder", title, res.Text, "run:"+runID)
 	return f.maybeAdvanceAfterImplementation(ctx, wo)
 }
 
