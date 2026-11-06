@@ -27,6 +27,7 @@ type WorkOrderStore interface {
 	Events(ctx context.Context, woID string, afterID int64, limit int) ([]model.Event, error)
 	LatestEvent(ctx context.Context, woID, kind string) (*model.Event, error)
 	EventsByKind(ctx context.Context, woID string, kinds []string) ([]model.Event, error)
+	ProjectEvents(ctx context.Context, projectID, kind string, limit int) ([]model.Event, error)
 }
 
 type ProjectStore interface {

@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"legos-factory/backend/internal/kb"
@@ -22,8 +21,6 @@ const (
 	maxLogBody       = 300
 )
 
-var logZone = time.FixedZone("WIB", 7*3600)
-
 type Cataloger struct {
 	Bundle *kb.Bundle
 	Log    *slog.Logger
@@ -35,7 +32,7 @@ func (c *Cataloger) Record(ctx context.Context, wo *model.WorkOrder, kind string
 	if c == nil {
 		return ""
 	}
-	line := fmt.Sprintf("* %s `%s` **%s** (%s) — %s", time.Now().In(logZone).Format("15:04"), wo.ID, kind, actor, oneLine(sanitize(title, 200)))
+	line := fmt.Sprintf("* %s `%s` **%s** (%s) — %s", kb.Clock().Format("15:04"), wo.ID, kind, actor, oneLine(sanitize(title, 200)))
 	if b := clip(oneLine(sanitize(body, maxKnowledgeBody)), maxLogBody); b != "" {
 		line += " — " + b
 	}

@@ -27,6 +27,9 @@ var (
 	now        = time.Now
 )
 
+// Clock is the time the logs use: it is now() in Asia/Jakarta.
+func Clock() time.Time { return now().In(jakarta) }
+
 // Bundle is the factory's own knowledge bundle: an OKF-format git repo with
 // one commit per write.
 type Bundle struct {
@@ -453,7 +456,7 @@ func (b *Bundle) appendLog(rel, entry string) error {
 	}
 	text := strings.TrimPrefix(string(old), "# Log\n")
 	text = strings.TrimLeft(text, "\n")
-	day := "## " + now().In(jakarta).Format("2006-01-02")
+	day := "## " + Clock().Format("2006-01-02")
 	entry += "\n"
 	if strings.HasPrefix(text, day+"\n") {
 		text = day + "\n\n" + entry + strings.TrimPrefix(strings.TrimPrefix(text, day+"\n"), "\n")

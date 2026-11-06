@@ -63,6 +63,8 @@ export function subscribe(
     "readiness_blocked",
     "readiness_needs_verification",
     "escalated",
+    "plan_approved",
+    "plan_revision_human",
     "pr_approved",
     "pr_declined",
     "pr_merged",

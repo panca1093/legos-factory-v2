@@ -413,12 +413,12 @@ func TestSimilarClarificationProposesDraft(t *testing.T) {
 	r := newRig(t)
 	ctx := context.Background()
 	prev := &model.WorkOrder{ID: "wo_prev", ProjectID: "p1", Title: "Earlier"}
-	legacy := map[string]any{
-		"type": model.KBTypeJournalEntry, "title": "Clarification: Should discount rounding go up or down?", "status": model.KBStatusStable,
-		"kind": model.KnowledgeClarification, "work_order": prev.ID, "created_at": "2026-11-01T00:00:00Z",
-		"verified": map[string]any{"by": "human:human", "at": "2026-11-01T00:00:00Z"},
+	prev.CreatedBy = r.wo.CreatedBy
+	if err := r.wos.Create(ctx, prev); err != nil {
+		t.Fatal(err)
 	}
-	if err := r.know.WriteFactory(ctx, "projects/p1/journal/kn_legacy.md", legacy, "Question: Should discount rounding go up or down?\nAnswer: Always round down.", "legacy journal entry"); err != nil {
+	if _, err := r.wos.AppendEvent(ctx, prev.ID, "human", "clarification_answered", "Always round down.",
+		map[string]any{"question": "Should discount rounding go up or down?"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateWaitingForHuman); err != nil {

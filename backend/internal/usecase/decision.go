@@ -103,7 +103,7 @@ func (f *Factory) AnswerClarification(ctx context.Context, woID, answer string) 
 		return err
 	}
 	wo.ClarifAnswer = answer
-	f.event(woID, "human", "clarification_answered", answer, nil)
+	f.event(woID, "human", "clarification_answered", answer, map[string]any{"question": wo.ClarifQuestion})
 	f.Catalog.Record(ctx, wo, model.KnowledgeClarification, model.TrustHumanDecision, "human",
 		"Clarification: "+wo.ClarifQuestion, fmt.Sprintf("Question: %s\nAnswer: %s", wo.ClarifQuestion, answer))
 	f.draftFromClarification(ctx, wo, wo.ClarifQuestion, answer)

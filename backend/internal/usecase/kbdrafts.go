@@ -51,27 +51,20 @@ func (f *Factory) draftFromClarification(ctx context.Context, wo *model.WorkOrde
 	if f.KB == nil {
 		return
 	}
-	hits, err := f.KB.Idx.Search(ctx, model.KBQuery{
-		ProjectID: wo.ProjectID, Text: question, Sources: []string{model.KBSourceFactory}, Types: []string{model.KBTypeJournalEntry}, Limit: 20,
-	}, nil)
+	evs, err := f.WO.ProjectEvents(ctx, wo.ProjectID, "clarification_answered", 200)
 	if err != nil {
 		f.Log.Warn("draft: clarification lookup failed", "wo", wo.ID, "err", err)
 		return
 	}
-	for _, h := range hits {
-		d := h.Doc
-		if metaStr(d.Meta, "kind") != model.KnowledgeClarification || metaStr(d.Meta, "work_order") == wo.ID ||
-			d.ProjectID != wo.ProjectID || d.Trust != model.KBTrustHuman || sharedWords(question, d.Title) < 2 {
+	for _, e := range evs {
+		prevQ, _ := e.Payload["question"].(string)
+		if e.WOID == wo.ID || (e.Actor != "human" && e.Actor != "foreman") || sharedWords(question, prevQ) < 2 {
 			continue
 		}
-		_, prior, err := f.KB.Bundle.Read(d.Path)
-		if err != nil {
-			continue
-		}
-		body := fmt.Sprintf("# Draft: %s\n\nThe Foreman asked a similar question before.\n\nEarlier (%s):\n%s\n\nNow (%s):\nQuestion: %s\nAnswer: %s\n\nProposed rule: when the Foreman meets this kind of question, decide it as the human did and state the assumption instead of asking … (edit the rule to match the answers above).\n",
-			oneLine(question), metaStr(d.Meta, "work_order"), strings.TrimSpace(prior), wo.ID, question, answer)
+		body := fmt.Sprintf("# Draft: %s\n\nThe Foreman asked a similar question before.\n\nEarlier (%s):\nQuestion: %s\nAnswer: %s\n\nNow (%s):\nQuestion: %s\nAnswer: %s\n\nProposed rule: when the Foreman meets this kind of question, decide it as the human did and state the assumption instead of asking … (edit the rule to match the answers above).\n",
+			oneLine(question), e.WOID, prevQ, strings.TrimSpace(e.Message), wo.ID, question, answer)
 		f.writeDraft(ctx, wo, "clarification-"+wo.ID, "Draft: "+firstRunes(oneLine(question), 80), string(model.AgentForeman), "", body,
-			[]string{"knowledge:" + strings.TrimSuffix(d.Path[strings.LastIndex(d.Path, "/")+1:], ".md"), "wo:" + wo.ID})
+			[]string{fmt.Sprintf("event:%d", e.ID), "wo:" + wo.ID})
 		return
 	}
 }
