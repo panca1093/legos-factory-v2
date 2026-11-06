@@ -65,6 +65,7 @@ type GateOutcome struct {
 	Row      int
 	Note     string   // code-built revise/fix/escalate reason
 	Issues   []string // the done gate's reasons one by one; Note joins them
+	Builder  []string // plan gate: unsettled answers that go to the Builder as notes, not to a revision
 	InReport []string // the Issues that restate the Architect's report, which the fix brief carries in full
 }
 
@@ -80,7 +81,8 @@ type PlanGateInput struct {
 	Criteria      []Criterion
 	Brief, Spec   string
 	Tasks         []PlanTask
-	ForemanReview string
+	Findings      []reviewFinding // the Foreman's analysis: unresolved criticals plus high and low notes
+	Coverage      []reviewCoverage
 	PlanRevisions int
 }
 
@@ -204,8 +206,7 @@ func yn(t, f string) *NoulCriteria { return &NoulCriteria{True: t, False: f} }
 // when the answer is yes; "it is unclear whether <phrase>" when unsettled.
 var planPhrases = map[string]string{
 	"scope_creep":            "the plan includes work the request does not ask for",
-	"task_overlap":           "tasks overlap",
-	"review_unresolved":      "the Foreman review reports a problem the plan does not address",
+	"open_questions":         "the spec still contains an open question or a guessed behaviour",
 	"touches_schema":         "a task changes a database schema or migration",
 	"touches_authentication": "a task changes authentication",
 	"touches_authorization":  "a task changes authorization or permission checks",
@@ -214,8 +215,8 @@ var planPhrases = map[string]string{
 }
 
 var (
-	planHardIDs = []string{"scope_creep", "task_overlap", "review_unresolved"}
-	planRiskIDs = []string{"touches_schema", "touches_authentication", "touches_authorization", "touches_payments", "touches_secrets"}
+	planFixedIDs = []string{"critical_resolved", "open_questions", "scope_creep"}
+	planRiskIDs  = []string{"touches_schema", "touches_authentication", "touches_authorization", "touches_payments", "touches_secrets"}
 )
 
 var doneHardPhrases = map[string]string{
@@ -232,7 +233,7 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 		"brief":               in.Brief,
 		"spec":                in.Spec,
 		"plan":                orderedTasks(in.Tasks),
-		"foreman_review":      in.ForemanReview,
+		"analysis":            map[string]any{"findings": nonNilSlice(in.Findings), "coverage": nonNilSlice(in.Coverage)},
 	}
 	qs := map[string]Noul{}
 	for _, c := range in.Criteria {
@@ -241,6 +242,14 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 			Criteria: yn(
 				fmt.Sprintf("A task's objective or scope names the behaviour in acceptance_criteria.%s, so building that task would make the criterion true.", c.ID),
 				fmt.Sprintf("No task's objective or scope mentions the behaviour in acceptance_criteria.%s, or the criterion is only touched by a task about something else.", c.ID)),
+		}
+	}
+	for _, c := range in.Criteria {
+		qs["verified_"+c.ID] = Noul{
+			Instructions: fmt.Sprintf("Does the acceptance-criteria verification table in spec give acceptance_criteria.%s a concrete test or check?", c.ID),
+			Criteria: yn(
+				fmt.Sprintf("The verification table in spec has a row for acceptance_criteria.%s that names a specific automated test, or a specific check a reviewer can run on the diff.", c.ID),
+				fmt.Sprintf("The verification table in spec has no row for acceptance_criteria.%s, or its row only says something vague such as \"works correctly\".", c.ID)),
 		}
 	}
 	qs["scope_creep"] = Noul{
@@ -279,17 +288,17 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 			"A task changes how API keys, tokens, passwords or encryption keys are stored, loaded, passed or logged.",
 			"No task changes secret handling; using an already configured secret unchanged does not count."),
 	}
-	qs["task_overlap"] = Noul{
-		Instructions: "Do two different tasks in plan implement the same behaviour?",
+	qs["critical_resolved"] = Noul{
+		Instructions: "Is every critical finding in analysis addressed by spec or by a task in plan?",
 		Criteria: yn(
-			"Two tasks both build the same function, endpoint or screen, so one would redo or conflict with the other.",
-			"Each behaviour is built by exactly one task; tasks that depend on each other but build different parts do not overlap."),
+			"analysis has no critical finding, or each critical finding is answered by a rule in spec or by a task in plan.",
+			"analysis has a critical finding that neither spec nor any task in plan addresses."),
 	}
-	qs["review_unresolved"] = Noul{
-		Instructions: "Does foreman_review report a problem that plan does not address?",
+	qs["open_questions"] = Noul{
+		Instructions: "Does spec still contain an open question or a behaviour that the Architect guessed?",
 		Criteria: yn(
-			"foreman_review names a gap, risk or defect and no task in plan fixes or accounts for it.",
-			"foreman_review reports no problem, or every problem it reports is addressed by a task in plan."),
+			"spec lists an unanswered question, says a behaviour is assumed or unknown, or leaves a behaviour undecided that a Builder would have to guess.",
+			"spec states every behaviour it relies on, and its open-questions list is empty or absent."),
 	}
 	return state, qs
 }
@@ -486,14 +495,6 @@ func numberNotes(notes []string) string {
 	return strings.Join(lines, "\n")
 }
 
-func planTaskTitles(tasks []PlanTask) string {
-	parts := make([]string, len(tasks))
-	for i, t := range tasks {
-		parts[i] = fmt.Sprintf("%q (%s)", t.Title, strings.Join(t.Scope, ", "))
-	}
-	return strings.Join(parts, ", ")
-}
-
 func gateFailure(noCriteria bool, judgeErr error, overLimit bool, missing []string) (string, bool) {
 	switch {
 	case noCriteria:
@@ -508,36 +509,43 @@ func gateFailure(noCriteria bool, judgeErr error, overLimit bool, missing []stri
 	return "", false
 }
 
-// decidePlanGate applies the plan truth table (SPEC section 4), first match wins:
+func planTaskTitles(tasks []PlanTask) string {
+	parts := make([]string, len(tasks))
+	for i, t := range tasks {
+		parts[i] = fmt.Sprintf("%q (%s)", t.Title, strings.Join(t.Scope, ", "))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// decidePlanGate applies the contract gate truth table (contract-flow SPEC
+// section 3), first match wins:
 //
 //	1 escalate: no acceptance criteria, Jev failed or not configured, state over
 //	  the limit, or any asked question has no answer
 //	2 escalate: touches_schema/authentication/authorization/payments/secrets is yes
-//	3 revise:   a covers_* is no, or scope_creep/task_overlap/review_unresolved is yes
-//	4 revise:   any answer is unsettled
-//	5 approve
+//	3 revise:   a covers_* or verified_* is no, critical_resolved is no,
+//	  open_questions is yes, or scope_creep is yes
+//	4 escalate: a touches_* is unsettled (risk is a human call)
+//	5 revise:   covers_*, verified_* or critical_resolved is unsettled
+//	6 approve
 //
-// Rows 3 and 4 become escalate once in.PlanRevisions reaches maxPlanRevisions.
-// Only the questions in asked are read; answers to other ids are ignored.
+// Rows 3 and 5 become escalate once in.PlanRevisions reaches maxPlanRevisions.
+// Unsettled scope_creep and open_questions never revise: they go to the
+// Builder as notes. The revise note holds only the triggering answers and the
+// critical findings in in.Findings. Only the questions in asked are read;
+// answers to other ids are ignored.
 func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]float64, judgeErr error, overLimit bool) GateOutcome {
-	required := append(append([]string{}, planHardIDs...), planRiskIDs...)
+	required := append(append([]string{}, planFixedIDs...), planRiskIDs...)
 	for _, c := range in.Criteria {
-		required = append(required, "covers_"+c.ID)
+		required = append(required, "covers_"+c.ID, "verified_"+c.ID)
 	}
 	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
 		return GateOutcome{Outcome: GateEscalate, Row: 1, Note: note}
 	}
-	var hard, soft, risky []string
+	var hard, soft, risky, unsure, builder []string
 	labels := make(map[string]string, len(in.Criteria))
 	for _, c := range in.Criteria {
 		labels[c.ID] = fmt.Sprintf("%s (%s)", c.ID, c.Text)
-	}
-	phrases := make(map[string]string, len(planPhrases))
-	for id, p := range planPhrases {
-		phrases[id] = p
-	}
-	for _, id := range []string{"scope_creep", "task_overlap"} {
-		phrases[id] += "; the plan's tasks are " + planTaskTitles(in.Tasks)
 	}
 	for _, c := range in.Criteria {
 		switch judge(answers["covers_"+c.ID]) {
@@ -546,39 +554,66 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 		case vUnsettled:
 			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s is covered by a task", labels[c.ID]))
 		}
-	}
-	for _, id := range planHardIDs {
-		switch judge(answers[id]) {
-		case vYes:
-			hard = append(hard, phrases[id])
+		switch judge(answers["verified_"+c.ID]) {
+		case vNo:
+			hard = append(hard, fmt.Sprintf("acceptance criterion %s has no concrete test or check in the spec's verification table", labels[c.ID]))
 		case vUnsettled:
-			soft = append(soft, "it is unclear whether "+phrases[id])
+			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s has a concrete test or check in the spec's verification table", labels[c.ID]))
 		}
+	}
+	var criticals []string
+	for _, f := range in.Findings {
+		if f.Severity == "critical" {
+			criticals = append(criticals, findingLine(f))
+		}
+	}
+	criticalNote := ""
+	if len(criticals) > 0 {
+		criticalNote = "; critical findings the spec or a task must address: " + strings.Join(criticals, " | ")
+	}
+	switch judge(answers["critical_resolved"]) {
+	case vNo:
+		hard = append(hard, "a critical finding is not addressed by the spec or any task"+criticalNote)
+	case vUnsettled:
+		soft = append(soft, "it is unclear whether every critical finding is addressed"+criticalNote)
+	}
+	if judge(answers["open_questions"]) == vYes {
+		hard = append(hard, planPhrases["open_questions"])
+	} else if judge(answers["open_questions"]) == vUnsettled {
+		builder = append(builder, "it is unclear whether "+planPhrases["open_questions"])
+	}
+	switch judge(answers["scope_creep"]) {
+	case vYes:
+		hard = append(hard, planPhrases["scope_creep"]+"; the plan's tasks are "+planTaskTitles(in.Tasks))
+	case vUnsettled:
+		builder = append(builder, "it is unclear whether "+planPhrases["scope_creep"]+"; stay within the request and acceptance criteria")
 	}
 	for _, id := range planRiskIDs {
 		switch judge(answers[id]) {
 		case vYes:
-			risky = append(risky, phrases[id])
+			risky = append(risky, planPhrases[id])
 		case vUnsettled:
-			soft = append(soft, "it is unclear whether "+phrases[id])
+			unsure = append(unsure, "it is unclear whether "+planPhrases[id])
 		}
 	}
 	if len(risky) > 0 {
-		return GateOutcome{Outcome: GateEscalate, Row: 2, Note: joinNotes(risky)}
+		return GateOutcome{Outcome: GateEscalate, Row: 2, Note: joinNotes(risky), Builder: builder}
 	}
 	row, note := 0, ""
 	switch {
 	case len(hard) > 0:
 		row, note = 3, numberNotes(append(hard, soft...))
+	case len(unsure) > 0:
+		return GateOutcome{Outcome: GateEscalate, Row: 4, Note: joinNotes(unsure), Builder: builder}
 	case len(soft) > 0:
-		row, note = 4, numberNotes(soft)
+		row, note = 5, numberNotes(soft)
 	default:
-		return GateOutcome{Outcome: GateApprove, Row: 5, Note: ""}
+		return GateOutcome{Outcome: GateApprove, Row: 6, Builder: builder}
 	}
 	if in.PlanRevisions >= maxPlanRevisions {
-		return GateOutcome{Outcome: GateEscalate, Row: row, Note: note}
+		return GateOutcome{Outcome: GateEscalate, Row: row, Note: note, Builder: builder}
 	}
-	return GateOutcome{Outcome: GateRevise, Row: row, Note: note}
+	return GateOutcome{Outcome: GateRevise, Row: row, Note: note, Builder: builder}
 }
 
 // architectStatus reduces the Architect's verdicts to one status per
@@ -695,6 +730,7 @@ func gateEvent(gate string, state any, questions map[string]Noul, res JudgeResul
 		"outcome":         out.Outcome,
 		"note":            out.Note,
 		"issues":          out.Issues,
+		"builder_notes":   out.Builder,
 		"yes_over":        yesAbove,
 		"no_under":        noBelow,
 	}

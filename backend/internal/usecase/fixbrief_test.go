@@ -177,7 +177,7 @@ func TestDoneGateBriefStatesEachFactOnce(t *testing.T) {
 	}
 }
 
-func TestPlanRevisionResumeSendsTheGateNoteAndForemanReview(t *testing.T) {
+func TestPlanRevisionResumeSendsTheGateNote(t *testing.T) {
 	r := reviewRig(t, &fakeJudge{over: map[string]float64{"scope_creep": 0.9}})
 	r.f.Sched = &failOnceQueue{fakeQueue: r.q, fail: true}
 	if err := r.f.handleReview(context.Background(), model.Job{WOID: r.wo.ID}); err == nil {
@@ -187,7 +187,7 @@ func TestPlanRevisionResumeSendsTheGateNoteAndForemanReview(t *testing.T) {
 		t.Fatal(err)
 	}
 	notes, _ := lastPayload(r)["notes"].(string)
-	if !strings.Contains(notes, "the plan includes work the request does not ask for") || !strings.Contains(notes, "Foreman review: ok") || strings.Contains(notes, "activity trail") {
+	if !strings.Contains(notes, "the plan includes work the request does not ask for") || strings.Contains(notes, "activity trail") {
 		t.Fatalf("resume notes %q", notes)
 	}
 }

@@ -10,8 +10,8 @@ import (
 
 func planAnswers(over map[string]float64) map[string]float64 {
 	a := map[string]float64{
-		"covers_c1": 0.95, "covers_c2": 0.9, "scope_creep": 0.05, "touches_schema": 0.02,
-		"touches_authentication": 0.01, "touches_authorization": 0.01, "touches_payments": 0.01, "touches_secrets": 0.01, "task_overlap": 0.1, "review_unresolved": 0.05,
+		"covers_c1": 0.95, "covers_c2": 0.9, "verified_c1": 0.9, "verified_c2": 0.95, "critical_resolved": 0.9, "open_questions": 0.05, "scope_creep": 0.05, "touches_schema": 0.02,
+		"touches_authentication": 0.01, "touches_authorization": 0.01, "touches_payments": 0.01, "touches_secrets": 0.01,
 	}
 	for k, v := range over {
 		a[k] = v
@@ -21,8 +21,13 @@ func planAnswers(over map[string]float64) map[string]float64 {
 
 var testCriteria = []Criterion{{"c1", "add items to the cart"}, {"c2", "show the cart total"}}
 
+var testFindings = []reviewFinding{
+	{ID: "F1", Severity: "critical", Layer: "contract", Cites: "c2", Issue: "no error path", Fix: "add a rule"},
+	{ID: "F2", Severity: "low", Layer: "contract", Cites: "spec: rules", Issue: "naming", Fix: "rename"},
+}
+
 func planInput(revisions int) PlanGateInput {
-	return PlanGateInput{Request: "r", Criteria: testCriteria, PlanRevisions: revisions}
+	return PlanGateInput{Request: "r", Criteria: testCriteria, Findings: testFindings, PlanRevisions: revisions}
 }
 
 func TestDecidePlanGate(t *testing.T) {
@@ -49,25 +54,36 @@ func TestDecidePlanGate(t *testing.T) {
 		{"row2 lists every risky area", planAnswers(map[string]float64{"touches_payments": 0.9, "touches_secrets": 0.9}), nil, false, 0, GateEscalate, 2, []string{"payment", "secrets"}},
 		{"row2 beats row3", planAnswers(map[string]float64{"touches_schema": 0.9, "covers_c1": 0.1}), nil, false, 0, GateEscalate, 2, nil},
 		{"row3 not covered", planAnswers(map[string]float64{"covers_c2": 0.1}), nil, false, 0, GateRevise, 3, []string{"criterion c2 (show the cart total) is not covered"}},
+		{"row3 not verified", planAnswers(map[string]float64{"verified_c1": 0.1}), nil, false, 0, GateRevise, 3, []string{"c1 (add items to the cart) has no concrete test or check"}},
+		{"row3 critical not resolved", planAnswers(map[string]float64{"critical_resolved": 0.1}), nil, false, 0, GateRevise, 3, []string{"critical finding is not addressed", "F1 [critical, contract] c2: no error path"}},
+		{"row3 open questions", planAnswers(map[string]float64{"open_questions": 0.8}), nil, false, 1, GateRevise, 3, []string{"open question or a guessed behaviour"}},
 		{"row3 scope creep", planAnswers(map[string]float64{"scope_creep": 0.8}), nil, false, 0, GateRevise, 3, []string{"does not ask for"}},
-		{"row3 overlap", planAnswers(map[string]float64{"task_overlap": 0.8}), nil, false, 1, GateRevise, 3, []string{"tasks overlap"}},
-		{"row3 review unresolved", planAnswers(map[string]float64{"review_unresolved": 0.8}), nil, false, 0, GateRevise, 3, []string{"Foreman review"}},
-		{"row3 lists several", planAnswers(map[string]float64{"covers_c1": 0.0, "task_overlap": 1}), nil, false, 0, GateRevise, 3, []string{"criterion c1 (add items to the cart) is not covered", "tasks overlap"}},
-		{"row3 includes unsettled too", planAnswers(map[string]float64{"covers_c1": 0.1, "scope_creep": 0.5}), nil, false, 0, GateRevise, 3, []string{"c1 (add items to the cart) is not covered", "it is unclear whether the plan includes work"}},
+		{"row3 lists several", planAnswers(map[string]float64{"covers_c1": 0.0, "open_questions": 1}), nil, false, 0, GateRevise, 3, []string{"criterion c1 (add items to the cart) is not covered", "open question"}},
+		{"row3 includes unsettled too", planAnswers(map[string]float64{"covers_c1": 0.1, "verified_c2": 0.5}), nil, false, 0, GateRevise, 3, []string{"c1 (add items to the cart) is not covered", "it is unclear whether acceptance criterion c2"}},
 		{"row3 escalates at budget", planAnswers(map[string]float64{"covers_c1": 0.1}), nil, false, 2, GateEscalate, 3, []string{"c1"}},
-		{"row4 unsettled covers", planAnswers(map[string]float64{"covers_c2": 0.5}), nil, false, 0, GateRevise, 4, []string{"it is unclear whether acceptance criterion c2 (show the cart total) is covered"}},
-		{"row4 unsettled schema", planAnswers(map[string]float64{"touches_schema": 0.5}), nil, false, 1, GateRevise, 4, []string{"it is unclear whether a task changes a database schema"}},
-		{"row4 escalates at budget", planAnswers(map[string]float64{"scope_creep": 0.4}), nil, false, 3, GateEscalate, 4, nil},
-		{"row5 approve", planAnswers(nil), nil, false, 0, GateApprove, 5, nil},
-		{"row5 approve with revisions spent", planAnswers(nil), nil, false, 2, GateApprove, 5, nil},
-		{"edge covers 0.7 unsettled", planAnswers(map[string]float64{"covers_c1": 0.7}), nil, false, 0, GateRevise, 4, nil},
-		{"edge covers 0.71 yes", planAnswers(map[string]float64{"covers_c1": 0.71}), nil, false, 0, GateApprove, 5, nil},
-		{"edge covers 0.3 unsettled", planAnswers(map[string]float64{"covers_c1": 0.3}), nil, false, 0, GateRevise, 4, nil},
+		{"row5 unsettled covers", planAnswers(map[string]float64{"covers_c2": 0.5}), nil, false, 0, GateRevise, 5, []string{"it is unclear whether acceptance criterion c2 (show the cart total) is covered"}},
+		{"row5 unsettled verified", planAnswers(map[string]float64{"verified_c2": 0.5}), nil, false, 1, GateRevise, 5, []string{"has a concrete test or check"}},
+		{"row5 unsettled critical_resolved", planAnswers(map[string]float64{"critical_resolved": 0.5}), nil, false, 0, GateRevise, 5, []string{"every critical finding is addressed", "F1"}},
+		{"row5 escalates at budget", planAnswers(map[string]float64{"critical_resolved": 0.4}), nil, false, 3, GateEscalate, 5, nil},
+		{"row6 unsettled scope_creep is a note, not a revise", planAnswers(map[string]float64{"scope_creep": 0.5}), nil, false, 0, GateApprove, 6, nil},
+		{"row6 unsettled open_questions is a note", planAnswers(map[string]float64{"open_questions": 0.5}), nil, false, 0, GateApprove, 6, nil},
+		{"row4 unsettled touches escalates", planAnswers(map[string]float64{"touches_schema": 0.5}), nil, false, 0, GateEscalate, 4, []string{"it is unclear whether a task changes a database schema"}},
+		{"row4 unsettled touches escalates even with revisions left", planAnswers(map[string]float64{"touches_payments": 0.4, "critical_resolved": 0.5}), nil, false, 0, GateEscalate, 4, nil},
+		{"row3 beats row4", planAnswers(map[string]float64{"touches_secrets": 0.5, "covers_c1": 0.1}), nil, false, 0, GateRevise, 3, nil},
+		{"row2 beats row4", planAnswers(map[string]float64{"touches_secrets": 0.5, "touches_schema": 0.9}), nil, false, 0, GateEscalate, 2, nil},
+		{"row6 approve", planAnswers(nil), nil, false, 0, GateApprove, 6, nil},
+		{"row6 approve with revisions spent", planAnswers(nil), nil, false, 2, GateApprove, 6, nil},
+		{"edge covers 0.7 unsettled", planAnswers(map[string]float64{"covers_c1": 0.7}), nil, false, 0, GateRevise, 5, nil},
+		{"edge covers 0.71 yes", planAnswers(map[string]float64{"covers_c1": 0.71}), nil, false, 0, GateApprove, 6, nil},
+		{"edge covers 0.3 unsettled", planAnswers(map[string]float64{"covers_c1": 0.3}), nil, false, 0, GateRevise, 5, nil},
 		{"edge covers 0.29 no", planAnswers(map[string]float64{"covers_c1": 0.29}), nil, false, 0, GateRevise, 3, nil},
-		{"edge scope_creep 0.7 unsettled", planAnswers(map[string]float64{"scope_creep": 0.7}), nil, false, 0, GateRevise, 4, nil},
-		{"edge scope_creep 0.3 unsettled", planAnswers(map[string]float64{"scope_creep": 0.3}), nil, false, 0, GateRevise, 4, nil},
-		{"edge scope_creep 0.29 no", planAnswers(map[string]float64{"scope_creep": 0.29}), nil, false, 0, GateApprove, 5, nil},
-		{"edge secrets 0.7 unsettled not escalate-2", planAnswers(map[string]float64{"touches_secrets": 0.7}), nil, false, 0, GateRevise, 4, nil},
+		{"edge verified 0.7 unsettled", planAnswers(map[string]float64{"verified_c1": 0.7}), nil, false, 0, GateRevise, 5, nil},
+		{"edge verified 0.29 no", planAnswers(map[string]float64{"verified_c1": 0.29}), nil, false, 0, GateRevise, 3, nil},
+		{"edge open_questions 0.7 unsettled", planAnswers(map[string]float64{"open_questions": 0.7}), nil, false, 0, GateApprove, 6, nil},
+		{"edge open_questions 0.71 yes", planAnswers(map[string]float64{"open_questions": 0.71}), nil, false, 0, GateRevise, 3, nil},
+		{"edge scope_creep 0.7 unsettled", planAnswers(map[string]float64{"scope_creep": 0.7}), nil, false, 0, GateApprove, 6, nil},
+		{"edge scope_creep 0.71 yes", planAnswers(map[string]float64{"scope_creep": 0.71}), nil, false, 0, GateRevise, 3, nil},
+		{"edge secrets 0.7 unsettled is row 4, not 2", planAnswers(map[string]float64{"touches_secrets": 0.7}), nil, false, 0, GateEscalate, 4, nil},
 		{"row1 no criteria", nil, nil, false, 0, GateEscalate, 1, []string{"no acceptance criteria to judge against"}},
 		{"row1 no judge", nil, errNoJudge, false, 0, GateEscalate, 1, []string{"jev is not configured"}},
 	}
@@ -124,8 +140,10 @@ func TestDecidePlanGateAskedQuestions(t *testing.T) {
 		long.Criteria = []Criterion{{"c1", text}}
 		long.Tasks = []PlanTask{{ID: "t1", Title: "Add cart endpoint", Scope: []string{"api/cart.go"}}, {ID: "t2", Title: "Show total"}}
 		_, q := planGateState(long)
-		a := planAnswers(map[string]float64{"covers_c1": 0.1, "task_overlap": 0.9, "scope_creep": 0.9})
-		delete(a, "covers_c2")
+		a := planAnswers(map[string]float64{"covers_c1": 0.1, "open_questions": 0.9, "scope_creep": 0.9})
+		for _, id := range []string{"covers_c2", "verified_c2"} {
+			delete(a, id)
+		}
 		got := decidePlanGate(long, q, a, nil, false)
 		for _, want := range []string{"1. ", "2. ", "3. ", "c1 (" + text + ")", `"Add cart endpoint" (api/cart.go)`, `"Show total"`} {
 			if !strings.Contains(got.Note, want) {
@@ -275,12 +293,12 @@ func TestSplitCriteria(t *testing.T) {
 
 func TestPlanGateState(t *testing.T) {
 	state, qs := planGateState(PlanGateInput{
-		Request:       "Cart\nadd totals",
-		Criteria:      []Criterion{{"c2", "b"}, {"c1", "a"}},
-		Brief:         "brief",
-		Spec:          "spec",
-		Tasks:         []PlanTask{{ID: "t2", Title: "T2"}, {ID: "t1", Title: "T1", Scope: []string{"cart.go"}, Deps: []string{"t2"}}},
-		ForemanReview: "ok",
+		Request:  "Cart\nadd totals",
+		Criteria: []Criterion{{"c2", "b"}, {"c1", "a"}},
+		Brief:    "brief",
+		Spec:     "spec",
+		Tasks:    []PlanTask{{ID: "t2", Title: "T2"}, {ID: "t1", Title: "T1", Scope: []string{"cart.go"}, Deps: []string{"t2"}}},
+		Findings: testFindings,
 	})
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -293,12 +311,12 @@ func TestPlanGateState(t *testing.T) {
 	if strings.Index(s, `"t2"`) > strings.Index(s, `"t1"`) || !strings.Contains(s, `"scope":[]`) {
 		t.Errorf("plan order or empty scope wrong: %s", s)
 	}
-	for _, k := range []string{"request", "brief", "spec", "plan", "foreman_review"} {
+	for _, k := range []string{"request", "brief", "spec", "plan", "analysis"} {
 		if _, ok := state[k]; !ok {
 			t.Errorf("state missing %s", k)
 		}
 	}
-	want := []string{"covers_c1", "covers_c2", "scope_creep", "touches_schema", "touches_authentication", "touches_authorization", "touches_payments", "touches_secrets", "task_overlap", "review_unresolved"}
+	want := []string{"covers_c1", "covers_c2", "verified_c1", "verified_c2", "critical_resolved", "open_questions", "scope_creep", "touches_schema", "touches_authentication", "touches_authorization", "touches_payments", "touches_secrets"}
 	if len(qs) != len(want) {
 		t.Fatalf("questions: %d, want %d", len(qs), len(want))
 	}

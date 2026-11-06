@@ -363,7 +363,7 @@ func TestRepeatedQuestionReusesTheStoredAnswer(t *testing.T) {
 }
 
 func TestNewPlanningRoundResetsTheAnswerCap(t *testing.T) {
-	h := &sessHarness{architect: []string{clarifyJSON, planJSON}, answer: answerJSON, review: `{"notes":"cover failures"}`}
+	h := &sessHarness{architect: []string{clarifyJSON, planJSON}, answer: answerJSON, review: `{"findings":[{"id":"F1","severity":"high","layer":"contract","cites":"c1","issue":"cover failures","fix":"add a rule"}],"coverage":[]}`}
 	r := sessionRig(t, h)
 	r.f.Judge = &fakeJudge{over: map[string]float64{"scope_creep": 0.9}}
 	r.plan(t)

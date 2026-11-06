@@ -11,7 +11,7 @@ func TestPromptsCarryClarificationAnswer(t *testing.T) {
 	wo := &model.WorkOrder{Title: "t", ClarifQuestion: "round what?", ClarifAnswer: "the discount"}
 	for name, p := range map[string]string{
 		"plan":        planPrompt(wo, "", "", nil),
-		"review":      foremanReviewPrompt(wo, nil),
+		"review":      foremanReviewPrompt(wo, nil, nil, false),
 		"implement":   implementPrompt(wo, model.Job{TaskID: "task-1"}, nil),
 		"remediation": implementPrompt(wo, model.Job{Payload: map[string]any{"reason": "fix"}}, nil),
 		"inspect":     inspectPrompt(wo, SpecialistPick{Specialty: "testing"}, nil),
@@ -23,7 +23,7 @@ func TestPromptsCarryClarificationAnswer(t *testing.T) {
 }
 
 func TestReviewPromptListsTaskScope(t *testing.T) {
-	p := foremanReviewPrompt(&model.WorkOrder{Title: "t"}, []model.Task{{Title: "a", Objective: "b", Scope: []string{"x/", "y.go"}}})
+	p := foremanReviewPrompt(&model.WorkOrder{Title: "t"}, []model.Task{{Title: "a", Objective: "b", Scope: []string{"x/", "y.go"}}}, nil, false)
 	if !strings.Contains(p, "Scope: x/, y.go") {
 		t.Fatalf("review prompt lacks the task scope:\n%s", p)
 	}
@@ -103,7 +103,7 @@ func TestImplementPromptRendersDoneGateNote(t *testing.T) {
 func TestReviewAndVerifyPromptsNumberTheCriteria(t *testing.T) {
 	wo := &model.WorkOrder{Title: "t", Acceptance: "- rounds half up\n- never floats"}
 	for name, p := range map[string]string{
-		"review":   foremanReviewPrompt(wo, nil),
+		"review":   foremanReviewPrompt(wo, nil, nil, false),
 		"verify":   architectVerifyPrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, "go test → PASS"),
 		"validate": foremanValidatePrompt(wo, "(none open)", "c1: met", "go test → PASS"),
 	} {

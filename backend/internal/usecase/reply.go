@@ -144,43 +144,99 @@ func (p *planReply) validate() error {
 	return nil
 }
 
-// coverageRemark is the Foreman's note on how one acceptance criterion is
-// (or is not) covered by the plan.
-type coverageRemark struct {
-	Criterion string `json:"criterion"`
-	Remark    string `json:"remark"`
+// reviewFinding is one problem the Foreman found in the contract. Question is
+// set only on a requirement-layer finding that needs a human answer.
+type reviewFinding struct {
+	ID       string `json:"id"`
+	Severity string `json:"severity"`
+	Layer    string `json:"layer"`
+	Cites    string `json:"cites"`
+	Issue    string `json:"issue"`
+	Fix      string `json:"fix"`
+	Question string `json:"question,omitempty"`
 }
 
-// reviewReply is the Foreman's notes on the plan. It carries no decision: the
-// plan gate decides in code (gates.go).
+type reviewCoverage struct {
+	Criterion    string `json:"criterion"`
+	Verification string `json:"verification"`
+}
+
+type findingStatus struct {
+	ID     string `json:"id"`
+	Status string `json:"status"`
+}
+
+const maxReviewFindings = 10
+
+// reviewReply is the Foreman's read-only analysis of the contract. It carries
+// no decision: the contract gate decides in code (gates.go). Resolved is set
+// only on a scoped re-review, where it marks each previous critical finding.
 type reviewReply struct {
-	Notes    string           `json:"notes"`
-	Coverage []coverageRemark `json:"coverage"`
+	Findings []reviewFinding  `json:"findings"`
+	Coverage []reviewCoverage `json:"coverage"`
+	Resolved []findingStatus  `json:"resolved,omitempty"`
 }
 
 func (r *reviewReply) validate() error {
-	if strings.TrimSpace(r.Notes) == "" {
-		return errors.New("notes is required")
+	if r.Findings == nil {
+		return errors.New("findings is required (use [] when there are none)")
+	}
+	if len(r.Findings) > maxReviewFindings {
+		return fmt.Errorf("at most %d findings, got %d", maxReviewFindings, len(r.Findings))
+	}
+	for i, f := range r.Findings {
+		if strings.TrimSpace(f.ID) == "" || strings.TrimSpace(f.Issue) == "" {
+			return fmt.Errorf("findings[%d] needs an id and an issue", i)
+		}
+		if err := oneOf(fmt.Sprintf("findings[%d].severity", i), f.Severity, "critical", "high", "low"); err != nil {
+			return err
+		}
+		if err := oneOf(fmt.Sprintf("findings[%d].layer", i), f.Layer, "contract", "requirement"); err != nil {
+			return err
+		}
+		if f.Severity == "critical" && strings.TrimSpace(f.Cites) == "" {
+			return fmt.Errorf("findings[%d] is critical, so it must cite the contract", i)
+		}
+		if f.Severity == "critical" && f.Layer == "requirement" && strings.TrimSpace(f.Fix) == "" && strings.TrimSpace(f.Question) == "" {
+			return fmt.Errorf("findings[%d] is a critical requirement finding, so it needs a fix or a question", i)
+		}
 	}
 	for i, c := range r.Coverage {
-		if strings.TrimSpace(c.Criterion) == "" || strings.TrimSpace(c.Remark) == "" {
-			return fmt.Errorf("coverage[%d] needs a criterion and a remark", i)
+		if strings.TrimSpace(c.Criterion) == "" {
+			return fmt.Errorf("coverage[%d] needs a criterion", i)
+		}
+		if err := oneOf(fmt.Sprintf("coverage[%d].verification", i), c.Verification, "test", "check", "missing"); err != nil {
+			return err
+		}
+	}
+	for i, s := range r.Resolved {
+		if err := oneOf(fmt.Sprintf("resolved[%d].status", i), s.Status, "resolved", "unresolved"); err != nil {
+			return err
 		}
 	}
 	return nil
 }
 
-// text renders the reply as the review the plan gate and the Architect read.
+func findingLine(f reviewFinding) string {
+	return fmt.Sprintf("%s [%s, %s] %s: %s Fix: %s", f.ID, f.Severity, f.Layer, strings.TrimSpace(f.Cites), strings.TrimSpace(f.Issue), strings.TrimSpace(f.Fix))
+}
+
+// text renders the analysis for the activity trail and the knowledge record.
 func (r *reviewReply) text() string {
 	var b strings.Builder
-	b.WriteString(strings.TrimSpace(r.Notes))
+	for _, f := range r.Findings {
+		b.WriteString("- " + findingLine(f) + "\n")
+	}
+	if b.Len() == 0 {
+		b.WriteString("No findings.\n")
+	}
 	if len(r.Coverage) > 0 {
-		b.WriteString("\n\nCoverage:")
+		b.WriteString("Coverage:")
 		for _, c := range r.Coverage {
-			b.WriteString("\n- " + strings.TrimSpace(c.Criterion) + ": " + strings.TrimSpace(c.Remark))
+			b.WriteString(" " + strings.TrimSpace(c.Criterion) + "=" + c.Verification)
 		}
 	}
-	return b.String()
+	return strings.TrimSpace(b.String())
 }
 
 // validationReply is the Foreman's notes on whether the finished work is done.

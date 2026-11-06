@@ -78,17 +78,36 @@ func TestIntakeAnswerAndSpecSchemas(t *testing.T) {
 
 func TestReviewAndFindingsSchemas(t *testing.T) {
 	var r reviewReply
-	if err := decodeReply(`{"decision":"APPROVE"}`, &r); err == nil || !strings.Contains(err.Error(), "notes") {
-		t.Fatalf("a review without notes must fail: %v", err)
+	if err := decodeReply(`{"coverage":[]}`, &r); err == nil || !strings.Contains(err.Error(), "findings") {
+		t.Fatalf("an analysis without findings must fail: %v", err)
 	}
-	if err := decodeReply(`{"notes":"ok","coverage":[{"criterion":"c1"}]}`, &r); err == nil || !strings.Contains(err.Error(), "coverage") {
-		t.Fatalf("a coverage remark needs a criterion and a remark: %v", err)
+	finding := func(sev, layer, cites string) string {
+		return `{"findings":[{"id":"F1","severity":"` + sev + `","layer":"` + layer + `","cites":"` + cites + `","issue":"no error path","fix":"add a rule"}]}`
 	}
-	if err := decodeReply(`{"notes":"Missing the failure path","coverage":[{"criterion":"c1","remark":"task t1"}]}`, &r); err != nil {
+	for name, text := range map[string]string{
+		"unknown severity":        finding("blocker", "contract", "c1"),
+		"unknown layer":           finding("high", "code", "c1"),
+		"critical without a cite": finding("critical", "contract", " "),
+		"bad coverage":            `{"findings":[],"coverage":[{"criterion":"c1","verification":"maybe"}]}`,
+		"coverage without id":     `{"findings":[],"coverage":[{"verification":"test"}]}`,
+		"bad resolved status":     `{"findings":[],"resolved":[{"id":"F1","status":"fixed"}]}`,
+		"eleven findings":         `{"findings":[` + strings.TrimSuffix(strings.Repeat(`{"id":"F","severity":"low","layer":"contract","issue":"x"},`, 11), ",") + `]}`,
+	} {
+		if err := decodeReply(text, &r); err == nil {
+			t.Errorf("%s must fail", name)
+		}
+	}
+	if err := decodeReply(finding("high", "contract", ""), &r); err != nil {
+		t.Fatalf("a high finding needs no cite: %v", err)
+	}
+	if err := decodeReply(`{"findings":[{"id":"F1","severity":"critical","layer":"requirement","cites":"brief: constraint 1","issue":"silent on limits","fix":"cap at 5MB","question":"Which cap?"}],"coverage":[{"criterion":"c1","verification":"test"},{"criterion":"c2","verification":"missing"}],"resolved":[{"id":"F0","status":"resolved"}]}`, &r); err != nil {
 		t.Fatal(err)
 	}
-	if want := "Missing the failure path\n\nCoverage:\n- c1: task t1"; r.text() != want {
+	if want := "- F1 [critical, requirement] brief: constraint 1: silent on limits Fix: cap at 5MB\nCoverage: c1=test c2=missing"; r.text() != want {
 		t.Fatalf("text = %q", r.text())
+	}
+	if err := decodeReply(`{"findings":[],"coverage":[]}`, &r); err != nil || r.text() != "No findings." {
+		t.Fatalf("empty analysis is valid: %v %q", err, r.text())
 	}
 	var f findingsReply
 	if err := decodeReply(`{"findings":[{"severity":"critical","title":"x"}]}`, &f); err == nil {

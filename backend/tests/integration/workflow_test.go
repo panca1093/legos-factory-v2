@@ -88,7 +88,7 @@ func (j *scriptedJudge) Ask(_ context.Context, state any, qs map[string]usecase.
 	answers := map[string]float64{}
 	for id := range qs {
 		answers[id] = 0.05
-		if strings.HasPrefix(id, "covers_") || strings.HasPrefix(id, "met_") {
+		if strings.HasPrefix(id, "covers_") || strings.HasPrefix(id, "met_") || strings.HasPrefix(id, "verified_") || id == "critical_resolved" {
 			answers[id] = 0.95
 		}
 	}

@@ -166,7 +166,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 func findClarification(list []model.Clarification, question string) *model.Clarification {
 	q := strings.ToLower(strings.TrimSpace(question))
 	for i := range list {
-		if strings.ToLower(strings.TrimSpace(list[i].Question)) == q {
+		if list[i].By != builderNotesBy && strings.ToLower(strings.TrimSpace(list[i].Question)) == q {
 			return &list[i]
 		}
 	}
