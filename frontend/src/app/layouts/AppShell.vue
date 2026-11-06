@@ -111,7 +111,19 @@ const budgetPercent = computed(() =>
       )
     : 0,
 );
-const recentChats = computed(() => chats.chats.slice(0, 5));
+const onChats = computed(() => route.path.startsWith("/chats"));
+const railQuery = ref("");
+watch(onChats, (on) => {
+  if (!on) railQuery.value = "";
+});
+// On the Chats page the rail is the conversation list, so it shows every chat.
+const recentChats = computed(() => {
+  if (!onChats.value) return chats.chats.slice(0, 5);
+  const q = railQuery.value.trim().toLowerCase();
+  return q
+    ? chats.chats.filter((c) => chatTitle(c).toLowerCase().includes(q))
+    : chats.chats;
+});
 const tokens = (t: { tokens_in: number; tokens_out: number }) =>
   new Intl.NumberFormat("en-US", { notation: "compact" }).format(
     t.tokens_in + t.tokens_out,
@@ -228,8 +240,20 @@ async function logout() {
             Projects appear here.
           </p>
         </nav>
-        <div class="lg-nav-label">Recent chats</div>
-        <nav class="lg-nav grow" aria-label="Recent chats">
+        <div class="lg-nav-label">
+          {{ onChats ? "Chats" : "Recent chats" }}
+        </div>
+        <SearchField
+          v-if="onChats"
+          v-model="railQuery"
+          class="rail-search"
+          label="Search chats"
+          placeholder="Search chats…"
+        />
+        <nav
+          class="lg-nav grow"
+          :aria-label="onChats ? 'All chats' : 'Recent chats'"
+        >
           <RouterLink
             v-for="c in recentChats"
             :key="c.id"
@@ -237,7 +261,9 @@ async function logout() {
             active-class="active"
             ><span class="t">{{ chatTitle(c) }}</span></RouterLink
           >
-          <p v-if="!recentChats.length" class="empty-note">No chats yet.</p>
+          <p v-if="!recentChats.length" class="empty-note">
+            {{ railQuery && onChats ? "No matching chats." : "No chats yet." }}
+          </p>
         </nav>
         <RouterLink to="/settings?tab=usage" class="usage-card"
           ><div class="top">

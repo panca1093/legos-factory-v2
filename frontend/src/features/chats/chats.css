@@ -614,6 +614,16 @@
     display: none;
   }
 }
+/* Matches AppShell's overlay breakpoint: below it the open rail floats over the page. */
+@media (min-width: 1001px) {
+  .side-open .chats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .side-open .chats > .chatlist,
+  .side-open .chats .list-btn {
+    display: none;
+  }
+}
 @container main (min-width: 861px) and (max-width: 1180px) {
   .chats.ctx-open {
     grid-template-columns: minmax(0, 1fr);

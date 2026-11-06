@@ -45,6 +45,9 @@
 .rail .lg-btn {
   width: 100%;
 }
+.rail .rail-search {
+  margin: 0 0 var(--space-2);
+}
 .rail .grow {
   flex: 1;
   align-content: start;

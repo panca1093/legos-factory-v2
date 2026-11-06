@@ -394,7 +394,7 @@ describe("rail recent chats", () => {
         { path: "/:pathMatch(.*)*", component: { template: "<div />" } },
       ],
     });
-    await router.push("/chats");
+    await router.push("/factory");
     await router.isReady();
     useSession().user = { id: "u", name: "P", email: "p@x", role: "OWNER" };
     const w = mount(AppShell, { global: { plugins: [router] } });
@@ -407,6 +407,50 @@ describe("rail recent chats", () => {
     await flushPromises();
     expect(router.currentRoute.value.fullPath).toBe("/chats?new=1");
     expect(calls).not.toContain("POST");
+    w.unmount();
+  });
+  it("lists every chat with search on the Chats page, where the in-page list is hidden", async () => {
+    setActivePinia(createPinia());
+    const calls: string[] = [];
+    const list = Array.from({ length: 7 }, (_, i) => ({
+      id: `c${i}`,
+      user_id: "u",
+      title: `Chat ${i}`,
+      model: "",
+      created_at: "",
+      updated_at: "",
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string }) => ({
+        ok: (calls.push(init?.method ?? "GET"), true),
+        text: async () =>
+          JSON.stringify(
+            init?.method === "POST"
+              ? { chat: { ...list[0], id: "new" } }
+              : url.endsWith("/chats")
+                ? { chats: list }
+                : { projects: [], work_orders: [], metrics: {}, budget: {} },
+          ),
+      })),
+    );
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: "/:pathMatch(.*)*", component: { template: "<div />" } },
+      ],
+    });
+    await router.push("/chats");
+    await router.isReady();
+    useSession().user = { id: "u", name: "P", email: "p@x", role: "OWNER" };
+    const w = mount(AppShell, { global: { plugins: [router] } });
+    await flushPromises();
+    expect(w.findAll('nav[aria-label="All chats"] a')).toHaveLength(7);
+    await w.find(".rail-search input").setValue("Chat 6");
+    await flushPromises();
+    expect(
+      w.findAll('nav[aria-label="All chats"] a').map((a) => a.text()),
+    ).toEqual(["Chat 6"]);
     w.unmount();
   });
 });
