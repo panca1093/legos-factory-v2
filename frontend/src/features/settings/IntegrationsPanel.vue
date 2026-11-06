@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { Laptop } from "lucide-vue-next";
+import { publishLabel } from "../../composables/presentation";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
 import type { Connection, Project, Provider } from "../../types/api";
@@ -249,7 +251,10 @@ function revoke(c: Connection) {
     >
       <div class="grow">
         <h3>{{ p.name }}</h3>
-        <p>{{ p.repo_url }}</p>
+        <p>
+          <Laptop class="icon proj-local" aria-label="On this computer" />
+          {{ p.repo_url }} · {{ publishLabel(p) }}
+        </p>
         <div v-if="links[p.id]" class="form-grid" style="margin-top: 8px">
           <select
             :id="`link-conn-${p.id}`"

@@ -16,7 +16,25 @@ export interface Project {
   language: string;
   git_connection_id?: string;
   remote_repo?: string;
+  publish_via?: "connection" | "gh" | "none";
+  github_repo?: string;
   created_at: string;
+}
+
+export interface LocalInspect {
+  path: string;
+  name: string;
+  is_git: boolean;
+  github_repo: string;
+  default_branch: string;
+  language: string;
+  repos: LocalInspect[];
+}
+
+export interface LocalGh {
+  installed: boolean;
+  authenticated: boolean;
+  account: string;
 }
 
 export type WorkOrderState =
@@ -273,6 +291,7 @@ async function request<T>(
   method: string,
   path: string,
   body?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
   const resp = await fetch(path, {
     method,
@@ -280,6 +299,7 @@ async function request<T>(
       body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: "same-origin",
+    signal,
   });
   const text = await resp.text();
   let data: unknown = null;
@@ -313,7 +333,8 @@ async function request<T>(
 
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
-  post: <T>(p: string, b?: unknown) => request<T>("POST", p, b ?? {}),
+  post: <T>(p: string, b?: unknown, signal?: AbortSignal) =>
+    request<T>("POST", p, b ?? {}, signal),
   put: <T>(p: string, b?: unknown) => request<T>("PUT", p, b ?? {}),
   patch: <T>(p: string, b?: unknown) => request<T>("PATCH", p, b ?? {}),
   del: <T>(p: string) => request<T>("DELETE", p),

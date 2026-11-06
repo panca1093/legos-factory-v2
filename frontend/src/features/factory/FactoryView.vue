@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { Plus, Folder, X } from "lucide-vue-next";
+import { Plus, Folder, Laptop, X } from "lucide-vue-next";
 import "./factory.css";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
@@ -10,12 +10,13 @@ import Popover from "../../components/ui/Popover.vue";
 import SearchField from "../../components/ui/SearchField.vue";
 import ActorBadge from "./ActorBadge.vue";
 import NewWorkOrderDrawer from "./work-orders/NewWorkOrderDrawer.vue";
-import NewProjectDialog from "./work-orders/NewProjectDialog.vue";
+import AddProjectDialog from "./work-orders/AddProjectDialog.vue";
 import {
   actorOf,
   isFinished,
   orderStatus,
   projectColor,
+  publishLabel,
   stageStatuses,
   stages,
   isNeedsYou,
@@ -155,7 +156,7 @@ onMounted(load);
           class="lg-btn small"
           @click="newProject = true"
         >
-          <Folder class="icon" />New project</button
+          <Folder class="icon" />Add project</button
         ><button
           v-if="session.canWrite"
           class="lg-btn primary pill"
@@ -188,7 +189,8 @@ onMounted(load);
           :aria-pressed="projectID === p.id"
           @click="setQuery('project', p.id)"
         >
-          <i class="fx-dot" :style="{ '--c': projectColor(i) }"></i>{{ p.name }}
+          <i class="fx-dot" :style="{ '--c': projectColor(i) }"></i>{{ p.name
+          }}<Laptop class="icon proj-local" aria-label="On this computer" />
         </button>
         <button
           v-if="status !== 'all'"
@@ -227,7 +229,7 @@ onMounted(load);
         class="lg-btn primary section-gap"
         @click="newProject = true"
       >
-        New project
+        Add project
       </button>
     </div>
     <template v-else>
@@ -279,7 +281,7 @@ onMounted(load);
     @close="setQuery('new', 'all')"
     @created="created"
   />
-  <NewProjectDialog
+  <AddProjectDialog
     v-if="newProject"
     :open="newProject"
     @close="newProject = false"
@@ -300,6 +302,7 @@ onMounted(load);
       </div>
       <p class="small muted">
         {{ selected.language || "Language not detected yet" }} ·
+        {{ publishLabel(selected) }} ·
         {{
           selected.description ||
           "Work orders use this repository and its backend quality profile."

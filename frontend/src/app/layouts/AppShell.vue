@@ -21,6 +21,8 @@ import {
   PanelLeft,
   PanelLeftClose,
   Plus,
+  FolderPlus,
+  Laptop,
   Gauge,
   LogOut,
 } from "lucide-vue-next";
@@ -35,8 +37,14 @@ import IconButton from "../../components/ui/IconButton.vue";
 import PillNav from "../../components/ui/PillNav.vue";
 import Popover from "../../components/ui/Popover.vue";
 import SearchField from "../../components/ui/SearchField.vue";
+import AddProjectDialog from "../../features/factory/work-orders/AddProjectDialog.vue";
 import Toast from "../../components/ui/Toast.vue";
-import { needsYou, money, projectColor } from "../../composables/presentation";
+import {
+  needsYou,
+  money,
+  projectColor,
+  publishLabel,
+} from "../../composables/presentation";
 import { useTheme } from "../../composables/useTheme";
 const session = useSession(),
   factory = useFactory(),
@@ -48,6 +56,7 @@ const railKey = "legos-factory-rail";
 const sideOpen = ref(false),
   menuOpen = ref(false),
   dialog = ref<"search" | "notifications" | null>(null),
+  addProject = ref(false),
   query = ref("");
 const error = ref("");
 const tabs = [
@@ -193,15 +202,27 @@ async function logout() {
           @click="router.push({ path: '/chats', query: { new: '1' } })"
           ><Plus class="icon" />New chat</Button
         >
-        <div class="lg-nav-label">Projects</div>
+        <div class="lg-nav-label ap-head">
+          Projects
+          <IconButton
+            v-if="session.canWrite"
+            label="Add a project"
+            @click="addProject = true"
+            ><FolderPlus class="icon"
+          /></IconButton>
+        </div>
         <nav class="lg-nav" aria-label="Projects">
           <RouterLink
             v-for="(p, i) in factory.projects"
             :key="p.id"
             :to="{ path: '/factory', query: { project: p.id } }"
             ><i class="dot" :style="{ '--c': projectColor(i) }"></i
-            ><span class="t">{{ p.name }}</span></RouterLink
-          >
+            ><span class="t">{{ p.name }}</span
+            ><Laptop
+              class="icon proj-local"
+              :title="publishLabel(p)"
+              aria-label="On this computer"
+          /></RouterLink>
           <p v-if="!factory.projects.length" class="empty-note">
             Projects appear here.
           </p>
@@ -337,6 +358,17 @@ async function logout() {
     ></RouterLink>
   </nav>
   <Toast />
+  <AddProjectDialog
+    v-if="addProject"
+    :open="addProject"
+    @close="addProject = false"
+    @created="
+      (id) => {
+        addProject = false;
+        router.push({ path: '/factory', query: { project: id } });
+      }
+    "
+  />
   <AppDialog
     :open="dialog === 'search'"
     title="Find your next piece"
@@ -355,7 +387,9 @@ async function logout() {
         class="search-result"
         :to="{ path: '/factory', query: { project: p.id } }"
         ><strong>{{ p.name }}</strong
-        ><small>Project · {{ p.repo_url }}</small></RouterLink
+        ><small
+          >Project · {{ p.repo_url }} · {{ publishLabel(p) }}</small
+        ></RouterLink
       ><RouterLink
         v-for="w in results"
         :key="w.id"

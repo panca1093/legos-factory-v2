@@ -38,7 +38,7 @@ test.afterAll(() =>
 async function createProject(page: Page, name: string) {
   await page.getByRole("link", { name: "Factory", exact: true }).click();
   await page
-    .getByRole("button", { name: "New project", exact: true })
+    .getByRole("button", { name: "Add project", exact: true })
     .first()
     .click();
   await page.fill("#prj-name", name);
