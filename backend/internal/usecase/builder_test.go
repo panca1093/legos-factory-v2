@@ -41,6 +41,9 @@ func (dirSandbox) ChangedFiles(_ context.Context, dir string) ([]string, error) 
 }
 
 func (dirSandbox) Diff(context.Context, string) ([]model.FileDiff, error) { return nil, nil }
+func (dirSandbox) CommitDiff(context.Context, string, string) (model.WODiff, error) {
+	return model.WODiff{}, nil
+}
 
 func (dirSandbox) TaskWorktree(context.Context, string, string, string) (bool, error) {
 	return false, nil

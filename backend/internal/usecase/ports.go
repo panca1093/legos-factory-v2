@@ -98,6 +98,7 @@ type Sandbox interface {
 	PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (base string, err error)
 	ChangedFiles(ctx context.Context, dir string) ([]string, error)
 	Diff(ctx context.Context, dir string) ([]model.FileDiff, error)
+	CommitDiff(ctx context.Context, dir, sha string) (model.WODiff, error)
 	TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (ok bool, err error)
 	MergeTask(ctx context.Context, woDir, branch, message string) (conflict bool, err error)
 	SyncTask(ctx context.Context, woDir, taskDir string) (conflicted []string, err error)

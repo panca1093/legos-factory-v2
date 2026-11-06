@@ -272,14 +272,22 @@ func (s *Server) handleListRuns(c echo.Context) error {
 }
 
 func (s *Server) handleListEvents(c echo.Context) error {
-	events, err := s.WORepo.Events(c.Request().Context(), c.Param("id"), 0, 200)
+	events, more, err := s.WORepo.LatestEvents(c.Request().Context(), c.Param("id"), 500)
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load events")
 	}
 	if events == nil {
 		events = []model.Event{}
 	}
-	return c.JSON(http.StatusOK, map[string]any{"events": events})
+	return c.JSON(http.StatusOK, map[string]any{"events": events, "has_more": more})
+}
+
+func (s *Server) handleWODiff(c echo.Context) error {
+	d, err := s.Factory.Diff(c.Request().Context(), woFrom(c))
+	if err != nil {
+		d = model.WODiff{Reason: "Could not read the diff.", Files: []model.WODiffFile{}}
+	}
+	return c.JSON(http.StatusOK, d)
 }
 
 func (s *Server) handleListQuality(c echo.Context) error {

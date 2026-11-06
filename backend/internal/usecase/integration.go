@@ -253,6 +253,19 @@ func (in *Integrations) Annotate(ctx context.Context, p *model.Project) {
 	}
 }
 
+// Bound reports whether GitFor would bind the project, without any network
+// call: a connection, or a local repo with a GitHub origin in gh mode.
+func (in *Integrations) Bound(ctx context.Context, p *model.Project) bool {
+	if in == nil {
+		return false
+	}
+	if p.GitConnection != "" {
+		return true
+	}
+	repo, _ := in.localGitHub(ctx, p)
+	return repo != ""
+}
+
 // GitFor returns the provider and auth for a project: its bound connection,
 // which wins, else the user's gh login for a local repo with a GitHub origin.
 // ok is false when the project is neither.

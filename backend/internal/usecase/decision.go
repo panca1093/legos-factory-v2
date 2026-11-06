@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"legos-factory/backend/internal/model"
 )
@@ -130,9 +131,11 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 				f.Log.Error("cataloger: summary enqueue failed", "wo", woID, "err", err)
 			}
 		}
-		// the human approval is the explicit authorization to publish
-		if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil && proj.GitConnection != "" {
-			if _, err := f.Sched.Enqueue(ctx, JobOpenPR, woID, "", map[string]any{}); err != nil {
+		// approval authorizes publishing; handleOpenPR does the gh auth check, so no network here
+		if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil && f.Integrations.Bound(ctx, proj) {
+			ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second) // a cancelled request must not drop the job after READY
+			defer cancel()
+			if _, err := f.Sched.Enqueue(ectx, JobOpenPR, woID, "", map[string]any{}); err != nil {
 				f.Log.Error("open PR enqueue failed", "wo", woID, "err", err)
 			}
 		}
@@ -160,6 +163,16 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 	default:
 		return fmt.Errorf("unknown PR decision %q", decision)
 	}
+}
+
+// Diff returns the work order's committed change. It compares two commits and
+// never touches the index or worktree, so it takes no workspace lock.
+func (f *Factory) Diff(ctx context.Context, wo *model.WorkOrder) (model.WODiff, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	d, err := f.Sandbox.CommitDiff(ctx, f.workspaceDir(wo.ID), wo.CommitSHA)
+	d.Revision = wo.Revision
+	return d, err
 }
 
 // Cancel stops pending jobs and transitions the WO to CANCELLED.
