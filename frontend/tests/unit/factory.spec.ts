@@ -49,6 +49,9 @@ it("groups orders by who holds them and keeps stalled PRs in Needs you and finis
   expect(group("Running").text()).toContain("Validate settlement timestamps");
   expect(group("Running").text()).toContain("PR open · in review");
   expect(group("Finished").findAll('[data-test="order-row"]')).toHaveLength(0);
+  expect(
+    w.findAll(".fx-group h2").map((h) => h.text().replace(/\s*\d+$/, "")),
+  ).toEqual(["To do", "Needs you", "Running", "Finished"]);
   const order = f.workOrders.find((o) => o.id === "LF-121")!;
   order.pr_closed_at = "2026-10-25T00:00:00Z";
   await flushPromises();
