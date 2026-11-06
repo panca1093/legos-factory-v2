@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"legos-factory/backend/internal/model"
 )
 
 type knowledgeRecord struct {
@@ -94,6 +96,13 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 	}
 
 	p1 := ta.createProject(t, "Greeter", repo)
+	legacy := &model.KnowledgeRecord{
+		ProjectID: p1, RepoURL: repo, Kind: "verification", Trust: model.TrustVerified, Actor: "builder",
+		Title: "Verification passed on revision 0 at legacy", Body: "legacy PASS record kept untouched",
+	}
+	if err := ta.a.Server.Catalog.Knowledge.Insert(context.Background(), legacy); err != nil {
+		t.Fatalf("seed legacy record: %v", err)
+	}
 	wo1 := ta.createWO(t, p1, "Greeter greeting", "Make the greeter greeting function available so the fixture contract test passes.")
 	ta.plan(t, wo1)
 	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+wo1+"/plan/decisions", `{"decision":"approve"}`); status != 202 {
@@ -122,9 +131,8 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 	_, recs := ta.knowledge(t, ta.session, "?project_id="+p1+"&work_order_id="+wo1)
 	kinds := byKind(recs)
 	for kind, trust := range map[string]string{
-		"architect_review": "ai_interpretation", "plan_approved": "human_decision", "implementation": "ai_interpretation",
-		"verification": "verified", "findings": "ai_interpretation", "readiness": "verified",
-		"pr_decision": "human_decision", "work_order_completed": "verified",
+		"architect_review": "ai_interpretation", "plan_approved": "human_decision", "findings": "ai_interpretation",
+		"readiness": "verified", "pr_decision": "human_decision", "work_order_completed": "verified",
 	} {
 		if len(kinds[kind]) == 0 {
 			t.Fatalf("missing %s record; have %v", kind, keys(kinds))
@@ -137,28 +145,61 @@ func TestCatalogerKnowledgeLifecycle(t *testing.T) {
 		if k.WOID != wo1 || k.ProjectID != p1 || k.RepoURL != repo {
 			t.Fatalf("record not linked to its origin: %+v", k)
 		}
+		if strings.HasPrefix(k.Title, "Verification passed on revision") {
+			t.Fatalf("per-revision verification journal must not be written: %+v", k)
+		}
+	}
+	for _, kind := range []string{"verification", "implementation"} {
+		if len(kinds[kind]) != 0 {
+			t.Fatalf("no new %s records expected for the work order: %+v", kind, kinds[kind])
+		}
+	}
+	if len(kinds["work_order_completed"]) != 1 {
+		t.Fatalf("want exactly one task summary, got %+v", kinds["work_order_completed"])
 	}
 	done := kinds["work_order_completed"][0]
-	if done.CommitSHA != woSHA || len(done.SourceRefs) < 7 {
+	if done.CommitSHA != woSHA || len(done.SourceRefs) == 0 {
 		t.Fatalf("completion must link the commit and prior records: %+v", done)
+	}
+	if !strings.HasPrefix(done.Title, "Task summary:") {
+		t.Fatalf("completion title must start with 'Task summary:': %q", done.Title)
+	}
+	for _, want := range []string{"Goal:", "Final verification:", "Open items / follow-up:", "Key decisions and rationale:", "Main changes:", "go-test: PASS", "go-vet: PASS"} {
+		if !strings.Contains(done.Body, want) {
+			t.Fatalf("task summary missing %q: %s", want, done.Body)
+		}
+	}
+	if strings.Contains(done.Body, "typecheck") {
+		t.Fatalf("task summary must use the fixture's check names, not typecheck: %s", done.Body)
 	}
 	if pr := kinds["pr_decision"][0]; pr.CommitSHA != woSHA || !contains(pr.SourceRefs, "pr:local:"+wo1+"@"+woSHA) {
 		t.Fatalf("PR decision must reference the local PR and commit: %+v", pr)
 	}
-	passed := false
-	for _, v := range kinds["verification"] {
-		if v.CommitSHA == woSHA && strings.Contains(v.Body, "PASS") {
-			passed = true
-		}
-		if strings.Contains(v.Body, "--- FAIL") || len(v.Body) > 2100 {
-			t.Fatalf("verification record must not store raw execution logs: %q", v.Body)
+
+	// pre-existing journal entries are never rewritten
+	_, seededAfter := ta.knowledge(t, ta.session, "?project_id="+p1+"&q=legacy")
+	var got *knowledgeRecord
+	for i := range seededAfter {
+		if seededAfter[i].ID == legacy.ID {
+			got = &seededAfter[i]
 		}
 	}
-	if !passed {
-		t.Fatalf("expected a verified PASS record at %s: %+v", woSHA, kinds["verification"])
+	if got == nil || got.Title != legacy.Title || got.Body != legacy.Body || got.Kind != "verification" {
+		t.Fatalf("legacy record changed: before %+v after %+v", legacy, got)
 	}
+
+	// per-revision verification history stays in the quality checks and run events
 	if status, body := ta.do(t, "GET", "/api/v1/work-orders/"+wo1+"/quality", ""); status != 200 || !strings.Contains(body, `"commit_sha":"`+woSHA+`"`) {
 		t.Fatalf("final-revision checks must be stamped with the commit: %d %s", status, tail(body, 600))
+	}
+	if status, body := ta.do(t, "GET", "/api/v1/work-orders/"+wo1+"/activity", ""); status != 200 {
+		t.Fatalf("activity: %d %s", status, body)
+	} else {
+		for _, ev := range []string{"verification_started", "check_pass", "verification_passed"} {
+			if !strings.Contains(body, `"`+ev+`"`) {
+				t.Fatalf("activity missing %s: %s", ev, tail(body, 800))
+			}
+		}
 	}
 
 	// optional AI summary: one run, non-authoritative, citing its sources
