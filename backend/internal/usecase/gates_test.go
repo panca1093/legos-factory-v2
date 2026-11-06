@@ -497,7 +497,7 @@ func TestGateEvent(t *testing.T) {
 		Answers: map[string]float64{"scope_creep": 0.9}, Model: "jev-1.14.0-r2", RequestedModel: "jev-1.14.0",
 		Request: wire, Usage: Usage{InputTokens: 360, OutputTokens: 39},
 	}
-	ev := gateEvent("plan", state, qs, res, GateOutcome{GateRevise, 3, "tasks overlap"}, nil)
+	ev := gateEvent("plan", state, qs, res, GateOutcome{Outcome: GateRevise, Row: 3, Note: "tasks overlap"}, nil)
 	if !reflect.DeepEqual(ev["request"], wire) || !reflect.DeepEqual(ev["answers"], res.Answers) {
 		t.Fatalf("payload: %+v", ev)
 	}
@@ -515,7 +515,7 @@ func TestGateEvent(t *testing.T) {
 	if err != nil || !strings.Contains(string(raw), `"request":`+string(wire)) {
 		t.Fatalf("request not embedded verbatim: %s (%v)", raw, err)
 	}
-	ev = gateEvent("done", state, qs, JudgeResult{}, GateOutcome{GateEscalate, 2, "x"}, errNoJudge)
+	ev = gateEvent("done", state, qs, JudgeResult{}, GateOutcome{Outcome: GateEscalate, Row: 2, Note: "x"}, errNoJudge)
 	if ev["error"] != "jev is not configured" {
 		t.Fatalf("error not recorded: %+v", ev)
 	}

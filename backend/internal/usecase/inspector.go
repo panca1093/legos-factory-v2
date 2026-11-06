@@ -62,7 +62,7 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 			if err := f.step(ctx, wo, model.StatePRPreparation, model.StateMergeReadiness, "factory", "Evaluating merge readiness"); err != nil {
 				return err
 			}
-			return f.evaluateReadiness(ctx, wo, true, "")
+			return f.evaluateReadiness(ctx, wo, true, nil)
 		}
 		newRev, failures := wo.Revision+1, wo.VerifyFailures+1
 		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": failures}); err != nil {

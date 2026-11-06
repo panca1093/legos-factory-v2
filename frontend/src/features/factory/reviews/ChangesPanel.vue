@@ -13,6 +13,7 @@ const props = defineProps<{
   busy: boolean;
   ship?: ReturnType<typeof shipState>;
   reason?: string;
+  issues?: string[];
   publishNote?: string;
   diff?: WODiff | null;
   refreshFailed?: boolean;
@@ -89,6 +90,7 @@ const shipNote: Record<string, string> = {
         v-if="reason && ship?.key === 'approval'"
         label="Before you approve:"
         :text="reason"
+        :items="issues"
       />
       <p v-if="ship?.key === 'approval'" class="small muted">
         {{ publishNote }}

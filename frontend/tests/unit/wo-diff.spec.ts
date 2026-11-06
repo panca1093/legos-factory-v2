@@ -6,7 +6,10 @@ import ChangesPanel from "../../src/features/factory/reviews/ChangesPanel.vue";
 import NowCard from "../../src/features/factory/work-orders/NowCard.vue";
 import ActivityPanel from "../../src/features/factory/runs/ActivityPanel.vue";
 import { diffFromApi } from "../../src/features/factory/reviews/diff";
-import { currentReason } from "../../src/features/factory/runs/agentActivity";
+import {
+  currentIssues,
+  currentReason,
+} from "../../src/features/factory/runs/agentActivity";
 import { publishNote } from "../../src/composables/presentation";
 import { useFactory } from "../../src/stores/factory";
 import type { WODiff, WOEvent, WorkOrder } from "../../src/types/api";
@@ -328,6 +331,48 @@ describe("NowCard", () => {
     );
     expect(w.find(".fx-reason").exists()).toBe(false);
     expect(w.text().match(/Waiting for your approval/g)).toHaveLength(1);
+  });
+  it("counts and lists the backend's issues, keeping a ';' inside one issue", async () => {
+    const events = [
+      into("NEEDS_HUMAN_REVIEW"),
+      ev(
+        "readiness_needs_human_review",
+        "The done gate needs a human decision: a; b; c",
+        {
+          issues: ["a", "renamed x; moved y"],
+        },
+      ),
+    ];
+    const order = wo({ state: "NEEDS_HUMAN_REVIEW" });
+    expect(currentIssues(order, events)).toEqual(["a", "renamed x; moved y"]);
+    const w = mountNow(order, events);
+    expect(w.find('[data-test="approval-summary"]').text()).toContain(
+      "left 2 open issues",
+    );
+    const changes = panel({
+      ship: { key: "approval", label: "Waiting", tone: "" },
+      reason: events[1].message,
+      issues: currentIssues(order, events),
+    });
+    await changes.find(".fx-reason-toggle").trigger("click");
+    expect(
+      changes.findAll(".fx-reason-list li").map((li) => li.text()),
+    ).toEqual(["a", "renamed x; moved y"]);
+  });
+  it("has no issue list for events logged before the backend sent one", () => {
+    const order = wo({ state: "NEEDS_HUMAN_REVIEW" });
+    expect(
+      currentIssues(order, [
+        into("NEEDS_HUMAN_REVIEW"),
+        ev("readiness_needs_human_review", "a; b"),
+      ]),
+    ).toEqual([]);
+    expect(
+      currentIssues(order, [
+        into("NEEDS_HUMAN_REVIEW"),
+        ev("done_gate", "x", { outcome: "escalate", note: "x", issues: null }),
+      ]),
+    ).toEqual([]);
   });
   it("Latest uses the newest event by id", () => {
     const w = mountNow(wo({ state: "IMPLEMENTING" }), [

@@ -1,12 +1,19 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-const props = defineProps<{ text: string; label?: string; suffix?: string }>();
+const props = defineProps<{
+  text: string;
+  label?: string;
+  suffix?: string;
+  items?: string[];
+}>();
 const open = ref(false);
 const parts = computed(() =>
-  props.text
-    .split(";")
-    .map((p) => p.trim())
-    .filter(Boolean),
+  props.items?.length
+    ? props.items
+    : props.text
+        .split(";")
+        .map((p) => p.trim())
+        .filter(Boolean),
 );
 const list = computed(() => parts.value.length > 1);
 const long = computed(() => list.value || props.text.length > 180);
