@@ -454,7 +454,8 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		provider, modelID := SplitModelRef(c.resolve(ctx, ch))
 		_ = c.Usage.Record(ctx, model.UsageRecord{
 			UserID: u.ID, Role: string(model.AgentChat), Provider: provider, Model: modelID,
-			TokensIn: res.TokensIn, TokensOut: res.TokensOut, CostMicros: res.CostMicros, Source: res.CostSource,
+			TokensIn: res.TokensIn, TokensOut: res.TokensOut, CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
+			CostMicros: res.CostMicros, Source: res.CostSource,
 		})
 	}
 	if titled != nil {

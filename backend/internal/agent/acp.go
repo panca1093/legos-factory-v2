@@ -454,6 +454,8 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 		// inputTokens excludes cache reads/writes, which carry nearly all of a cached prompt
 		TokensIn:   res.Usage.InputTokens + res.Usage.CachedReadTokens + res.Usage.CachedWriteTokens,
 		TokensOut:  res.Usage.OutputTokens,
+		CacheRead:  res.Usage.CachedReadTokens,
+		CacheWrite: res.Usage.CachedWriteTokens,
 		CostMicros: int64((c.cost - r.costBase) * 1_000_000), CostSource: "unknown",
 	}
 	if c.costSeen {

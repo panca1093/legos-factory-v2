@@ -24,7 +24,7 @@ func TestRunListReportsFinishedAtOnlyForEndedRuns(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := repo.Complete(ctx, "run_done", model.AgentResult{Text: "ok"}); err != nil {
+	if err := repo.Complete(ctx, "run_done", model.AgentResult{Text: "ok", CacheRead: 4000, CacheWrite: 900}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.Fail(ctx, "run_failed", "boom"); err != nil {
@@ -37,6 +37,9 @@ func TestRunListReportsFinishedAtOnlyForEndedRuns(t *testing.T) {
 	}
 	finished := map[string]bool{}
 	for _, r := range runs {
+		if r.ID == "run_done" && (r.CacheRead != 4000 || r.CacheWrite != 900) {
+			t.Fatalf("cache tokens not stored: %+v", r)
+		}
 		finished[r.ID] = r.FinishedAt != nil
 		if r.FinishedAt != nil && r.FinishedAt.Before(r.CreatedAt) {
 			t.Fatalf("%s finished before it started", r.ID)

@@ -112,6 +112,8 @@ export interface Run {
   error?: string;
   tokens_in: number;
   tokens_out: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
   cost_micros: number;
   created_at: string;
   finished_at?: string;

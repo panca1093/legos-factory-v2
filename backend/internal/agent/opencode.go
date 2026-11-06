@@ -221,6 +221,8 @@ func (s *sessionState) absorb(msgs []message) bool {
 				SessionRef: s.id,
 				TokensIn:   int64(m.Tokens.Input + m.Tokens.Cache.Read + m.Tokens.Cache.Write),
 				TokensOut:  int64(m.Tokens.Output),
+				CacheRead:  int64(m.Tokens.Cache.Read),
+				CacheWrite: int64(m.Tokens.Cache.Write),
 				CostMicros: int64(m.Cost * 1_000_000),
 				CostSource: "measured",
 			}

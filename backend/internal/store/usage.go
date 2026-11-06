@@ -11,10 +11,10 @@ import (
 type UsageRepo struct{ DB *sql.DB }
 
 func (r *UsageRepo) Insert(ctx context.Context, u model.UsageRecord) error {
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO usage_records (id, wo_id, user_id, role, provider, model, tokens_in, tokens_out, cost_micros, source, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO usage_records (id, wo_id, user_id, role, provider, model, tokens_in, tokens_out, cache_read_tokens, cache_write_tokens, cost_micros, source, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		u.ID, nullStr(u.WOID), nullStr(u.UserID), u.Role, u.Provider, u.Model,
-		u.TokensIn, u.TokensOut, u.CostMicros, u.Source, u.CreatedAt.Unix())
+		u.TokensIn, u.TokensOut, u.CacheRead, u.CacheWrite, u.CostMicros, u.Source, u.CreatedAt.Unix())
 	return err
 }
 

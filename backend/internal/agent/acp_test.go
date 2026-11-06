@@ -211,7 +211,7 @@ func TestACPRunReportsStepsTextAndUsage(t *testing.T) {
 	if streamed.String() != res.Text {
 		t.Fatalf("OnText streamed %q, result text %q", streamed.String(), res.Text)
 	}
-	if res.TokensIn != 5000 || res.TokensOut != 20 || res.CostMicros != 12300 || res.CostSource != "measured" || res.SessionRef != "fake-ses" {
+	if res.TokensIn != 5000 || res.TokensOut != 20 || res.CacheRead != 4000 || res.CacheWrite != 900 || res.CostMicros != 12300 || res.CostSource != "measured" || res.SessionRef != "fake-ses" {
 		t.Fatalf("result = %+v", res)
 	}
 }

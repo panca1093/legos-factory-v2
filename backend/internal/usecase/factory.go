@@ -207,6 +207,7 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 			WOID: wo.ID, UserID: wo.CreatedBy, Role: string(role),
 			Provider: provider, Model: modelID,
 			TokensIn: res.TokensIn, TokensOut: res.TokensOut,
+			CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
 			CostMicros: res.CostMicros, Source: res.CostSource,
 		})
 	}

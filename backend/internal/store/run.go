@@ -19,8 +19,8 @@ func (r *RunRepo) Start(ctx context.Context, id, woID, taskID, kind, harness str
 
 func (r *RunRepo) Complete(ctx context.Context, id string, res model.AgentResult) error {
 	_, err := r.DB.ExecContext(ctx, `UPDATE runs SET state = 'completed', output = ?, session_ref = ?,
-		tokens_in = ?, tokens_out = ?, cost_micros = ?, finished_at = ? WHERE id = ?`,
-		res.Text, res.SessionRef, res.TokensIn, res.TokensOut, res.CostMicros, time.Now().Unix(), id)
+		tokens_in = ?, tokens_out = ?, cache_read_tokens = ?, cache_write_tokens = ?, cost_micros = ?, finished_at = ? WHERE id = ?`,
+		res.Text, res.SessionRef, res.TokensIn, res.TokensOut, res.CacheRead, res.CacheWrite, res.CostMicros, time.Now().Unix(), id)
 	return err
 }
 
@@ -63,7 +63,7 @@ func (r *RunRepo) LatestRemediationState(ctx context.Context, woID string) (stri
 
 func (r *RunRepo) List(ctx context.Context, woID string) ([]model.Run, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT id, task_id, kind, state, harness,
-		output, error, tokens_in, tokens_out, cost_micros, created_at, finished_at
+		output, error, tokens_in, tokens_out, cache_read_tokens, cache_write_tokens, cost_micros, created_at, finished_at
 		FROM runs WHERE work_order_id = ? ORDER BY created_at`, woID)
 	if err != nil {
 		return nil, err
@@ -75,7 +75,7 @@ func (r *RunRepo) List(ctx context.Context, woID string) ([]model.Run, error) {
 		var createdAt int64
 		var finishedAt sql.NullInt64
 		if err := rows.Scan(&run.ID, &run.TaskID, &run.Kind, &run.State, &run.Harness, &run.Output, &run.Error,
-			&run.TokensIn, &run.TokensOut, &run.CostMicros, &createdAt, &finishedAt); err != nil {
+			&run.TokensIn, &run.TokensOut, &run.CacheRead, &run.CacheWrite, &run.CostMicros, &createdAt, &finishedAt); err != nil {
 			return nil, err
 		}
 		run.CreatedAt = time.Unix(createdAt, 0)
