@@ -42,7 +42,9 @@ type originInfo struct {
 const ghAuthTTL = 5 * time.Minute
 
 // warmer is implemented by providers that cache per-repo facts (default branch).
-type warmer interface{ Warm(ctx context.Context) error }
+type warmer interface {
+	Warm(ctx context.Context) error
+}
 
 var remoteRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$`)
 

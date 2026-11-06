@@ -15,7 +15,7 @@ var (
 	ErrGHMissing         = errors.New("the gh CLI is not installed; install it from https://cli.github.com")
 	ErrGHUnauthenticated = errors.New("gh is not authenticated; run `gh auth login` and `gh auth setup-git`")
 	ErrGHUnreachable     = errors.New("gh could not reach GitHub")
-	ErrNotSupported     = errors.New("not supported on this platform")
+	ErrNotSupported      = errors.New("not supported on this platform")
 	ErrCancelled         = errors.New("cancelled")
 	ErrBusy              = errors.New("another folder chooser is already open")
 )
