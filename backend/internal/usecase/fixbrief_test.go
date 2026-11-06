@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -217,5 +218,144 @@ func TestRetryTaskKeepsTheTaskSectionAndBrief(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("retry prompt missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func seedFix(t *testing.T, r *rig, rev int, brief string) {
+	t.Helper()
+	r.f.event(r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": rev, "brief": brief})
+}
+
+func atRevision(t *testing.T, r *rig, rev int) {
+	t.Helper()
+	ctx := context.Background()
+	report := strings.Replace(unmetVerifyReport, `"revision":0`, fmt.Sprintf(`"revision":%d`, rev), 1)
+	if err := r.wos.UpdateFields(ctx, r.wo.ID, map[string]any{"revision": rev, "architect_report": report}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.Quality.Save(ctx, model.QualityCheck{ID: "qc_rev", WOID: r.wo.ID, Name: "go-test", Command: "go test ./...", Outcome: "PASS", Revision: int64(rev)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const unmetVerifyReport = `{"revision":0,"verdicts":[{"criterion_id":"c1","status":"not_met","evidence":"evidence-text","gap":"gap-text","fix":"fix-text"}],"deviations":[]}`
+
+const earlierHeading = "Already addressed in earlier revisions — keep these fixes intact, do not undo or regress them:"
+
+func TestFixBriefCarriesEarlierRevisionsFixesForward(t *testing.T) {
+	r := doneRig(t, &fakeJudge{}, unmetVerifyReport)
+	seedFix(t, r, 1, "1. ITEM-A\n2. ITEM-B\n   Missing: B-detail")
+	seedFix(t, r, 2, "1. ITEM-A\n2. ITEM-C\n\n"+earlierHeading+"\n- ITEM-A")
+	atRevision(t, r, 2)
+	r.evaluate(t)
+	b, _ := lastPayload(r)["brief"].(string)
+	head, tail, ok := strings.Cut(b, earlierHeading)
+	if !ok || !strings.Contains(head, "1. ") || !strings.Contains(head, "evidence-text") {
+		t.Fatalf("current items must stay numbered and complete above the section:\n%s", b)
+	}
+	for _, want := range []string{"- ITEM-A", "- ITEM-B\n   Missing: B-detail", "- ITEM-C"} {
+		if !strings.Contains(tail, want) {
+			t.Fatalf("section missing %q:\n%s", want, b)
+		}
+	}
+	if strings.Count(tail, "ITEM-A") != 1 {
+		t.Fatalf("duplicates must collapse:\n%s", b)
+	}
+}
+
+func TestFixBriefCarriesOnlyTheThreeMostRecentEarlierRevisions(t *testing.T) {
+	r := doneRig(t, &fakeJudge{}, unmetVerifyReport)
+	for rev := 1; rev <= 4; rev++ {
+		seedFix(t, r, rev, fmt.Sprintf("1. REV%d-ITEM", rev))
+	}
+	atRevision(t, r, 4)
+	r.evaluate(t)
+	b, _ := lastPayload(r)["brief"].(string)
+	for _, want := range []string{"REV2-ITEM", "REV3-ITEM", "REV4-ITEM"} {
+		if !strings.Contains(b, want) {
+			t.Fatalf("brief missing %q:\n%s", want, b)
+		}
+	}
+	if strings.Contains(b, "REV1-ITEM") {
+		t.Fatalf("the 4th-oldest revision must be dropped:\n%s", b)
+	}
+}
+
+func TestFixBriefWithoutEarlierRevisionsHasNoSection(t *testing.T) {
+	r := doneRig(t, &fakeJudge{}, unmetVerifyReport)
+	r.evaluate(t)
+	if b, _ := lastPayload(r)["brief"].(string); strings.Contains(b, "Already addressed") {
+		t.Fatalf("unexpected section:\n%s", b)
+	}
+}
+
+func TestFindingsAndHumanBriefsCarryEarlierFixesAndRetryDoesNotDoubleAppend(t *testing.T) {
+	ctx := context.Background()
+	h := &replyHarness{verify: unmetVerify,
+		inspect: `{"findings":[{"severity":"blocker","title":"NEW-FINDING","detail":"d","location":"round.go:1"}]}`}
+	r := inspectRig(t, h)
+	seedFix(t, r, 1, "1. ITEM-A")
+	if err := r.wos.UpdateFields(ctx, r.wo.ID, map[string]any{"revision": 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.handleInspect(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := lastPayload(r)["brief"].(string)
+	if lastPayload(r)["reason"] != "fix_findings" || !strings.Contains(b, "NEW-FINDING") || !strings.Contains(b, earlierHeading+"\n- ITEM-A") {
+		t.Fatalf("fix_findings brief:\n%s", b)
+	}
+	if got, _ := r.f.retryPayload(ctx, r.reload(t))["brief"].(string); got != b {
+		t.Fatalf("retry must return the stored brief as is:\n%s", got)
+	}
+
+	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateNeedsHumanReview); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.f.HumanPRDecision(ctx, r.wo.ID, "request_changes", "use the old format"); err != nil {
+		t.Fatal(err)
+	}
+	hb, _ := lastPayload(r)["brief"].(string)
+	if !strings.Contains(hb, "use the old format") || !strings.Contains(hb, "- ITEM-A") {
+		t.Fatalf("human_revision brief:\n%s", hb)
+	}
+	if got, _ := r.f.retryPayload(ctx, r.reload(t))["brief"].(string); got != hb || strings.Count(got, earlierHeading) != 1 {
+		t.Fatalf("retry double-appended:\n%s", got)
+	}
+}
+
+func TestImplementPromptTellsTheBuilderToKeepAlreadyAddressedItems(t *testing.T) {
+	p := implementPrompt(&model.WorkOrder{Spec: "S"}, model.Job{Payload: map[string]any{"reason": "fix_findings", "brief": "1. x"}}, nil)
+	if !strings.Contains(p, `"Already addressed"`) || !strings.Contains(p, "per-item reply") {
+		t.Fatalf("prompt lacks the keep-intact rule:\n%s", p)
+	}
+}
+
+func TestHumanReasonWithOwnNumberedListStaysOneEarlierItem(t *testing.T) {
+	ctx := context.Background()
+	r := inspectRig(t, &replyHarness{})
+	if err := r.wos.UpdateState(ctx, r.wo.ID, model.StateNeedsHumanReview); err != nil {
+		t.Fatal(err)
+	}
+	reason := "Please:\n1. rename X\n2. add test"
+	if err := r.f.HumanPRDecision(ctx, r.wo.ID, "request_changes", reason); err != nil {
+		t.Fatal(err)
+	}
+	b := r.f.withEarlierFixes(ctx, r.wo.ID, 2, []string{"NEW"})
+	_, tail, _ := strings.Cut(b, earlierHeading)
+	if want := "\n- The reviewer asked for changes: " + reason; tail != want {
+		t.Fatalf("earlier section %q, want %q", tail, want)
+	}
+}
+
+func TestEarlierFixesDropReraisedItemsAndForemanNotes(t *testing.T) {
+	ctx := context.Background()
+	r := doneRig(t, &fakeJudge{}, unmetVerifyReport)
+	seedFix(t, r, 1, "1. ITEM-A\n2. ITEM-B\n3. "+foremanNotesPrefix+"hm")
+	r.f.event(r.wo.ID, "factory", "fix_requested", "x", map[string]any{"revision": 1, "items": []string{"ITEM-A", "ITEM-B", foremanNotesPrefix + "hm"}})
+	b := r.f.withEarlierFixes(ctx, r.wo.ID, 2, []string{"ITEM-A"})
+	head, tail, _ := strings.Cut(b, earlierHeading)
+	if !strings.HasPrefix(head, "1. ITEM-A") || strings.Contains(tail, "ITEM-A") || !strings.Contains(tail, "- ITEM-B") || strings.Contains(b, "validation notes") {
+		t.Fatalf("brief:\n%s", b)
 	}
 }

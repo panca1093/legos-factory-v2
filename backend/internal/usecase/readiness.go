@@ -132,12 +132,13 @@ func (f *Factory) doneGate(ctx context.Context, wo *model.WorkOrder, lastTry boo
 		note := out.Note + architectFixes(report)
 		issues := slices.DeleteFunc(slices.Clone(out.Issues), func(s string) bool { return slices.Contains(out.InReport, s) })
 		if strings.TrimSpace(v.Notes) != "" {
-			issues = append(issues, "The Foreman's validation notes: "+v.Notes)
+			issues = append(issues, foremanNotesPrefix+v.Notes)
 		}
 		payload := map[string]any{"reason": "fix_done_gate", "note": note}
 		evPayload := map[string]any{"revision": newRev, "reason": "fix_done_gate", "note": note}
-		if b := fixBrief(openFindings(findings), report, issues, ""); b != "" {
-			payload["brief"], evPayload["brief"] = b, b
+		if items := fixItems(openFindings(findings), report, issues, ""); len(items) > 0 {
+			b := f.withEarlierFixes(ctx, wo.ID, newRev, items)
+			payload["brief"], evPayload["brief"], evPayload["items"] = b, b, items
 		}
 		f.event(wo.ID, "factory", "fix_requested", fmt.Sprintf("Revision %d: done gate requests a fix: %s", newRev, out.Note), evPayload)
 		return true, nil, f.enqueuePayload(ctx, JobImplement, wo.ID, payload)

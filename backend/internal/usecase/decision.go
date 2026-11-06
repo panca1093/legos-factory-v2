@@ -141,14 +141,14 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		}
 		return nil
 	case "request_changes":
-		payload := f.withBrief(ctx, wo, map[string]any{"reason": "human_revision"}, nil, reason)
 		newRev := wo.Revision + 1
+		payload := f.withBrief(ctx, wo, newRev, map[string]any{"reason": "human_revision"}, nil, reason)
 		if err := f.WO.UpdateFields(ctx, woID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": 0, "review_fixes": 0}); err != nil {
 			return err
 		}
 		evPayload := map[string]any{"revision": newRev}
 		if b, ok := payload["brief"]; ok {
-			evPayload["brief"] = b
+			evPayload["brief"], evPayload["items"] = b, payload["items"]
 		}
 		f.event(woID, "human", "revision_requested", reason, evPayload)
 		if err := f.step(ctx, wo, model.StateNeedsHumanReview, model.StateImplementing, "human", "Changes requested; invalidating prior quality approval"); err != nil {
