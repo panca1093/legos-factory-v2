@@ -213,6 +213,20 @@ export const useFactory = defineStore("factory", {
       await this.refreshWorkOrders().catch(() => {});
       return res;
     },
+    async deleteWorkOrder(id: string) {
+      await api.del(`/api/v1/work-orders/${id}`);
+      this.workOrders = this.workOrders.filter((w) => w.id !== id);
+      if (this.selectedID === id) this.clearDetail();
+    },
+    async deleteProject(id: string) {
+      await api.del(`/api/v1/projects/${id}`);
+      const gone = new Set(
+        this.workOrders.filter((w) => w.project_id === id).map((w) => w.id),
+      );
+      this.projects = this.projects.filter((p) => p.id !== id);
+      this.workOrders = this.workOrders.filter((w) => !gone.has(w.id));
+      if (gone.has(this.selectedID)) this.clearDetail();
+    },
     async loadDetail(id: string) {
       const request = ++this.requestID;
       if (this.selectedID !== id) {

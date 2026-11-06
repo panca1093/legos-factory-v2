@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { ArrowLeft, GitBranch } from "lucide-vue-next";
+import { ArrowLeft, GitBranch, Trash2 } from "lucide-vue-next";
 import "../factory.css";
 import { useFactory } from "../../../stores/factory";
 import { useSession } from "../../../stores/session";
 import { subscribe } from "../../../services/events/sse";
 import AppDialog from "../../../components/ui/AppDialog.vue";
+import DeleteDialog from "./DeleteDialog.vue";
+import { useToast } from "../../../composables/useToast";
 import {
+  isDeletable,
   money,
   orderStatus,
   publishNote,
@@ -72,6 +75,23 @@ const canClarify = computed(
     session.canWrite &&
     (session.isAdmin || session.user?.id === order.value?.created_by),
 );
+const { toast } = useToast();
+const deleting = ref(false),
+  deleteError = ref("");
+async function confirmDelete() {
+  busy.value = true;
+  deleteError.value = "";
+  try {
+    await factory.deleteWorkOrder(id.value);
+    deleting.value = false;
+    toast("Work order deleted");
+    await router.replace("/factory");
+  } catch (e) {
+    deleteError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    busy.value = false;
+  }
+}
 const busy = ref(false),
   actionError = ref(""),
   modal = ref<
@@ -268,6 +288,17 @@ function download() {
         </div>
       </div>
       <span class="fx-pill" :class="status?.tone">{{ status?.label }}</span>
+      <button
+        v-if="session.canWrite && isDeletable(order)"
+        class="lg-btn small ghost danger"
+        data-test="delete-order"
+        @click="
+          deleteError = '';
+          deleting = true;
+        "
+      >
+        <Trash2 class="icon" />Delete
+      </button>
     </div>
     <StageTrack
       :order="order"
@@ -383,6 +414,23 @@ function download() {
       />
     </div>
   </div>
+  <DeleteDialog
+    :open="deleting"
+    title="Delete this work order?"
+    confirm-label="Delete work order"
+    :busy="busy"
+    :error="deleteError"
+    @close="deleting = false"
+    @confirm="confirmDelete"
+  >
+    <p class="small">
+      <strong>{{ order?.title }}</strong> and its history, runs and evidence
+      will be permanently deleted. This cannot be undone.
+    </p>
+    <p class="small muted">
+      Any pull request or branch on GitHub is not touched.
+    </p>
+  </DeleteDialog>
   <AppDialog
     :open="modal !== null"
     :title="modalTitle"

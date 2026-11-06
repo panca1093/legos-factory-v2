@@ -60,6 +60,15 @@
 .lg-btn.danger {
   color: var(--danger);
 }
+.lg-btn.danger-solid {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--bg);
+}
+.lg-btn.danger-solid:hover:not(:disabled) {
+  background: var(--danger);
+  filter: brightness(0.92);
+}
 .lg-btn.pill {
   border-radius: var(--radius-full);
 }
