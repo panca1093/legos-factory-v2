@@ -128,3 +128,50 @@ it("pauses a running order and resumes it from the Now card", async () => {
   expect(w.text()).not.toMatch(/autonomy/i);
   w.unmount();
 });
+
+it("prefills Request changes only from the current revision's Architect report", async () => {
+  const f = useFactory();
+  const order = {
+    ...orders[0],
+    state: "NEEDS_HUMAN_REVIEW" as const,
+    revision: 2,
+  };
+  vi.mocked(f.loadDetail).mockImplementation(async (id) => {
+    f.selectedID = id;
+    f.detail = { work_order: order, plan: tasks, runs: [] };
+  });
+  vi.spyOn(f, "loadDiff").mockResolvedValue();
+  const verified = (revision: number) => ({
+    id: revision,
+    work_order_id: order.id,
+    actor: "architect",
+    kind: "architect_verified",
+    message: "",
+    payload: {
+      revision,
+      verdicts: [
+        {
+          criterion_id: "c1",
+          status: "not_met",
+          evidence: "e",
+          fix: "budget each section",
+        },
+      ],
+    },
+    created_at: "2026-11-06T00:00:00Z",
+  });
+  const notesAfterOpen = async (events: unknown[]) => {
+    const { w } = await render();
+    f.events = events as never;
+    await w.find(".fx-now button.primary").trigger("click");
+    await flushPromises();
+    await w.find('[data-test="pr-changes"]').trigger("click");
+    await flushPromises();
+    const value =
+      document.querySelector<HTMLTextAreaElement>("#decision-notes")!.value;
+    w.unmount();
+    return value;
+  };
+  expect(await notesAfterOpen([verified(2)])).toBe("c1: budget each section");
+  expect(await notesAfterOpen([verified(1)])).toBe("");
+});

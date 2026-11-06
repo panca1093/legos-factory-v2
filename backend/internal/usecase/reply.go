@@ -208,6 +208,7 @@ func (r *verifyReply) validate() error {
 	for i := range r.Verdicts {
 		v := &r.Verdicts[i]
 		v.CriterionID = strings.TrimSpace(v.CriterionID)
+		v.Evidence, v.Gap, v.Fix = strings.TrimSpace(v.Evidence), strings.TrimSpace(v.Gap), strings.TrimSpace(v.Fix)
 		v.Status = strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(strings.TrimSpace(v.Status)), "-", "_"), " ", "_")
 		if v.CriterionID == "" {
 			return fmt.Errorf("verdicts[%d] needs a criterion_id", i)

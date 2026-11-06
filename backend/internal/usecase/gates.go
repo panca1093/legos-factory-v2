@@ -112,6 +112,8 @@ type ArchitectVerdict struct {
 	CriterionID string `json:"criterion_id"`
 	Status      string `json:"status"`
 	Evidence    string `json:"evidence"`
+	Gap         string `json:"gap,omitempty"`
+	Fix         string `json:"fix,omitempty"`
 }
 
 type orderedCriteria []Criterion

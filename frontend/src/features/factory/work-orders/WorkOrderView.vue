@@ -22,7 +22,11 @@ import TaskGraph from "../task-graph/TaskGraph.vue";
 import ActivityPanel from "../runs/ActivityPanel.vue";
 import ReviewPanel from "../reviews/ReviewPanel.vue";
 import ChangesPanel from "../reviews/ChangesPanel.vue";
-import { currentReason } from "../runs/agentActivity";
+import {
+  architectReport,
+  changeRequestDraft,
+  currentReason,
+} from "../runs/agentActivity";
 const factory = useFactory(),
   session = useSession(),
   route = useRoute(),
@@ -150,7 +154,11 @@ async function act(fn: () => Promise<unknown>) {
   }
 }
 function open(value: typeof modal.value) {
-  notes.value = "";
+  const report = architectReport(factory.events);
+  notes.value =
+    value === "request_changes" && report?.revision === order.value?.revision
+      ? changeRequestDraft(report)
+      : "";
   actionError.value = "";
   modal.value = value;
 }

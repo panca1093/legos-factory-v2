@@ -45,6 +45,9 @@ const paused = computed(() => !!props.order.paused_at),
       undefined,
     ),
   ),
+  openIssues = computed(
+    () => (reason.value ?? "").split(";").filter((p) => p.trim()).length,
+  ),
   done = computed(
     () =>
       props.tasks.filter((t) => taskState(t.id, props.runs) === "completed")
@@ -194,7 +197,6 @@ const headline = computed(() => {
       </template>
       <template v-else-if="planEscalated">
         <ReasonText
-          label="Why you are asked:"
           :text="reason || 'The plan gate escalated this plan.'"
           :suffix="
             order.plan_revisions
@@ -221,8 +223,12 @@ const headline = computed(() => {
         </div>
       </template>
       <template v-else-if="order.state === 'NEEDS_HUMAN_REVIEW'">
+        <p v-if="openIssues > 1" class="small" data-test="approval-summary">
+          The done gate left {{ openIssues }} open issues for you. Check them
+          against the changes before you approve.
+        </p>
         <ReasonText
-          :label="ship?.label + '.'"
+          v-else
           :text="
             reason || 'The checks passed and the done gate handed this to you.'
           "

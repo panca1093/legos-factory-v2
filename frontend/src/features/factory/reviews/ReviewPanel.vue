@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-vue-next";
 import type { QualityCheck, Finding, WOEvent } from "../../../types/api";
 import AppDialog from "../../../components/ui/AppDialog.vue";
 import ActorBadge from "../ActorBadge.vue";
+import ReasonText from "../ReasonText.vue";
 import { architectReport } from "../runs/agentActivity";
 const props = defineProps<{
   checks: QualityCheck[];
@@ -70,17 +71,39 @@ function dispose(f: Finding, action: FindingAction) {
       <h3><ActorBadge actor="architect" small />Architect verdicts</h3>
       <template v-if="report">
         <p class="tiny muted">Revision {{ report.revision }}</p>
-        <div v-for="v in report.verdicts" :key="v.criterion_id" class="fx-row">
-          <span class="fx-code">{{ v.criterion_id }}</span>
-          <span class="small grow">{{ v.evidence }}</span>
-          <span class="fx-pill" :class="verdictTone[v.status]">{{
-            v.status.replace("_", " ")
-          }}</span>
+        <article
+          v-for="v in report.verdicts"
+          :key="v.criterion_id"
+          class="fx-verdict"
+          data-test="verdict"
+        >
+          <div class="fx-row">
+            <span class="fx-code">{{ v.criterion_id }}</span>
+            <span class="fx-pill" :class="verdictTone[v.status]">{{
+              v.status.replace("_", " ")
+            }}</span>
+          </div>
+          <template v-if="v.status !== 'met' && (v.gap || v.fix)">
+            <p v-if="v.gap" class="small" data-test="verdict-gap">
+              <strong>What's missing:</strong> {{ v.gap }}
+            </p>
+            <p v-if="v.fix" class="small" data-test="verdict-fix">
+              <strong>Suggested fix:</strong> {{ v.fix }}
+            </p>
+            <details class="small muted">
+              <summary>Evidence</summary>
+              {{ v.evidence }}
+            </details>
+          </template>
+          <ReasonText v-else :text="v.evidence" />
+        </article>
+        <div class="small muted">
+          <strong>Deviations</strong>
+          <ul v-if="report.deviations.length" class="fx-reason-list">
+            <li v-for="(d, i) in report.deviations" :key="i">{{ d }}</li>
+          </ul>
+          <span v-else> none</span>
         </div>
-        <p class="small muted">
-          Deviations:
-          {{ report.deviations.length ? report.deviations.join("; ") : "none" }}
-        </p>
       </template>
       <p v-else class="fx-empty">
         Runs after the checks pass, in parallel with the Inspector. Only

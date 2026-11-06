@@ -393,6 +393,12 @@ func reportText(r architectReport) string {
 	var b strings.Builder
 	for _, v := range r.Verdicts {
 		fmt.Fprintf(&b, "%s: %s — %s\n", v.CriterionID, v.Status, v.Evidence)
+		if v.Gap != "" {
+			fmt.Fprintf(&b, "  Gap: %s\n", v.Gap)
+		}
+		if v.Fix != "" {
+			fmt.Fprintf(&b, "  Fix: %s\n", v.Fix)
+		}
 	}
 	for _, d := range r.Deviations {
 		fmt.Fprintf(&b, "Deviation: %s\n", d)

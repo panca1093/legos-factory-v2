@@ -140,7 +140,7 @@ func doneAnswers(over map[string]float64) map[string]float64 {
 }
 
 func metVerdicts() []ArchitectVerdict {
-	return []ArchitectVerdict{{"c1", "met", "ok"}, {"c2", "met", "ok"}}
+	return []ArchitectVerdict{{CriterionID: "c1", Status: "met", Evidence: "ok"}, {CriterionID: "c2", Status: "met", Evidence: "ok"}}
 }
 
 func doneInput() DoneGateInput {
@@ -178,7 +178,7 @@ func TestDecideDoneGate(t *testing.T) {
 		{"row3 architect deviations", doneAnswers(nil), func(in *DoneGateInput) { in.Deviations = []string{"added an admin endpoint"} }, nil, false, false, 0, true, GateFix, 3, []string{"outside the spec or plan: added an admin endpoint"}},
 		{"row3 blank deviations ignored", doneAnswers(nil), func(in *DoneGateInput) { in.Deviations = []string{" ", ""} }, nil, false, false, 0, true, GateDone, 5, nil},
 		{"row3 not_met beats unclear for same criterion", doneAnswers(nil), func(in *DoneGateInput) {
-			in.ArchitectVerdicts = append(in.ArchitectVerdicts, ArchitectVerdict{"c1", "not_met", ""}, ArchitectVerdict{"c1", "unclear", ""})
+			in.ArchitectVerdicts = append(in.ArchitectVerdicts, ArchitectVerdict{CriterionID: "c1", Status: "not_met"}, ArchitectVerdict{CriterionID: "c1", Status: "unclear"})
 		}, nil, false, false, 0, true, GateFix, 3, nil},
 		{"row4 unsettled met", doneAnswers(map[string]float64{"met_c1": 0.5}), nil, nil, false, false, 0, true, GateFix, 4, []string{"it is unclear whether the diff implements acceptance criterion c1 (add items to the cart)"}},
 		{"row4 unsettled deviates", doneAnswers(map[string]float64{"deviates": 0.5}), nil, nil, false, false, 0, true, GateFix, 4, []string{"it is unclear whether the diff changes behaviour"}},
@@ -340,7 +340,7 @@ func TestDoneGateState(t *testing.T) {
 func TestDoneGateStateCarriesArchitectData(t *testing.T) {
 	state, _ := doneGateState(DoneGateInput{
 		Criteria:          []Criterion{{"c1", "a"}},
-		ArchitectVerdicts: []ArchitectVerdict{{"c1", "met", "see a.go"}},
+		ArchitectVerdicts: []ArchitectVerdict{{CriterionID: "c1", Status: "met", Evidence: "see a.go"}},
 		Deviations:        []string{"extra endpoint"},
 	})
 	raw, _ := json.Marshal(state)

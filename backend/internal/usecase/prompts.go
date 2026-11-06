@@ -207,11 +207,15 @@ Check results:
 Diff against the base:
 %s
 For every acceptance criterion above, report whether the change meets it: "met", "not_met" or
-"unclear", with evidence from the diff or the code. Report as deviations any work that goes beyond
-your spec or plan, or that departs from it.
+"unclear". A human reads this, so keep each field short and plain:
+- evidence: at most three sentences naming the files and what they do.
+- gap: only when not_met or unclear; one or two sentences on what is missing or wrong.
+- fix: only when not_met or unclear; the concrete change the builder should make, as short steps.
+Report as deviations any work that goes beyond your spec or plan, or that departs from it, one
+sentence each.
 
 Respond with ONLY a JSON object:
-{"verdicts":[{"criterion_id":"c1","status":"met"|"not_met"|"unclear","evidence":"<file and what it does>"}],
+{"verdicts":[{"criterion_id":"c1","status":"met"|"not_met"|"unclear","evidence":"<files and what they do>","gap":"<what is missing>","fix":"<change to make>"}],
  "deviations":["<work outside the spec or plan>"]}`,
 		wo.Title, criteriaSection(splitCriteria(wo.Acceptance)), wo.Spec, scopedTaskList(tasks), checks, diffSection(diff))
 }
