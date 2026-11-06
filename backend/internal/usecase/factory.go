@@ -5,6 +5,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -411,6 +412,9 @@ func (f *Factory) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Ch
 // runStructured runs role and decodes its reply into v. An invalid reply is
 // retried once with the schema error; a second failure is permanent, so a
 // malformed answer never drives a transition.
+// errReplyInvalid marks an agent reply that failed its schema twice.
+var errReplyInvalid = errors.New("agent reply invalid")
+
 func (f *Factory) runStructured(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, prompt string, extra map[string]string, taskID string, v reply, opts runOpts) (model.AgentResult, string, error) {
 	provider, modelID := f.Model(role, wo)
 	res, runID, err := f.runAgent(ctx, wo, role, provider, modelID, prompt, extra, taskID, opts)
@@ -428,7 +432,7 @@ func (f *Factory) runStructured(ctx context.Context, wo *model.WorkOrder, role m
 		return res, runID, err
 	}
 	if derr = decodeReply(res.Text, v); derr != nil {
-		return res, runID, fmt.Errorf("%w: %s reply invalid after retry: %v", model.ErrPermanent, role, derr)
+		return res, runID, fmt.Errorf("%w: %w: %s reply invalid after retry: %v", model.ErrPermanent, errReplyInvalid, role, derr)
 	}
 	return res, runID, nil
 }

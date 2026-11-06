@@ -119,6 +119,7 @@ type WorkOrder struct {
 	Brief          string          `json:"brief,omitempty"` // Foreman intake brief
 	Spec           string          `json:"spec,omitempty"`  // Architect spec
 	ClarifRounds   int             `json:"clarif_rounds"`
+	IntakePending  bool            `json:"-"` // the brief waits on a human answer to an intake question
 	Clarifications []Clarification `json:"clarifications,omitempty"` // Foreman answers to Architect questions
 }
 

@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -39,7 +40,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 	}
 	f.syncRepo(ctx, wo, true)
 	facts := repoFacts(ctx, f.workspaceDir(wo.ID))
-	if (wo.State == model.StateRequirement && wo.Brief == "") || strings.Contains(wo.Brief, openQuestionsHeader) {
+	if (wo.State == model.StateRequirement && wo.Brief == "") || wo.IntakePending {
 		if err := f.intake(ctx, wo, facts); err != nil || wo.State == model.StateWaitingForHuman {
 			return err
 		}
@@ -82,7 +83,11 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 	}
 	if over := planOverBudget(&plan); over != "" {
 		var shorter planReply
-		if _, id, err := f.runStructured(ctx, wo, model.AgentArchitect, prompt+rewriteAsk(over, plan), extra, "", &shorter, runOpts{Audit: audit}); err == nil && shorter.Decision == "APPROVE" {
+		_, id, err := f.runStructured(ctx, wo, model.AgentArchitect, prompt+rewriteAsk(over, plan), extra, "", &shorter, runOpts{Audit: audit})
+		if err := rewriteErr(err); err != nil {
+			return err
+		}
+		if err == nil && shorter.Decision == "APPROVE" {
 			plan, runID = shorter, id
 		}
 		if over = planOverBudget(&plan); over != "" {
@@ -210,6 +215,14 @@ func rewriteAsk(over string, draft any) string {
 		string(raw) + "\nReply with ONLY the JSON object."
 }
 
+// rewriteErr keeps a rewrite failure from hiding a budget cap or a cancel; only an invalid reply is ignored.
+func rewriteErr(err error) error {
+	if errors.Is(err, errReplyInvalid) {
+		return nil
+	}
+	return err
+}
+
 func humanAnswers(wo *model.WorkOrder) int {
 	n := 0
 	for _, c := range wo.Clarifications {
@@ -243,22 +256,40 @@ func (f *Factory) intake(ctx context.Context, wo *model.WorkOrder, facts string)
 	}
 	if over := overBudget("brief", r.text(), briefWords); over != "" {
 		var shorter intakeReply
-		if _, id, err := f.runStructured(ctx, wo, model.AgentForeman, prompt+rewriteAsk(over, r), extra, "", &shorter, opts); err == nil {
+		// the Foreman's planning session already holds the intake prompt
+		_, id, err := f.runStructured(ctx, wo, model.AgentForeman, rewriteAsk(over, r), extra, "", &shorter, opts)
+		if err := rewriteErr(err); err != nil {
+			return err
+		}
+		if err == nil {
 			r, runID = shorter, id
 		}
 		if over = overBudget("brief", r.text(), briefWords); over != "" {
 			f.event(wo.ID, "foreman", "budget_exceeded", "Brief accepted over budget: "+over, nil)
 		}
 	}
+	var asks []openQuestion
+	for _, q := range r.OpenQuestions {
+		if c := findClarification(wo.Clarifications, q.ask()); c != nil {
+			r.Assumptions = append(r.Assumptions, "Settled: "+q.Question+" -> "+c.Answer)
+		} else {
+			asks = append(asks, q)
+		}
+	}
+	r.OpenQuestions = asks
 	if humanAnswers(wo) >= maxHumanQuestions {
 		r.Assumptions = append(r.Assumptions, unresolved(r.OpenQuestions)...)
 		r.OpenQuestions = nil
 	}
 	brief := r.text()
-	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"brief": brief}); err != nil {
+	pending := 0
+	if len(r.OpenQuestions) > 0 {
+		pending = 1
+	}
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"brief": brief, "intake_pending": pending}); err != nil {
 		return err
 	}
-	wo.Brief = brief
+	wo.Brief, wo.IntakePending = brief, pending == 1
 	f.writeBriefDoc(ctx, wo)
 	f.event(wo.ID, "foreman", "brief_ready", "Foreman brief ready", map[string]any{"brief": brief, "run_id": runID})
 	if len(r.OpenQuestions) == 0 {
