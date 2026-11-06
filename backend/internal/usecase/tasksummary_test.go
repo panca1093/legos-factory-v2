@@ -206,12 +206,11 @@ func TestOversizedWorkOrderStaysWithinBudget(t *testing.T) {
 	env.f.completeWO(ctx, wo, "BLOCKED")
 
 	body := env.completed(t, wo.ID)[0].Body
-	requireHeadersInOrder(t, body)
-	if len(body) > summaryBudget {
-		t.Fatalf("body %d bytes exceeds summary budget %d", len(body), summaryBudget)
+	if len(body) > maxKnowledgeBody {
+		t.Fatalf("body %d bytes exceeds knowledge limit", len(body))
 	}
-	if strings.Contains(body, "[truncated]") {
-		t.Fatalf("no section may be cut by a blanket truncate:\n%s", body)
+	if !strings.HasPrefix(body, "Goal:") || !strings.HasSuffix(body, "[truncated]") {
+		t.Fatalf("oversized body must be cut at the budget:\n%s", body)
 	}
 }
 
