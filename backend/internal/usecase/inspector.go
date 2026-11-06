@@ -32,7 +32,6 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 	mu.Unlock()
 	failed := ""
 	var failedResults []model.CheckResult
-	var results strings.Builder
 	for _, c := range profile.Checks {
 		r := f.Sandbox.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
 		if err := f.saveCheck(ctx, wo, c, r); err != nil {
@@ -40,7 +39,6 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		}
 		f.event(wo.ID, "inspector", "check_"+strings.ToLower(string(r.Outcome)),
 			fmt.Sprintf("%s → %s", c.Name, r.Outcome), map[string]any{"command": c.Command})
-		fmt.Fprintf(&results, "%s (%s) → %s\n", c.Name, c.Command, r.Outcome)
 		if r.Outcome != model.Pass && failed == "" {
 			failed = c.Name
 		}
@@ -49,8 +47,6 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		}
 	}
 	if failed != "" {
-		f.Catalog.Record(ctx, wo, model.KnowledgeVerification, model.TrustVerified, "inspector",
-			fmt.Sprintf("Verification failed on revision %d (uncommitted workspace)", wo.Revision), results.String())
 		if wo.VerifyFailures >= MaxRevisionCycles {
 			f.event(wo.ID, "factory", "escalated", "Verification failed after max revision cycles; blocking", nil)
 			if err := f.step(ctx, wo, model.StateVerifying, model.StateSpecialistReview, "factory", "Final evaluation after exhausted retries"); err != nil {
@@ -86,8 +82,6 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 	if err := f.commitVerified(ctx, wo); err != nil {
 		return err
 	}
-	f.Catalog.Record(ctx, wo, model.KnowledgeVerification, model.TrustVerified, "inspector",
-		fmt.Sprintf("Verification passed on revision %d at %s", wo.Revision, orUnversioned(wo.CommitSHA)), results.String())
 	if err := f.step(ctx, wo, model.StateVerifying, model.StateSpecialistReview, "factory", "Verification passed; specialist review"); err != nil {
 		if wo.State != model.StateSpecialistReview {
 			return err
