@@ -364,7 +364,7 @@ func (f *Factory) contractStatus(ctx context.Context, wo *model.WorkOrder) (test
 				changed[c] = true
 			}
 			gaps = append(gaps, convergeGap{
-				ID: fmt.Sprintf("H%d", len(gaps)+1), Type: "contradicts", Layer: "contract", Cites: strings.Join(l.Criteria, ", "), Evidence: l.Path,
+				ID: fmt.Sprintf("H%d", len(gaps)+1), Type: "contradicts", Layer: "contract", Cites: strings.Join(l.Criteria, ", "), Evidence: l.Path, Restore: true,
 				Fix: fmt.Sprintf("contract test changed: %s no longer matches the version locked at red proof; restore it, or amend the spec with the reason the criterion changed", l.Path),
 			})
 		}

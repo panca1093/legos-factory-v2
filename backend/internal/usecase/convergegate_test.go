@@ -196,13 +196,13 @@ func TestConvergeContractGapAmendsTheSpec(t *testing.T) {
 		t.Fatal("an amendment round uses the append budget")
 	}
 
-	// a contract gap whose evidence names code also appends a task
+	// evidence that names code still only amends: any code change surfaces as a code gap next round
 	withCode := strings.Replace(contract, "spec §2 is silent on negative amounts", "round.go:40 rounds negatives away from zero", 1)
 	r2 := convergeRig(t, &fakeJudge{over: map[string]float64{"gap_valid_C1-G1": 0.9}}, gapsReport(withCode))
 	r2.builtPlan(t)
 	wo2 := r2.evaluate(t)
 	plan2, _ := r2.wos.Plan(context.Background(), r2.wo.ID)
-	if wo2.State != model.StateImplementing || len(plan2) != 2 || !strings.Contains(wo2.Spec, "Amendment:") {
+	if wo2.State != model.StateSpecialistReview || len(plan2) != 1 || !strings.Contains(wo2.Spec, "Amendment:") {
 		t.Fatalf("state %s plan %+v spec %q", wo2.State, plan2, wo2.Spec)
 	}
 }
