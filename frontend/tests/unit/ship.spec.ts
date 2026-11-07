@@ -108,7 +108,20 @@ describe("work order page ship states", () => {
     );
     expect(
       w.find('[data-test="stage-track"] [data-stage="Ship"]').classes(),
-    ).toContain("cur");
+    ).toContain("done");
+    w.unmount();
+  });
+
+  it("shows a PR that failed to open as not shipped", async () => {
+    const w = await render("READY", {}, [
+      event("pr_open_failed", "Could not open pull request: no auth"),
+    ]);
+    expect(w.find('[data-test="ship-state"]').text()).toContain(
+      "PR failed to open",
+    );
+    expect(
+      w.find('[data-test="stage-track"] [data-stage="Ship"]').classes(),
+    ).not.toContain("done");
     w.unmount();
   });
 

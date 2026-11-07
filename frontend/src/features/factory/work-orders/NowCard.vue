@@ -33,9 +33,11 @@ const emit = defineEmits<{
   goto: [string];
 }>();
 const paused = computed(() => !!props.order.paused_at),
-  finished = computed(() => isFinished(props.order)),
+  finished = computed(
+    () => isFinished(props.order) && ship.value?.key !== "open_failed",
+  ),
   status = computed(() => orderStatus(props.order)),
-  ship = computed(() => shipState(props.order)),
+  ship = computed(() => shipState(props.order, props.events)),
   reason = computed(() =>
     currentReason(props.order, props.events, props.hasMore),
   ),
@@ -72,6 +74,9 @@ const planEscalated = computed(
 const headline = computed(() => {
   const o = props.order;
   if (o.pr_merged_at) return "Merged: this work order is done";
+  if (ship.value?.key === "open") return "Pull request open: review it there";
+  if (ship.value?.key === "open_failed")
+    return "The pull request could not be opened";
   if (o.state === "CANCELLED") return "Cancelled";
   if (o.state === "BLOCKED") return "Blocked";
   if (asking.value) return "The Architect needs your input";

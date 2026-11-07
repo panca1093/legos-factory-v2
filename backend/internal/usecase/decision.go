@@ -141,9 +141,7 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		f.completeWO(ctx, wo, "READY")
 		// approval authorizes publishing; handleOpenPR does the gh auth check, so no network here
 		if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil && f.Integrations.Bound(ctx, proj) {
-			ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second) // a cancelled request must not drop the job after READY
-			defer cancel()
-			if _, err := f.Sched.Enqueue(ectx, JobOpenPR, woID, "", map[string]any{}); err != nil {
+			if err := f.enqueueOpenPR(ctx, woID); err != nil { // enqueueOpenPR detaches from a cancelled request so READY never loses the job
 				f.Log.Error("open PR enqueue failed", "wo", woID, "err", err)
 			}
 		}
@@ -341,7 +339,11 @@ func (f *Factory) handleOpenPR(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return f.prFailed(wo, err)
 	}
-	pr, err := g.OpenPullRequest(ctx, model.PRRequest{Repo: proj.RemoteRepo, Head: branch, Base: base, Title: wo.Title, Body: prBody(wo)})
+	auto, err := f.WO.LatestEvent(ctx, wo.ID, "pr_auto_approved")
+	if err != nil {
+		return err
+	}
+	pr, err := g.OpenPullRequest(ctx, model.PRRequest{Repo: proj.RemoteRepo, Head: branch, Base: base, Title: wo.Title, Body: prBody(wo, auto == nil)})
 	if err != nil {
 		var pe *model.ProviderError
 		if errors.As(err, &pe) && pe.Permanent() {
@@ -364,11 +366,15 @@ func (f *Factory) prFailed(wo *model.WorkOrder, err error) error {
 	return err
 }
 
-func prBody(wo *model.WorkOrder) string {
+func prBody(wo *model.WorkOrder, humanApproved bool) string {
+	approval := "the converge gate approved this change; review it here before merging"
+	if humanApproved {
+		approval = "a human approved this change"
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n\n**Acceptance criteria**\n%s\n\n", wo.Objective, wo.Acceptance)
-	fmt.Fprintf(&b, "Verified by legos-factory at revision %d (commit %s); deterministic checks passed and a human approved this change.",
-		wo.Revision, orUnversioned(wo.CommitSHA))
+	fmt.Fprintf(&b, "Verified by legos-factory at revision %d (commit %s); deterministic checks passed and %s.",
+		wo.Revision, orUnversioned(wo.CommitSHA), approval)
 	if wo.SourceRef != "" {
 		fmt.Fprintf(&b, "\n\nSource: %s", wo.SourceRef)
 	}

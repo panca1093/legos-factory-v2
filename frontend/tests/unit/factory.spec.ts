@@ -39,16 +39,18 @@ it("combines project, status and text filters", async () => {
   expect(w.text()).toContain("No work orders match");
   w.unmount();
 });
-it("groups orders by who holds them and keeps stalled PRs in Needs you and finishes only merged, cancelled or PR-less orders", async () => {
+it("groups orders by who holds them and keeps stalled PRs in Needs you and finishes orders whose PR is open, merged, cancelled or PR-less", async () => {
   const f = useFactory();
   f.workOrders.find((o) => o.id === "LF-121")!.pr_url = "https://x/pr/1";
   const w = await render("/factory");
   const group = (name: string) =>
     w.findAll(".fx-group").find((g) => g.text().startsWith(name))!;
   expect(group("Needs you").findAll('[data-test="order-row"]')).toHaveLength(2);
-  expect(group("Running").text()).toContain("Validate settlement timestamps");
-  expect(group("Running").text()).toContain("PR open · in review");
-  expect(group("Finished").findAll('[data-test="order-row"]')).toHaveLength(0);
+  expect(group("Running").text()).not.toContain(
+    "Validate settlement timestamps",
+  );
+  expect(group("Finished").text()).toContain("Validate settlement timestamps");
+  expect(group("Finished").text()).toContain("PR open · in review");
   expect(
     w.findAll(".fx-group h2").map((h) => h.text().replace(/\s*\d+$/, "")),
   ).toEqual(["To do", "Needs you", "Running", "Finished"]);

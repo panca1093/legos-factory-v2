@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"legos-factory/backend/internal/model"
 )
@@ -23,6 +24,12 @@ func (f *Factory) handleEvaluate(ctx context.Context, job model.Job) error {
 	}
 	if wo.State == model.StateImplementing {
 		return f.resumeAppend(ctx, wo) // a retry after an append got only partway
+	}
+	if wo.State == model.StateReady && wo.PRRef == "" && wo.PRURL == "" {
+		if f.Sched.HasActive(ctx, wo.ID, "", JobOpenPR) {
+			return nil
+		}
+		return f.enqueueOpenPR(ctx, wo.ID) // a retry after the auto-approve could not queue the PR; open_pr is find-or-create
 	}
 	if wo.State != model.StateSpecialistReview {
 		return nil // superseded or already evaluated
@@ -382,8 +389,11 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 	}
 	f.event(wo.ID, "factory", "readiness_"+strings.ToLower(decision), reason, payload)
 	f.Catalog.Record(ctx, wo, model.KnowledgeReadiness, model.TrustVerified, "factory", "Merge readiness: "+decision, reason)
-	// Final PR disposition stays human: evidence-complete orders land in
-	// NEEDS_HUMAN_REVIEW; the human approve/decline endpoint decides READY.
+	if decision == "READY" && f.autoShip(ctx, wo) {
+		return f.openPRAutomatically(ctx, wo)
+	}
+	// Without a clean converge or a bound repo the disposition stays human:
+	// NEEDS_HUMAN_REVIEW, then the approve/decline endpoint decides READY.
 	next := model.StateNeedsHumanReview
 	if decision == "BLOCKED" {
 		next = model.StateBlocked
@@ -395,4 +405,34 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 		f.completeWO(ctx, wo, "BLOCKED")
 	}
 	return nil
+}
+
+// autoShip reports whether a clean order can go straight to a pull request; an unreadable project falls back to a human.
+func (f *Factory) autoShip(ctx context.Context, wo *model.WorkOrder) bool {
+	proj, err := f.Proj.Get(ctx, wo.ProjectID)
+	if err != nil {
+		f.Log.Warn("project lookup failed; leaving order for human review", "wo", wo.ID, "err", err)
+		return false
+	}
+	return f.Integrations.Bound(ctx, proj)
+}
+
+// openPRAutomatically approves a clean order as the factory; the pull request is where the human reviews.
+func (f *Factory) openPRAutomatically(ctx context.Context, wo *model.WorkOrder) error {
+	if f.cancelled(ctx, wo.ID) {
+		return nil
+	}
+	if err := f.step(ctx, wo, model.StateMergeReadiness, model.StateReady, "factory", "Converge gate approved; opening the pull request"); err != nil {
+		return err
+	}
+	f.event(wo.ID, "factory", "pr_auto_approved", "Clean converge: the factory approved this change and is opening the pull request", nil)
+	f.completeWO(ctx, wo, "READY")
+	return f.enqueueOpenPR(ctx, wo.ID)
+}
+
+func (f *Factory) enqueueOpenPR(ctx context.Context, woID string) error {
+	ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, err := f.Sched.Enqueue(ectx, JobOpenPR, woID, "", map[string]any{})
+	return err
 }

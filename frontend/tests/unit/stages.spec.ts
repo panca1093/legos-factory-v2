@@ -89,7 +89,7 @@ it("marks the stage that waits on a human and who holds the order", () => {
   expect(actorOf(wo("VERIFYING"))).toBe("factory");
 });
 
-it("reports every Ship sub-state and finishes Ship only when merged", () => {
+it("reports every Ship sub-state and finishes Ship when the PR is open", () => {
   const ready = (extra: Partial<WorkOrder>) => wo("READY", extra);
   const cases: [WorkOrder, string, string][] = [
     [wo("NEEDS_HUMAN_REVIEW"), "approval", "Waiting for your approval"],
@@ -114,9 +114,9 @@ it("reports every Ship sub-state and finishes Ship only when merged", () => {
   }
   expect(shipState(wo("IMPLEMENTING"))).toBeNull();
   const open = ready({ pr_url: PR });
-  expect(stageStatuses(open)[4]).toBe("cur");
-  expect(isFinished(open)).toBe(false);
-  expect(isActive(open)).toBe(true);
+  expect(stageStatuses(open)).toEqual(Array(5).fill("done"));
+  expect(isFinished(open)).toBe(true);
+  expect(isActive(open)).toBe(false);
   expect(stageStatuses(ready({}))).toEqual(Array(5).fill("done"));
   const merged = ready({ pr_url: PR, pr_merged_at: AT });
   expect(stageStatuses(merged)).toEqual(Array(5).fill("done"));
@@ -126,7 +126,7 @@ it("reports every Ship sub-state and finishes Ship only when merged", () => {
 it("treats merged and cancelled as finished, blocked as needing you; READY is no longer assembled", () => {
   expect(isFinished(wo("CANCELLED"))).toBe(true);
   expect(isFinished(wo("BLOCKED"))).toBe(false);
-  expect(isFinished(wo("READY", { pr_url: PR }))).toBe(false);
+  expect(isFinished(wo("READY", { pr_url: PR }))).toBe(true);
   expect(isFinished(wo("READY"))).toBe(true);
   const stalled = [{ pr_closed_at: AT }, { pr_track_failed_at: AT }];
   for (const extra of stalled) {
@@ -137,8 +137,19 @@ it("treats merged and cancelled as finished, blocked as needing you; READY is no
     expect(stageStatuses(w)[4]).toBe("wait");
   }
   expect(isRunning(wo("IMPLEMENTING"))).toBe(true);
-  expect(isRunning(wo("READY", { pr_url: PR }))).toBe(true);
+  expect(isRunning(wo("READY", { pr_url: PR }))).toBe(false);
   expect(isNeedsYou(wo("BLOCKED"))).toBe(true);
   expect(isFinished(wo("NEEDS_HUMAN_REVIEW"))).toBe(false);
   expect(stateInfo("READY").label).not.toBe("Assembled");
+});
+
+it("keeps a PR that failed to open out of Ship", () => {
+  const failed = [{ kind: "pr_open_failed" }];
+  const w = wo("READY");
+  expect(shipState(w, failed)).toMatchObject({
+    key: "open_failed",
+    tone: "red",
+  });
+  expect(stageStatuses(w, [], failed)[4]).toBe("cur");
+  expect(shipState(wo("READY", { pr_url: PR }), failed)?.key).toBe("open");
 });
