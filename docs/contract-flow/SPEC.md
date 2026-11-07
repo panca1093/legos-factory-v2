@@ -153,7 +153,7 @@ Jev converge gate: `gap_valid_<G>` (is the gap real, given the evidence?) for ea
 
 ### 7. Ship and Port
 
-Ship is unchanged (PR merged). Port is the existing Cataloger journal step plus: stable facts → Code Map (auto-promoted); decisions table rows → knowledge record.
+Ship is unchanged (PR open; see `docs/foreman-flow/SPEC.md` section 8). Port is the existing Cataloger journal step plus: stable facts → Code Map (auto-promoted); decisions table rows → knowledge record.
 
 ## Contract tests (optional, per project)
 

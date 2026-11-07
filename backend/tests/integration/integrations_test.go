@@ -185,7 +185,7 @@ func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
 		t.Fatalf("bind: %d %s", status, body)
 	}
 
-	// work order from the Jira draft, through to human approval
+	// work order from the Jira draft, through to the automatic pull request
 	status, body = ta.do(t, "POST", "/api/v1/work-orders", fmt.Sprintf(
 		`{"project_id":%q,"title":%q,"objective":%q,"acceptance":%q,"source_ref":%q}`,
 		proj, draft.Title, draft.Objective, draft.Acceptance, draft.SourceRef))
@@ -197,19 +197,14 @@ func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
 	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+wo+"/plan/decisions", `{"decision":"approve"}`); status != 202 {
 		t.Fatalf("approve plan: %d %s", status, body)
 	}
-	ta.awaitState(t, wo, "NEEDS_HUMAN_REVIEW", 60*time.Second)
-	if len(gh.prs()) != 0 {
-		t.Fatal("nothing may be published before the human PR decision")
-	}
-	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+wo+"/pr-decision", `{"decision":"approve","reason":"ship it"}`); status != 202 {
-		t.Fatalf("pr decision: %d %s", status, body)
-	}
 
-	// the approval pushes the verified commit and opens exactly one PR
+	// a clean converge on a bound project is approved by the factory, no human decision
+
+	// the factory pushes the verified commit and opens exactly one PR
 	var doc map[string]any
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		doc = ta.awaitState(t, wo, "READY", 5*time.Second)
+		doc = ta.awaitState(t, wo, "READY", 60*time.Second)
 		if doc["work_order"].(map[string]any)["pr_url"] != nil {
 			break
 		}

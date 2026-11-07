@@ -23,6 +23,7 @@ import {
   actorOf,
   isDeletable,
   isFinished,
+  isShipped,
   orderStatus,
   projectColor,
   publishLabel,
@@ -124,7 +125,7 @@ const groups = computed(() =>
     .filter((g) => status.value === "all" || g.key === status.value)
     .map((g) =>
       status.value === "complete"
-        ? { ...g, items: g.items.filter((w) => w.pr_merged_at) }
+        ? { ...g, items: g.items.filter(isShipped) }
         : g,
     ),
 );
@@ -186,8 +187,8 @@ onMounted(load);
             <div class="fx-explain" @click.stop>
               <b>Five stages</b>
               <p class="small muted">
-                Brief → Plan → Build → Review → Ship. Ship is done only when the
-                pull request is merged.
+                Brief → Plan → Build → Review → Ship. Ship is done when the
+                pull request is open.
               </p>
               <b>Who is acting</b>
               <ul>

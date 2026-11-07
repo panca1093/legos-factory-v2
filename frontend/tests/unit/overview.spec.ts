@@ -100,7 +100,7 @@ it("does not raise a page alert when usage fails", async () => {
   expect(w.text()).toContain("Usage unavailable");
   w.unmount();
 });
-it("counts shipped orders by merged PR and does not refetch on first visit", async () => {
+it("counts shipped orders by opened or merged PR and does not refetch on first visit", async () => {
   const f = useFactory();
   f.usage = null;
   f.workOrders[0].pr_merged_at = "2026-10-24T00:00:00Z";

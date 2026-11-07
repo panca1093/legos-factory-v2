@@ -16,6 +16,7 @@ import StatusBadge from "../../components/ui/StatusBadge.vue";
 import {
   money,
   isRunning,
+  isShipped,
   isTodo,
   needsYou,
   persona,
@@ -38,7 +39,7 @@ const inMaking = computed(() =>
   factory.workOrders.filter((w) => isTodo(w) || isRunning(w)),
 );
 const shipped = computed(
-  () => factory.workOrders.filter((w) => w.pr_merged_at).length,
+  () => factory.workOrders.filter(isShipped).length,
 );
 const mtd = computed(() => factory.usage?.month_to_date);
 const activity = computed(() => factory.usage?.activity ?? []);
@@ -125,7 +126,7 @@ onMounted(() => {
     <RouterLink class="lg-card lg-stat" to="/factory?status=complete"
       ><div class="label"><Rocket class="icon" />Shipped</div>
       <div class="value">{{ shipped }}</div>
-      <div class="note">merged pull requests</div></RouterLink
+      <div class="note">pull requests opened</div></RouterLink
     >
     <RouterLink class="lg-card lg-stat" to="/settings?tab=usage"
       ><div class="label"><Gauge class="icon" />This month</div>

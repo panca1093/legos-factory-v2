@@ -54,8 +54,17 @@ export const runningStates: WorkOrderState[] = [
 // Approved with no pull request to track: nothing can merge, so it is done.
 const approvedLocally = (w: WorkOrder) =>
   w.state === "READY" && !w.pr_url && !w.pr_closed_at && !w.pr_track_failed_at;
+// Ship is done once the pull request is open; merging is extra information.
+const prOpened = (w: WorkOrder) =>
+  w.state === "READY" && !!w.pr_url && !w.pr_closed_at && !w.pr_track_failed_at;
+export const isShipped = (w: WorkOrder) => !!w.pr_merged_at || prOpened(w);
 export const isFinished = (w: WorkOrder) =>
-  !!w.pr_merged_at || w.state === "CANCELLED" || approvedLocally(w);
+  isShipped(w) || w.state === "CANCELLED" || approvedLocally(w);
+// The PR was queued but never opened: not shipped, whatever the order state says.
+const openFailed = (w: WorkOrder, events?: { kind: string }[]) =>
+  w.state === "READY" &&
+  !w.pr_url &&
+  !!events?.some((e) => e.kind === "pr_open_failed");
 // Not yet picked up by an agent: just created, or approved and waiting for a builder.
 export const isTodo = (w: WorkOrder) =>
   (w.state === "CREATED" || w.state === "QUEUED") &&
@@ -136,7 +145,8 @@ export function stageStatuses(
 ): StageStatus[] {
   const at = stageIndex(w, runs, events);
   return stages.map((_, i) =>
-    (isFinished(w) && w.state !== "CANCELLED") || i < at
+    (isFinished(w) && w.state !== "CANCELLED" && !openFailed(w, events)) ||
+    i < at
       ? "done"
       : i > at
         ? "todo"
@@ -149,9 +159,16 @@ export function stageStatuses(
 }
 
 export type ShipKey =
-  "approval" | "open" | "closed" | "tracking_stopped" | "merged" | "local";
+  | "approval"
+  | "open"
+  | "open_failed"
+  | "closed"
+  | "tracking_stopped"
+  | "merged"
+  | "local";
 export function shipState(
   w: WorkOrder,
+  events?: { kind: string }[],
 ): { key: ShipKey; label: string; tone: string } | null {
   if (w.state === "NEEDS_HUMAN_REVIEW")
     return {
@@ -171,6 +188,8 @@ export function shipState(
     };
   if (w.pr_url)
     return { key: "open", label: "PR open · in review", tone: "green" };
+  if (openFailed(w, events))
+    return { key: "open_failed", label: "PR failed to open", tone: "red" };
   return { key: "local", label: "Approved · no pull request", tone: "green" };
 }
 export function stateInfo(state: string): { label: string; tone: string } {

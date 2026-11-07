@@ -56,13 +56,13 @@ QUEUED → IMPLEMENTING           Builders, one task per job, in dependency orde
 VERIFYING                       factory checks (gate)
 SPECIALIST_REVIEW               Inspector specialists ∥ Architect verification
                                 then Foreman validation notes → Jev → done gate
- ├─ done     → PR_PREPARATION → MERGE_READINESS → NEEDS_HUMAN_REVIEW (as today)
+ ├─ done     → PR_PREPARATION → MERGE_READINESS → READY → PR opened (bound project; else NEEDS_HUMAN_REVIEW)
  ├─ fix      → IMPLEMENTING (shares the revision budget, max 2)
  └─ escalate → PR_PREPARATION → MERGE_READINESS → NEEDS_HUMAN_REVIEW, with the reason
-NEEDS_HUMAN_REVIEW → human approves the PR → READY → PR opened
+NEEDS_HUMAN_REVIEW → human approves the PR → READY → PR opened (escalations and unbound projects)
 ```
 
-Existing state names are reused so the UI and stored orders keep working. `REQUIREMENT_ANALYSIS` stops being an empty step and becomes Foreman intake. **No new transition**: the done gate runs while the order is still in `SPECIALIST_REVIEW` (in the `evaluate` job, before `PR_PREPARATION`), so a fix uses the existing `SPECIALIST_REVIEW → IMPLEMENTING` transition. Readiness still ends in `NEEDS_HUMAN_REVIEW`, where the human approves the PR; `done` only means the gate found nothing to fix.
+Existing state names are reused so the UI and stored orders keep working. `REQUIREMENT_ANALYSIS` stops being an empty step and becomes Foreman intake. **No new transition**: the done gate runs while the order is still in `SPECIALIST_REVIEW` (in the `evaluate` job, before `PR_PREPARATION`), so a fix uses the existing `SPECIALIST_REVIEW → IMPLEMENTING` transition. Readiness ends in `NEEDS_HUMAN_REVIEW` unless it is clean and the project can open a pull request (section 8); `done` only means the gate found nothing to fix.
 
 ### 1. Factory preparation (deterministic)
 
@@ -208,14 +208,18 @@ Truth table:
 
 `fix` bumps the revision and returns to the Builder with reason `fix_done_gate` and the code-built note (rendered in the Builder prompt). It shares the `review_fixes` budget with blocker-finding remediation (`review_fixes < 2`). When the budget is spent, fix becomes escalate. `escalate` and `done` both continue to `PR_PREPARATION → MERGE_READINESS`; an escalation shows up as a `readiness_needs_human_review` event carrying the reason.
 
-### 8. Ship = PR merged
+### 8. Ship = PR open
 
-Ship, the work order's last stage in the UI, is complete only when its pull request is **merged**. Human PR approval (`NEEDS_HUMAN_REVIEW → READY`, which opens the PR) is unchanged; state stays `READY` afterwards.
+Ship, the work order's last stage in the UI, is complete when its pull request is **open** (`pr_url` / `pr_ref` set). The pull request is where the human reviews; merging and closing are tracked as extra information (the "Merged" pill), not as the end of Ship. A PR that failed to open (`pr_open_failed`, no `pr_url`) is not shipped.
+
+**Automatic path.** When readiness is clean (no blockers, no converge escalation, checks recorded) and the project has a bound git integration, the factory moves `MERGE_READINESS → READY` itself, records `pr_auto_approved` (`actor: factory`; no human decision is recorded) and enqueues `open_pr`. If that enqueue fails, the `evaluate` job fails and its retry enqueues `open_pr` again for a `READY` order without a PR (`open_pr` is find-or-create). The PR body says the converge gate approved the change. A cancelled order is never moved to `READY`.
+
+**Human path.** Blocked orders stay `BLOCKED`. Converge escalations, missing verification evidence, and projects with no bound git integration still land in `NEEDS_HUMAN_REVIEW`; the human approval (`NEEDS_HUMAN_REVIEW → READY`) opens the PR as before. State stays `READY` afterwards.
 
 The factory polls at boot and then every 2 minutes (fixed, no config). It checks `READY` orders that have a `pr_ref` and no `pr_merged_at`, asking the provider (`GitProvider.PullRequestStatus`, from the stored `pr_ref`) for the PR state:
 
 - merged → `pr_merged_at` is set, `pr_closed_at` is cleared, and event `pr_merged` is recorded (`actor: factory`);
-- closed without merging → `pr_closed_at` is set once and event `pr_closed` is recorded once (`actor: factory`). Polling continues, because Ship means merged: a PR that is reopened and then merged still ends in `pr_merged`;
+- closed without merging → `pr_closed_at` is set once and event `pr_closed` is recorded once (`actor: factory`). Polling continues: a PR that is reopened and then merged still ends in `pr_merged`;
 - open → nothing;
 - transient provider error → logged and retried next tick; it never fails the order;
 - permanent error (provider 400/401/403/404/422, a `pr_ref` the provider cannot parse, a project no longer bound to a git connection) → one `pr_track_failed` event (`actor: factory`, with the reason) and `pr_track_failed_at` is set, which stops polling that order.

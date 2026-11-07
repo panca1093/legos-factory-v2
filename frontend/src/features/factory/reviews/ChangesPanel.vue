@@ -34,12 +34,14 @@ const canDecide = computed(
   () => props.canWrite && props.state === "NEEDS_HUMAN_REVIEW" && !props.busy,
 );
 const shipNote: Record<string, string> = {
-  open: "Nothing is merged until the provider's review and branch protection pass. This order finishes when the PR is merged.",
+  open: "The pull request is open: review and merge it on the provider. Nothing is merged until its review and branch protection pass; the factory keeps tracking the merge.",
+  open_failed:
+    "The pull request could not be opened. The reason is in Activity.",
   closed:
     "The PR was closed without merging. Polling continues: if it is reopened and merged, this order still ships.",
   tracking_stopped:
     "The factory can no longer read this pull request, so its merge status will not update. The reason is in Activity.",
-  merged: "The pull request was merged. This work order is done.",
+  merged: "The pull request was merged.",
   local: "The decision was recorded locally. No pull request was opened.",
 };
 </script>

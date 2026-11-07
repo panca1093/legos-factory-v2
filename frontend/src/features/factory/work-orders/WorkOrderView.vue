@@ -126,7 +126,9 @@ const crewModels = computed(
       .join(" · ") || "Workspace default models",
 );
 const status = computed(() => order.value && orderStatus(order.value)),
-  ship = computed(() => (order.value ? shipState(order.value) : null)),
+  ship = computed(() =>
+    order.value ? shipState(order.value, factory.events) : null,
+  ),
   reason = computed(() =>
     order.value
       ? currentReason(order.value, factory.events, factory.eventsHasMore)
@@ -447,7 +449,7 @@ function download() {
         {{
           publish.remote
             ? publish.text +
-              " The work order finishes when that pull request is merged."
+              " The work order ships once that pull request is open; review and merge it there."
             : publish.text
         }}
       </p>
