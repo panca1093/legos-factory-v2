@@ -179,7 +179,7 @@ func evidencePaths(evidence string) []string {
 }
 
 // appendRound turns the valid gaps into work. A code gap becomes a new plan task; a
-// contract gap amends the spec and, when its evidence names files, also becomes a task;
+// contract gap only amends the spec, and any code it needs surfaces as a code gap next round;
 // a requirement gap goes to the Foreman, and to a human when the Foreman escalates.
 // Earlier tasks are never rewritten. With tasks to build the order returns to the
 // Builder, otherwise converge runs again on the amended contract.
@@ -219,8 +219,8 @@ func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in Conve
 			addTask(key, key+" "+truncateText(g.Fix, 60), objective, evidencePaths(g.Evidence))
 		case "contract":
 			contract = append(contract, g)
-			if paths := evidencePaths(g.Evidence); len(paths) > 0 {
-				addTask(key, key+" "+truncateText(g.Fix, 60), objective, paths)
+			if g.Restore {
+				addTask(key, key+" "+truncateText(g.Fix, 60), objective, evidencePaths(g.Evidence))
 			}
 		default:
 			requirement = append(requirement, g)
