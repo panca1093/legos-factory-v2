@@ -574,7 +574,11 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	}
 	foremanCovered := map[string]bool{}
 	for _, cv := range in.Coverage {
-		foremanCovered[cv.Criterion] = cv.Verification == "test" || cv.Verification == "check"
+		id := strings.ToLower(strings.TrimSpace(cv.Criterion))
+		ok := cv.Verification == "test" || cv.Verification == "check"
+		if prev, seen := foremanCovered[id]; !seen || prev {
+			foremanCovered[id] = ok // any missing entry for a criterion wins
+		}
 	}
 	for _, c := range in.Criteria {
 		switch judge(answers["covers_"+c.ID]) {

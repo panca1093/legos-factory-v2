@@ -599,7 +599,7 @@ func TestPlanGateSettlesUnsettledCoverageWithForemanCoverage(t *testing.T) {
 	if out := decidePlanGate(in, qs, answers, nil, false); out.Outcome != GateApprove {
 		t.Fatalf("Foreman test/check must settle unsettled answers: %+v", out)
 	}
-	in.Coverage = []reviewCoverage{{"c1", "test"}, {"c2", "missing"}}
+	in.Coverage = []reviewCoverage{{" C1 ", "test"}, {"c2", "missing"}, {"c2", "test"}}
 	if out := decidePlanGate(in, qs, answers, nil, false); out.Outcome != GateRevise || !strings.Contains(out.Note, "c2") || strings.Contains(out.Note, "c1") {
 		t.Fatalf("Foreman missing keeps the answer unsettled: %+v", out)
 	}
