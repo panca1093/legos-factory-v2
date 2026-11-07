@@ -341,7 +341,7 @@ func (f *Factory) handleOpenPR(ctx context.Context, job model.Job) error {
 	}
 	auto, err := f.WO.LatestEvent(ctx, wo.ID, "pr_auto_approved")
 	if err != nil {
-		return err
+		return f.prFailed(ctx, wo, err)
 	}
 	pr, err := g.OpenPullRequest(ctx, model.PRRequest{Repo: proj.RemoteRepo, Head: branch, Base: base, Title: wo.Title, Body: prBody(wo, auto == nil)})
 	if err != nil {
