@@ -11,6 +11,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -144,10 +145,21 @@ func (h *OpenCodeHarness) Start(ctx context.Context, req model.AgentRequest) (mo
 	h.ses[st.id] = st
 	h.mu.Unlock()
 
-	payload, err := json.Marshal(map[string]any{
+	body := map[string]any{
 		"text":  req.Prompt,
 		"model": map[string]string{"providerID": req.ProviderID, "modelID": req.ModelID},
-	})
+	}
+	if len(req.Images) > 0 {
+		files := make([]map[string]string, 0, len(req.Images))
+		for i, im := range req.Images {
+			files = append(files, map[string]string{
+				"name": fmt.Sprintf("image-%d", i+1),
+				"uri":  "data:" + im.MediaType + ";base64," + base64.StdEncoding.EncodeToString(im.Data),
+			})
+		}
+		body["files"] = files
+	}
+	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}

@@ -1,9 +1,11 @@
 import { defineStore } from "pinia";
 import { api, ApiError } from "../types/api";
+import { base64Size } from "../features/chats/chatUtils";
 import { streamChat, type ChatStreamBody } from "../services/api/chatStream";
 
 export type ChatAttachment =
   | { kind: "file"; name: string; size: number }
+  | { kind: "image"; name: string; size: number }
   | { kind: "kb"; name: string; doc_id: string; quote?: string };
 export interface ChatUsage {
   model: string;
@@ -136,11 +138,19 @@ export const useChats = defineStore("chats", {
           id: tmpUser,
           role: "user",
           content: body.content,
-          attachments: (body.files ?? []).map((f) => ({
-            kind: "file" as const,
-            name: f.name,
-            size: new TextEncoder().encode(f.content).length,
-          })),
+          attachments: (body.files ?? []).map((f) =>
+            f.encoding === "base64"
+              ? {
+                  kind: "image" as const,
+                  name: f.name,
+                  size: base64Size(f.content),
+                }
+              : {
+                  kind: "file" as const,
+                  name: f.name,
+                  size: new TextEncoder().encode(f.content).length,
+                },
+          ),
         },
         {
           ...base,

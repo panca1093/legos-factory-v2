@@ -11,6 +11,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -170,16 +171,16 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 	h.mu.Lock()
 	h.runs[run.sessionID] = run
 	h.mu.Unlock()
-	return h.launch(run, req.Prompt)
+	return h.launch(run, req.Prompt, req.Images)
 }
 
 // launch sends text on run's session, which is already registered in h.runs,
 // and starts collecting the reply.
-func (h *ACPHarness) launch(run *acpRun, text string) (model.AgentSession, error) {
+func (h *ACPHarness) launch(run *acpRun, text string, images []model.AgentImage) (model.AgentSession, error) {
 	// sent before returning, so a Cancel right after Start always follows the prompt
 	wait, err := run.conn.begin("session/prompt", map[string]any{
 		"sessionId": run.sessionID,
-		"prompt":    []any{map[string]any{"type": "text", "text": text}},
+		"prompt":    promptBlocks(text, images),
 	})
 	if err != nil {
 		run.conn.close()
@@ -188,6 +189,14 @@ func (h *ACPHarness) launch(run *acpRun, text string) (model.AgentSession, error
 	}
 	go run.finish(wait)
 	return &sessionHandle{id: run.sessionID}, nil
+}
+
+func promptBlocks(text string, images []model.AgentImage) []any {
+	blocks := make([]any, 0, len(images)+1)
+	for _, im := range images {
+		blocks = append(blocks, map[string]any{"type": "image", "mimeType": im.MediaType, "data": base64.StdEncoding.EncodeToString(im.Data)})
+	}
+	return append(blocks, map[string]any{"type": "text", "text": text})
 }
 
 // Continue sends another prompt into a session kept open by a Keep run. The
@@ -221,7 +230,7 @@ func (h *ACPHarness) Continue(_ context.Context, sessionID string, req model.Age
 	conn.onStep, conn.onText = req.OnStep, req.OnText
 	run.costBase = conn.costAttr
 	conn.mu.Unlock()
-	return h.launch(run, req.Prompt)
+	return h.launch(run, req.Prompt, req.Images)
 }
 
 // Close ends a kept session; a prompt still running in it is the last one.

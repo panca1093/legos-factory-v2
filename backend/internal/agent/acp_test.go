@@ -3,6 +3,7 @@ package agent
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -143,6 +144,13 @@ func fakeAgent(scenario string) {
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": fmt.Sprintf("turn %d: %s", turns, p.Prompt[0].Text)}})
 				update(map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01 * float64(turns), "currency": "USD"}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 10, "outputTokens": 2}})
+			case "echo":
+				var p struct {
+					Prompt json.RawMessage `json:"prompt"`
+				}
+				_ = json.Unmarshal(m.Params, &p)
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": string(p.Prompt)}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "quota":
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Go usage limit exceeded"}})
 			case "funds":
@@ -549,5 +557,63 @@ func TestACPSteerUnsupported(t *testing.T) {
 	defer h.Cancel(ctx, ses.ID())
 	if err := h.Steer(ctx, ses.ID(), "hi"); !errors.Is(err, model.ErrSteeringUnsupported) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestACPImageBlock(t *testing.T) {
+	h := fakeHarness(t, "echo")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ws := t.TempDir()
+	png := []byte("\x89PNG\r\n\x1a\nbytes")
+	jpg := []byte("\xff\xd8\xffjpg")
+	imgs := []model.AgentImage{{MediaType: "image/png", Data: png}, {MediaType: "image/jpeg", Data: jpg}}
+	want := func(text string) string {
+		b, _ := json.Marshal([]any{
+			map[string]any{"type": "image", "mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(png)},
+			map[string]any{"type": "image", "mimeType": "image/jpeg", "data": base64.StdEncoding.EncodeToString(jpg)},
+			map[string]any{"type": "text", "text": text},
+		})
+		return string(b)
+	}
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentChat, Prompt: "look", WorkspaceDir: ws, Keep: true, Images: imgs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := h.Result(ctx, ses.ID())
+	if err != nil || res.Text != want("look") {
+		t.Fatalf("start prompt = %q, %v", res.Text, err)
+	}
+	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentChat, Prompt: "again", WorkspaceDir: ws, Images: imgs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = h.Result(ctx, next.ID())
+	if err != nil || res.Text != want("again") {
+		t.Fatalf("continue prompt = %q, %v", res.Text, err)
+	}
+}
+
+func TestACPNoImagesPayloadUnchanged(t *testing.T) {
+	h := fakeHarness(t, "echo")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	ws := t.TempDir()
+	const want = `[{"text":"hi","type":"text"}]`
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentChat, Prompt: "hi", WorkspaceDir: ws, Keep: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := h.Result(ctx, ses.ID())
+	if err != nil || res.Text != want {
+		t.Fatalf("start prompt = %q, %v", res.Text, err)
+	}
+	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentChat, Prompt: "hi", WorkspaceDir: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err = h.Result(ctx, next.ID())
+	if err != nil || res.Text != want {
+		t.Fatalf("continue prompt = %q, %v", res.Text, err)
 	}
 }
