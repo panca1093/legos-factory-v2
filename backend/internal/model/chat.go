@@ -18,7 +18,7 @@ type Chat struct {
 }
 
 // ChatAttachment is what is kept of something sent with a message: a text file
-// ("file") or a knowledge document ("kb"). The content itself is not stored.
+// ("file"), an image ("image") or a knowledge document ("kb"). The content itself is not stored.
 type ChatAttachment struct {
 	Kind  string `json:"kind"`
 	Name  string `json:"name"`
