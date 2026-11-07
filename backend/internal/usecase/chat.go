@@ -1,8 +1,10 @@
 package usecase
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -23,6 +25,8 @@ const (
 	maxChatFiles     = 5
 	maxChatFile      = 100 << 10
 	maxChatFilesAll  = 300 << 10
+	maxChatImageB64  = 5 << 20  // base64 characters; the provider measures the encoded string
+	maxChatImagesB64 = 10 << 20 // base64 characters per message
 	maxChatQuote     = 8 << 10
 	maxChatDoc       = 60 << 10
 	historyMessages  = 20
@@ -106,6 +110,8 @@ type ChatModels struct {
 type ChatFile struct {
 	Name    string `json:"name"`
 	Content string `json:"content"`
+	// Encoding is "base64" for image bytes; empty means text.
+	Encoding string `json:"encoding,omitempty"`
 }
 
 type ChatKBRef struct {
@@ -367,7 +373,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	if c.Harness == nil {
 		return ErrChatUnavailable
 	}
-	prompt, atts, err := c.compose(ctx, u, in)
+	prompt, atts, images, err := c.compose(ctx, u, in)
 	if err != nil {
 		return err
 	}
@@ -440,7 +446,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	}
 	send(ChatEvent{Kind: "user_message", Message: um})
 
-	res, err := c.answer(ctx, ch, history, prompt, func(t string) {
+	res, err := c.answer(ctx, ch, history, prompt, images, func(t string) {
 		mu.Lock()
 		defer mu.Unlock()
 		if finished {
@@ -506,12 +512,12 @@ func (c *Chat) resolve(ctx context.Context, ch *model.Chat) string {
 	return c.Default(ctx)
 }
 
-func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatMessage, turn string, onText func(string)) (model.AgentResult, error) {
+func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatMessage, turn string, images []model.AgentImage, onText func(string)) (model.AgentResult, error) {
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
 		return model.AgentResult{}, err
 	}
 	provider, modelID := SplitModelRef(c.resolve(ctx, ch))
-	req := model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, OnText: onText}
+	req := model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, OnText: onText, Images: images}
 	sh, canKeep := c.Harness.(SessionHarness)
 
 	var ses model.AgentSession
@@ -591,29 +597,29 @@ func historyText(history []model.ChatMessage) string {
 
 // compose validates the message and builds this turn's prompt: knowledge
 // context, attached files, then the question.
-func (c *Chat) compose(ctx context.Context, u *model.User, in ChatSend) (string, []model.ChatAttachment, error) {
+func (c *Chat) compose(ctx context.Context, u *model.User, in ChatSend) (string, []model.ChatAttachment, []model.AgentImage, error) {
 	content := strings.TrimSpace(in.Content)
 	if content == "" {
-		return "", nil, fmt.Errorf("%w: content is required", ErrInvalid)
+		return "", nil, nil, fmt.Errorf("%w: content is required", ErrInvalid)
 	}
 	if len(content) > maxChatMessage {
-		return "", nil, fmt.Errorf("%w: message is over %d KB", ErrInvalid, maxChatMessage>>10)
+		return "", nil, nil, fmt.Errorf("%w: message is over %d KB", ErrInvalid, maxChatMessage>>10)
 	}
 	if len(in.Files) > maxChatFiles {
-		return "", nil, fmt.Errorf("%w: at most %d files per message", ErrInvalid, maxChatFiles)
+		return "", nil, nil, fmt.Errorf("%w: at most %d files per message", ErrInvalid, maxChatFiles)
 	}
 	var b strings.Builder
 	atts := []model.ChatAttachment{}
 	if in.KB != nil && in.KB.ID != "" {
 		if c.Docs == nil {
-			return "", nil, fmt.Errorf("%w: knowledge context is not available", ErrInvalid)
+			return "", nil, nil, fmt.Errorf("%w: knowledge context is not available", ErrInvalid)
 		}
 		if len(in.KB.Quote) > maxChatQuote {
-			return "", nil, fmt.Errorf("%w: quoted selection is over %d KB", ErrInvalid, maxChatQuote>>10)
+			return "", nil, nil, fmt.Errorf("%w: quoted selection is over %d KB", ErrInvalid, maxChatQuote>>10)
 		}
 		det, err := c.Docs.Detail(ctx, u, in.KB.ID)
 		if err != nil {
-			return "", nil, err
+			return "", nil, nil, err
 		}
 		body := det.Body
 		if len(body) > maxChatDoc {
@@ -625,26 +631,65 @@ func (c *Chat) compose(ctx context.Context, u *model.User, in ChatSend) (string,
 		}
 		atts = append(atts, model.ChatAttachment{Kind: "kb", Name: det.Doc.Title, DocID: det.Doc.ID, Quote: strings.TrimSpace(in.KB.Quote)})
 	}
-	total := 0
+	total, imgTotal := 0, 0
+	var images []model.AgentImage
 	for _, f := range in.Files {
 		name := filepath.Base(strings.ReplaceAll(strings.TrimSpace(f.Name), "\\", "/"))
 		if name == "" || name == "." || name == "/" {
-			return "", nil, fmt.Errorf("%w: every file needs a name", ErrInvalid)
+			return "", nil, nil, fmt.Errorf("%w: every file needs a name", ErrInvalid)
+		}
+		switch f.Encoding {
+		case "":
+		case "base64":
+			if len(f.Content) > maxChatImageB64 {
+				return "", nil, nil, fmt.Errorf("%w: %s is over 3.75 MB.", ErrInvalid, name)
+			}
+			if imgTotal += len(f.Content); imgTotal > maxChatImagesB64 {
+				return "", nil, nil, fmt.Errorf("%w: Images can total 7.5 MB at most.", ErrInvalid)
+			}
+			data, err := base64.StdEncoding.DecodeString(f.Content)
+			if err != nil {
+				return "", nil, nil, fmt.Errorf("%w: %s is not valid base64", ErrInvalid, name)
+			}
+			mt := imageType(data)
+			if mt == "" {
+				return "", nil, nil, fmt.Errorf("%w: %s is not a supported image (PNG, JPEG, GIF or WebP).", ErrInvalid, name)
+			}
+			images = append(images, model.AgentImage{MediaType: mt, Data: data})
+			atts = append(atts, model.ChatAttachment{Kind: "image", Name: name, Size: len(data)})
+			continue
+		default:
+			return "", nil, nil, fmt.Errorf("%w: %s has an unsupported encoding", ErrInvalid, name)
 		}
 		if len(f.Content) > maxChatFile {
-			return "", nil, fmt.Errorf("%w: %s is over %d KB", ErrInvalid, name, maxChatFile>>10)
+			return "", nil, nil, fmt.Errorf("%w: %s is over %d KB", ErrInvalid, name, maxChatFile>>10)
 		}
 		if total += len(f.Content); total > maxChatFilesAll {
-			return "", nil, fmt.Errorf("%w: files total over %d KB", ErrInvalid, maxChatFilesAll>>10)
+			return "", nil, nil, fmt.Errorf("%w: files total over %d KB", ErrInvalid, maxChatFilesAll>>10)
 		}
 		if !utf8.ValidString(f.Content) || strings.ContainsRune(f.Content, 0) {
-			return "", nil, fmt.Errorf("%w: %s looks binary; only text files can be attached", ErrInvalid, name)
+			return "", nil, nil, fmt.Errorf("%w: %s looks binary; only text files can be attached", ErrInvalid, name)
 		}
 		fmt.Fprintf(&b, "Attached file %s:\n<file>\n%s\n</file>\n\n", name, f.Content)
 		atts = append(atts, model.ChatAttachment{Kind: "file", Name: name, Size: len(f.Content)})
 	}
 	b.WriteString(content)
-	return b.String(), atts, nil
+	return b.String(), atts, images, nil
+}
+
+// imageType names the image type by its signature, or "" if it is none of PNG, JPEG, GIF, WebP.
+func imageType(b []byte) string {
+	switch {
+	case bytes.HasPrefix(b, []byte("\x89PNG\r\n\x1a\n")):
+		return "image/png"
+	case bytes.HasPrefix(b, []byte{0xFF, 0xD8, 0xFF}):
+		return "image/jpeg"
+	case bytes.HasPrefix(b, []byte("GIF87a")), bytes.HasPrefix(b, []byte("GIF89a")):
+		return "image/gif"
+	case len(b) >= 12 && string(b[:4]) == "RIFF" && string(b[8:12]) == "WEBP":
+		return "image/webp"
+	}
+	return ""
 }
 
 // fallbackTitle is the first sentence of s, cut at a word boundary.

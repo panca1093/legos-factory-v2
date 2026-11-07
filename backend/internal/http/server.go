@@ -55,7 +55,12 @@ func New(cfg *model.Config, log *slog.Logger) *Server {
 		e.Use(loopbackHostOnly)
 	}
 	e.Use(requestLogger(log))
-	e.Use(echomw.BodyLimit("1MB"))
+	e.Use(echomw.BodyLimitWithConfig(echomw.BodyLimitConfig{
+		Limit: "1MB",
+		Skipper: func(c echo.Context) bool {
+			return c.Request().Method == http.MethodPost && c.Path() == "/api/v1/chats/:id/messages"
+		},
+	}))
 	e.Use(echomw.CORSWithConfig(echomw.CORSConfig{
 		AllowOrigins:     []string{cfg.FrontendOrigin},
 		AllowCredentials: true,
@@ -265,7 +270,7 @@ func (s *Server) routes() {
 	api.PATCH("/chats/:id", s.requireRole(model.RoleEngineer, s.handleUpdateChat))
 	api.DELETE("/chats/:id", s.requireRole(model.RoleEngineer, s.handleDeleteChat))
 	api.GET("/chats/:id/messages", s.handleChatMessages)
-	api.POST("/chats/:id/messages", s.requireRole(model.RoleEngineer, s.handleChatSend))
+	api.POST("/chats/:id/messages", s.requireRole(model.RoleEngineer, s.handleChatSend), echomw.BodyLimit("12MiB"))
 	api.POST("/chats/:id/work-order-draft", s.requireRole(model.RoleEngineer, s.handleChatWorkOrderDraft))
 	api.GET("/chats/:id/related-knowledge", s.handleChatRelatedKnowledge)
 	api.GET("/chat/models", s.handleChatModels)

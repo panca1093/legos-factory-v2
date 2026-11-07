@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -250,5 +251,58 @@ func TestChatTitleFrameAndProjectAndDraftAPI(t *testing.T) {
 	code, body = chatDo(srv, "ana", "POST", "/api/v1/chats/"+id+"/work-order-draft", "")
 	if code != http.StatusBadGateway || !strings.Contains(body, "DRAFT_FAILED") {
 		t.Fatalf("bad draft: %d %s", code, body)
+	}
+}
+
+func TestChatSendBodyLimit(t *testing.T) {
+	srv := bootChat(t)
+	_, body := chatDo(srv, "ana", "POST", "/api/v1/chats", `{"model":"mock/mock-local"}`)
+	var created struct{ Chat model.Chat }
+	_ = json.Unmarshal([]byte(body), &created)
+	url := "/api/v1/chats/" + created.Chat.ID + "/messages"
+
+	img := strings.Repeat("A", 5242880)
+	ctrl := strings.Repeat(`\u0001`, 100<<10) // JSON-escaped control characters: 6 bytes each
+	worst := `{"content":"` + strings.Repeat(`\u0001`, 32<<10) + `","files":[` +
+		`{"name":"1.png","encoding":"base64","content":"` + img + `"},` +
+		`{"name":"2.png","encoding":"base64","content":"` + img + `"},` +
+		`{"name":"a.txt","content":"` + ctrl + `"},{"name":"b.txt","content":"` + ctrl + `"},{"name":"c.txt","content":"` + ctrl + `"}]}`
+	if len(worst) <= 12<<20-300<<10 || len(worst) > 12<<20 {
+		t.Fatalf("worst-case body is %d bytes", len(worst))
+	}
+	if code, body := chatDo(srv, "ana", "POST", url, worst); code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("worst-case send rejected by the body limit: %s", body[:min(len(body), 200)])
+	}
+
+	if code, _ := chatDo(srv, "ana", "POST", url, `{"content":"`+strings.Repeat("a", 12<<20)+`"}`); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over 12 MB on the chat route: %d", code)
+	}
+	if code, _ := chatDo(srv, "ana", "POST", "/api/v1/chats", `{"title":"`+strings.Repeat("a", 2<<20)+`"}`); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over 1 MB on another route: %d", code)
+	}
+	if code, _ := chatDo(srv, "ana", "PATCH", "/api/v1/chats/"+created.Chat.ID, `{"title":"`+strings.Repeat("a", 2<<20)+`"}`); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over 1 MB on the same path with another method: %d", code)
+	}
+}
+
+func TestChatSendImageOverHTTP(t *testing.T) {
+	srv := bootChat(t)
+	_, body := chatDo(srv, "ana", "POST", "/api/v1/chats", `{"model":"mock/mock-local"}`)
+	var created struct{ Chat model.Chat }
+	_ = json.Unmarshal([]byte(body), &created)
+	url := "/api/v1/chats/" + created.Chat.ID + "/messages"
+	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n0123"))
+
+	code, body := chatDo(srv, "ana", "POST", url, `{"content":"look","files":[{"name":"s.png","encoding":"base64","content":"`+png+`"}]}`)
+	if code != 200 || !strings.Contains(body, `"kind":"image"`) || !strings.Contains(body, `"size":12`) {
+		t.Fatalf("image send: %d %s", code, body)
+	}
+	code, body = chatDo(srv, "ana", "POST", url, `{"content":"x","files":[{"name":"a.zip","content":"PK\u0003\u0004\u0000"}]}`)
+	if code != http.StatusBadRequest || !strings.Contains(body, "a.zip looks binary; only text files can be attached") {
+		t.Fatalf("zip: %d %s", code, body)
+	}
+	code, body = chatDo(srv, "ana", "POST", url, `{"content":"x","files":[{"name":"a.png","encoding":"base64","content":"AAAA"}]}`)
+	if code != http.StatusBadRequest || !strings.Contains(body, "a.png is not a supported image (PNG, JPEG, GIF or WebP).") {
+		t.Fatalf("not an image: %d %s", code, body)
 	}
 }
