@@ -153,8 +153,8 @@ func (h *OpenCodeHarness) Start(ctx context.Context, req model.AgentRequest) (mo
 		files := make([]map[string]string, 0, len(req.Images))
 		for i, im := range req.Images {
 			files = append(files, map[string]string{
-				"type": "file", "mime": im.MediaType, "filename": fmt.Sprintf("image-%d", i+1),
-				"url": "data:" + im.MediaType + ";base64," + base64.StdEncoding.EncodeToString(im.Data),
+				"name": fmt.Sprintf("image-%d", i+1),
+				"uri":  "data:" + im.MediaType + ";base64," + base64.StdEncoding.EncodeToString(im.Data),
 			})
 		}
 		body["files"] = files

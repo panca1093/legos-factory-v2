@@ -330,13 +330,13 @@ func TestOpenCodeImagePart(t *testing.T) {
 	}
 	var got struct {
 		Text  string
-		Files []struct{ Type, Mime, Filename, URL string }
+		Files []struct{ Name, URI string }
 	}
 	if err := json.Unmarshal(st.lastBody, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Text != "look" || len(got.Files) != 1 || got.Files[0].Type != "file" || got.Files[0].Mime != "image/png" ||
-		got.Files[0].URL != "data:image/png;base64,"+base64.StdEncoding.EncodeToString(png) {
+	if got.Text != "look" || len(got.Files) != 1 || got.Files[0].Name != "image-1" ||
+		got.Files[0].URI != "data:image/png;base64,"+base64.StdEncoding.EncodeToString(png) {
 		t.Fatalf("payload = %s", st.lastBody)
 	}
 }
