@@ -33,11 +33,20 @@ export const money = (micros: number = 0) =>
   );
 export const projectColor = (index: number) =>
   ["#8B7AD8", "#5D9FAC", "#C58D66", "#6DA58A"][Math.max(0, index) % 4];
-// A PR that was closed or can no longer be tracked needs a human, since nothing will merge it on its own.
+// The PR was queued but never opened: not shipped, whatever the order state says.
+function openFailed(w: WorkOrder, events?: { kind: string }[]) {
+  return (
+    w.state === "READY" &&
+    !w.pr_url &&
+    (!!w.pr_open_failed_at ||
+      !!events?.some((e) => e.kind === "pr_open_failed"))
+  );
+}
+// A PR that failed to open, was closed or can no longer be tracked needs a human, since nothing will merge it on its own.
 const prStalled = (w: WorkOrder) =>
   w.state === "READY" &&
   !w.pr_merged_at &&
-  !!(w.pr_closed_at || w.pr_track_failed_at);
+  (!!(w.pr_closed_at || w.pr_track_failed_at) || openFailed(w));
 export const isNeedsYou = (w: WorkOrder) =>
   ["WAITING_FOR_HUMAN", "NEEDS_HUMAN_REVIEW", "BLOCKED"].includes(w.state) ||
   (w.state === "ARCHITECT_REVIEW" && w.plan_review === "approved") ||
@@ -53,18 +62,17 @@ export const runningStates: WorkOrderState[] = [
 ];
 // Approved with no pull request to track: nothing can merge, so it is done.
 const approvedLocally = (w: WorkOrder) =>
-  w.state === "READY" && !w.pr_url && !w.pr_closed_at && !w.pr_track_failed_at;
+  w.state === "READY" &&
+  !w.pr_url &&
+  !w.pr_closed_at &&
+  !w.pr_track_failed_at &&
+  !openFailed(w);
 // Ship is done once the pull request is open; merging is extra information.
 const prOpened = (w: WorkOrder) =>
   w.state === "READY" && !!w.pr_url && !w.pr_closed_at && !w.pr_track_failed_at;
 export const isShipped = (w: WorkOrder) => !!w.pr_merged_at || prOpened(w);
 export const isFinished = (w: WorkOrder) =>
   isShipped(w) || w.state === "CANCELLED" || approvedLocally(w);
-// The PR was queued but never opened: not shipped, whatever the order state says.
-const openFailed = (w: WorkOrder, events?: { kind: string }[]) =>
-  w.state === "READY" &&
-  !w.pr_url &&
-  !!events?.some((e) => e.kind === "pr_open_failed");
 // Not yet picked up by an agent: just created, or approved and waiting for a builder.
 export const isTodo = (w: WorkOrder) =>
   (w.state === "CREATED" || w.state === "QUEUED") &&

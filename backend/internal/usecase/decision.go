@@ -331,17 +331,17 @@ func (f *Factory) handleOpenPR(ctx context.Context, job model.Job) error {
 		return nil
 	}
 	if err != nil {
-		return f.prFailed(wo, fmt.Errorf("%w: %v", model.ErrPermanent, err))
+		return f.prFailed(ctx, wo, fmt.Errorf("%w: %v", model.ErrPermanent, err))
 	}
 	auth := g.GitAuth()
 	branch := "legos-factory/" + wo.ID
 	base, err := f.Sandbox.PushBranch(ctx, f.workspaceDir(wo.ID), branch, &auth)
 	if err != nil {
-		return f.prFailed(wo, err)
+		return f.prFailed(ctx, wo, err)
 	}
 	auto, err := f.WO.LatestEvent(ctx, wo.ID, "pr_auto_approved")
 	if err != nil {
-		return err
+		return f.prFailed(ctx, wo, err)
 	}
 	pr, err := g.OpenPullRequest(ctx, model.PRRequest{Repo: proj.RemoteRepo, Head: branch, Base: base, Title: wo.Title, Body: prBody(wo, auto == nil)})
 	if err != nil {
@@ -349,9 +349,9 @@ func (f *Factory) handleOpenPR(ctx context.Context, job model.Job) error {
 		if errors.As(err, &pe) && pe.Permanent() {
 			err = fmt.Errorf("%w: %v", model.ErrPermanent, err)
 		}
-		return f.prFailed(wo, err)
+		return f.prFailed(ctx, wo, err)
 	}
-	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"pr_url": pr.URL, "pr_ref": pr.Ref}); err != nil {
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"pr_url": pr.URL, "pr_ref": pr.Ref, "pr_open_failed_at": nil}); err != nil {
 		return err
 	}
 	f.event(wo.ID, "factory", "pr_opened", fmt.Sprintf("Pull request %s opened from %s into %s", pr.Ref, branch, base),
@@ -361,8 +361,11 @@ func (f *Factory) handleOpenPR(ctx context.Context, job model.Job) error {
 	return nil
 }
 
-func (f *Factory) prFailed(wo *model.WorkOrder, err error) error {
+func (f *Factory) prFailed(ctx context.Context, wo *model.WorkOrder, err error) error {
 	f.event(wo.ID, "factory", "pr_open_failed", "Could not open pull request: "+err.Error(), nil)
+	if uerr := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"pr_open_failed_at": time.Now().Unix()}); uerr != nil {
+		return errors.Join(err, uerr)
+	}
 	return err
 }
 
