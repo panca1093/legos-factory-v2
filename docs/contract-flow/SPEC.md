@@ -116,7 +116,7 @@ Truth table, first match wins:
 | 2 | any `touches_*` yes | escalate |
 | 3 | any `covers_*` / `verified_*` no, `critical_resolved` no, `open_questions` yes, `scope_creep` yes | revise |
 | 4 | an unsettled `touches_*` | escalate (risk is a human call) |
-| 5 | an unsettled answer on `covers_*`, `verified_*` or `critical_resolved` | revise |
+| 5 | an unsettled answer on `covers_*`, `verified_*` or `critical_resolved`; an unsettled `covers_<c>` or `verified_<c>` counts as yes when the Foreman's coverage marks `<c>` as `test` or `check` | revise |
 | 6 | otherwise | approve |
 
 The change from today: unsettled `scope_creep` and `task_overlap` no longer trigger a revise. They become a note to the Builder. `task_overlap` is dropped, because task `scope` already makes overlap visible to code. Budget: 2 revisions, then escalate (unchanged).

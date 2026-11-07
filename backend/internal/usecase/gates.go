@@ -549,6 +549,8 @@ func planTaskTitles(tasks []PlanTask) string {
 //	5 revise:   covers_*, verified_* or critical_resolved is unsettled
 //	6 approve
 //
+// An unsettled covers_<c> or verified_<c> is settled by the Foreman's coverage:
+// test or check counts as yes; missing or absent keeps it unsettled.
 // Rows 3 and 5 become escalate once in.PlanRevisions reaches maxPlanRevisions.
 // Unsettled scope_creep and open_questions never revise: they go to the
 // Builder as notes. The revise note holds only the triggering answers and the
@@ -570,17 +572,31 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	for _, c := range in.Criteria {
 		labels[c.ID] = fmt.Sprintf("%s (%s)", c.ID, c.Text)
 	}
+	foremanCovered := map[string]bool{}
+	for _, cv := range in.Coverage {
+		id := strings.ToLower(strings.TrimSpace(cv.Criterion))
+		ok := cv.Verification == "test" || cv.Verification == "check"
+		if prev, seen := foremanCovered[id]; !seen || prev {
+			foremanCovered[id] = ok // any missing entry for a criterion wins
+		}
+	}
 	for _, c := range in.Criteria {
 		switch judge(answers["covers_"+c.ID]) {
 		case vNo:
 			hard = append(hard, fmt.Sprintf("acceptance criterion %s is not covered by any task", labels[c.ID]))
 		case vUnsettled:
+			if foremanCovered[c.ID] {
+				break
+			}
 			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s is covered by a task", labels[c.ID]))
 		}
 		switch judge(answers["verified_"+c.ID]) {
 		case vNo:
 			hard = append(hard, fmt.Sprintf("acceptance criterion %s has no concrete test or check in the spec's verification table", labels[c.ID]))
 		case vUnsettled:
+			if foremanCovered[c.ID] {
+				break
+			}
 			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s has a concrete test or check in the spec's verification table", labels[c.ID]))
 		}
 	}
