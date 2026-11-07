@@ -1,9 +1,15 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,4 +82,45 @@ func TestLiveOpenCode(t *testing.T) {
 	}
 	t.Logf("cancelled after %s: %v", time.Since(t0).Round(time.Millisecond), err)
 	fmt.Println("LIVE_OP CODE_VERIFICATION_OK")
+}
+
+// TestLiveOpenCodeImage proves the server reads the `files` data: URI shape; needs a vision-capable first model.
+func TestLiveOpenCodeImage(t *testing.T) {
+	url := os.Getenv("LF_LIVE_OPENCODE_URL")
+	if url == "" {
+		t.Skip("set LF_LIVE_OPENCODE_URL to verify against a real server")
+	}
+	c := NewOpenCodeClient(url, "opencode", os.Getenv("LF_LIVE_OPENCODE_PASSWORD"))
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	models, err := c.Models(ctx)
+	if err != nil || len(models) == 0 {
+		t.Fatalf("model discovery: %v (models=%d)", err, len(models))
+	}
+
+	img := image.NewRGBA(image.Rect(0, 0, 64, 64))
+	draw.Draw(img, img.Bounds(), &image.Uniform{color.RGBA{R: 255, A: 255}}, image.Point{}, draw.Src)
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewOpenCodeHarness(c)
+	ses, err := h.Start(ctx, model.AgentRequest{
+		Role:       model.AgentBuilder,
+		Prompt:     "What single color fills the attached image? Answer with one lowercase word.",
+		ProviderID: models[0].ProviderID,
+		ModelID:    models[0].ModelID,
+		Images:     []model.AgentImage{{MediaType: "image/png", Data: buf.Bytes()}},
+	})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	res, err := h.Result(ctx, ses.ID())
+	if err != nil {
+		t.Fatalf("result: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(res.Text), "red") {
+		t.Fatalf("reply %q does not name the image color; the server may be ignoring files", res.Text)
+	}
 }
