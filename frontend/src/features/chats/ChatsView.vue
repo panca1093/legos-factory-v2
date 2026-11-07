@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import {
   ChevronLeft,
   FileText,
+  Image as ImageIcon,
   BookOpen,
   Layers,
   PanelLeft,
@@ -25,6 +26,7 @@ import {
   formatSize,
   groupByRecency,
   renderMarkdownCached,
+  base64Size,
   byteLength,
   type PendingFile,
 } from "./chatUtils";
@@ -138,7 +140,9 @@ async function send(p: { content: string; files: PendingFile[] }) {
   let id = chatId.value;
   const body = {
     content: p.content,
-    files: p.files.map(({ name, content }) => ({ name, content })),
+    files: p.files.map(({ name, content, encoding }) =>
+      encoding ? { name, content, encoding } : { name, content },
+    ),
   };
   try {
     if (!id) {
@@ -166,7 +170,8 @@ function retry() {
       content: body.content,
       files: (body.files ?? []).map((f) => ({
         ...f,
-        size: byteLength(f.content),
+        size: f.encoding ? base64Size(f.content) : byteLength(f.content),
+        ...(f.encoding ? { kind: "image" as const } : {}),
       })),
     });
 }
@@ -327,7 +332,10 @@ onMounted(async () => {
                     }}</span></RouterLink
                   >
                   <span v-else class="ch-chip"
-                    ><FileText class="icon" /><span class="ch-fn">{{
+                    ><ImageIcon
+                      v-if="a.kind === 'image'"
+                      class="icon"
+                    /><FileText v-else class="icon" /><span class="ch-fn">{{
                       a.name
                     }}</span
                     ><span class="ch-fs">{{ formatSize(a.size) }}</span></span
