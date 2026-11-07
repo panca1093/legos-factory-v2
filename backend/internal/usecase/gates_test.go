@@ -584,3 +584,26 @@ func TestPlanGateSkipsCriticalResolvedWithoutACritical(t *testing.T) {
 		t.Fatalf("no critical and every other answer clean must approve: %+v", out)
 	}
 }
+
+func TestPlanGateSettlesUnsettledCoverageWithForemanCoverage(t *testing.T) {
+	in := planInput(0)
+	answers := planAnswers(map[string]float64{"covers_c1": 0.68, "verified_c2": 0.5})
+	qs := map[string]Noul{}
+	for id := range answers {
+		qs[id] = Noul{}
+	}
+	if out := decidePlanGate(in, qs, answers, nil, false); out.Outcome != GateRevise || out.Row != 5 {
+		t.Fatalf("without Foreman coverage an unsettled covers/verified must revise: %+v", out)
+	}
+	in.Coverage = []reviewCoverage{{"c1", "test"}, {"c2", "check"}}
+	if out := decidePlanGate(in, qs, answers, nil, false); out.Outcome != GateApprove {
+		t.Fatalf("Foreman test/check must settle unsettled answers: %+v", out)
+	}
+	in.Coverage = []reviewCoverage{{"c1", "test"}, {"c2", "missing"}}
+	if out := decidePlanGate(in, qs, answers, nil, false); out.Outcome != GateRevise || !strings.Contains(out.Note, "c2") || strings.Contains(out.Note, "c1") {
+		t.Fatalf("Foreman missing keeps the answer unsettled: %+v", out)
+	}
+	if out := decidePlanGate(in, qs, planAnswers(map[string]float64{"covers_c1": 0.1}), nil, false); out.Outcome != GateRevise || out.Row != 3 {
+		t.Fatalf("a clear no from Jev still revises despite Foreman coverage: %+v", out)
+	}
+}
