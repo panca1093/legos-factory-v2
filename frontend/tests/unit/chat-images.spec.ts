@@ -1,8 +1,11 @@
-import { mount } from "@vue/test-utils";
+import { flushPromises, mount } from "@vue/test-utils";
+import { createMemoryHistory, createRouter } from "vue-router";
 import { createPinia, setActivePinia } from "pinia";
 import { describe, expect, it, vi } from "vitest";
 import { addFiles, detectImage } from "../../src/features/chats/chatUtils";
 import ChatComposer from "../../src/features/chats/ChatComposer.vue";
+import ChatsView from "../../src/features/chats/ChatsView.vue";
+import { useSession } from "../../src/stores/session";
 import { useChats } from "../../src/stores/chats";
 
 const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4];
@@ -150,51 +153,72 @@ describe("image chip", () => {
 });
 
 describe("image send payload", () => {
-  it("sends the PNG with encoding base64 and shows an image attachment", async () => {
+  it("sends the PNG with encoding base64 through ChatsView and shows an image attachment", async () => {
     setActivePinia(createPinia());
-    const models = [{ id: "", name: "Auto" }];
-    const w = mount(ChatComposer, { props: { models } });
-    const input = w.find('input[type="file"]');
-    Object.defineProperty(input.element, "files", {
-      value: [file("shot.png", PNG)],
+    useSession().user = { role: "OWNER" } as never;
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/chats/:id?", component: ChatsView }],
     });
-    await input.trigger("change");
-    await vi.waitFor(() => expect(w.find(".ch-chip").exists()).toBe(true));
-    await w.find("textarea").setValue("what is this");
-    await w.find("button.ch-send").trigger("click");
-    const sent = w.emitted("send")![0][0] as {
-      content: string;
-      files: { name: string; content: string; encoding?: "base64" }[];
-    };
-    const f = sent.files[0];
-    const fetchMock = vi.fn().mockResolvedValue({
+    await router.push("/chats/c");
+    const json = (data: unknown) => ({
       ok: true,
-      body: new ReadableStream({
-        start(c) {
-          c.enqueue(
-            new TextEncoder().encode(
-              'event: error\ndata: {"error":"stop"}\n\n',
-            ),
-          );
-          c.close();
-        },
-      }),
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => data,
+      text: async () => JSON.stringify(data),
+    });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST")
+        return {
+          ok: true,
+          body: new ReadableStream({
+            start(c) {
+              c.enqueue(
+                new TextEncoder().encode(
+                  'event: error\ndata: {"error":"stop"}\n\n',
+                ),
+              );
+              c.close();
+            },
+          }),
+        };
+      if (url.endsWith("/api/v1/chats"))
+        return json({
+          chats: [{ id: "c", title: "t", model: "", updated_at: "" }],
+        });
+      if (url.endsWith("/api/v1/chat/models")) return json({ models: [] });
+      return json({ messages: [] });
     });
     vi.stubGlobal("fetch", fetchMock);
-    const s = useChats();
-    await s.send("c", {
-      content: sent.content,
-      files: [{ name: f.name, content: f.content, encoding: f.encoding }],
-    });
-    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
-    expect(body.files).toEqual([
-      { name: "shot.png", content: b64(PNG), encoding: "base64" },
-    ]);
-    expect(
-      Uint8Array.from(atob(body.files[0].content), (c) => c.charCodeAt(0)),
-    ).toEqual(new Uint8Array(PNG));
-    expect(s.messages.c[0].attachments).toEqual([
-      { kind: "image", name: "shot.png", size: PNG.length },
-    ]);
+    try {
+      const w = mount(ChatsView, { global: { plugins: [router] } });
+      await flushPromises();
+      const input = w.find('input[type="file"]');
+      Object.defineProperty(input.element, "files", {
+        value: [file("shot.png", PNG)],
+      });
+      await input.trigger("change");
+      await vi.waitFor(() => expect(w.find(".ch-chip").exists()).toBe(true));
+      await w.find("textarea").setValue("what is this");
+      await w.find("button.ch-send").trigger("click");
+      const call = await vi.waitFor(() => {
+        const c = fetchMock.mock.calls.find((x) => x[1]?.method === "POST");
+        expect(c).toBeTruthy();
+        return c!;
+      });
+      const body = JSON.parse(call[1]!.body as string);
+      expect(body.files).toEqual([
+        { name: "shot.png", content: b64(PNG), encoding: "base64" },
+      ]);
+      expect(
+        Uint8Array.from(atob(body.files[0].content), (c) => c.charCodeAt(0)),
+      ).toEqual(new Uint8Array(PNG));
+      expect(useChats().messages.c[0].attachments).toEqual([
+        { kind: "image", name: "shot.png", size: PNG.length },
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
