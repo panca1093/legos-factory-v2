@@ -5,10 +5,51 @@ export const MAX_FILES = 5;
 export const MAX_FILE_BYTES = 100 * 1024;
 export const MAX_TOTAL_BYTES = 300 * 1024;
 
+export const MAX_IMAGE_B64 = 5_242_880;
+export const MAX_IMAGES_B64_TOTAL = 10_485_760;
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+
+export type ImageType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+
 export interface PendingFile {
   name: string;
   size: number;
   content: string;
+  encoding?: "base64";
+  kind?: "file" | "image";
+  mediaType?: ImageType;
+  preview?: string;
+}
+
+export const base64Size = (b64: string) =>
+  Math.floor((b64.length * 3) / 4) -
+  (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0);
+
+const startsWith = (b: Uint8Array, sig: number[], at = 0) =>
+  sig.every((v, i) => b[at + i] === v);
+
+export function detectImage(b: Uint8Array): ImageType | undefined {
+  if (startsWith(b, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    return "image/png";
+  if (startsWith(b, [0xff, 0xd8, 0xff])) return "image/jpeg";
+  if (
+    startsWith(b, [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) ||
+    startsWith(b, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
+  )
+    return "image/gif";
+  if (
+    startsWith(b, [0x52, 0x49, 0x46, 0x46]) &&
+    startsWith(b, [0x57, 0x45, 0x42, 0x50], 8)
+  )
+    return "image/webp";
+}
+
+function toBase64(buf: ArrayBuffer) {
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
 }
 
 export const byteLength = (s: string) => new TextEncoder().encode(s).length;
@@ -30,7 +71,7 @@ export function groupByRecency(chats: Chat[], now = new Date()) {
   return groups.filter((g) => g.chats.length);
 }
 
-function readBuffer(file: File): Promise<ArrayBuffer> {
+function readBuffer(file: Blob): Promise<ArrayBuffer> {
   if (typeof file.arrayBuffer === "function") return file.arrayBuffer();
   return new Promise((resolve, reject) => {
     const r = new FileReader();
@@ -46,11 +87,47 @@ export async function addFiles(
 ): Promise<{ files: PendingFile[]; errors: string[] }> {
   const files = [...current];
   const errors: string[] = [];
-  let total = files.reduce((n, f) => n + f.size, 0);
+  let total = files.reduce((n, f) => n + (f.encoding ? 0 : f.size), 0);
+  let imageTotal = files.reduce(
+    (n, f) => n + (f.encoding ? f.content.length : 0),
+    0,
+  );
   for (const file of incoming) {
     if (files.length >= MAX_FILES) {
       errors.push(`Up to ${MAX_FILES} files per message.`);
       break;
+    }
+    const mediaType = detectImage(
+      new Uint8Array(await readBuffer(file.slice(0, 12))),
+    );
+    if (mediaType || IMAGE_EXT.test(file.name)) {
+      if (!mediaType) {
+        errors.push(
+          `${file.name} is not a supported image (PNG, JPEG, GIF or WebP).`,
+        );
+        continue;
+      }
+      const length = 4 * Math.ceil(file.size / 3);
+      if (length > MAX_IMAGE_B64) {
+        errors.push(`${file.name} is over 3.75 MB.`);
+        continue;
+      }
+      if (imageTotal + length > MAX_IMAGES_B64_TOTAL) {
+        errors.push("Images can total 7.5 MB at most.");
+        continue;
+      }
+      const content = toBase64(await readBuffer(file));
+      files.push({
+        name: file.name,
+        size: file.size,
+        content,
+        encoding: "base64",
+        kind: "image",
+        mediaType,
+        preview: `data:${mediaType};base64,${content}`,
+      });
+      imageTotal += length;
+      continue;
     }
     if (file.size > MAX_FILE_BYTES) {
       errors.push(`${file.name} is over ${MAX_FILE_BYTES / 1024} KB.`);

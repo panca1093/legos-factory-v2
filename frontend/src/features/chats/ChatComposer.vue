@@ -94,6 +94,18 @@ defineExpose({ restore, focus: () => ta.value?.focus() });
   >
     <div v-if="files.length" class="ch-chips">
       <span v-for="(f, i) in files" :key="f.name + i" class="ch-chip">
+        <img
+          v-if="f.preview"
+          :src="f.preview"
+          alt=""
+          class="ch-thumb"
+          style="
+            width: 18px;
+            height: 18px;
+            object-fit: cover;
+            border-radius: 3px;
+          "
+        />
         <span class="ch-fn">{{ f.name }}</span
         ><span class="ch-fs">{{ formatSize(f.size) }}</span
         ><button
@@ -120,7 +132,7 @@ defineExpose({ restore, focus: () => ta.value?.focus() });
         type="button"
         class="lg-icon-btn ch-tool"
         aria-label="Attach files"
-        title="Attach text files (or drop them here)"
+        title="Attach text files or images (or drop them here)"
         :disabled="locked"
         @click="picker?.click()"
       >
