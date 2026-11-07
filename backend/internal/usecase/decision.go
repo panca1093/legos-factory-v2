@@ -339,7 +339,11 @@ func (f *Factory) handleOpenPR(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return f.prFailed(wo, err)
 	}
-	pr, err := g.OpenPullRequest(ctx, model.PRRequest{Repo: proj.RemoteRepo, Head: branch, Base: base, Title: wo.Title, Body: prBody(wo, !f.autoApproved(ctx, wo.ID))})
+	auto, err := f.WO.LatestEvent(ctx, wo.ID, "pr_auto_approved")
+	if err != nil {
+		return err
+	}
+	pr, err := g.OpenPullRequest(ctx, model.PRRequest{Repo: proj.RemoteRepo, Head: branch, Base: base, Title: wo.Title, Body: prBody(wo, auto == nil)})
 	if err != nil {
 		var pe *model.ProviderError
 		if errors.As(err, &pe) && pe.Permanent() {
@@ -360,11 +364,6 @@ func (f *Factory) handleOpenPR(ctx context.Context, job model.Job) error {
 func (f *Factory) prFailed(wo *model.WorkOrder, err error) error {
 	f.event(wo.ID, "factory", "pr_open_failed", "Could not open pull request: "+err.Error(), nil)
 	return err
-}
-
-func (f *Factory) autoApproved(ctx context.Context, woID string) bool {
-	ev, err := f.WO.LatestEvent(ctx, woID, "pr_auto_approved")
-	return err == nil && ev != nil
 }
 
 func prBody(wo *model.WorkOrder, humanApproved bool) string {

@@ -26,6 +26,9 @@ func (f *Factory) handleEvaluate(ctx context.Context, job model.Job) error {
 		return f.resumeAppend(ctx, wo) // a retry after an append got only partway
 	}
 	if wo.State == model.StateReady && wo.PRRef == "" && wo.PRURL == "" {
+		if f.Sched.HasActive(ctx, wo.ID, "", JobOpenPR) {
+			return nil
+		}
 		return f.enqueueOpenPR(ctx, wo.ID) // a retry after the auto-approve could not queue the PR; open_pr is find-or-create
 	}
 	if wo.State != model.StateSpecialistReview {

@@ -210,7 +210,7 @@ Truth table:
 
 ### 8. Ship = PR open
 
-Ship, the work order's last stage in the UI, is complete when its pull request is **open** (`pr_url` / `pr_ref` set). The pull request is where the human reviews; merging and closing are tracked as extra information (the "Merged" pill), not as the end of Ship. A PR that failed to open (`pr_open_failed`, no `pr_url`) is not shipped.
+Ship, the work order's last stage in the UI, is complete when its pull request is **open** (`pr_url` / `pr_ref` set). The pull request is where the human reviews; merging is tracked as extra information (the "Merged" pill). A PR that failed to open (`pr_open_failed`, no `pr_url`) or was closed without merging is not shipped and needs the human.
 
 **Automatic path.** When readiness is clean (no blockers, no converge escalation, checks recorded) and the project has a bound git integration, the factory moves `MERGE_READINESS → READY` itself, records `pr_auto_approved` (`actor: factory`; no human decision is recorded) and enqueues `open_pr`. If that enqueue fails, the `evaluate` job fails and its retry enqueues `open_pr` again for a `READY` order without a PR (`open_pr` is find-or-create). The PR body says the converge gate approved the change. A cancelled order is never moved to `READY`.
 
