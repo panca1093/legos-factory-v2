@@ -2,9 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -40,6 +42,7 @@ func fakeServer(t *testing.T) (*httptest.Server, *opencodeStub) {
 			return
 		}
 		id := r.PathValue("id")
+		st.lastBody, _ = io.ReadAll(r.Body)
 		st.startAssistant(id)
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"data":{"id":"msg-user"}}`)
@@ -71,6 +74,7 @@ type opencodeStub struct {
 	sessions     map[string]*stubSession
 	next         int
 	failPrompt   bool
+	lastBody     []byte
 }
 
 func (s *opencodeStub) createSession() string {
@@ -311,5 +315,39 @@ func TestAbsorbReportsEachToolStepOnce(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("steps = %+v\nwant   %+v", got, want)
+	}
+}
+
+func TestOpenCodeImagePart(t *testing.T) {
+	srv, st := fakeServer(t)
+	h := NewOpenCodeHarness(NewOpenCodeClient(srv.URL, "opencode", "pass"))
+	png := []byte("\x89PNG\r\n\x1a\nbytes")
+	if _, err := h.Start(context.Background(), model.AgentRequest{
+		Prompt: "look", ProviderID: "p1", ModelID: "m1",
+		Images: []model.AgentImage{{MediaType: "image/png", Data: png}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Text  string
+		Files []struct{ Type, Mime, Filename, URL string }
+	}
+	if err := json.Unmarshal(st.lastBody, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != "look" || len(got.Files) != 1 || got.Files[0].Type != "file" || got.Files[0].Mime != "image/png" ||
+		got.Files[0].URL != "data:image/png;base64,"+base64.StdEncoding.EncodeToString(png) {
+		t.Fatalf("payload = %s", st.lastBody)
+	}
+}
+
+func TestOpenCodeNoImagesPayloadUnchanged(t *testing.T) {
+	srv, st := fakeServer(t)
+	h := NewOpenCodeHarness(NewOpenCodeClient(srv.URL, "opencode", "pass"))
+	if _, err := h.Start(context.Background(), model.AgentRequest{Prompt: "hi", ProviderID: "p1", ModelID: "m1"}); err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"model":{"modelID":"m1","providerID":"p1"},"text":"hi"}`; string(st.lastBody) != want {
+		t.Fatalf("payload = %s", st.lastBody)
 	}
 }
