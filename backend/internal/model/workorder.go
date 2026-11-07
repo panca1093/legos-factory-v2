@@ -113,6 +113,7 @@ type WorkOrder struct {
 	PRMergedAt      *time.Time `json:"pr_merged_at,omitempty"`
 	PRClosedAt      *time.Time `json:"pr_closed_at,omitempty"`
 	PRTrackFailedAt *time.Time `json:"pr_track_failed_at,omitempty"`
+	PROpenFailedAt  *time.Time `json:"pr_open_failed_at,omitempty"`
 	CreatedBy       string     `json:"created_by"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`

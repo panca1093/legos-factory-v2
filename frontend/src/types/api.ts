@@ -87,6 +87,7 @@ export interface WorkOrder {
   pr_merged_at?: string | null;
   pr_closed_at?: string | null;
   pr_track_failed_at?: string | null;
+  pr_open_failed_at?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;

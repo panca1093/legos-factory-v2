@@ -11,6 +11,11 @@ import {
   changeRequestDraft,
   escalationReason,
 } from "../../src/features/factory/runs/agentActivity";
+import {
+  isFinished,
+  isNeedsYou,
+  isShipped,
+} from "../../src/composables/presentation";
 import { subscribe } from "../../src/services/events/sse";
 import { useFactory } from "../../src/stores/factory";
 import { useSession } from "../../src/stores/session";
@@ -165,6 +170,26 @@ describe("work order page ship states", () => {
     );
     expect(w.find(".tg").exists()).toBe(true);
     w.unmount();
+  });
+});
+
+describe("list ship status", () => {
+  it("counts a READY order whose PR failed to open as needing you, not finished", () => {
+    const failed = {
+      ...orders[0],
+      state: "READY",
+      pr_url: "",
+      pr_open_failed_at: "2026-11-07T00:00:00Z",
+    } as WorkOrder;
+    expect(isShipped(failed)).toBe(false);
+    expect(isFinished(failed)).toBe(false);
+    expect(isNeedsYou(failed)).toBe(true);
+    const local = { ...failed, pr_open_failed_at: null } as WorkOrder;
+    expect(isFinished(local)).toBe(true);
+    expect(isNeedsYou(local)).toBe(false);
+    const opened = { ...failed, pr_url: "https://x/pull/1" } as WorkOrder;
+    expect(isShipped(opened)).toBe(true);
+    expect(isNeedsYou(opened)).toBe(false);
   });
 });
 

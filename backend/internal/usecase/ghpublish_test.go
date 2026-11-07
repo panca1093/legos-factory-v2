@@ -31,12 +31,16 @@ type recordingGH struct {
 	GitProvider
 	auth model.GitAuth
 	req  model.PRRequest
+	fail error
 }
 
 func (g *recordingGH) CheckAuth(context.Context) (string, error) { return "octo", nil }
 func (g *recordingGH) GitAuth() model.GitAuth                    { return g.auth }
 func (g *recordingGH) OpenPullRequest(_ context.Context, r model.PRRequest) (model.PullRequest, error) {
 	g.req = r
+	if g.fail != nil {
+		return model.PullRequest{}, g.fail
+	}
 	return model.PullRequest{Number: 3, URL: "https://github.com/acme/greeter/pull/3", Ref: "github:acme/greeter#3"}, nil
 }
 
@@ -85,6 +89,14 @@ func TestOpenPRInGHModeNeverPushesIntoTheUsersFolder(t *testing.T) {
 	gh := &recordingGH{auth: model.GitAuth{RemoteURL: "file://" + bare, DefaultBranch: "main"}}
 	f := &Factory{WO: wos, Proj: projs, Sandbox: box, DataDir: root, Bus: nopBus{}, Log: slog.Default(),
 		Integrations: &Integrations{Host: sandbox.Host{}, GH: func(string, string) GitProvider { return gh }}}
+	gh.fail = errors.New("github: 502")
+	if err := f.handleOpenPR(ctx, model.Job{WOID: "wo_1"}); err == nil {
+		t.Fatal("a failed PR open must fail the job")
+	}
+	if wo, _ := wos.Get(ctx, "wo_1"); wo.PROpenFailedAt == nil || wo.PRURL != "" {
+		t.Fatalf("a failed open must mark pr_open_failed_at: %+v", wo)
+	}
+	gh.fail = nil
 	if err := f.handleOpenPR(ctx, model.Job{WOID: "wo_1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -99,8 +111,8 @@ func TestOpenPRInGHModeNeverPushesIntoTheUsersFolder(t *testing.T) {
 		t.Fatalf("PR request = %+v", gh.req)
 	}
 	wo, _ := wos.Get(ctx, "wo_1")
-	if wo.PRRef != "github:acme/greeter#3" {
-		t.Fatalf("pr_ref = %q", wo.PRRef)
+	if wo.PRRef != "github:acme/greeter#3" || wo.PROpenFailedAt != nil {
+		t.Fatalf("pr_ref = %q, a later open must clear pr_open_failed_at: %v", wo.PRRef, wo.PROpenFailedAt)
 	}
 }
 
