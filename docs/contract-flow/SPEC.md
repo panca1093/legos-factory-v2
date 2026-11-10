@@ -27,7 +27,7 @@ The method below is taken from three references and adapted to the factory: the 
 
 ## Artifacts
 
-Each artifact has one reader and a length budget. Budgets are enforced in the prompt and checked by code (over budget = one rewrite request, then accepted with a warning).
+Each artifact has one reader and a length budget. Budgets are enforced in the prompt and checked by code (over budget = the brief gets one rewrite request, then is accepted with a warning; the plan, spec and tasks, is accepted with a warning at once).
 
 | Artifact | Author | Reader | Budget | Content |
 |---|---|---|---|---|
