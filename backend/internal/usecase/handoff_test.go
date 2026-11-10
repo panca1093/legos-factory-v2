@@ -50,6 +50,8 @@ func TestBuilderQuestionIsFoundBeforeANotesSection(t *testing.T) {
 	for _, text := range []string{
 		"partial\nNEEDS_CONTEXT: half up?\n\nNotes for review:\nnone",
 		"partial\nNEEDS_CONTEXT: half up?\n**Notes for review:**\n- unverified",
+		"partial\nNotes for review:\n- unverified rounding\nNEEDS_CONTEXT: half up?",
+		"Notes for review: none\nNEEDS_CONTEXT: half up?",
 	} {
 		if q, asked := builderQuestion(text); !asked || q != "half up?" {
 			t.Errorf("builderQuestion(%q) = %q, %v", text, q, asked)
@@ -201,9 +203,13 @@ func TestEarlierFindingTitles(t *testing.T) {
 		Title: "still broken", Status: model.FindingOpen, Specialty: "backend"}); err != nil {
 		t.Fatal(err)
 	}
+	if err := r.f.Findings.Create(ctx, model.Finding{ID: "fnd_006", RunID: "run_a", WOID: r.wo.ID, Severity: "minor",
+		Title: "float rounding", Detail: "uses float (cites c2)", Status: model.FindingOpen, Specialty: "backend"}); err != nil {
+		t.Fatal(err)
+	}
 	got := r.f.earlierFindingTitles(ctx, r.wo.ID, "backend")
 	if !reflect.DeepEqual(got, []string{"dup", "old"}) {
-		t.Fatalf("titles = %q; want [dup old] (any status, de-duplicated, own specialty only, never a blocker)", got)
+		t.Fatalf("titles = %q; want [dup old] (any status, de-duplicated, own specialty only, never a blocker or a criterion-citing finding)", got)
 	}
 	for i := 10; i < 40; i++ {
 		add(i, "backend", fmt.Sprintf("t%d", i), model.FindingOpen)

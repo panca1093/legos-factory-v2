@@ -139,16 +139,19 @@ type needsContext struct{ question string }
 
 func (e *needsContext) Error() string { return "builder needs context: " + e.question }
 
-// builderQuestion reports whether the reply's last line, before any notes section, is "NEEDS_CONTEXT: <question>"; a bare marker gives an empty question.
+// builderQuestion reports whether the reply's last line, or the last line before a notes section, is "NEEDS_CONTEXT: <question>"; a bare marker gives an empty question.
 func builderQuestion(text string) (string, bool) {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		if notesHeadingLine.MatchString(strings.TrimSpace(lines[i])) {
-			lines = strings.Split(strings.TrimSpace(strings.Join(lines[:i], "\n")), "\n")
-			break
-		}
-	}
 	m := needsContextLine.FindStringSubmatch(strings.TrimSpace(lines[len(lines)-1]))
+	if m == nil {
+		for i := len(lines) - 1; i >= 0; i-- {
+			if notesHeadingLine.MatchString(strings.TrimSpace(lines[i])) {
+				lines = strings.Split(strings.TrimSpace(strings.Join(lines[:i], "\n")), "\n")
+				break
+			}
+		}
+		m = needsContextLine.FindStringSubmatch(strings.TrimSpace(lines[len(lines)-1]))
+	}
 	if m == nil {
 		return "", false
 	}
