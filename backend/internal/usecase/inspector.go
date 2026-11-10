@@ -452,7 +452,7 @@ func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []stri
 
 const maxEarlierFindings = 20
 
-// earlierFindingTitles are the distinct titles the order's earlier findings of one specialty carried, most recent first, whatever their status.
+// earlierFindingTitles are the distinct titles of the order's earlier non-blocker findings of one specialty, most recent first, whatever their status.
 func (f *Factory) earlierFindingTitles(ctx context.Context, woID, specialty string) []string {
 	if f.Findings == nil {
 		return nil
@@ -460,7 +460,7 @@ func (f *Factory) earlierFindingTitles(ctx context.Context, woID, specialty stri
 	all, _ := f.Findings.List(ctx, woID)
 	var titles []string
 	for _, fd := range slices.Backward(all) {
-		if fd.Specialty == specialty && fd.Title != "" && !slices.Contains(titles, fd.Title) {
+		if fd.Specialty == specialty && fd.Severity != model.SeverityBlocker && fd.Title != "" && !slices.Contains(titles, fd.Title) {
 			if titles = append(titles, fd.Title); len(titles) == maxEarlierFindings {
 				break
 			}

@@ -34,12 +34,29 @@ func TestBuilderNotes(t *testing.T) {
 		{"long item is cut", "Notes for review:\n- " + long, []string{long[:300]}},
 		{"blank lines between items", "Notes for review:\n\n- a\n\n- b\n", []string{"a", "b"}},
 		{"reply that asks a question", "partial edits\nNEEDS_CONTEXT: Round half up or down?", nil},
+		{"prose that starts like the heading", "Notes for review are not needed here.", nil},
+		{"closing fence is not a note", "Notes for review:\n- a\n```", []string{"a"}},
+		{"n/a", "Notes for review:\nN/A", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := builderNotes(tc.text); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("builderNotes(%q) = %q; want %q", tc.text, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBuilderQuestionIsFoundBeforeANotesSection(t *testing.T) {
+	for _, text := range []string{
+		"partial\nNEEDS_CONTEXT: half up?\n\nNotes for review:\nnone",
+		"partial\nNEEDS_CONTEXT: half up?\n**Notes for review:**\n- unverified",
+	} {
+		if q, asked := builderQuestion(text); !asked || q != "half up?" {
+			t.Errorf("builderQuestion(%q) = %q, %v", text, q, asked)
+		}
+	}
+	if _, asked := builderQuestion("done\nNotes for review:\n- NEEDS_CONTEXT: not a question, a note"); asked {
+		t.Error("a note is not a question")
 	}
 }
 
@@ -91,14 +108,15 @@ func TestInspectPromptCarriesSpecDecisionRuleAndEarlierFindings(t *testing.T) {
 		"Spec (the contract the change was built against):\n## Decisions\n| 1 | cap is 3.75 MB |",
 		"A choice recorded in the spec's Decisions table or Behaviour rules is settled",
 		"report ONE finding that cites both the decision and the criterion",
-		"Reported in earlier revisions (do not report these again unless the change made them worse):\n- Cap is 3.75 MB\n- Missing index\n",
+		earlierFindingsHead + "\n- Cap is 3.75 MB\n- Missing index\n",
+		"report it again with fresh evidence",
 	} {
 		if !strings.Contains(p, want) {
 			t.Errorf("inspect prompt missing %q:\n%s", want, p)
 		}
 	}
 	bare := inspectPrompt(&model.WorkOrder{Title: "t"}, pick, nil, "", nil)
-	if strings.Contains(bare, "Reported in earlier revisions") || strings.Contains(bare, "Spec (the contract") {
+	if strings.Contains(bare, "Already reported as notes") || strings.Contains(bare, "Spec (the contract") {
 		t.Errorf("sections must be omitted when empty:\n%s", bare)
 	}
 }
@@ -179,9 +197,13 @@ func TestEarlierFindingTitles(t *testing.T) {
 	add(2, "testing", "other specialty", model.FindingOpen)
 	add(3, "backend", "dup", model.FindingResolved)
 	add(4, "backend", "dup", model.FindingOpen)
+	if err := r.f.Findings.Create(ctx, model.Finding{ID: "fnd_005", RunID: "run_a", WOID: r.wo.ID, Severity: model.SeverityBlocker,
+		Title: "still broken", Status: model.FindingOpen, Specialty: "backend"}); err != nil {
+		t.Fatal(err)
+	}
 	got := r.f.earlierFindingTitles(ctx, r.wo.ID, "backend")
 	if !reflect.DeepEqual(got, []string{"dup", "old"}) {
-		t.Fatalf("titles = %q; want [dup old] (any status, de-duplicated, own specialty only)", got)
+		t.Fatalf("titles = %q; want [dup old] (any status, de-duplicated, own specialty only, never a blocker)", got)
 	}
 	for i := 10; i < 40; i++ {
 		add(i, "backend", fmt.Sprintf("t%d", i), model.FindingOpen)
@@ -266,7 +288,7 @@ func TestSecondInspectionListsTheFirstOnesFindingTitles(t *testing.T) {
 		t.Fatal("no inspector ran")
 	}
 	for _, p := range h.prompts["inspector"] {
-		if strings.Contains(p, "Reported in earlier revisions") {
+		if strings.Contains(p, earlierFindingsHead) {
 			t.Fatalf("first inspection has no earlier findings:\n%s", p)
 		}
 	}
@@ -278,7 +300,7 @@ func TestSecondInspectionListsTheFirstOnesFindingTitles(t *testing.T) {
 		t.Fatalf("second inspection ran %d specialists, first %d", len(second), first)
 	}
 	for _, p := range second {
-		if !strings.Contains(p, "Reported in earlier revisions (do not report these again unless the change made them worse):\n- Cap is 3.75 MB, not 5 MB\n") {
+		if !strings.Contains(p, earlierFindingsHead+"\n- Cap is 3.75 MB, not 5 MB\n") {
 			t.Errorf("second inspection prompt lacks the earlier title:\n%s", p)
 		}
 		if !strings.Contains(p, "Round in integer rupiah") {

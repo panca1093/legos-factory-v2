@@ -591,12 +591,13 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 		out := "; Foreman coverage: " + coverage
 		for _, f := range in.Findings {
 			if slices.Contains(citedCriteria(f.Cites, in.Criteria), c.ID) {
-				out += "; finding: " + findingLine(f)
+				out += "; finding: " + truncateText(findingLine(f), 400)
 			}
 		}
-		return out + "; to settle it, name in the spec's Acceptance table the test or check for this criterion and the task that delivers it"
+		return out + "; to settle it, give this criterion a row in the spec's Acceptance table that names its test or check, and make sure a task's objective covers it"
 	}
 	for _, c := range in.Criteria {
+		before := len(soft)
 		switch judge(answers["covers_"+c.ID]) {
 		case vNo:
 			hard = append(hard, fmt.Sprintf("acceptance criterion %s is not covered by any task", labels[c.ID]))
@@ -604,7 +605,7 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 			if foremanCovered[c.ID] {
 				break
 			}
-			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s is covered by a task", labels[c.ID])+evidence(c))
+			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s is covered by a task", labels[c.ID]))
 		}
 		switch judge(answers["verified_"+c.ID]) {
 		case vNo:
@@ -613,7 +614,10 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 			if foremanCovered[c.ID] {
 				break
 			}
-			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s has a concrete test or check in the spec's verification table", labels[c.ID])+evidence(c))
+			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s has a concrete test or check in the spec's verification table", labels[c.ID]))
+		}
+		if len(soft) > before {
+			soft[len(soft)-1] += evidence(c)
 		}
 	}
 	var criticals []string

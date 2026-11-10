@@ -614,7 +614,7 @@ func TestPlanGateSoftNotesCarryCoverageAndCitedFindings(t *testing.T) {
 	for id := range answers {
 		qs[id] = Noul{}
 	}
-	settle := "name in the spec's Acceptance table the test or check for this criterion and the task that delivers it"
+	settle := "give this criterion a row in the spec's Acceptance table that names its test or check, and make sure a task's objective covers it"
 
 	in := planInput(0)
 	in.Coverage = []reviewCoverage{{" C1 ", "missing"}}
@@ -640,6 +640,17 @@ func TestPlanGateSoftNotesCarryCoverageAndCitedFindings(t *testing.T) {
 	in.Coverage = []reviewCoverage{{"c1", "missing"}, {"c1", "test"}}
 	if out = decidePlanGate(in, qs, answers, nil, false); !strings.Contains(out.Note, "Foreman coverage: missing") {
 		t.Fatalf("the note shows the entry the gate acted on:\n%s", out.Note)
+	}
+
+	in = planInput(0)
+	in.Coverage = nil
+	in.Findings = []reviewFinding{{ID: "F9", Severity: "high", Layer: "contract", Cites: "c1", Issue: "line one\n2. looks like an item " + strings.Repeat("z", 900), Fix: "f"}}
+	out = decidePlanGate(in, qs, planAnswers(map[string]float64{"covers_c1": 0.5, "verified_c1": 0.5}), nil, false)
+	if strings.Count(out.Note, "Foreman coverage:") != 1 || strings.Count(out.Note, "F9 [high") != 1 {
+		t.Fatalf("one criterion carries its evidence once:\n%s", out.Note)
+	}
+	if strings.Contains(out.Note, "\n2. looks") || len(out.Note) > 1200 {
+		t.Fatalf("a cited finding is flattened and capped (%d bytes):\n%s", len(out.Note), out.Note)
 	}
 
 	in = PlanGateInput{Request: "r", Criteria: testCriteria, Findings: testFindings[1:]}

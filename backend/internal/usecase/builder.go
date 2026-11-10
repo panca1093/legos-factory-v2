@@ -139,9 +139,15 @@ type needsContext struct{ question string }
 
 func (e *needsContext) Error() string { return "builder needs context: " + e.question }
 
-// builderQuestion reports whether the reply's last line is "NEEDS_CONTEXT: <question>"; a bare marker gives an empty question.
+// builderQuestion reports whether the reply's last line, before any notes section, is "NEEDS_CONTEXT: <question>"; a bare marker gives an empty question.
 func builderQuestion(text string) (string, bool) {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if notesHeadingLine.MatchString(strings.TrimSpace(lines[i])) {
+			lines = strings.Split(strings.TrimSpace(strings.Join(lines[:i], "\n")), "\n")
+			break
+		}
+	}
 	m := needsContextLine.FindStringSubmatch(strings.TrimSpace(lines[len(lines)-1]))
 	if m == nil {
 		return "", false
@@ -157,7 +163,7 @@ const (
 )
 
 var (
-	notesHeadingLine = regexp.MustCompile("(?i)^[\\s#*_`]*" + regexp.QuoteMeta(strings.TrimSuffix(notesHeading, ":")) + "(?:[\\s*_`]*:[\\s*_`]*|[\\s*_`]+|$)(.*?)[\\s*_`]*$")
+	notesHeadingLine = regexp.MustCompile("(?i)^[\\s#*_`]*" + regexp.QuoteMeta(strings.TrimSuffix(notesHeading, ":")) + "[\\s*_`]*(?::[\\s*_`]*(.*?))?[\\s*_`]*$")
 	listMarker       = regexp.MustCompile(`^(?:[-*•]|\d+[.)])\s+`)
 )
 
@@ -176,7 +182,7 @@ func builderNotes(text string) []string {
 	var notes []string
 	for _, l := range append([]string{inline}, lines[start+1:]...) {
 		l = strings.TrimSpace(listMarker.ReplaceAllString(strings.TrimSpace(l), ""))
-		if l == "" || strings.EqualFold(strings.TrimRight(l, "."), "none") {
+		if l == "" || strings.HasPrefix(l, "```") || strings.EqualFold(strings.TrimRight(l, "."), "none") || strings.EqualFold(l, "n/a") {
 			continue
 		}
 		if r := []rune(l); len(r) > maxBuilderNoteLen {
@@ -214,7 +220,7 @@ func (f *Factory) builderNotesSection(ctx context.Context, wo *model.WorkOrder) 
 		latest[task] = items
 	}
 	var b strings.Builder
-	size := len(builderNotesHead) + 1
+	size := len(builderNotesHead) + 2
 	for _, task := range slices.Backward(order) {
 		if len(latest[task]) == 0 {
 			continue

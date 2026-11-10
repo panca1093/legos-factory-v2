@@ -27,7 +27,7 @@ The method below is taken from three references and adapted to the factory: the 
 
 ## Artifacts
 
-Each artifact has one reader and a length budget. Budgets are enforced in the prompt and checked by code (over budget = the brief gets one rewrite request, then is accepted with a warning; the plan, spec and tasks, is accepted with a warning at once).
+Each artifact has one reader and a length budget. Budgets are enforced in the prompt and checked by code (over budget = the brief gets one rewrite request, then is accepted with a warning; the plan (spec and tasks) is accepted with a warning at once).
 
 | Artifact | Author | Reader | Budget | Content |
 |---|---|---|---|---|
@@ -148,7 +148,7 @@ The Architect compares the diff with the contract and returns gaps, without trus
 - A `requirement`-layer gap goes to the Foreman.
 - `partial` and `unrequested` are notes unless they cite an acceptance criterion.
 - Inspector findings block only when their severity is `blocker` or they cite an acceptance criterion. Every other finding is a note. Blocker findings follow the existing remediation loop.
-- Each Inspector also receives the spec (a choice recorded in its Decisions table or Behaviour rules is settled and is not a finding) and the titles of earlier findings of its specialty.
+- Each Inspector also receives the spec (a choice recorded in its Decisions table or Behaviour rules is settled and is not a finding) and the titles of earlier non-blocker findings of its specialty, which it repeats only when one is still a blocker or leaves a criterion unmet.
 - With contract tests on, layer sorting is mostly mechanical: a criterion whose test is red is `code`; a criterion whose test is green but the gap still claims it unmet is `contract` (the test is too weak).
 
 Jev converge gate: `gap_valid_<G>` (is the gap real, given the evidence?) for each blocking gap, and `met_<c>` for each criterion with no test. Outcome: **converged** (no valid blocking gap, every criterion met) → PR preparation, as `done` does today; **append** → new tasks, then back to Build; **escalate**. Budget: 2 append rounds, then escalate.

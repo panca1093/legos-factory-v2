@@ -458,6 +458,9 @@ Work only within the assigned workspace. When done, reply with one line describi
 		job.TaskID, wo.Title, strings.Join(files, "\n"), wo.Objective, clarification(wo))
 }
 
+// A specialist that stays silent on an unfixed finding closes it: only a note may be dropped, never a blocker or an unmet criterion.
+const earlierFindingsHead = "Already reported as notes in earlier revisions. Do not repeat one as a note. If one is still present and is a blocker or leaves an acceptance criterion unmet, report it again with fresh evidence:"
+
 func inspectPrompt(wo *model.WorkOrder, pick SpecialistPick, files []string, builderNotes string, earlier []string) string {
 	changed := "(no file list available)"
 	if len(files) > 0 {
@@ -471,7 +474,7 @@ func inspectPrompt(wo *model.WorkOrder, pick SpecialistPick, files []string, bui
 		spec = "\nSpec (the contract the change was built against):\n" + wo.Spec + "\n"
 	}
 	if len(earlier) > 0 {
-		reported = "\nReported in earlier revisions (do not report these again unless the change made them worse):\n- " + strings.Join(earlier, "\n- ") + "\n"
+		reported = "\n" + earlierFindingsHead + "\n- " + strings.Join(earlier, "\n- ") + "\n"
 	}
 	return fmt.Sprintf(`You are the %s Inspector. Independently review the implementation of work order %q in the workspace.
 You were selected because the change %s.
