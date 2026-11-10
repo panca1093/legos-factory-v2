@@ -201,12 +201,13 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	if err != nil {
 		f.event(wo.ID, "inspector", "changed_files_unavailable", err.Error(), nil)
 	}
+	builderNotes := f.builderNotesSection(ctx, wo)
 	if only, _ := job.Payload["converge_only"].(bool); only && f.Judge != nil {
 		// the contract changed, not the diff: the specialists' findings still stand
 		round, _ := job.Payload["round"].(float64)
-		err := f.converge(ctx, *wo, files, int(round))
+		err := f.converge(ctx, *wo, files, int(round), builderNotes)
 		if err != nil {
-			err = f.retryConverge(ctx, wo, files, int(round), err)
+			err = f.retryConverge(ctx, wo, files, int(round), builderNotes, err)
 		}
 		if err != nil {
 			f.event(wo.ID, "architect", "converge_failed", err.Error(), nil)
@@ -236,7 +237,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 					f.event(wo.ID, "architect", "converge_failed", fmt.Sprintf("converge panicked: %v", r), nil)
 				}
 			}()
-			archErr = f.converge(actx, *wo, files, 0)
+			archErr = f.converge(actx, *wo, files, 0, builderNotes)
 		}()
 		// an early return must neither leave the verification running nor wait for it to finish
 		defer func() {
@@ -252,7 +253,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		var out findingsReply
 		kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentInspector), p.Specialty,
 			woQuery(wo)+" "+strings.Join(files, " ")+" "+p.Specialty, f.workspaceDir(wo.ID), wo.KBBaseSHA)
-		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files)+kbText,
+		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files, builderNotes)+kbText,
 			map[string]string{"specialty": p.Specialty}, "", &out, runOpts{Audit: audit})
 		if err != nil {
 			return err
@@ -289,7 +290,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	wg.Wait()
 	if archErr != nil && blockers == 0 {
 		// retry only converge: requeueing the job would re-run every specialist
-		archErr = f.retryConverge(ctx, wo, files, 0, archErr)
+		archErr = f.retryConverge(ctx, wo, files, 0, builderNotes, archErr)
 	}
 	if archErr != nil {
 		f.event(wo.ID, "architect", "converge_failed", archErr.Error(), nil)
@@ -364,14 +365,14 @@ const convergeAttempts = 3
 
 var architectRetryDelay = 5 * time.Second
 
-func (f *Factory) retryConverge(ctx context.Context, wo *model.WorkOrder, files []string, round int, err error) error {
+func (f *Factory) retryConverge(ctx context.Context, wo *model.WorkOrder, files []string, round int, builderNotes string, err error) error {
 	for i := 1; i < convergeAttempts && err != nil; i++ {
 		select {
 		case <-ctx.Done():
 			return err
 		case <-time.After(architectRetryDelay):
 		}
-		err = f.converge(ctx, *wo, files, round)
+		err = f.converge(ctx, *wo, files, round, builderNotes)
 	}
 	return err
 }
@@ -404,7 +405,7 @@ func (f *Factory) convergeAppends(ctx context.Context, woID string) (int, error)
 // converge has the Architect compare the built result with the contract and
 // stores the gaps for the converge gate; round is 0 unless the caller knows it (a converge-only job). A failure is reported, not fatal: the
 // gate then has no report for this revision.
-func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []string, round int) error {
+func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []string, round int, builderNotes string) error {
 	dir := f.workspaceDir(wo.ID)
 	diff, err := f.Sandbox.Diff(ctx, dir)
 	if err != nil {
@@ -425,7 +426,7 @@ func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []stri
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "",
 		woQuery(&wo)+" "+strings.Join(files, " "), dir, wo.KBBaseSHA)
 	var r convergeReply
-	_, runID, err := f.runStructured(ctx, &wo, model.AgentArchitect, convergePrompt(&wo, tasks, diff, checks)+kbText,
+	_, runID, err := f.runStructured(ctx, &wo, model.AgentArchitect, convergePrompt(&wo, tasks, diff, checks, builderNotes)+kbText,
 		map[string]string{"stage": "converge"}, "", &r, runOpts{Audit: audit})
 	if err != nil {
 		if errors.Is(err, model.ErrPermanent) || ctx.Err() != nil {

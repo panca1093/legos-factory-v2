@@ -266,7 +266,7 @@ Respond with ONLY a JSON object:
 
 // convergePrompt asks the Architect to compare the change with the contract. Earlier "done" claims are not input:
 // every gap must stand on the diff, the checks or the repository.
-func convergePrompt(wo *model.WorkOrder, tasks []model.Task, diff []FileDiff, checks string) string {
+func convergePrompt(wo *model.WorkOrder, tasks []model.Task, diff []FileDiff, checks, builderNotes string) string {
 	return fmt.Sprintf(`You are the Architect. The Builders finished the tasks below. Compare the change with the contract
 and list every gap. Do not trust any earlier claim that work is done: check the diff, the check results and the
 repository yourself. You may read the repository.
@@ -279,7 +279,7 @@ Spec (with its amendments; the acceptance table maps each criterion to its verif
 %s
 
 Tasks built so far:
-%s
+%s%s
 Check results:
 %s
 Diff against the base:
@@ -297,7 +297,7 @@ At most %d gaps, the most important first. Set "converged" to true when no gap n
 Respond with ONLY a JSON object:
 {"gaps":[{"type":"missing|partial|contradicts|unrequested","layer":"code|contract|requirement","cites":"c3 | spec §2","evidence":"file:line or test name","fix":"..."}],
  "converged":true|false}`,
-		wo.Title, criteriaSection(splitCriteria(wo.Acceptance)), wo.Spec, scopedTaskList(tasks), checks, diffSection(diff), maxConvergeGaps)
+		wo.Title, criteriaSection(splitCriteria(wo.Acceptance)), wo.Spec, scopedTaskList(tasks), builderNotes, checks, diffSection(diff), maxConvergeGaps)
 }
 
 // taskSection names a plan task's own objective and scope and lists the other
@@ -358,16 +358,20 @@ func planNotesSection(wo *model.WorkOrder) string {
 	return "\nReview notes (do not block the work; keep them in mind):\n" + strings.Join(notes, "\n") + "\n"
 }
 
+const notesHeading = "Notes for review:"
+
+const notesInstruction = `Then end your reply with a section headed exactly "` + notesHeading + `" followed by at most 5 one-line items, each something you left unverified, guessed, or that needs a change outside your task's scope (the spec, another task). If there is nothing, write the single word "none".`
+
 // fixContext is what every fix prompt shares: the spec, the plan and the numbered brief.
 func fixContext(wo *model.WorkOrder, job model.Job, tasks []model.Task) (ctx, tail string) {
 	ctx = specSection(wo) + planNotesSection(wo)
 	if len(tasks) > 0 {
 		ctx += "\nPlan:\n" + scopedTaskList(tasks)
 	}
-	tail = "Work only within the assigned workspace. When done, reply with one line describing what changed."
+	tail = "Work only within the assigned workspace. When done, reply with one line describing what changed.\n\n" + notesInstruction
 	if brief, _ := job.Payload["brief"].(string); brief != "" {
 		ctx += "\nFix brief. Address every numbered item and change only what the items require. Items under \"Already addressed\" were fixed in earlier revisions and must still hold after your changes; if resolving a numbered item would undo one, say so in your per-item reply instead of undoing it:\n" + brief + "\n"
-		tail = `Work only within the assigned workspace. When done, reply with one line stating for each item number either "N: fixed (file:line)" or "N: not fixed because <reason>".`
+		tail = `Work only within the assigned workspace. When done, reply with one line stating for each item number either "N: fixed (file:line)" or "N: not fixed because <reason>".` + "\n\n" + notesInstruction
 	}
 	return ctx, tail
 }
@@ -412,9 +416,11 @@ Acceptance criteria:
 %s%s%s
 Work only within the assigned workspace. When done, reply with one line describing what changed.
 
+%s
+
 Do not guess what should happen. If the task or spec is ambiguous about behaviour, stop without finishing and end
-your reply with a final line "%s <one question>". Decide anything about how yourself (naming, layout, a choice between
-equivalent implementations) and state it as an assumption in your reply.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo), specSection(wo)+planNotesSection(wo), taskSection(job, tasks), needsContextMarker)
+your reply with a final line "%s <one question>"; a reply that asks a question has no notes section. Decide anything about how yourself (naming, layout, a choice between
+equivalent implementations) and state it as an assumption in your reply.`, job.TaskID, wo.Title, wo.Objective, wo.Acceptance, clarification(wo), specSection(wo)+planNotesSection(wo), taskSection(job, tasks), notesInstruction, needsContextMarker)
 }
 
 // architectAnswerPrompt asks the Architect to settle a Builder's behaviour question from the contract.
@@ -452,7 +458,7 @@ Work only within the assigned workspace. When done, reply with one line describi
 		job.TaskID, wo.Title, strings.Join(files, "\n"), wo.Objective, clarification(wo))
 }
 
-func inspectPrompt(wo *model.WorkOrder, pick SpecialistPick, files []string) string {
+func inspectPrompt(wo *model.WorkOrder, pick SpecialistPick, files []string, builderNotes string) string {
 	changed := "(no file list available)"
 	if len(files) > 0 {
 		if len(files) > 50 {
@@ -473,11 +479,11 @@ Acceptance criteria:
 %s
 Changed files:
 %s
-
+%s
 Respond with ONLY:
 {"findings":[{"severity":"blocker"|"major"|"minor"|"info","title":"...","detail":"...","location":"file:line","cites":"c2"}]}
 
 Report only findings within your focus that are supported by evidence in the workspace. If there are none, report an empty findings list.
 Only a blocker, or a finding that cites an acceptance criterion in "cites" (leave it out otherwise; cite only a criterion the change does not meet), sends the work back to the Builder. Every other finding is a note for the next Builder run.`,
-		pick.Specialty, wo.Title, pick.Reason, focusOf(pick.Specialty), wo.Objective, wo.Acceptance, clarification(wo), changed)
+		pick.Specialty, wo.Title, pick.Reason, focusOf(pick.Specialty), wo.Objective, wo.Acceptance, clarification(wo), changed, builderNotes)
 }

@@ -14,7 +14,7 @@ func TestPromptsCarryClarificationAnswer(t *testing.T) {
 		"review":      foremanReviewPrompt(wo, nil, nil, false),
 		"implement":   implementPrompt(wo, model.Job{TaskID: "task-1"}, nil),
 		"remediation": implementPrompt(wo, model.Job{Payload: map[string]any{"reason": "fix"}}, nil),
-		"inspect":     inspectPrompt(wo, SpecialistPick{Specialty: "testing"}, nil),
+		"inspect":     inspectPrompt(wo, SpecialistPick{Specialty: "testing"}, nil, ""),
 	} {
 		if !strings.Contains(p, "Q: round what?\nA: the discount") {
 			t.Errorf("%s prompt lacks the clarification:\n%s", name, p)
@@ -30,7 +30,7 @@ func TestReviewPromptListsTaskScope(t *testing.T) {
 }
 
 func TestInspectPromptHasFocusForCustomSpecialty(t *testing.T) {
-	p := inspectPrompt(&model.WorkOrder{}, SpecialistPick{Specialty: "payments"}, nil)
+	p := inspectPrompt(&model.WorkOrder{}, SpecialistPick{Specialty: "payments"}, nil, "")
 	if !strings.Contains(p, "Focus: Correctness, risks and regressions within the payments area.") {
 		t.Fatalf("custom specialty has no focus:\n%s", p)
 	}
@@ -90,13 +90,13 @@ func TestReviewAndConvergePromptsNumberTheCriteria(t *testing.T) {
 	wo := &model.WorkOrder{Title: "t", Acceptance: "- rounds half up\n- never floats"}
 	for name, p := range map[string]string{
 		"review":   foremanReviewPrompt(wo, nil, nil, false),
-		"converge": convergePrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, "go test → PASS"),
+		"converge": convergePrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, "go test → PASS", ""),
 	} {
 		if !strings.Contains(p, "c1: rounds half up\nc2: never floats") {
 			t.Errorf("%s prompt lacks the numbered criteria:\n%s", name, p)
 		}
 	}
-	if p := convergePrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, ""); !strings.Contains(p, "--- a.go (+1 -0)") || !strings.Contains(p, "+x") {
+	if p := convergePrompt(wo, nil, []FileDiff{{Path: "a.go", Added: 1, Hunks: "@@ -0,0 +1 @@\n+x\n"}}, "", ""); !strings.Contains(p, "--- a.go (+1 -0)") || !strings.Contains(p, "+x") {
 		t.Errorf("converge prompt lacks the diff:\n%s", p)
 	}
 }

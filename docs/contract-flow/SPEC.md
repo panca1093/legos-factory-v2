@@ -126,6 +126,7 @@ The change from today: unsettled `scope_creep` and `task_overlap` no longer trig
 - Unchanged task scheduling, scope and fix brief (foreman-flow §5).
 - New: a Builder reply may be `{"status":"NEEDS_CONTEXT","question":"…"}` when the task or spec is ambiguous about behaviour. The factory routes the question to the Architect (same session if kept), which replies `ANSWER` (written into the spec as an amendment with a reason) or `ESCALATE` (to the Foreman, then the human). Max 2 questions per task. A third question escalates.
 - The Builder decides on its own anything about how, within its scope (naming, layout, a choice between equivalent implementations), and records it as an assumption in its reply.
+- A Builder that finishes ends its reply with "Notes for review:" (at most 5 one-line items, or `none`): what it left unverified, guessed, or that needs a change outside its task. Converge and the Inspector receive them as leads to check, never as evidence.
 
 ### 5. Checks
 
