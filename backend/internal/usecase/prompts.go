@@ -458,13 +458,20 @@ Work only within the assigned workspace. When done, reply with one line describi
 		job.TaskID, wo.Title, strings.Join(files, "\n"), wo.Objective, clarification(wo))
 }
 
-func inspectPrompt(wo *model.WorkOrder, pick SpecialistPick, files []string, builderNotes string) string {
+func inspectPrompt(wo *model.WorkOrder, pick SpecialistPick, files []string, builderNotes string, earlier []string) string {
 	changed := "(no file list available)"
 	if len(files) > 0 {
 		if len(files) > 50 {
 			files = append(files[:50:50], fmt.Sprintf("… and %d more", len(files)-50))
 		}
 		changed = strings.Join(files, "\n")
+	}
+	spec, reported := "", ""
+	if wo.Spec != "" {
+		spec = "\nSpec (the contract the change was built against):\n" + wo.Spec + "\n"
+	}
+	if len(earlier) > 0 {
+		reported = "\nReported in earlier revisions (do not report these again unless the change made them worse):\n- " + strings.Join(earlier, "\n- ") + "\n"
 	}
 	return fmt.Sprintf(`You are the %s Inspector. Independently review the implementation of work order %q in the workspace.
 You were selected because the change %s.
@@ -476,14 +483,15 @@ Objective:
 
 Acceptance criteria:
 %s
-%s
+%s%s
 Changed files:
 %s
-%s
+%s%s
 Respond with ONLY:
 {"findings":[{"severity":"blocker"|"major"|"minor"|"info","title":"...","detail":"...","location":"file:line","cites":"c2"}]}
 
 Report only findings within your focus that are supported by evidence in the workspace. If there are none, report an empty findings list.
-Only a blocker, or a finding that cites an acceptance criterion in "cites" (leave it out otherwise; cite only a criterion the change does not meet), sends the work back to the Builder. Every other finding is a note for the next Builder run.`,
-		pick.Specialty, wo.Title, pick.Reason, focusOf(pick.Specialty), wo.Objective, wo.Acceptance, clarification(wo), changed, builderNotes)
+Only a blocker, or a finding that cites an acceptance criterion in "cites" (leave it out otherwise; cite only a criterion the change does not meet), sends the work back to the Builder. Every other finding is a note for the next Builder run.
+A choice recorded in the spec's Decisions table or Behaviour rules is settled: do not report the change following it as a finding. If you believe a decision itself breaks an acceptance criterion, report ONE finding that cites both the decision and the criterion.`,
+		pick.Specialty, wo.Title, pick.Reason, focusOf(pick.Specialty), wo.Objective, wo.Acceptance, clarification(wo), spec, changed, builderNotes, reported)
 }

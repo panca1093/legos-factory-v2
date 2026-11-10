@@ -14,7 +14,7 @@ func TestPromptsCarryClarificationAnswer(t *testing.T) {
 		"review":      foremanReviewPrompt(wo, nil, nil, false),
 		"implement":   implementPrompt(wo, model.Job{TaskID: "task-1"}, nil),
 		"remediation": implementPrompt(wo, model.Job{Payload: map[string]any{"reason": "fix"}}, nil),
-		"inspect":     inspectPrompt(wo, SpecialistPick{Specialty: "testing"}, nil, ""),
+		"inspect":     inspectPrompt(wo, SpecialistPick{Specialty: "testing"}, nil, "", nil),
 	} {
 		if !strings.Contains(p, "Q: round what?\nA: the discount") {
 			t.Errorf("%s prompt lacks the clarification:\n%s", name, p)
@@ -30,7 +30,7 @@ func TestReviewPromptListsTaskScope(t *testing.T) {
 }
 
 func TestInspectPromptHasFocusForCustomSpecialty(t *testing.T) {
-	p := inspectPrompt(&model.WorkOrder{}, SpecialistPick{Specialty: "payments"}, nil, "")
+	p := inspectPrompt(&model.WorkOrder{}, SpecialistPick{Specialty: "payments"}, nil, "", nil)
 	if !strings.Contains(p, "Focus: Correctness, risks and regressions within the payments area.") {
 		t.Fatalf("custom specialty has no focus:\n%s", p)
 	}

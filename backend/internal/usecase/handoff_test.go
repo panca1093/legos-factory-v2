@@ -72,14 +72,34 @@ func TestBuilderNotesReachConvergeAndInspectPrompts(t *testing.T) {
 	if p := convergePrompt(wo, nil, nil, "", section); !strings.Contains(p, section) || !strings.Contains(p, "Do not trust any earlier claim") {
 		t.Errorf("converge prompt lacks the notes:\n%s", p)
 	}
-	if p := inspectPrompt(wo, SpecialistPick{Specialty: "testing"}, nil, section); !strings.Contains(p, section) {
+	if p := inspectPrompt(wo, SpecialistPick{Specialty: "testing"}, nil, section, nil); !strings.Contains(p, section) {
 		t.Errorf("inspect prompt lacks the notes:\n%s", p)
 	}
 	if p := convergePrompt(wo, nil, nil, "", ""); strings.Contains(p, "Builder notes") {
 		t.Errorf("converge prompt shows a notes heading without notes:\n%s", p)
 	}
-	if p := inspectPrompt(wo, SpecialistPick{Specialty: "testing"}, nil, ""); strings.Contains(p, "Builder notes") {
+	if p := inspectPrompt(wo, SpecialistPick{Specialty: "testing"}, nil, "", nil); strings.Contains(p, "Builder notes") {
 		t.Errorf("inspect prompt shows a notes heading without notes:\n%s", p)
+	}
+}
+
+func TestInspectPromptCarriesSpecDecisionRuleAndEarlierFindings(t *testing.T) {
+	wo := &model.WorkOrder{Title: "t", Spec: "## Decisions\n| 1 | cap is 3.75 MB |"}
+	pick := SpecialistPick{Specialty: "backend"}
+	p := inspectPrompt(wo, pick, nil, "", []string{"Cap is 3.75 MB", "Missing index"})
+	for _, want := range []string{
+		"Spec (the contract the change was built against):\n## Decisions\n| 1 | cap is 3.75 MB |",
+		"A choice recorded in the spec's Decisions table or Behaviour rules is settled",
+		"report ONE finding that cites both the decision and the criterion",
+		"Reported in earlier revisions (do not report these again unless the change made them worse):\n- Cap is 3.75 MB\n- Missing index\n",
+	} {
+		if !strings.Contains(p, want) {
+			t.Errorf("inspect prompt missing %q:\n%s", want, p)
+		}
+	}
+	bare := inspectPrompt(&model.WorkOrder{Title: "t"}, pick, nil, "", nil)
+	if strings.Contains(bare, "Reported in earlier revisions") || strings.Contains(bare, "Spec (the contract") {
+		t.Errorf("sections must be omitted when empty:\n%s", bare)
 	}
 }
 
@@ -137,6 +157,45 @@ func TestBuilderNotesSectionDropsOldestTasksWholeWhenOverTheCap(t *testing.T) {
 	}
 }
 
+func TestEarlierFindingTitles(t *testing.T) {
+	ctx := context.Background()
+	r := inspectRig(t, &replyHarness{})
+	run := func(id string) {
+		if err := r.f.Runs.Start(ctx, id, r.wo.ID, "", "inspector", "h"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("run_a")
+	add := func(i int, specialty, title string, status string) {
+		err := r.f.Findings.Create(ctx, model.Finding{
+			ID: fmt.Sprintf("fnd_%03d", i), RunID: "run_a", WOID: r.wo.ID, Severity: "minor",
+			Title: title, Status: status, Specialty: specialty,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	add(1, "backend", "old", model.FindingOpen)
+	add(2, "testing", "other specialty", model.FindingOpen)
+	add(3, "backend", "dup", model.FindingResolved)
+	add(4, "backend", "dup", model.FindingOpen)
+	got := r.f.earlierFindingTitles(ctx, r.wo.ID, "backend")
+	if !reflect.DeepEqual(got, []string{"dup", "old"}) {
+		t.Fatalf("titles = %q; want [dup old] (any status, de-duplicated, own specialty only)", got)
+	}
+	for i := 10; i < 40; i++ {
+		add(i, "backend", fmt.Sprintf("t%d", i), model.FindingOpen)
+	}
+	got = r.f.earlierFindingTitles(ctx, r.wo.ID, "backend")
+	if len(got) != maxEarlierFindings || got[0] != "t39" {
+		t.Fatalf("want %d titles, newest first; got %d starting %q", maxEarlierFindings, len(got), got[0])
+	}
+	r.f.Findings = nil
+	if got := r.f.earlierFindingTitles(ctx, r.wo.ID, "backend"); got != nil {
+		t.Fatalf("nil store: %q", got)
+	}
+}
+
 // notesHarness gives Builder runs a scripted reply and leaves every other role to replyHarness.
 type notesHarness struct {
 	*replyHarness
@@ -191,6 +250,39 @@ func TestBuilderNotesFlowFromTaskCompletedToConvergeAndInspector(t *testing.T) {
 			if !strings.Contains(p, builderNotesHead) || !strings.Contains(p, want) {
 				t.Errorf("%s prompt lacks the Builder notes %q:\n%s", role, want, p)
 			}
+		}
+	}
+}
+
+func TestSecondInspectionListsTheFirstOnesFindingTitles(t *testing.T) {
+	ctx := context.Background()
+	h := &replyHarness{inspect: `{"findings":[{"severity":"minor","title":"Cap is 3.75 MB, not 5 MB","detail":"d","location":"a.go:1"}]}`}
+	r := inspectRig(t, h)
+	if err := r.f.handleInspect(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	first := len(h.prompts["inspector"])
+	if first == 0 {
+		t.Fatal("no inspector ran")
+	}
+	for _, p := range h.prompts["inspector"] {
+		if strings.Contains(p, "Reported in earlier revisions") {
+			t.Fatalf("first inspection has no earlier findings:\n%s", p)
+		}
+	}
+	if err := r.f.handleInspect(ctx, model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	second := h.prompts["inspector"][first:]
+	if len(second) != first {
+		t.Fatalf("second inspection ran %d specialists, first %d", len(second), first)
+	}
+	for _, p := range second {
+		if !strings.Contains(p, "Reported in earlier revisions (do not report these again unless the change made them worse):\n- Cap is 3.75 MB, not 5 MB\n") {
+			t.Errorf("second inspection prompt lacks the earlier title:\n%s", p)
+		}
+		if !strings.Contains(p, "Round in integer rupiah") {
+			t.Errorf("inspector prompt lacks the spec:\n%s", p)
 		}
 	}
 }

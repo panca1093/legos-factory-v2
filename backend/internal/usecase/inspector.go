@@ -253,7 +253,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		var out findingsReply
 		kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentInspector), p.Specialty,
 			woQuery(wo)+" "+strings.Join(files, " ")+" "+p.Specialty, f.workspaceDir(wo.ID), wo.KBBaseSHA)
-		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files, builderNotes)+kbText,
+		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files, builderNotes, f.earlierFindingTitles(ctx, wo.ID, p.Specialty))+kbText,
 			map[string]string{"specialty": p.Specialty}, "", &out, runOpts{Audit: audit})
 		if err != nil {
 			return err
@@ -448,6 +448,25 @@ func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []stri
 	f.Catalog.Record(ctx, &wo, model.KnowledgeArchitectVerified, model.TrustAIInterpretation, "architect",
 		fmt.Sprintf("Architect converge of revision %d: %d gap(s)", wo.Revision, len(report.Gaps)), reportText(report), "run:"+runID)
 	return nil
+}
+
+const maxEarlierFindings = 20
+
+// earlierFindingTitles are the distinct titles the order's earlier findings of one specialty carried, most recent first, whatever their status.
+func (f *Factory) earlierFindingTitles(ctx context.Context, woID, specialty string) []string {
+	if f.Findings == nil {
+		return nil
+	}
+	all, _ := f.Findings.List(ctx, woID)
+	var titles []string
+	for _, fd := range slices.Backward(all) {
+		if fd.Specialty == specialty && fd.Title != "" && !slices.Contains(titles, fd.Title) {
+			if titles = append(titles, fd.Title); len(titles) == maxEarlierFindings {
+				break
+			}
+		}
+	}
+	return titles
 }
 
 func reportText(r architectReport) string {
