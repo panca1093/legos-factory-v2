@@ -583,8 +583,9 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 	evidence := func(c Criterion) string {
 		coverage := "not stated"
 		for _, cv := range in.Coverage {
-			if strings.ToLower(strings.TrimSpace(cv.Criterion)) == c.ID {
-				coverage = cv.Verification
+			// the note is only written when some entry does not cover the criterion: show that one
+			if v := cv.Verification; strings.ToLower(strings.TrimSpace(cv.Criterion)) == c.ID && v != "" && v != "test" && v != "check" {
+				coverage = v
 			}
 		}
 		out := "; Foreman coverage: " + coverage

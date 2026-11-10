@@ -636,6 +636,12 @@ func TestPlanGateSoftNotesCarryCoverageAndCitedFindings(t *testing.T) {
 		}
 	}
 
+	in = planInput(0)
+	in.Coverage = []reviewCoverage{{"c1", "missing"}, {"c1", "test"}}
+	if out = decidePlanGate(in, qs, answers, nil, false); !strings.Contains(out.Note, "Foreman coverage: missing") {
+		t.Fatalf("the note shows the entry the gate acted on:\n%s", out.Note)
+	}
+
 	in = PlanGateInput{Request: "r", Criteria: testCriteria, Findings: testFindings[1:]}
 	out = decidePlanGate(in, qs, answers, nil, false)
 	if !strings.Contains(out.Note, "Foreman coverage: not stated") || !strings.Contains(out.Note, settle) || strings.Contains(out.Note, "F2") {
