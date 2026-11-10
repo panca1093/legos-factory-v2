@@ -580,7 +580,24 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 			foremanCovered[id] = ok // any missing entry for a criterion wins
 		}
 	}
+	evidence := func(c Criterion) string {
+		coverage := "not stated"
+		for _, cv := range in.Coverage {
+			// the note is only written when some entry does not cover the criterion: show that one
+			if v := cv.Verification; strings.ToLower(strings.TrimSpace(cv.Criterion)) == c.ID && v != "" && v != "test" && v != "check" {
+				coverage = v
+			}
+		}
+		out := "; Foreman coverage: " + coverage
+		for _, f := range in.Findings {
+			if slices.Contains(citedCriteria(f.Cites, in.Criteria), c.ID) {
+				out += "; finding: " + truncateText(findingLine(f), 400)
+			}
+		}
+		return out + "; to settle it, give this criterion a row in the spec's Acceptance table that names its test or check, and make sure a task's objective covers it"
+	}
 	for _, c := range in.Criteria {
+		before := len(soft)
 		switch judge(answers["covers_"+c.ID]) {
 		case vNo:
 			hard = append(hard, fmt.Sprintf("acceptance criterion %s is not covered by any task", labels[c.ID]))
@@ -598,6 +615,9 @@ func decidePlanGate(in PlanGateInput, asked map[string]Noul, answers map[string]
 				break
 			}
 			soft = append(soft, fmt.Sprintf("it is unclear whether acceptance criterion %s has a concrete test or check in the spec's verification table", labels[c.ID]))
+		}
+		if len(soft) > before {
+			soft[len(soft)-1] += evidence(c)
 		}
 	}
 	var criticals []string

@@ -27,7 +27,7 @@ The method below is taken from three references and adapted to the factory: the 
 
 ## Artifacts
 
-Each artifact has one reader and a length budget. Budgets are enforced in the prompt and checked by code (over budget = one rewrite request, then accepted with a warning).
+Each artifact has one reader and a length budget. Budgets are enforced in the prompt and checked by code (over budget = the brief gets one rewrite request, then is accepted with a warning; the plan (spec and tasks) is accepted with a warning at once).
 
 | Artifact | Author | Reader | Budget | Content |
 |---|---|---|---|---|
@@ -126,6 +126,7 @@ The change from today: unsettled `scope_creep` and `task_overlap` no longer trig
 - Unchanged task scheduling, scope and fix brief (foreman-flow §5).
 - New: a Builder reply may be `{"status":"NEEDS_CONTEXT","question":"…"}` when the task or spec is ambiguous about behaviour. The factory routes the question to the Architect (same session if kept), which replies `ANSWER` (written into the spec as an amendment with a reason) or `ESCALATE` (to the Foreman, then the human). Max 2 questions per task. A third question escalates.
 - The Builder decides on its own anything about how, within its scope (naming, layout, a choice between equivalent implementations), and records it as an assumption in its reply.
+- A Builder that finishes ends its reply with "Notes for review:" (at most 5 one-line items, or `none`): what it left unverified, guessed, or that needs a change outside its task. Converge and the Inspector receive them as leads to check, never as evidence.
 
 ### 5. Checks
 
@@ -147,6 +148,7 @@ The Architect compares the diff with the contract and returns gaps, without trus
 - A `requirement`-layer gap goes to the Foreman.
 - `partial` and `unrequested` are notes unless they cite an acceptance criterion.
 - Inspector findings block only when their severity is `blocker` or they cite an acceptance criterion. Every other finding is a note. Blocker findings follow the existing remediation loop.
+- Each Inspector also receives the spec (a choice recorded in its Decisions table or Behaviour rules is settled and is not a finding) and the titles of earlier findings of its specialty that are neither blockers nor cite a criterion, and does not repeat those as notes.
 - With contract tests on, layer sorting is mostly mechanical: a criterion whose test is red is `code`; a criterion whose test is green but the gap still claims it unmet is `contract` (the test is too weak).
 
 Jev converge gate: `gap_valid_<G>` (is the gap real, given the evidence?) for each blocking gap, and `met_<c>` for each criterion with no test. Outcome: **converged** (no valid blocking gap, every criterion met) → PR preparation, as `done` does today; **append** → new tasks, then back to Build; **escalate**. Budget: 2 append rounds, then escalate.

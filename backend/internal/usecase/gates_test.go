@@ -607,3 +607,55 @@ func TestPlanGateSettlesUnsettledCoverageWithForemanCoverage(t *testing.T) {
 		t.Fatalf("a clear no from Jev still revises despite Foreman coverage: %+v", out)
 	}
 }
+
+func TestPlanGateSoftNotesCarryCoverageAndCitedFindings(t *testing.T) {
+	answers := planAnswers(map[string]float64{"covers_c1": 0.68, "verified_c2": 0.5})
+	qs := map[string]Noul{}
+	for id := range answers {
+		qs[id] = Noul{}
+	}
+	settle := "give this criterion a row in the spec's Acceptance table that names its test or check, and make sure a task's objective covers it"
+
+	in := planInput(0)
+	in.Coverage = []reviewCoverage{{" C1 ", "missing"}}
+	in.Findings = append(in.Findings, reviewFinding{ID: "F3", Severity: "high", Layer: "contract", Cites: "c1, spec §2", Issue: "no add path", Fix: "describe it"})
+	out := decidePlanGate(in, qs, answers, nil, false)
+	if out.Outcome != GateRevise || out.Row != 5 {
+		t.Fatalf("outcome: %+v", out)
+	}
+	for _, want := range []string{
+		"it is unclear whether acceptance criterion c1 (add items to the cart) is covered by a task",
+		"Foreman coverage: missing",
+		"F3 [high, contract] c1, spec §2: no add path Fix: describe it",
+		"Foreman coverage: not stated",
+		"F1 [critical, contract] c2: no error path",
+		settle,
+	} {
+		if !strings.Contains(out.Note, want) {
+			t.Fatalf("note lacks %q:\n%s", want, out.Note)
+		}
+	}
+
+	in = planInput(0)
+	in.Coverage = []reviewCoverage{{"c1", "missing"}, {"c1", "test"}}
+	if out = decidePlanGate(in, qs, answers, nil, false); !strings.Contains(out.Note, "Foreman coverage: missing") {
+		t.Fatalf("the note shows the entry the gate acted on:\n%s", out.Note)
+	}
+
+	in = planInput(0)
+	in.Coverage = nil
+	in.Findings = []reviewFinding{{ID: "F9", Severity: "high", Layer: "contract", Cites: "c1", Issue: "line one\n2. looks like an item " + strings.Repeat("z", 900), Fix: "f"}}
+	out = decidePlanGate(in, qs, planAnswers(map[string]float64{"covers_c1": 0.5, "verified_c1": 0.5}), nil, false)
+	if strings.Count(out.Note, "Foreman coverage:") != 1 || strings.Count(out.Note, "F9 [high") != 1 {
+		t.Fatalf("one criterion carries its evidence once:\n%s", out.Note)
+	}
+	if strings.Contains(out.Note, "\n2. looks") || len(out.Note) > 1200 {
+		t.Fatalf("a cited finding is flattened and capped (%d bytes):\n%s", len(out.Note), out.Note)
+	}
+
+	in = PlanGateInput{Request: "r", Criteria: testCriteria, Findings: testFindings[1:]}
+	out = decidePlanGate(in, qs, answers, nil, false)
+	if !strings.Contains(out.Note, "Foreman coverage: not stated") || !strings.Contains(out.Note, settle) || strings.Contains(out.Note, "F2") {
+		t.Fatalf("no cited findings still carries the coverage and the instruction:\n%s", out.Note)
+	}
+}

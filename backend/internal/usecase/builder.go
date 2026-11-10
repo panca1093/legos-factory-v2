@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"legos-factory/backend/internal/model"
@@ -38,7 +39,7 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 		return err
 	}
 	provider, modelID := f.Model(model.AgentBuilder, wo)
-	_, _, err = f.runBuilder(ctx, wo, job, provider, modelID)
+	res, _, err := f.runBuilder(ctx, wo, job, provider, modelID)
 	var nc *needsContext
 	if errors.As(err, &nc) {
 		if f.cancelled(ctx, wo.ID) {
@@ -54,7 +55,11 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
-	f.event(wo.ID, "builder", "task_completed", fmt.Sprintf("Task %s implemented", job.TaskID), nil)
+	completed := map[string]any{"task_id": job.TaskID}
+	if notes := builderNotes(res.Text); len(notes) > 0 {
+		completed["notes"] = notes
+	}
+	f.event(wo.ID, "builder", "task_completed", fmt.Sprintf("Task %s implemented", job.TaskID), completed)
 	if job.TaskID == contractTaskID(wo.ID) {
 		if proceed, err := f.contractRedProof(ctx, wo, job); err != nil || !proceed {
 			return err
@@ -134,14 +139,109 @@ type needsContext struct{ question string }
 
 func (e *needsContext) Error() string { return "builder needs context: " + e.question }
 
-// builderQuestion reports whether the reply's last line is "NEEDS_CONTEXT: <question>"; a bare marker gives an empty question.
+// builderQuestion reports whether the reply's last line, or the last line before a notes section, is "NEEDS_CONTEXT: <question>"; a bare marker gives an empty question.
 func builderQuestion(text string) (string, bool) {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	m := needsContextLine.FindStringSubmatch(strings.TrimSpace(lines[len(lines)-1]))
 	if m == nil {
+		for i := len(lines) - 1; i >= 0; i-- {
+			if notesHeadingLine.MatchString(strings.TrimSpace(lines[i])) {
+				lines = strings.Split(strings.TrimSpace(strings.Join(lines[:i], "\n")), "\n")
+				break
+			}
+		}
+		m = needsContextLine.FindStringSubmatch(strings.TrimSpace(lines[len(lines)-1]))
+	}
+	if m == nil {
 		return "", false
 	}
 	return strings.TrimSpace(m[1]), true
+}
+
+const (
+	maxBuilderNotes   = 5
+	maxBuilderNoteLen = 300
+	maxNotesSection   = 3000
+	builderNotesHead  = "Builder notes (leads to check, not evidence; a note never proves work is done):"
+)
+
+var (
+	notesHeadingLine = regexp.MustCompile("(?i)^[\\s#*_`]*" + regexp.QuoteMeta(strings.TrimSuffix(notesHeading, ":")) + "[\\s*_`]*(?::[\\s*_`]*(.*?))?[\\s*_`]*$")
+	listMarker       = regexp.MustCompile(`^(?:[-*•]|\d+[.)])\s+`)
+)
+
+// builderNotes returns the items of the "Notes for review:" section that ends the Builder's reply; the last heading wins.
+func builderNotes(text string) []string {
+	lines := strings.Split(text, "\n")
+	start, inline := -1, ""
+	for i, l := range lines {
+		if m := notesHeadingLine.FindStringSubmatch(strings.TrimSpace(l)); m != nil {
+			start, inline = i, m[1]
+		}
+	}
+	if start < 0 {
+		return nil
+	}
+	var notes []string
+	for _, l := range append([]string{inline}, lines[start+1:]...) {
+		l = strings.TrimSpace(listMarker.ReplaceAllString(strings.TrimSpace(l), ""))
+		if l == "" || strings.HasPrefix(l, "```") || strings.EqualFold(strings.TrimRight(l, "."), "none") || strings.EqualFold(l, "n/a") {
+			continue
+		}
+		if r := []rune(l); len(r) > maxBuilderNoteLen {
+			l = string(r[:maxBuilderNoteLen])
+		}
+		if notes = append(notes, l); len(notes) == maxBuilderNotes {
+			break
+		}
+	}
+	return notes
+}
+
+// builderNotesSection renders the latest notes per task, newest task first, within maxNotesSection; "" when there are none.
+func (f *Factory) builderNotesSection(ctx context.Context, wo *model.WorkOrder) string {
+	evs, err := f.WO.EventsByKind(ctx, wo.ID, []string{"task_completed"})
+	if err != nil {
+		f.Log.Warn("builder notes: reading events failed", "wo", wo.ID, "err", err)
+		return ""
+	}
+	var order []string
+	latest := map[string][]string{}
+	for _, e := range evs {
+		task, _ := e.Payload["task_id"].(string)
+		if _, seen := latest[task]; seen {
+			order = slices.DeleteFunc(order, func(t string) bool { return t == task })
+		}
+		order = append(order, task)
+		var items []string
+		raw, _ := e.Payload["notes"].([]any)
+		for _, v := range raw {
+			if s, _ := v.(string); s != "" {
+				items = append(items, s)
+			}
+		}
+		latest[task] = items
+	}
+	var b strings.Builder
+	size := len(builderNotesHead) + 2
+	for _, task := range slices.Backward(order) {
+		if len(latest[task]) == 0 {
+			continue
+		}
+		name := strings.TrimPrefix(task, wo.ID+"_")
+		if name == "" {
+			name = "fix"
+		}
+		line := "- " + name + ": " + strings.Join(latest[task], "; ") + "\n"
+		if size += len(line); size > maxNotesSection {
+			break
+		}
+		b.WriteString(line)
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return "\n" + builderNotesHead + "\n" + b.String()
 }
 
 // askBack settles a Builder question and reports true when the task can run again with the answer.
