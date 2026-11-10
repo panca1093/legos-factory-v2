@@ -90,17 +90,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 		return err
 	}
 	if over := planOverBudget(&plan); over != "" {
-		var shorter planReply
-		_, id, err := f.runStructured(ctx, wo, model.AgentArchitect, prompt+rewriteAsk(over, plan), extra, "", &shorter, runOpts{Audit: audit})
-		if err := rewriteErr(err); err != nil {
-			return err
-		}
-		if err == nil && shorter.Decision == "APPROVE" {
-			plan, runID = shorter, id
-		}
-		if over = planOverBudget(&plan); over != "" {
-			f.event(wo.ID, "architect", "budget_exceeded", "Plan accepted over budget: "+over, nil)
-		}
+		f.event(wo.ID, "architect", "budget_exceeded", "Plan accepted over budget: "+over, nil)
 	}
 	f.recordCodeFacts(ctx, wo, model.AgentArchitect, plan.CodeFacts)
 	if plan.Decision == "CLARIFY" {

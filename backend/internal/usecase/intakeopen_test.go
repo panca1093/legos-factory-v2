@@ -97,27 +97,26 @@ func TestOverBudgetBriefGetsOneRewriteThenAWarning(t *testing.T) {
 	}
 }
 
-func TestOverBudgetSpecAndTaskGetOneRewrite(t *testing.T) {
-	long := fmt.Sprintf(`{"decision":"APPROVE","summary":"s","spec":"%s","tasks":[{"id":"t1","title":"a","objective":"%s"}]}`,
-		strings.Repeat("rule ", 1000), strings.Repeat("do ", 200))
-	short := `{"decision":"APPROVE","summary":"s","spec":"short","tasks":[{"id":"t1","title":"a","objective":"o"}]}`
-	h := &sessHarness{architect: []string{long, short}}
+func TestOverBudgetPlanIsAcceptedWithAWarningAndNoRewrite(t *testing.T) {
+	long := fmt.Sprintf(`{"decision":"APPROVE","summary":"s","spec":"%s","tasks":[{"id":"t1","title":"a","objective":"o"}]}`,
+		strings.Repeat("rule ", 1000))
+	h := &sessHarness{architect: []string{long}}
 	r := sessionRig(t, h)
 	r.plan(t)
-	var arch []model.AgentRequest
+	arch := 0
 	for _, s := range h.starts {
 		if s.Role == model.AgentArchitect {
-			arch = append(arch, s)
+			arch++
 		}
 	}
-	if len(arch) != 2 || !strings.Contains(arch[1].Prompt, "spec is 1000 words (budget 750); task 1 objective is 200 words (budget 150)") {
-		t.Fatalf("architect runs %d; the rewrite must carry the counts", len(arch))
+	if arch != 1 {
+		t.Fatalf("architect runs %d, want 1: an over-budget plan gets no rewrite request", arch)
 	}
-	if wo := r.reload(t); wo.Spec != "short" {
-		t.Fatalf("the rewrite replaces the draft: %q", wo.Spec)
+	if wo := r.reload(t); wo.Spec != strings.Repeat("rule ", 1000) {
+		t.Fatalf("the draft is kept as is: %d bytes", len(wo.Spec))
 	}
-	if ev := r.events(t, "budget_exceeded"); len(ev) != 0 {
-		t.Fatalf("a rewrite within budget must not warn: %d", len(ev))
+	if ev := r.events(t, "budget_exceeded"); len(ev) != 1 {
+		t.Fatalf("budget_exceeded events: %d", len(ev))
 	}
 }
 
