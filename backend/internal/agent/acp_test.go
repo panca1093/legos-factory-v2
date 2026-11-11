@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -119,10 +120,19 @@ func fakeAgent(scenario string) {
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": `"model":"` + chosenModel + `","config":` + fmt.Sprintf("%q", os.Getenv("OPENCODE_CONFIG_CONTENT")) + `,"meta":` + fmt.Sprintf("%q", sessionMeta) + `,"set":` + fmt.Sprintf("%q", strings.Join(setCalls, ",")) + `}`}})
 				update(map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.0123, "currency": "USD"}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 4000, "cachedWriteTokens": 900}})
+			case "read-steps":
+				file := cwd + "/backend/internal/usecase/chat.go"
+				update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "r1", "title": "Read File", "kind": "read", "status": "pending", "rawInput": map[string]any{}})
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "r1", "status": "completed", "rawInput": map[string]any{"file_path": file}, "locations": []any{map[string]any{"path": file, "line": 1}}})
+				update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "r2", "title": "Read File", "kind": "read", "status": "pending", "rawInput": map[string]any{}, "locations": []any{map[string]any{"path": cwd + "/go.mod"}}})
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "r2", "status": "completed"})
+				update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "g1", "title": "grep", "kind": "search", "status": "pending", "rawInput": map[string]any{"pattern": "decidePlanGate", "path": cwd}, "locations": []any{map[string]any{"path": cwd}}})
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "g1", "status": "completed"})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "permission":
 				send(map[string]any{"id": "perm-1", "method": "session/request_permission", "params": map[string]any{
 					"sessionId": "fake-ses",
-					"toolCall":  map[string]any{"toolCallId": "t9", "kind": os.Getenv("ACP_FAKE_KIND"), "locations": []any{map[string]any{"path": os.Getenv("ACP_FAKE_PATH")}}},
+					"toolCall":  fakePermissionCall(),
 					"options": []any{
 						map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
 						map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"},
@@ -164,6 +174,19 @@ func fakeAgent(scenario string) {
 			}
 		}
 	}
+}
+
+func fakePermissionCall() map[string]any {
+	call := map[string]any{"toolCallId": "t9", "kind": os.Getenv("ACP_FAKE_KIND")}
+	if p := os.Getenv("ACP_FAKE_PATH"); p != "" {
+		call["locations"] = []any{map[string]any{"path": p}}
+	}
+	if in := os.Getenv("ACP_FAKE_INPUT"); in != "" {
+		var raw map[string]any
+		_ = json.Unmarshal([]byte(in), &raw)
+		call["rawInput"] = raw
+	}
+	return call
 }
 
 func fakeHarness(t *testing.T, scenario string, extraEnv ...string) *ACPHarness {
@@ -615,5 +638,239 @@ func TestACPNoImagesPayloadUnchanged(t *testing.T) {
 	res, err = h.Result(ctx, next.ID())
 	if err != nil || res.Text != want {
 		t.Fatalf("continue prompt = %q, %v", res.Text, err)
+	}
+}
+
+func TestACPRepoChatGetsReadOnlyToolsWithSecretDenials(t *testing.T) {
+	h := fakeHarness(t, "ok")
+	h.Provider = "claude"
+	res, err := runFake(t, h, model.AgentRequest{Role: model.AgentChat, ProviderID: "claude", ModelID: "sonnet", Prompt: "go", RepoAccess: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct{ Meta, Set string }
+	if err := json.Unmarshal([]byte(res.Text), &s); err != nil {
+		t.Fatalf("reply %q: %v", res.Text, err)
+	}
+	want := `{"claudeCode":{"options":{"disallowedTools":["Bash","Edit","Write","MultiEdit","NotebookEdit","Agent","Task","Read(./.env)","Read(./.env.*)","Read(./**/.env)","Read(./**/*.pem)","Read(./**/*.key)","Read(./.git/**)","Read(./**/.env.*)"],"extraArgs":{"settings":"{\"permissions\":{\"ask\":[\"Read\",\"Grep\",\"Glob\"]}}"},"settingSources":[],"strictMcpConfig":true,"tools":["Read","Grep","Glob"]}}}`
+	if s.Meta != want {
+		t.Fatalf("repo chat meta = %s\nwant %s", s.Meta, want)
+	}
+	if s.Set != "model=sonnet,mode=plan" {
+		t.Fatalf("repo chat config calls = %q; want the model, then plan mode", s.Set)
+	}
+}
+
+func TestACPRepoChatOpenCodeConfigKeepsReadTools(t *testing.T) {
+	res, err := runFake(t, fakeHarness(t, "ok"), model.AgentRequest{Role: model.AgentChat, Prompt: "go", RepoAccess: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct{ Config string }
+	if err := json.Unmarshal([]byte(res.Text), &s); err != nil {
+		t.Fatalf("reply %q: %v", res.Text, err)
+	}
+	for _, tool := range []string{"read", "grep", "glob", "list"} {
+		if strings.Contains(s.Config, `"`+tool+`":"deny"`) {
+			t.Fatalf("repo chat must keep %s: %s", tool, s.Config)
+		}
+	}
+	for _, tool := range []string{"webfetch", "websearch", "task", "skill", "todowrite", "todoread"} {
+		if !strings.Contains(s.Config, `"`+tool+`":"deny"`) {
+			t.Fatalf("repo chat config must deny %s: %s", tool, s.Config)
+		}
+	}
+	for _, tool := range []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute", "external_directory"} {
+		if !strings.Contains(s.Config, `"`+tool+`":"deny"`) {
+			t.Fatalf("repo chat config must deny %s: %s", tool, s.Config)
+		}
+	}
+	plain, err := runFake(t, fakeHarness(t, "ok"), model.AgentRequest{Role: model.AgentChat, Prompt: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plain.Text, `\"read\":\"deny\"`) {
+		t.Fatalf("plain chat must still lose read: %s", plain.Text)
+	}
+}
+
+func TestACPRepoChatPermissionPolicy(t *testing.T) {
+	ws := t.TempDir()
+	cases := []struct {
+		repo       bool
+		kind, path string
+		want       string
+	}{
+		{true, "read", ws + "/main.go", "yes"},
+		{true, "search", ws, "yes"},
+		{true, "think", ws, "yes"},
+		{true, "read", "/etc/passwd", "no"},
+		{true, "read", ws + "/../other/.env", "no"},
+		{true, "edit", ws + "/main.go", "no"},
+		{true, "execute", ws, "no"},
+		{true, "fetch", ws, "no"},
+		{false, "read", ws + "/main.go", "no"},
+		{false, "search", ws, "no"},
+	}
+	for _, c := range cases {
+		res, err := runFake(t, fakeHarness(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_PATH="+c.path),
+			model.AgentRequest{Role: model.AgentChat, WorkspaceDir: ws, Prompt: "go", RepoAccess: c.repo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Text != c.want {
+			t.Fatalf("repo=%v %s %s: answered %q, want %q", c.repo, c.kind, c.path, res.Text, c.want)
+		}
+	}
+}
+
+func TestACPChatPermissionSurvivesContinue(t *testing.T) {
+	ws := t.TempDir()
+	for _, c := range []struct {
+		repo bool
+		want string
+	}{{true, "yes"}, {false, "no"}} {
+		h := fakeHarness(t, "permission", "ACP_FAKE_KIND=read", "ACP_FAKE_PATH="+ws+"/main.go")
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentChat, WorkspaceDir: ws, Prompt: "one", Keep: true, RepoAccess: c.repo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res, err := h.Result(ctx, ses.ID()); err != nil || res.Text != c.want {
+			t.Fatalf("repo=%v first turn: %q, %v", c.repo, res.Text, err)
+		}
+		// a continued prompt cannot widen (or narrow) what the session was started with
+		next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentChat, WorkspaceDir: ws, Prompt: "two", RepoAccess: !c.repo})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res, err := h.Result(ctx, next.ID()); err != nil || res.Text != c.want {
+			t.Fatalf("repo=%v continued turn: %q, %v", c.repo, res.Text, err)
+		}
+		h.Close(ses.ID())
+		cancel()
+	}
+}
+
+func TestACPReadStepTargetIsWorkspaceRelative(t *testing.T) {
+	var steps []model.AgentStep
+	ws := t.TempDir()
+	_, err := runFake(t, fakeHarness(t, "read-steps"), model.AgentRequest{
+		Role: model.AgentChat, WorkspaceDir: ws, Prompt: "go", RepoAccess: true,
+		OnStep: func(s model.AgentStep) { steps = append(steps, s) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []model.AgentStep{
+		{N: 1, Tools: []model.AgentTool{{Name: "Read File", Target: "backend/internal/usecase/chat.go"}}},
+		{N: 2, Tools: []model.AgentTool{{Name: "Read File", Target: "go.mod"}}},
+		{N: 3, Tools: []model.AgentTool{{Name: "grep", Target: "decidePlanGate"}}},
+	}
+	if fmt.Sprint(steps) != fmt.Sprint(want) {
+		t.Fatalf("steps = %+v\nwant   %+v", steps, want)
+	}
+}
+
+func TestACPRepoChatPermissionChecksRawInputPaths(t *testing.T) {
+	ws := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(outside+"/secret", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside+"/secret", ws+"/link.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, ws+"/linkdir"); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, kind, path, input, want string
+	}{
+		{"grep path outside", "search", "", `{"pattern":"root","path":"/etc"}`, "no"},
+		{"grep path inside", "search", "", `{"pattern":"root","path":"` + ws + `/sub"}`, "yes"},
+		{"grep relative path", "search", "", `{"pattern":"x","path":"sub"}`, "yes"},
+		{"grep relative escape", "search", "", `{"pattern":"x","path":"../x"}`, "no"},
+		{"grep no path", "search", "", `{"pattern":"x"}`, "yes"},
+		{"glob absolute pattern outside", "search", "", `{"pattern":"/etc/*"}`, "no"},
+		{"glob dotdot pattern", "search", "", `{"pattern":"../**/*.go"}`, "no"},
+		{"glob plain pattern", "search", "", `{"pattern":"**/*.go"}`, "yes"},
+		{"glob absolute pattern inside", "search", "", `{"pattern":"` + ws + `/**/*.go"}`, "yes"},
+		{"read file_path outside", "read", "", `{"file_path":"/etc/hosts"}`, "no"},
+		{"read filePath outside", "read", "", `{"filePath":"/etc/hosts"}`, "no"},
+		{"read file_path inside", "read", "", `{"file_path":"` + ws + `/main.go"}`, "yes"},
+		{"read relative", "read", "", `{"file_path":"main.go"}`, "yes"},
+		{"read names no path", "read", "", `{}`, "no"},
+		{"read location inside, input outside", "read", ws + "/main.go", `{"file_path":"/etc/hosts"}`, "no"},
+		{"read symlink file", "read", "", `{"file_path":"` + ws + `/link.txt"}`, "no"},
+		{"read through symlink dir", "read", ws + "/linkdir/secret", "", "no"},
+		{"read home tilde", "read", "~/.ssh/id_rsa", `{"file_path":"~/.ssh/id_rsa"}`, "no"},
+		{"read home tilde input only", "read", "", `{"file_path":"~/.ssh/id_rsa"}`, "no"},
+		{"grep home", "search", "", `{"pattern":"x","path":"~"}`, "no"},
+		{"glob home pattern", "search", "", `{"pattern":"~/.ssh/*"}`, "no"},
+	}
+	for _, c := range cases {
+		res, err := runFake(t, fakeHarness(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_PATH="+c.path, "ACP_FAKE_INPUT="+c.input),
+			model.AgentRequest{Role: model.AgentChat, WorkspaceDir: ws, Prompt: "go", RepoAccess: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Text != c.want {
+			t.Fatalf("%s: answered %q, want %q", c.name, res.Text, c.want)
+		}
+	}
+}
+
+func TestWithinResolvesSymlinks(t *testing.T) {
+	ws := t.TempDir()
+	outside := t.TempDir()
+	_ = os.WriteFile(ws+"/in.txt", []byte("x"), 0o644)
+	_ = os.WriteFile(outside+"/out.txt", []byte("x"), 0o644)
+	_ = os.Symlink(outside+"/out.txt", ws+"/link.txt")
+	_ = os.Symlink(outside, ws+"/linkdir")
+	for path, want := range map[string]bool{
+		ws + "/in.txt":          true,
+		ws + "/new/file.txt":    true,
+		ws:                      true,
+		ws + "/link.txt":        false,
+		ws + "/linkdir/out.txt": false,
+		ws + "/linkdir/nope":    false,
+		outside + "/out.txt":    false,
+	} {
+		if got := within(ws, path); got != want {
+			t.Errorf("within(ws, %s) = %v, want %v", path, got, want)
+		}
+	}
+	real, _ := filepath.EvalSymlinks(ws)
+	if real != ws {
+		if !within(ws, real+"/in.txt") || !within(real, ws+"/in.txt") {
+			t.Errorf("a workspace and its real path must contain each other's files")
+		}
+	}
+	dir := t.TempDir()
+	alias := filepath.Join(dir, "alias")
+	if err := os.Symlink(ws, alias); err != nil {
+		t.Fatal(err)
+	}
+	if !within(alias, ws+"/in.txt") || !within(ws, alias+"/in.txt") {
+		t.Errorf("a symlinked workspace path must contain its own files")
+	}
+}
+
+func TestACPStepTargetFromPathInputs(t *testing.T) {
+	ws := t.TempDir()
+	c := &acpConn{workspace: ws}
+	for _, tc := range []struct {
+		input map[string]any
+		want  string
+	}{
+		{map[string]any{"filePath": ws + "/a/b.go"}, "a/b.go"},
+		{map[string]any{"path": ws + "/a/b.go"}, "a/b.go"},
+		{map[string]any{"path": ws}, "."},
+		{map[string]any{"file_path": ws}, "."},
+	} {
+		if got := c.target(&acpTool{input: tc.input}); got != tc.want {
+			t.Errorf("target(%v) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }

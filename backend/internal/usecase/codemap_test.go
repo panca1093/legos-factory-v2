@@ -139,3 +139,17 @@ func TestPortCodeMapDropsMapLinesOnEditedFiles(t *testing.T) {
 		t.Fatalf("map lines on edited files must go:\n%s", body)
 	}
 }
+
+func TestRepoFactsCarriesTheCodeMap(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+	if s := r.f.RepoFacts(ctx, "p1", dir); !strings.Contains(s, "Repository facts") || strings.Contains(s, "Code Map") {
+		t.Fatalf("without a Code Map only the facts: %q", s)
+	}
+	r.f.CodeFacts = &memFacts{facts: []model.CodeFact{{Path: "a.go", Line: 1, Claim: "from map", SHA: "abc"}}}
+	r.f.portCodeMap(ctx, r.wo)
+	if s := r.f.RepoFacts(ctx, "p1", dir); !strings.Contains(s, "Repository facts") || !strings.Contains(s, "Code Map") || !strings.Contains(s, "- a.go:1 @abc — from map\n") {
+		t.Fatalf("facts then Code Map lines: %q", s)
+	}
+}

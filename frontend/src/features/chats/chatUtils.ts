@@ -1,4 +1,4 @@
-import type { Chat } from "../../stores/chats";
+import type { Chat, ChatStep } from "../../stores/chats";
 
 export const MAX_MESSAGE_BYTES = 32 * 1024;
 export const MAX_FILES = 5;
@@ -56,6 +56,24 @@ export const byteLength = (s: string) => new TextEncoder().encode(s).length;
 export const formatSize = (n: number) =>
   n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
 export const chatTitle = (c?: Pick<Chat, "title">) => c?.title || "New chat";
+
+// agents name tools differently ("Read File", "read", "grep", "Glob"), so the verb comes from the name's first word
+export function stepLine(s: ChatStep) {
+  const first = s.name.trim().split(/\s+/)[0].toLowerCase();
+  const kind = ["read", "view"].includes(first)
+    ? "read"
+    : ["grep", "glob", "search", "find", "list"].includes(first)
+      ? "search"
+      : "";
+  const verb = !kind
+    ? s.name
+    : s.failed
+      ? `Could not ${kind}`
+      : kind === "read"
+        ? "Reading"
+        : "Searching";
+  return s.target ? `${verb} ${s.target}` : verb;
+}
 
 export function groupByRecency(chats: Chat[], now = new Date()) {
   const day = (d: Date) =>

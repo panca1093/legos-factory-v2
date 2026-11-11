@@ -34,7 +34,8 @@ const (
 	chatTurnTimeout  = 10 * time.Minute
 	modelListTTL     = 5 * time.Minute
 	maxChatTurns     = 4
-	chatTurnEstimate = 50_000 // micros reserved per turn, as for a factory agent run
+	chatTurnEstimate = 50_000  // micros reserved per turn, as for a factory agent run
+	repoTurnEstimate = 250_000 // a turn that reads the repository: the spike measured $0.08–0.13
 )
 
 // ErrDraftFailed means the model did not return a usable work order draft.
@@ -75,6 +76,12 @@ type Chat struct {
 	Default func(ctx context.Context) string
 	// Dir is the empty directory chat agents run in.
 	Dir string
+	// Repo returns the project's checkout and its HEAD, refreshed first when asked; nil means chats never read code.
+	Repo func(ctx context.Context, projectID string, refresh bool) (dir, sha string, err error)
+	// RepoFacts is what a new repo session starts from: repository facts and the project's Code Map.
+	RepoFacts func(ctx context.Context, projectID, dir string) string
+	// RepoDefault is the "provider/model" auto resolves to in a chat that reads its project's code.
+	RepoDefault func(ctx context.Context) string
 	// Related finds knowledge documents for the related-knowledge panel; nil means none.
 	Related interface {
 		Related(ctx context.Context, projectID, text string, limit int) ([]model.KBDoc, error)
@@ -92,7 +99,8 @@ type Chat struct {
 	listAt time.Time
 }
 
-type chatSession struct{ id string }
+// chatSession is a kept harness session; sha is set when it reads the project checkout at that commit.
+type chatSession struct{ id, projectID, sha string }
 
 type ChatModel struct {
 	ID         string `json:"id"` // "provider/model"; empty is auto
@@ -125,13 +133,16 @@ type ChatSend struct {
 	KB      *ChatKBRef `json:"kb"`
 }
 
-// ChatEvent is one step of a streamed turn: "user_message", "delta", then
-// exactly one of "done" or "error".
+// ChatEvent is one step of a streamed turn: "user_message", "repo" when the turn reads
+// the project's code, "delta" and "step" as the reply streams, then exactly one of "done" or "error".
 type ChatEvent struct {
-	Kind    string
-	Text    string
-	Message *model.ChatMessage
-	Error   string
+	Kind      string
+	Text      string
+	Message   *model.ChatMessage
+	Error     string
+	ProjectID string            // repo
+	SHA       string            // repo
+	Tools     []model.AgentTool // step
 }
 
 func (c *Chat) Create(ctx context.Context, u *model.User, title, projectID, modelRef string) (*model.Chat, error) {
@@ -218,6 +229,7 @@ func (c *Chat) Update(ctx context.Context, u *model.User, id string, title, mode
 		if err := c.Store.SetProject(ctx, id, *projectID); err != nil {
 			return nil, err
 		}
+		c.forget(id) // the session reads the old project's checkout, or none
 	}
 	return c.Store.Get(ctx, id)
 }
@@ -385,6 +397,10 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	if err != nil {
 		return err
 	}
+	if ch.ProjectID != "" && c.Projects.Authorize(ctx, u, ch.ProjectID) != nil {
+		ch.ProjectID = ""
+		c.forget(id)
+	}
 	if allowed := c.allowedModels(ctx); ch.Model != "" && len(allowed) > 0 && !allowed[ch.Model] {
 		return fmt.Errorf("%w: model %q is no longer allowed; pick another one for this chat", ErrInvalid, ch.Model)
 	}
@@ -393,7 +409,11 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	}
 	defer c.endTurn()
 	if c.Usage != nil {
-		release, ok := c.Usage.Reserve(chatTurnEstimate)
+		estimate := int64(chatTurnEstimate)
+		if c.repoChat(ch) {
+			estimate = repoTurnEstimate
+		}
+		release, ok := c.Usage.Reserve(estimate)
 		if !ok {
 			return ErrChatBudget
 		}
@@ -454,7 +474,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		}
 		streamed.WriteString(t)
 		emit(ChatEvent{Kind: "delta", Text: t})
-	})
+	}, send)
 	_ = c.Store.Touch(ctx, id)
 	if c.Usage != nil && (res.TokensIn != 0 || res.TokensOut != 0 || res.CostMicros != 0) {
 		provider, modelID := SplitModelRef(c.resolve(ctx, ch))
@@ -506,26 +526,73 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 }
 
 func (c *Chat) resolve(ctx context.Context, ch *model.Chat) string {
-	if ch.Model != "" || c.Default == nil {
+	if ch.Model != "" {
 		return ch.Model
+	}
+	if c.repoChat(ch) && c.RepoDefault != nil {
+		return c.RepoDefault(ctx)
+	}
+	if c.Default == nil {
+		return ""
 	}
 	return c.Default(ctx)
 }
 
-func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatMessage, turn string, images []model.AgentImage, onText func(string)) (model.AgentResult, error) {
+// repoChat reports whether ch's turns read its project's code.
+func (c *Chat) repoChat(ch *model.Chat) bool { return ch.ProjectID != "" && c.Repo != nil }
+
+// readableProject is the project whose checkout ch's turns read, or "".
+func (c *Chat) readableProject(ch *model.Chat) string {
+	if c.repoChat(ch) {
+		return ch.ProjectID
+	}
+	return ""
+}
+
+// otherKeeps reports whether another chat has a kept session on ch's project, whose files a refresh would shift.
+func (c *Chat) otherKeeps(ch *model.Chat) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, s := range c.ses {
+		if id != ch.ID && s.projectID == ch.ProjectID {
+			return true
+		}
+	}
+	return false
+}
+
+// answer runs one turn; emit (guarded like onText) receives the "repo" and "step" events.
+func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatMessage, turn string, images []model.AgentImage, onText func(string), emit func(ChatEvent)) (model.AgentResult, error) {
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
 		return model.AgentResult{}, err
 	}
 	provider, modelID := SplitModelRef(c.resolve(ctx, ch))
-	req := model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, OnText: onText, Images: images}
+	req := model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, Images: images}
+	// the repo event must reach the browser before the first delta or step, which the harness may send before Start returns
+	var cur chatSession
+	var announce sync.Once
+	announced := func() {
+		announce.Do(func() {
+			if cur.sha != "" {
+				emit(ChatEvent{Kind: "repo", ProjectID: cur.projectID, SHA: cur.sha})
+			}
+		})
+	}
+	req.OnText = func(t string) { announced(); onText(t) }
+	req.OnStep = func(s model.AgentStep) { announced(); emit(ChatEvent{Kind: "step", Tools: s.Tools}) }
 	sh, canKeep := c.Harness.(SessionHarness)
 
 	var ses model.AgentSession
 	if canKeep {
 		c.mu.Lock()
-		cur, ok := c.ses[ch.ID]
+		kept, ok := c.ses[ch.ID]
 		c.mu.Unlock()
+		if ok && kept.projectID != c.readableProject(ch) {
+			c.forget(ch.ID)
+			ok = false
+		}
 		if ok {
+			cur = kept
 			req.Prompt = turn
 			var err error
 			ses, err = sh.Continue(ctx, cur.id, req)
@@ -538,31 +605,72 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 			}
 		}
 	}
+	keep := canKeep
 	if ses == nil {
-		req.Prompt = chatPreamble + historyText(history) + turn
-		req.Keep = canKeep
+		cur = chatSession{}
+		preamble, seed := chatPreamble, ""
+		if c.repoChat(ch) {
+			dir, sha, err := c.Repo(ctx, ch.ProjectID, !c.otherKeeps(ch))
+			if err != nil {
+				preamble += chatRepoUnreadable
+				keep = false // the next turn tries the checkout again
+			} else {
+				cur = chatSession{projectID: ch.ProjectID, sha: sha}
+				req.WorkspaceDir, req.RepoAccess, preamble = dir, true, chatRepoPreamble
+				if c.RepoFacts != nil {
+					if f := strings.TrimSpace(c.RepoFacts(ctx, ch.ProjectID, dir)); f != "" {
+						seed = f + "\n\n"
+					}
+				}
+			}
+		}
+		req.Prompt = preamble + seed + historyText(history) + turn
+		req.Keep = keep
 		var err error
 		if ses, err = c.Harness.Start(ctx, req); err != nil {
 			return model.AgentResult{}, err
 		}
 	}
+	announced()
 	res, err := c.Harness.Result(ctx, ses.ID())
 	if err != nil {
 		c.forget(ch.ID)
 		return res, err
 	}
-	if canKeep {
+	if keep {
 		c.mu.Lock()
 		if c.ses == nil {
 			c.ses = map[string]chatSession{}
 		}
-		c.ses[ch.ID] = chatSession{id: ses.ID()}
+		c.ses[ch.ID] = chatSession{id: ses.ID(), projectID: cur.projectID, sha: cur.sha}
 		c.mu.Unlock()
 	}
 	return res, nil
 }
 
 const chatPreamble = "You are an assistant in the Legos factory app, in a general conversation. You cannot run commands or change files; answer from what you know and the context you are given.\n\n"
+
+const chatRepoUnreadable = "This chat is bound to a project, but its repository could not be read for this conversation; tell the user so before you answer.\n\n"
+
+const chatRepoPreamble = "You are an assistant in the Legos factory app, in a conversation about this project. Your working directory is a checkout of the project's repository: you may read and search it, and you should whenever a question is about the code. Cite every claim about the code as path:line. You cannot run commands or change files. When you describe code you have not read, say so.\n\n"
+
+// RepoFacts is Chat.RepoFacts: the checkout's repository facts, then the project's Code Map lines.
+func (f *Factory) RepoFacts(ctx context.Context, projectID, dir string) string {
+	facts := repoFacts(ctx, dir)
+	if f.KB == nil || f.KB.Bundle == nil {
+		return facts
+	}
+	lines := f.readCodeMap(projectID)
+	if len(lines) == 0 {
+		return facts
+	}
+	var b strings.Builder
+	b.WriteString(facts + "\nCode Map (facts agents verified in merged work orders, as `path:line @commit — claim`; a line may be out of date, the code wins):\n")
+	for _, cf := range lines {
+		b.WriteString(mapLine(cf) + "\n")
+	}
+	return b.String()
+}
 
 // historyText replays the recent turns for an agent that has no memory of them.
 func historyText(history []model.ChatMessage) string {

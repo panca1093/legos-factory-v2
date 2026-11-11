@@ -20,8 +20,9 @@ type chatPlain struct {
 	reply  string
 	err    error // Result fails after streaming the reply, reporting errRes
 	errRes model.AgentResult
-	gate   chan struct{} // when set, Result waits for it
-	inRun  chan struct{} // when set, Result signals that it has been reached
+	gate   chan struct{}     // when set, Result waits for it
+	inRun  chan struct{}     // when set, Result signals that it has been reached
+	steps  []model.AgentStep // reported before the reply streams
 	n      int
 }
 
@@ -35,6 +36,9 @@ func (h *chatPlain) Start(_ context.Context, req model.AgentRequest) (model.Agen
 	return h.stream(req, fmt.Sprintf("s%d", h.n)), nil
 }
 func (h *chatPlain) stream(req model.AgentRequest, id string) model.AgentSession {
+	for _, st := range h.steps {
+		req.OnStep(st)
+	}
 	for _, w := range strings.SplitAfter(h.reply, " ") {
 		req.OnText(w)
 	}
@@ -77,15 +81,17 @@ type usageSink struct {
 	deny     bool
 	reserved int
 	released int
+	amounts  []int64
 }
 
-func (u *usageSink) Reserve(int64) (func(int64), bool) {
+func (u *usageSink) Reserve(micros int64) (func(int64), bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	if u.deny {
 		return nil, false
 	}
 	u.reserved++
+	u.amounts = append(u.amounts, micros)
 	return func(int64) { u.mu.Lock(); u.released++; u.mu.Unlock() }, true
 }
 func (u *usageSink) Record(_ context.Context, r model.UsageRecord) error {
@@ -109,6 +115,8 @@ type chatRig struct {
 	usage *usageSink
 	ana   *model.User
 	bob   *model.User
+
+	members *store.MemberRepo
 }
 
 func newChatRig(t *testing.T, h Harness) *chatRig {
@@ -134,7 +142,7 @@ func newChatRig(t *testing.T, h Harness) *chatRig {
 	if err := members.Add(context.Background(), "p1", "ana"); err != nil {
 		t.Fatal(err)
 	}
-	return &chatRig{usage: usage, ana: ana, bob: bob, chat: &Chat{
+	return &chatRig{usage: usage, ana: ana, bob: bob, members: members, chat: &Chat{
 		Store:    &store.ChatRepo{DB: db},
 		Projects: &Projects{Store: projRepo, Members: members, Users: users},
 		Docs: fakeDocs{docs: map[string]*KBDetail{
@@ -682,5 +690,241 @@ func TestChatImageSizeCaps(t *testing.T) {
 	many := []ChatFile{img("1.png", 16), img("2.png", 16), img("3.png", 16), {Name: "a", Content: "x"}, {Name: "b", Content: "x"}, {Name: "c", Content: "x"}}
 	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: many}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "at most 5 files") {
 		t.Fatalf("count includes images: %v", err)
+	}
+}
+
+type repoCall struct {
+	project string
+	refresh bool
+}
+
+// repoRig is a chat rig whose project p1 has a checkout at dir, at sha.
+func repoRig(t *testing.T, h Harness) (r *chatRig, dir string, calls *[]repoCall, fail *error) {
+	t.Helper()
+	r = newChatRig(t, h)
+	dir = t.TempDir()
+	calls, fail = &[]repoCall{}, new(error)
+	r.chat.Repo = func(_ context.Context, project string, refresh bool) (string, string, error) {
+		*calls = append(*calls, repoCall{project, refresh})
+		if *fail != nil {
+			return "", "", *fail
+		}
+		return dir, "0123456789abcdef0123456789abcdef01234567", nil
+	}
+	r.chat.RepoFacts = func(_ context.Context, project, d string) string {
+		return "Repository facts for " + project + " in " + d
+	}
+	r.chat.RepoDefault = func(context.Context) string { return "anthropic/haiku" }
+	return r, dir, calls, fail
+}
+
+func TestChatProjectChatReadsItsCheckout(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "See a.go:1", steps: []model.AgentStep{{N: 1, Tools: []model.AgentTool{{Name: "Read File", Target: "a.go"}}}}}}
+	r, dir, calls, _ := repoRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	var evs []ChatEvent
+	if err := r.chat.Send(ctx, r.ana, ch.ID, ChatSend{Content: "where is it decided?"}, func(e ChatEvent) { evs = append(evs, e) }); err != nil {
+		t.Fatal(err)
+	}
+	req := h.starts[0]
+	if req.WorkspaceDir != dir || !req.RepoAccess || req.ModelID != "haiku" || !req.Keep {
+		t.Fatalf("a repo chat runs in the checkout, on the builder's default model: %+v", req)
+	}
+	if !strings.HasPrefix(req.Prompt, chatRepoPreamble) || !strings.Contains(req.Prompt, "Repository facts for p1 in "+dir+"\n\n") || !strings.HasSuffix(req.Prompt, "where is it decided?") {
+		t.Fatalf("first prompt: %q", req.Prompt)
+	}
+	if fmt.Sprint(*calls) != "[{p1 true}]" {
+		t.Fatalf("a new session refreshes the checkout: %v", *calls)
+	}
+	if k := kinds(evs); k != "user_message,repo,step,delta,delta,title,done" {
+		t.Fatalf("events: %s", k)
+	}
+	if e := evs[1]; e.ProjectID != "p1" || e.SHA != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("repo event: %+v", e)
+	}
+	if e := evs[2]; fmt.Sprint(e.Tools) != "[{Read File a.go false}]" {
+		t.Fatalf("step event: %+v", e)
+	}
+	if fmt.Sprint(r.usage.amounts) != "[250000]" {
+		t.Fatalf("a repo turn reserves more: %v", r.usage.amounts)
+	}
+	if last := evs[len(evs)-1].Message; last.Usage.Model != "anthropic/haiku" {
+		t.Fatalf("usage model: %+v", last.Usage)
+	}
+
+	h.starts[0].OnStep(model.AgentStep{N: 9, Tools: []model.AgentTool{{Name: "late"}}})
+	h.starts[0].OnText("late")
+	if k := kinds(evs); k != "user_message,repo,step,delta,delta,title,done" {
+		t.Fatalf("nothing may follow done: %s", k)
+	}
+
+	evs = nil
+	if err := r.chat.Send(ctx, r.ana, ch.ID, ChatSend{Content: "and the caller?"}, func(e ChatEvent) { evs = append(evs, e) }); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.starts) != 1 || len(h.conts) != 1 || h.conts[0].Prompt != "and the caller?" {
+		t.Fatalf("a continued turn sends the question only: starts %d, conts %+v", len(h.starts), h.conts)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("a continued session keeps its checkout as it was: %v", *calls)
+	}
+	if k := kinds(evs); k != "user_message,repo,step,delta,delta,done" || evs[1].SHA != "0123456789abcdef0123456789abcdef01234567" {
+		t.Fatalf("a continued turn still announces its commit: %s %+v", k, evs[1])
+	}
+}
+
+func TestChatPlainChatNeverReadsCode(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "hi"}}
+	r, _, calls, _ := repoRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	evs, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "hello"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := h.starts[0]
+	if req.RepoAccess || req.WorkspaceDir != r.chat.Dir || req.ModelID != "opus" || req.Prompt != chatPreamble+"hello" {
+		t.Fatalf("plain chat request: %+v", req)
+	}
+	if len(*calls) != 0 || strings.Contains(kinds(evs), "repo") || fmt.Sprint(r.usage.amounts) != "[50000]" {
+		t.Fatalf("plain chat: repo calls %v, events %s, reserved %v", *calls, kinds(evs), r.usage.amounts)
+	}
+}
+
+func TestChatFailedCheckoutFallsBackToPlainChat(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "I could not read it"}}
+	r, _, calls, fail := repoRig(t, h)
+	*fail = errors.New("repository gone")
+	ch, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	evs, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "explain"})
+	if err != nil || evs[len(evs)-1].Kind != "done" || strings.Contains(kinds(evs), "repo") {
+		t.Fatalf("a failed checkout must not fail the turn: %v %s", err, kinds(evs))
+	}
+	req := h.starts[0]
+	if req.RepoAccess || req.WorkspaceDir != r.chat.Dir || req.Prompt != chatPreamble+chatRepoUnreadable+"explain" || req.Keep {
+		t.Fatalf("fallback request: %+v", req)
+	}
+	*fail = nil
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "again"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.starts) != 2 || !h.starts[1].RepoAccess || len(*calls) != 2 {
+		t.Fatalf("the next turn tries the checkout again: %d starts, calls %v", len(h.starts), *calls)
+	}
+}
+
+func TestChatProjectChangeDropsTheSession(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok"}}
+	r, dir, _, _ := repoRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	p := "p1"
+	if _, err := r.chat.Update(ctx, r.ana, ch.ID, nil, nil, &p); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(h.closed) != "[s1]" {
+		t.Fatalf("binding a project ends the plain session: %v", h.closed)
+	}
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.starts) != 2 || !h.starts[1].RepoAccess || h.starts[1].WorkspaceDir != dir || !strings.Contains(h.starts[1].Prompt, "User: first") {
+		t.Fatalf("a new repo session replays history: %d starts %+v", len(h.starts), h.starts)
+	}
+	same := "p1"
+	if _, err := r.chat.Update(ctx, r.ana, ch.ID, nil, nil, &same); err != nil || len(h.closed) != 1 {
+		t.Fatalf("an unchanged project keeps the session: %v %v", err, h.closed)
+	}
+}
+
+func TestChatStepsStopAtError(t *testing.T) {
+	ctx := context.Background()
+	h := &chatPlain{reply: "partial", err: errors.New("agent exited"), steps: []model.AgentStep{{N: 1, Tools: []model.AgentTool{{Name: "grep", Target: "x", Failed: true}}}}}
+	r, _, _, _ := repoRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "t", "p1", "")
+	var evs []ChatEvent
+	if err := r.chat.Send(ctx, r.ana, ch.ID, ChatSend{Content: "q"}, func(e ChatEvent) { evs = append(evs, e) }); err != nil {
+		t.Fatal(err)
+	}
+	h.starts[0].OnStep(model.AgentStep{N: 2})
+	if k := kinds(evs); k != "user_message,repo,step,delta,error" {
+		t.Fatalf("events: %s", k)
+	}
+}
+
+func TestChatMemberRemovedAfterBindingRunsAsPlainChat(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok"}}
+	r, _, calls, _ := repoRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.members.Remove(ctx, "p1", "ana"); err != nil {
+		t.Fatal(err)
+	}
+	callsBefore := len(*calls)
+	evs, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.conts) != 0 || fmt.Sprint(h.closed) != "[s1]" || len(h.starts) != 2 {
+		t.Fatalf("the kept session must be dropped: conts %d closed %v starts %d", len(h.conts), h.closed, len(h.starts))
+	}
+	if req := h.starts[1]; req.RepoAccess || req.WorkspaceDir != r.chat.Dir {
+		t.Fatalf("a removed member's turn must not read the checkout: %+v", req)
+	}
+	if len(*calls) != callsBefore || strings.Contains(kinds(evs), "repo") {
+		t.Fatalf("no checkout call or repo event after removal: calls %v events %s", *calls, kinds(evs))
+	}
+}
+
+func TestChatProjectClearedUnderAKeptSessionDropsIt(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok"}}
+	r, _, _, _ := repoRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.chat.Store.SetProject(ctx, ch.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.conts) != 0 || len(h.starts) != 2 || h.starts[1].RepoAccess || fmt.Sprint(h.closed) != "[s1]" {
+		t.Fatalf("the session of a cleared project must not continue: conts %d starts %+v closed %v", len(h.conts), h.starts, h.closed)
+	}
+}
+
+func TestChatSecondSessionOnAProjectDoesNotRefreshTheCheckout(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok"}}
+	r, _, calls, _ := repoRig(t, h)
+	a, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	b, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	if _, err := r.send(t, r.ana, a.ID, ChatSend{Content: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.send(t, r.ana, b.ID, ChatSend{Content: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(*calls) != "[{p1 true} {p1 false}]" {
+		t.Fatalf("the second chat must reuse the checkout as is: %v", *calls)
+	}
+	r.chat.forget(a.ID)
+	r.chat.forget(b.ID)
+	c, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	if _, err := r.send(t, r.ana, c.ID, ChatSend{Content: "three"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := (*calls)[len(*calls)-1]; !got.refresh {
+		t.Fatalf("with no other kept session the new one refreshes: %v", *calls)
 	}
 }

@@ -306,3 +306,47 @@ func TestChatSendImageOverHTTP(t *testing.T) {
 		t.Fatalf("not an image: %d %s", code, body)
 	}
 }
+
+type stepHarness struct{}
+
+func (stepHarness) Name() string                         { return "steps" }
+func (stepHarness) Cancel(context.Context, string) error { return nil }
+func (stepHarness) Result(context.Context, string) (model.AgentResult, error) {
+	return model.AgentResult{Text: "See a.go:1"}, nil
+}
+func (stepHarness) Start(_ context.Context, req model.AgentRequest) (model.AgentSession, error) {
+	req.OnStep(model.AgentStep{N: 1, Tools: []model.AgentTool{{Name: "Read File", Target: "backend/a.go"}}})
+	req.OnStep(model.AgentStep{N: 2, Tools: []model.AgentTool{{Name: "grep"}}})
+	req.OnText("See a.go:1")
+	return stepSession{}, nil
+}
+
+type stepSession struct{}
+
+func (stepSession) ID() string { return "s1" }
+
+func TestChatRepoAndStepFrames(t *testing.T) {
+	srv := bootChat(t)
+	srv.Chat.Harness = stepHarness{}
+	srv.Chat.Repo = func(context.Context, string, bool) (string, string, error) {
+		return t.TempDir(), "0123456789abcdef0123456789abcdef01234567", nil
+	}
+	_, body := chatDo(srv, "ana", "POST", "/api/v1/chats", `{"title":"t","project_id":"p1"}`)
+	var created struct{ Chat model.Chat }
+	_ = json.Unmarshal([]byte(body), &created)
+	_, body = chatDo(srv, "ana", "POST", "/api/v1/chats/"+created.Chat.ID+"/messages", `{"content":"where?"}`)
+	events := parseSSE(body)
+	var names []string
+	for _, e := range events {
+		names = append(names, e.name)
+	}
+	if strings.Join(names, ",") != "user_message,repo,step,step,delta,done" {
+		t.Fatalf("stream: %s", body)
+	}
+	if events[1].data != `{"project_id":"p1","sha":"0123456789abcdef0123456789abcdef01234567"}` {
+		t.Fatalf("repo frame: %s", events[1].data)
+	}
+	if events[2].data != `{"tools":[{"name":"Read File","target":"backend/a.go","failed":false}]}` || events[3].data != `{"tools":[{"name":"grep","target":"","failed":false}]}` {
+		t.Fatalf("step frames: %s | %s", events[2].data, events[3].data)
+	}
+}

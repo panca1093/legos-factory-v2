@@ -117,9 +117,16 @@ func (s *Server) handleChatModels(c echo.Context) error {
 	return c.JSON(http.StatusOK, list)
 }
 
+// chatStepTool is model.AgentTool with every field always present in a step frame.
+type chatStepTool struct {
+	Name   string `json:"name"`
+	Target string `json:"target"`
+	Failed bool   `json:"failed"`
+}
+
 // handleChatSend answers the message as a server-sent event stream:
-// user_message, delta..., then done or error. Failures before the message is
-// stored are ordinary JSON errors.
+// user_message, repo (a project chat), delta and step..., then done or error.
+// Failures before the message is stored are ordinary JSON errors.
 func (s *Server) handleChatSend(c echo.Context) error {
 	var in usecase.ChatSend
 	if err := c.Bind(&in); err != nil {
@@ -148,6 +155,14 @@ func (s *Server) handleChatSend(c echo.Context) error {
 			payload["text"] = ev.Text
 		case "title":
 			payload["title"] = ev.Text
+		case "repo":
+			payload["project_id"], payload["sha"] = ev.ProjectID, ev.SHA
+		case "step":
+			tools := make([]chatStepTool, 0, len(ev.Tools))
+			for _, t := range ev.Tools {
+				tools = append(tools, chatStepTool(t))
+			}
+			payload["tools"] = tools
 		case "error":
 			payload["message"], payload["error"] = ev.Message, ev.Error
 		default:
