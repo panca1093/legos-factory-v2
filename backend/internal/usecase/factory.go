@@ -48,6 +48,7 @@ type Factory struct {
 	Catalog      *Cataloger
 	KB           *KB
 	Integrations *Integrations
+	MCP          MCPSelector // nil: agents get no MCP servers
 	Sandbox      Sandbox
 	Judge        Judge // nil when TYPESAFE_API_KEY is unset
 	DataDir      string
@@ -106,6 +107,31 @@ func (f *Factory) ResumeOnStart(ctx context.Context) error {
 
 // ---- agent run plumbing ----
 
+// applyMCP gives req the MCP servers its role may use and returns the names for the agent_started audit; failures leave the run without MCP.
+func (f *Factory) applyMCP(ctx context.Context, req *model.AgentRequest) map[string]any {
+	if f.MCP == nil {
+		return nil
+	}
+	sel, err := f.MCP.Selection(ctx, req.Role)
+	if err != nil {
+		f.Log.Warn("mcp selection failed; the run starts without MCP servers", "role", req.Role, "err", err)
+		return nil
+	}
+	return applySelection(req, sel)
+}
+
+func applySelection(req *model.AgentRequest, sel model.MCPSelection) map[string]any {
+	if len(sel.Servers) == 0 {
+		return nil
+	}
+	req.MCP, req.MCPAllow, req.MCPDeny = sel.Servers, sel.Allow, sel.Deny
+	names := make([]string, len(sel.Servers))
+	for i, s := range sel.Servers {
+		names[i] = s.Name
+	}
+	return map[string]any{"mcp_servers": names, "mcp_tools": sel.Allow}
+}
+
 // runAgent creates a run row, invokes the harness and records usage. A
 // conservative budget reservation is taken before execution so parallel
 // runs cannot over-commit the remaining budget.
@@ -156,6 +182,7 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 		Role: role, Prompt: prompt, ProviderID: provider, ModelID: modelID,
 		WorkspaceDir: dir, Context: cctx,
 	}
+	mcpAudit := f.applyMCP(ctx, &req)
 	h := f.Resolve(role, wo)
 	// the clock can be microsecond-grained, so parallel runs need the sequence to stay unique
 	runID := fmt.Sprintf("run_%d_%d", time.Now().UnixNano(), runSeq.Add(1))
@@ -165,6 +192,9 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	runRef := map[string]any{"run_id": runID, "task_id": taskID}
 	started := map[string]any{"run_id": runID, "task_id": taskID}
 	for k, v := range opts.Audit {
+		started[k] = v
+	}
+	for k, v := range mcpAudit {
 		started[k] = v
 	}
 	f.event(wo.ID, string(role), "agent_started",

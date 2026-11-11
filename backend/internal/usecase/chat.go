@@ -69,6 +69,7 @@ type Chat struct {
 	}
 	Settings SettingsReader
 	Usage    Budget
+	MCP      MCPSelector // nil: chats get no MCP servers
 	// Harness is nil when no harness can run chats read-only.
 	Harness Harness
 	// Models lists what the harness can run; Default is the "provider/model" auto resolves to.
@@ -622,6 +623,11 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 						seed = f + "\n\n"
 					}
 				}
+			}
+		}
+		if c.MCP != nil {
+			if sel, err := c.MCP.Selection(ctx, model.AgentChat); err == nil {
+				applySelection(&req, sel)
 			}
 		}
 		req.Prompt = preamble + seed + historyText(history) + turn
