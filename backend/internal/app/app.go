@@ -220,7 +220,26 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			}
 			return p + "/" + m
 		},
+		RepoDefault: func(ctx context.Context) string {
+			p, m := modelFor(model.AgentBuilder, &model.WorkOrder{})
+			if m == "" {
+				return ""
+			}
+			return p + "/" + m
+		},
 		Dir: filepath.Join(cfg.DataDir, "chat"),
+		Repo: func(ctx context.Context, projectID string, refresh bool) (string, string, error) {
+			p, err := projRepo.Get(ctx, projectID)
+			if err != nil {
+				return "", "", err
+			}
+			auth, err := integrations.GitAuth(ctx, p)
+			if err != nil {
+				return "", "", err
+			}
+			return box.Checkout(ctx, "chat-"+projectID, p.RepoURL, auth, refresh)
+		},
+		RepoFacts: factory.RepoFacts,
 	}
 
 	return &App{Cfg: cfg, DBCloser: db.Close, Server: srv, Sched: sched, settings: settingsRepo, log: log}, nil

@@ -307,6 +307,20 @@ func (in *Integrations) GitFor(ctx context.Context, p *model.Project) (g GitProv
 	return g, true, err
 }
 
+// GitAuth is the auth a project is cloned with, as for a work order workspace: nil when the project is
+// unbound or its gh login is unavailable, since a local folder clones without one.
+func (in *Integrations) GitAuth(ctx context.Context, p *model.Project) (*model.GitAuth, error) {
+	g, bound, err := in.GitFor(ctx, p)
+	switch {
+	case !bound, errors.Is(err, model.ErrGHMissing), errors.Is(err, model.ErrGHUnauthenticated), errors.Is(err, model.ErrGHUnreachable):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("repository connection unavailable: %w", err)
+	}
+	a := g.GitAuth()
+	return &a, nil
+}
+
 func (in *Integrations) token(ctx context.Context, c *model.Connection) (string, error) {
 	if in.Secrets == nil {
 		return "", model.ErrSecretsUnavailable
