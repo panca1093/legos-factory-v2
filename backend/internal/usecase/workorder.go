@@ -22,6 +22,8 @@ type WorkOrders struct {
 	Sandbox      Sandbox
 	Integrations *Integrations
 	Settings     SettingsReader
+	// ResolveDefault gives the model a role resolves to under the workspace settings; nil snapshots the stored default as is.
+	ResolveDefault func(role model.AgentRole, s *model.Settings) string
 	// Chats resolves source_chat_id; nil rejects any chat link.
 	Chats interface {
 		Get(ctx context.Context, id string) (*model.Chat, error)
@@ -48,6 +50,9 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 	var foreman, architect string
 	if s, err := w.Settings.Get(ctx); err == nil {
 		foreman, architect = s.ForemanModel, s.ArchitectModel
+		if w.ResolveDefault != nil {
+			foreman, architect = w.ResolveDefault(model.AgentForeman, s), w.ResolveDefault(model.AgentArchitect, s)
+		}
 	}
 	wo := &model.WorkOrder{
 		ID:             "wo_" + uuid.NewString()[:12],

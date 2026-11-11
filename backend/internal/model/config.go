@@ -23,8 +23,6 @@ type Config struct {
 	ACPCommand []string // agent command for Harness=acp, e.g. opencode acp
 
 	MaxConcurrentRuns int    // global worker pool size
-	RunTimeoutSec     int    // per job execution timeout
-	SandboxMode       string // "local" (trusted) or "docker" (requires daemon)
 	SecretKey         string // base64 32-byte key sealing provider credentials
 
 	FrontendOrigin string // allowed CORS origin for the Vite dev server

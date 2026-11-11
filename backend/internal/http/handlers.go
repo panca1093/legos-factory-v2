@@ -409,18 +409,20 @@ func (s *Server) handleGetSettings(c echo.Context) error {
 	return c.JSON(http.StatusOK, settings)
 }
 
-func (s *Server) handlePutSettings(c echo.Context) error {
-	var dto model.Settings
-	if err := c.Bind(&dto); err != nil {
+func (s *Server) handlePatchSettings(c echo.Context) error {
+	var patch model.SettingsPatch
+	if err := c.Bind(&patch); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
+	if patch.BudgetLimitMicros != nil && *patch.BudgetLimitMicros < 0 {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "budget_limit_micros cannot be negative")
+	}
 	ctx := c.Request().Context()
-	if err := s.Settings.Put(ctx, dto); err != nil {
+	if err := s.Settings.Patch(ctx, patch); err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not save settings")
 	}
-	s.Usage.SetBudgetLimit(dto.BudgetLimitMicros)
-	if u := currentUser(c); u != nil && !u.Role.IsAdmin() {
-		return errorJSON(c, http.StatusForbidden, "FORBIDDEN", "admin role required") // unreachable: route guards
+	if patch.BudgetLimitMicros != nil {
+		s.Usage.SetBudgetLimit(*patch.BudgetLimitMicros)
 	}
 	out, err := s.Settings.Get(ctx)
 	if err != nil {
@@ -428,6 +430,26 @@ func (s *Server) handlePutSettings(c echo.Context) error {
 	}
 	out.JevEnabled = s.Cfg.TypeSafeKey != ""
 	return c.JSON(http.StatusOK, out)
+}
+
+func (s *Server) handleRuntimeSettings(c echo.Context) error {
+	harness := "mock"
+	switch {
+	case s.Cfg.Harness == "acp":
+		harness = "acp"
+	case s.Cfg.OpenCodeURL != "":
+		harness = "opencode"
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"harness":     harness,
+		"acp_command": strings.Join(s.Cfg.ACPCommand, " "),
+		"jev": map[string]any{
+			"enabled": s.Cfg.TypeSafeKey != "",
+			"model":   s.Cfg.TypeSafeModel,
+		},
+		"credentials_configured": s.Cfg.SecretKey != "",
+		"max_concurrent_runs":    s.Cfg.MaxConcurrentRuns,
+	})
 }
 
 func (s *Server) handlePause(c echo.Context) error {

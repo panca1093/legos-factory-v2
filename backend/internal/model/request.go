@@ -30,7 +30,6 @@ type CreateWorkOrderRequest struct {
 	Title          string `json:"title"`
 	Objective      string `json:"objective"`
 	Acceptance     string `json:"acceptance"`
-	Autonomy       string `json:"autonomy"` // accepted for compatibility, ignored
 	BuilderModel   string `json:"builder_model"`
 	InspectorModel string `json:"inspector_model"`
 	SourceRef      string `json:"source_ref"`

@@ -205,7 +205,7 @@ func TestJevGatedLifecycleNeedsNoHumanUntilThePRDecision(t *testing.T) {
 	proj := ta.createProject(t, "Greeter", fixtureRepo(t))
 
 	// governance snapshot: later default changes do not alter existing orders
-	if status, body := ta.do(t, "PUT", "/api/v1/settings", `{"foreman_model":"openai/gpt-5","architect_model":"openai/gpt-5-mini"}`); status != 200 {
+	if status, body := ta.do(t, "PATCH", "/api/v1/settings", `{"foreman_model":"openai/gpt-5","architect_model":"openai/gpt-5-mini"}`); status != 200 {
 		t.Fatalf("settings: %d %s", status, body)
 	}
 	// the autonomy field of older clients is accepted and ignored
@@ -215,7 +215,7 @@ func TestJevGatedLifecycleNeedsNoHumanUntilThePRDecision(t *testing.T) {
 		t.Fatalf("create: %d %s", status, body)
 	}
 	id := decode[struct{ ID string }](t, body).ID
-	ta.do(t, "PUT", "/api/v1/settings", `{"foreman_model":"openai/other","architect_model":"openai/other"}`)
+	ta.do(t, "PATCH", "/api/v1/settings", `{"foreman_model":"openai/other","architect_model":"openai/other"}`)
 	if w := ta.workOrder(t, id); w["foreman_model"] != "openai/gpt-5" || w["architect_model"] != "openai/gpt-5-mini" {
 		t.Fatalf("governance snapshot: %v / %v", w["foreman_model"], w["architect_model"])
 	}

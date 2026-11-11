@@ -27,8 +27,6 @@ func LoadConfig() (*model.Config, error) {
 		Harness:           strings.ToLower(env("FACTORY_HARNESS", "")),
 		ACPCommand:        strings.Fields(env("FACTORY_ACP_COMMAND", "opencode acp")),
 		MaxConcurrentRuns: envInt("FACTORY_MAX_CONCURRENT_RUNS", 2),
-		RunTimeoutSec:     envInt("FACTORY_RUN_TIMEOUT", 600),
-		SandboxMode:       env("FACTORY_SANDBOX_MODE", "local"),
 		SecretKey:         env("FACTORY_SECRET_KEY", ""),
 		FrontendOrigin:    env("FACTORY_FRONTEND_ORIGIN", "http://localhost:5173"),
 		TypeSafeKey:       env("TYPESAFE_API_KEY", ""),
@@ -42,9 +40,6 @@ func LoadConfig() (*model.Config, error) {
 	}
 	if c.Harness != "" && c.Harness != "acp" {
 		return nil, fmt.Errorf("FACTORY_HARNESS must be acp or empty, got %q", c.Harness)
-	}
-	if c.SandboxMode != "local" && c.SandboxMode != "docker" {
-		return nil, fmt.Errorf("FACTORY_SANDBOX_MODE must be local or docker, got %q", c.SandboxMode)
 	}
 	if strings.EqualFold(strings.TrimSpace(c.TypeSafeModel), "jev-latest") {
 		return nil, fmt.Errorf("TYPESAFE_MODEL must be a pinned version such as jev-1.14.0, not jev-latest")

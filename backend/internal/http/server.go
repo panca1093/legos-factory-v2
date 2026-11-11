@@ -290,7 +290,8 @@ func (s *Server) routes() {
 
 	settings := api.Group("/settings")
 	settings.GET("", s.handleGetSettings)
-	settings.PUT("", s.requireRole(model.RoleAdmin, s.handlePutSettings))
+	settings.PATCH("", s.requireRole(model.RoleAdmin, s.handlePatchSettings))
+	settings.GET("/runtime", s.handleRuntimeSettings)
 }
 
 // ---- auth handlers ----

@@ -36,8 +36,8 @@ func (r *SettingsRepo) Get(ctx context.Context) (*model.Settings, error) {
 			s.InspectorModel = v
 		case "allowed_models":
 			s.AllowedModels = strings.Split(strings.Trim(v, ","), ",")
-		case "cataloger_summaries":
-			s.CatalogerSummaries = v == "true"
+		case "chat_model":
+			s.ChatModel = v
 		default:
 			if s.Extra == nil {
 				s.Extra = map[string]string{}
@@ -57,10 +57,32 @@ func (r *SettingsRepo) Put(ctx context.Context, s model.Settings) error {
 		"architect_model":     s.ArchitectModel,
 		"builder_model":       s.BuilderModel,
 		"inspector_model":     s.InspectorModel,
-		"cataloger_summaries": fmt.Sprintf("%t", s.CatalogerSummaries),
+		"chat_model":          s.ChatModel,
 	}
 	if s.AllowedModels != nil {
 		writes["allowed_models"] = strings.Trim(strings.Join(s.AllowedModels, ","), ",")
+	}
+	for k, v := range writes {
+		if _, err := r.DB.ExecContext(ctx, `INSERT INTO settings_kv (key, value) VALUES (?,?)
+			ON CONFLICT(key) DO UPDATE SET value = excluded.value`, k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *SettingsRepo) Patch(ctx context.Context, p model.SettingsPatch) error {
+	writes := map[string]string{}
+	if p.BudgetLimitMicros != nil {
+		writes["budget_limit_micros"] = fmt.Sprintf("%d", *p.BudgetLimitMicros)
+	}
+	for k, v := range map[string]*string{
+		"foreman_model": p.ForemanModel, "architect_model": p.ArchitectModel,
+		"builder_model": p.BuilderModel, "inspector_model": p.InspectorModel, "chat_model": p.ChatModel,
+	} {
+		if v != nil {
+			writes[k] = *v
+		}
 	}
 	for k, v := range writes {
 		if _, err := r.DB.ExecContext(ctx, `INSERT INTO settings_kv (key, value) VALUES (?,?)
