@@ -881,13 +881,17 @@ func (c *acpConn) repoPathsAllowed(kind string, locations []struct {
 			paths = append(paths, v)
 		}
 	}
-	if v, _ := input["pattern"].(string); filepath.IsAbs(v) || slices.Contains(strings.Split(filepath.ToSlash(v), "/"), "..") {
+	if v, _ := input["pattern"].(string); filepath.IsAbs(v) || strings.HasPrefix(v, "~") || slices.Contains(strings.Split(filepath.ToSlash(v), "/"), "..") {
 		paths = append(paths, v)
 	}
 	if len(paths) == 0 {
 		return kind != "read"
 	}
 	for _, p := range paths {
+		// Claude Code expands a leading ~ to the home directory
+		if strings.HasPrefix(p, "~") {
+			return false
+		}
 		if !filepath.IsAbs(p) {
 			p = filepath.Join(c.workspace, p)
 		}

@@ -153,6 +153,10 @@ func (l Local) Checkout(ctx context.Context, id, repoURL string, auth *model.Git
 
 // ownsRepo reports whether dir is the top of its own git repository rather than a directory git resolves to an enclosing one.
 func ownsRepo(ctx context.Context, dir string) bool {
+	// a symlinked checkout would make git act on the link's target, possibly the user's own folder
+	if fi, err := os.Lstat(dir); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
 	out, err := git(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return false

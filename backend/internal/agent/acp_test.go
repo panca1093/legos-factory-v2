@@ -804,6 +804,10 @@ func TestACPRepoChatPermissionChecksRawInputPaths(t *testing.T) {
 		{"read location inside, input outside", "read", ws + "/main.go", `{"file_path":"/etc/hosts"}`, "no"},
 		{"read symlink file", "read", "", `{"file_path":"` + ws + `/link.txt"}`, "no"},
 		{"read through symlink dir", "read", ws + "/linkdir/secret", "", "no"},
+		{"read home tilde", "read", "~/.ssh/id_rsa", `{"file_path":"~/.ssh/id_rsa"}`, "no"},
+		{"read home tilde input only", "read", "", `{"file_path":"~/.ssh/id_rsa"}`, "no"},
+		{"grep home", "search", "", `{"pattern":"x","path":"~"}`, "no"},
+		{"glob home pattern", "search", "", `{"pattern":"~/.ssh/*"}`, "no"},
 	}
 	for _, c := range cases {
 		res, err := runFake(t, fakeHarness(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_PATH="+c.path, "ACP_FAKE_INPUT="+c.input),

@@ -421,3 +421,35 @@ func sameDir(a, b string) bool {
 	rb, _ := filepath.EvalSymlinks(b)
 	return ra == rb
 }
+
+func TestCheckoutThatIsASymlinkNeverTouchesItsTarget(t *testing.T) {
+	src := t.TempDir()
+	gitIn(t, src, "init", "-q", "-b", "main")
+	mine := filepath.Join(src, "a.go")
+	if err := os.WriteFile(mine, []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, src, "add", ".")
+	gitIn(t, src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "one")
+	if err := os.WriteFile(mine, []byte("uncommitted work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	l := Local{DataDir: t.TempDir()}
+	link := filepath.Join(l.DataDir, "workspaces", "chat-p6")
+	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(src, link); err != nil {
+		t.Fatal(err)
+	}
+	dir, _, err := l.Checkout(context.Background(), "chat-p6", src, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(mine); string(b) != "uncommitted work\n" {
+		t.Fatalf("the symlink's target was reset: %q", b)
+	}
+	if fi, err := os.Lstat(dir); err != nil || fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("the checkout must be a real directory again: %v %v", fi, err)
+	}
+}
