@@ -893,6 +893,8 @@ func (c *acpConn) answerPermission(m acpMsg) {
 	var p struct {
 		ToolCall struct {
 			Kind      string `json:"kind"`
+			Title     string `json:"title"`
+			Name      string `json:"name"`
 			Locations []struct {
 				Path string `json:"path"`
 			} `json:"locations"`
@@ -910,8 +912,16 @@ func (c *acpConn) answerPermission(m acpMsg) {
 	}
 	_ = json.Unmarshal(m.Params, &p)
 	var allow bool
-	if tool := p.ToolCall.Meta.ClaudeCode.ToolName; strings.HasPrefix(tool, "mcp__") {
+	tool := p.ToolCall.Meta.ClaudeCode.ToolName
+	for _, n := range []string{p.ToolCall.Title, p.ToolCall.Name} {
+		if !strings.HasPrefix(tool, "mcp__") && strings.HasPrefix(n, "mcp__") {
+			tool = n
+		}
+	}
+	if strings.HasPrefix(tool, "mcp__") {
 		allow = c.mcpAllow[tool]
+	} else if tool == "" && p.ToolCall.Kind == "other" {
+		allow = false
 	} else {
 		reads := p.ToolCall.Kind == "read" || p.ToolCall.Kind == "search" || p.ToolCall.Kind == "think"
 		allow = c.role == model.AgentBuilder || (reads && (c.role != model.AgentChat || c.repo))

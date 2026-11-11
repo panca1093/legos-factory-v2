@@ -336,3 +336,20 @@ func TestChatStartsWithMCPSelectionForChatRole(t *testing.T) {
 		t.Fatalf("a nil port leaves the request unchanged: %+v", q)
 	}
 }
+
+func TestMCPSelectionAllowsOnlyReadToolsForEveryRoleButBuilder(t *testing.T) {
+	r := newMCPRig(t)
+	ctx := context.Background()
+	v := r.discovered(t, "docs", "foreman", "architect", "builder", "inspector", "chat")
+	rec, _ := r.m.Store.Get(ctx, v.ID)
+	rec.Tools[0].Enabled, rec.Tools[1].Enabled = true, true
+	if err := r.m.Store.Update(ctx, rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []model.AgentRole{model.AgentForeman, model.AgentArchitect, model.AgentBuilder, model.AgentInspector, model.AgentChat} {
+		sel, _ := r.m.Selection(ctx, role)
+		if !slices.Equal(sel.Allow, []string{"mcp__docs__search"}) || !slices.Contains(sel.Deny, "mcp__docs__write") {
+			t.Fatalf("%s: %+v", role, sel)
+		}
+	}
+}

@@ -343,7 +343,7 @@ func (m *MCPServers) Selection(ctx context.Context, role model.AgentRole) (model
 		var allow, deny []string
 		for _, t := range rec.Tools {
 			// a writing tool outside a builder-only server is dropped even if its flag says enabled
-			if t.Enabled && (t.ReadOnly || builderOnly(rec.Roles)) {
+			if t.Enabled && (t.ReadOnly || (role == model.AgentBuilder && builderOnly(rec.Roles))) {
 				allow = append(allow, mcpToolName(rec.Name, t.Name))
 			} else {
 				deny = append(deny, mcpToolName(rec.Name, t.Name))

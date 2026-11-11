@@ -133,21 +133,29 @@ func TestACPMCPPermissionAllowsOnlyEnabledTools(t *testing.T) {
 		role       model.AgentRole
 		tool, kind string
 		want       string
+		title, nm  string
 	}{
-		{model.AgentInspector, "mcp__docs__search", "other", "yes"},
-		{model.AgentArchitect, "mcp__docs__search", "other", "yes"},
-		{model.AgentChat, "mcp__docs__search", "other", "yes"},
-		{model.AgentBuilder, "mcp__docs__search", "other", "yes"},
-		{model.AgentInspector, "mcp__docs__write", "other", "no"},
-		{model.AgentChat, "mcp__docs__write", "other", "no"},
-		{model.AgentBuilder, "mcp__docs__write", "other", "no"},
-		{model.AgentBuilder, "mcp__other__search", "other", "no"},
-		{model.AgentBuilder, "Bash", "execute", "yes"},
-		{model.AgentInspector, "Read", "read", "yes"},
-		{model.AgentInspector, "Bash", "execute", "no"},
+		{model.AgentInspector, "mcp__docs__search", "other", "yes", "", ""},
+		{model.AgentArchitect, "mcp__docs__search", "other", "yes", "", ""},
+		{model.AgentChat, "mcp__docs__search", "other", "yes", "", ""},
+		{model.AgentBuilder, "mcp__docs__search", "other", "yes", "", ""},
+		{model.AgentInspector, "mcp__docs__write", "other", "no", "", ""},
+		{model.AgentChat, "mcp__docs__write", "other", "no", "", ""},
+		{model.AgentBuilder, "mcp__docs__write", "other", "no", "", ""},
+		{model.AgentBuilder, "mcp__other__search", "other", "no", "", ""},
+		{model.AgentBuilder, "Bash", "execute", "yes", "", ""},
+		{model.AgentInspector, "Read", "read", "yes", "", ""},
+		{model.AgentInspector, "Bash", "execute", "no", "", ""},
+		{model.AgentInspector, "", "other", "yes", "mcp__docs__search", ""},
+		{model.AgentInspector, "", "other", "no", "mcp__docs__write", ""},
+		{model.AgentBuilder, "", "other", "yes", "", "mcp__docs__search"},
+		{model.AgentBuilder, "", "other", "no", "", "mcp__docs__write"},
+		{model.AgentInspector, "", "other", "no", "", ""},
+		{model.AgentBuilder, "", "other", "no", "Some tool", ""},
+		{model.AgentBuilder, "TodoWrite", "other", "yes", "", ""},
 	}
 	for _, c := range cases {
-		res, err := runFake(t, claudeFake(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_TOOLNAME="+c.tool),
+		res, err := runFake(t, claudeFake(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_TOOLNAME="+c.tool, "ACP_FAKE_TITLE="+c.title, "ACP_FAKE_NAME="+c.nm),
 			model.AgentRequest{Role: c.role, WorkspaceDir: ws, Prompt: "go", MCPAllow: allow})
 		if err != nil {
 			t.Fatal(err)
