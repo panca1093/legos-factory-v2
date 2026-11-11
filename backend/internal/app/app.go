@@ -81,6 +81,10 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	if secrets != nil { // a nil *SecretBox in the interface would not be nil
 		integrations.Secrets = secrets
 	}
+	mcpServers := &usecase.MCPServers{Store: &store.MCPRepo{DB: db}, Lister: agent.ListMCPTools}
+	if secrets != nil {
+		mcpServers.Secrets = secrets
+	}
 	var localProjects *usecase.Local
 	if cfg.AuthMode == "dev" { // gh and the folder endpoints act as the machine's user
 		ghFor := func(repo, remote string) usecase.GitProvider { return integration.NewGHCLI(repo, remote, nil) }
@@ -135,7 +139,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		Proj:    projRepo,
 		Resolve: resolve, Model: modelFor,
 		Bus: bus, Usage: usageTracker,
-		Catalog: catalog, KB: know, Sandbox: box, Integrations: integrations,
+		Catalog: catalog, KB: know, Sandbox: box, Integrations: integrations, MCP: mcpServers,
 		DataDir:     cfg.DataDir,
 		QualTimeout: 5 * time.Minute,
 		Log:         log,
@@ -162,6 +166,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Projects = projects
 	srv.WorkOrders = workOrders
 	srv.Integrations = integrations
+	srv.MCP = mcpServers
 	srv.Local = localProjects
 	srv.Catalog = catalog
 	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo, WO: woRepo, DataDir: cfg.DataDir}
@@ -211,7 +216,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	}
 	srv.Chat = &usecase.Chat{
 		Store: &store.ChatRepo{DB: db}, Docs: srv.KBDocs, Related: srv.KBDocs, Projects: projects,
-		Settings: settingsRepo, Usage: usageTracker, Harness: chatH,
+		Settings: settingsRepo, Usage: usageTracker, Harness: chatH, MCP: mcpServers,
 		Models: listModels,
 		Default: func(ctx context.Context) string {
 			p, m := modelFor(model.AgentArchitect, &model.WorkOrder{})

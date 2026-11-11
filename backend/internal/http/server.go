@@ -31,6 +31,7 @@ type Server struct {
 	Projects     *usecase.Projects
 	WorkOrders   *usecase.WorkOrders
 	Integrations *usecase.Integrations
+	MCP          *usecase.MCPServers
 	Local        *usecase.Local
 	Catalog      *usecase.Cataloger
 	KBDocs       *usecase.KBDocs
@@ -244,6 +245,13 @@ func (s *Server) routes() {
 	api.PATCH("/connections/:id", s.requireRole(model.RoleEngineer, s.handleUpdateConnection))
 	api.DELETE("/connections/:id", s.requireRole(model.RoleEngineer, s.handleDeleteConnection))
 	api.POST("/connections/:id/test", s.requireRole(model.RoleEngineer, s.handleTestConnection))
+	api.GET("/mcp-servers", s.requireRole(model.RoleAdmin, s.handleListMCPServers))
+	api.POST("/mcp-servers", s.requireRole(model.RoleAdmin, s.handleCreateMCPServer))
+	api.PATCH("/mcp-servers/:id", s.requireRole(model.RoleAdmin, s.handleUpdateMCPServer))
+	api.DELETE("/mcp-servers/:id", s.requireRole(model.RoleAdmin, s.handleDeleteMCPServer))
+	api.POST("/mcp-servers/:id/discover", s.requireRole(model.RoleAdmin, s.handleDiscoverMCPServer))
+	api.PUT("/mcp-servers/:id/roles", s.requireRole(model.RoleAdmin, s.handleSetMCPRoles))
+	api.PUT("/mcp-servers/:id/tools", s.requireRole(model.RoleAdmin, s.handleSetMCPTools))
 	api.PUT("/projects/:id/contract-tests", s.requireRole(model.RoleEngineer, s.handleProjectContractTests))
 	api.PUT("/projects/:id/kb-scope", s.requireRole(model.RoleEngineer, s.handleProjectKBScope))
 	api.PUT("/projects/:id/binding", s.requireRole(model.RoleEngineer, s.handleBindProject))
