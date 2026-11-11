@@ -186,6 +186,12 @@ func fakePermissionCall() map[string]any {
 	if n := os.Getenv("ACP_FAKE_TOOLNAME"); n != "" {
 		call["_meta"] = map[string]any{"claudeCode": map[string]any{"toolName": n}}
 	}
+	if n := os.Getenv("ACP_FAKE_TITLE"); n != "" {
+		call["title"] = n
+	}
+	if n := os.Getenv("ACP_FAKE_NAME"); n != "" {
+		call["name"] = n
+	}
 	if p := os.Getenv("ACP_FAKE_PATH"); p != "" {
 		call["locations"] = []any{map[string]any{"path": p}}
 	}

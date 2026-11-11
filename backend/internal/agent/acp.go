@@ -158,6 +158,41 @@ func withDisallowed(meta map[string]any, deny []string) map[string]any {
 	return map[string]any{"claudeCode": map[string]any{"options": opts}}
 }
 
+// withMCPAsk returns a copy of meta whose extraArgs.settings asks before every tool of the given servers, keeping any ask rules it already has.
+func withMCPAsk(meta map[string]any, servers []model.MCPServer) map[string]any {
+	if len(servers) == 0 || meta == nil {
+		return meta
+	}
+	opts := map[string]any{}
+	for k, v := range meta["claudeCode"].(map[string]any)["options"].(map[string]any) {
+		opts[k] = v
+	}
+	extra := map[string]any{}
+	if cur, ok := opts["extraArgs"].(map[string]any); ok {
+		for k, v := range cur {
+			extra[k] = v
+		}
+	}
+	var settings struct {
+		Permissions map[string]any `json:"permissions"`
+	}
+	if cur, _ := extra["settings"].(string); cur != "" {
+		_ = json.Unmarshal([]byte(cur), &settings)
+	}
+	if settings.Permissions == nil {
+		settings.Permissions = map[string]any{}
+	}
+	ask, _ := settings.Permissions["ask"].([]any)
+	for _, sv := range servers {
+		ask = append(ask, "mcp__"+sv.Name)
+	}
+	settings.Permissions["ask"] = ask
+	b, _ := json.Marshal(settings)
+	extra["settings"] = string(b)
+	opts["extraArgs"] = extra
+	return map[string]any{"claudeCode": map[string]any{"options": opts}}
+}
+
 type acpRun struct {
 	h         *ACPHarness
 	conn      *acpConn
@@ -196,7 +231,7 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 		default:
 			meta = claudeReadOnlyMeta
 		}
-		meta = withDisallowed(meta, req.MCPDeny)
+		meta = withMCPAsk(withDisallowed(meta, req.MCPDeny), servers)
 	}
 	ns, err := conn.newSession(ctx, req.WorkspaceDir, meta, servers)
 	if err != nil {

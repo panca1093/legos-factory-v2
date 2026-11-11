@@ -72,6 +72,48 @@ func TestACPClaudeSessionCarriesMCPServersAndDeniedTools(t *testing.T) {
 	}
 }
 
+func sentSettings(t *testing.T, req model.AgentRequest) (settings string, meta string) {
+	t.Helper()
+	req.Prompt = "go"
+	req.ProviderID, req.ModelID = "claude", "sonnet"
+	res, err := runFake(t, claudeFake(t, "ok"), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct{ Meta string }
+	if err := json.Unmarshal([]byte(res.Text), &s); err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		ClaudeCode struct {
+			Options struct{ ExtraArgs struct{ Settings string } }
+		}
+	}
+	_ = json.Unmarshal([]byte(s.Meta), &m)
+	return m.ClaudeCode.Options.ExtraArgs.Settings, s.Meta
+}
+
+func TestACPAskRuleRoutesEveryMCPCallThroughTheFactory(t *testing.T) {
+	two := []model.MCPServer{{Name: "docs", Transport: model.MCPHTTP, URL: "https://x"}, {Name: "my_files", Transport: model.MCPStdio, Command: "/bin/f"}}
+	before, _ := json.Marshal([]any{claudeReadOnlyMeta, claudeBuilderMeta, claudeChatMeta, claudeRepoChatMeta})
+	for i := 0; i < 2; i++ {
+		got, _ := sentSettings(t, model.AgentRequest{Role: model.AgentArchitect, MCP: two})
+		if want := `{"permissions":{"ask":["mcp__docs","mcp__my_files"]}}`; got != want {
+			t.Fatalf("architect settings = %s, want %s", got, want)
+		}
+		got, _ = sentSettings(t, model.AgentRequest{Role: model.AgentChat, RepoAccess: true, MCP: two[:1]})
+		if want := `{"permissions":{"ask":["Read","Grep","Glob","mcp__docs"]}}`; got != want {
+			t.Fatalf("repo chat settings = %s, want %s", got, want)
+		}
+	}
+	if after, _ := json.Marshal([]any{claudeReadOnlyMeta, claudeBuilderMeta, claudeChatMeta, claudeRepoChatMeta}); string(after) != string(before) {
+		t.Fatalf("shared meta maps were mutated:\n%s\n%s", before, after)
+	}
+	if got, meta := sentSettings(t, model.AgentRequest{Role: model.AgentArchitect}); got != "" || strings.Contains(meta, "extraArgs") {
+		t.Fatalf("no servers must add no settings: %s", meta)
+	}
+}
+
 func TestACPWithoutMCPSendsEmptyListAndOpenCodeNever(t *testing.T) {
 	if mcp, _ := sentSession(t, claudeFake(t, "ok"), model.AgentRequest{Role: model.AgentBuilder}); mcp != "[]" {
 		t.Fatalf("no selection must send []: %s", mcp)
