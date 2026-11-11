@@ -46,9 +46,16 @@ permission handler for any call that still asks.
 | 5 | Admin only. A stdio server runs a command on the factory host | It is code execution by configuration | Engineer-managed servers |
 | 6 | claude-acp first. OpenCode-ACP gets servers only after its own spike | Per-tool removal was verified on Claude only | Shipping both unverified |
 
+### Limits (what the allow set does and does not guarantee)
+
+- Every MCP call is checked against the allow set: the session carries an `ask` rule `mcp__<server>` for each mounted server, so even a `readOnlyHint` tool or one added after discovery raises a permission request, and `answerPermission` allows it only if that exact tool name is enabled (verified live on claude-agent-acp for the Architect and Builder).
+- A tool's read-only status is the server's own annotation at discovery time. A server that later changes a tool's behaviour or annotation is trusted until it is rediscovered.
+- For the Builder the allow set is not a hard boundary: it has Bash and inherits the process environment, and the repository's own `.claude/settings.json` is loaded.
+- claude-agent-acp starts stdio servers with the agent's environment at run time; the minimal environment applies to discovery only (not verified).
+
 ### Data and flow
 
-- `mcp_servers`: id, name (the `mcp__<name>__` prefix, unique, `[a-z0-9_]`), transport (`stdio` | `http`),
+- `mcp_servers`: id, name (the `mcp__<name>__` prefix, unique, `^[a-z0-9]+(_[a-z0-9]+)*$`, at most 40), transport (`stdio` | `http`),
   command + args, url, auth (`none` | `token` | `oauth`), sealed secret (env or headers, or OAuth
   access + refresh token + expiry + client registration), roles, tools (name, read-only flag,
   enabled), status, last error, discovered at. Sealed with the existing `Sealer`.
