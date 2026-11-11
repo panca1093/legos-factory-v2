@@ -179,16 +179,15 @@ test("human clarification, plan revision and cancellation preserve the same orde
 test("settings save, navigation and missing-order recovery against the real backend", async ({
   page,
 }) => {
-  await page.goto("/settings?tab=usage");
+  await page.goto("/settings#budget");
   await page.fill("#set-budget", "80.25");
-  await page.getByRole("button", { name: "Save settings" }).click();
-  await expect(page.getByRole("status")).toHaveText("Settings saved");
+  await page.locator("#set-budget").press("Enter");
+  await page.locator("#set-budget").blur();
   await page.reload();
   await expect(page.locator("#set-budget")).toHaveValue("80.25");
-  await page.getByRole("link", { name: "Governance", exact: true }).click();
   await page.selectOption("#set-architect", "mock/mock-local");
-  await page.getByRole("button", { name: "Save settings" }).click();
-  await expect(page.getByRole("status")).toHaveText("Settings saved");
+  await page.reload();
+  await expect(page.locator("#set-architect")).toHaveValue("mock/mock-local");
   await page.goto("/factory/missing");
   await expect(page.getByRole("alert")).toContainText("work order not found");
   await page

@@ -128,7 +128,7 @@ onMounted(() => {
       <div class="value">{{ shipped }}</div>
       <div class="note">pull requests opened</div></RouterLink
     >
-    <RouterLink class="lg-card lg-stat" to="/settings?tab=usage"
+    <RouterLink class="lg-card lg-stat" to="/settings#budget"
       ><div class="label"><Gauge class="icon" />This month</div>
       <div class="value">
         {{ mtd ? money(mtd.cost_micros) : "—" }}
