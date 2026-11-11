@@ -315,3 +315,27 @@ func TestDeleteProjectDropsItsSearchIndex(t *testing.T) {
 		t.Fatalf("fts rows left: %d %v", n, err)
 	}
 }
+
+func TestDeleteProjectRemovesItsChatCheckout(t *testing.T) {
+	ctx := context.Background()
+	f, _ := deleteFixture(t, model.StateCancelled)
+	if err := f.Proj.Create(ctx, &model.Project{ID: "p3", Name: "chatty"}); err != nil {
+		t.Fatal(err)
+	}
+	checkout := filepath.Join(f.DataDir, "workspaces", "chat-p3")
+	other := filepath.Join(f.DataDir, "workspaces", "chat-p1")
+	for _, d := range []string{checkout, other} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.DeleteProject(ctx, "p3"); err != nil {
+		t.Fatal(err)
+	}
+	if exists(checkout) {
+		t.Fatal("the deleted project's chat checkout survived")
+	}
+	if !exists(other) {
+		t.Fatal("another project's chat checkout was removed")
+	}
+}

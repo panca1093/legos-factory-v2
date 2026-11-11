@@ -115,6 +115,8 @@ type chatRig struct {
 	usage *usageSink
 	ana   *model.User
 	bob   *model.User
+
+	members *store.MemberRepo
 }
 
 func newChatRig(t *testing.T, h Harness) *chatRig {
@@ -140,7 +142,7 @@ func newChatRig(t *testing.T, h Harness) *chatRig {
 	if err := members.Add(context.Background(), "p1", "ana"); err != nil {
 		t.Fatal(err)
 	}
-	return &chatRig{usage: usage, ana: ana, bob: bob, chat: &Chat{
+	return &chatRig{usage: usage, ana: ana, bob: bob, members: members, chat: &Chat{
 		Store:    &store.ChatRepo{DB: db},
 		Projects: &Projects{Store: projRepo, Members: members, Users: users},
 		Docs: fakeDocs{docs: map[string]*KBDetail{
@@ -852,5 +854,77 @@ func TestChatStepsStopAtError(t *testing.T) {
 	h.starts[0].OnStep(model.AgentStep{N: 2})
 	if k := kinds(evs); k != "user_message,repo,step,delta,error" {
 		t.Fatalf("events: %s", k)
+	}
+}
+
+func TestChatMemberRemovedAfterBindingRunsAsPlainChat(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok"}}
+	r, _, calls, _ := repoRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.members.Remove(ctx, "p1", "ana"); err != nil {
+		t.Fatal(err)
+	}
+	callsBefore := len(*calls)
+	evs, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.conts) != 0 || fmt.Sprint(h.closed) != "[s1]" || len(h.starts) != 2 {
+		t.Fatalf("the kept session must be dropped: conts %d closed %v starts %d", len(h.conts), h.closed, len(h.starts))
+	}
+	if req := h.starts[1]; req.RepoAccess || req.WorkspaceDir != r.chat.Dir {
+		t.Fatalf("a removed member's turn must not read the checkout: %+v", req)
+	}
+	if len(*calls) != callsBefore || strings.Contains(kinds(evs), "repo") {
+		t.Fatalf("no checkout call or repo event after removal: calls %v events %s", *calls, kinds(evs))
+	}
+}
+
+func TestChatProjectClearedUnderAKeptSessionDropsIt(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok"}}
+	r, _, _, _ := repoRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "first"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.chat.Store.SetProject(ctx, ch.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "second"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.conts) != 0 || len(h.starts) != 2 || h.starts[1].RepoAccess || fmt.Sprint(h.closed) != "[s1]" {
+		t.Fatalf("the session of a cleared project must not continue: conts %d starts %+v closed %v", len(h.conts), h.starts, h.closed)
+	}
+}
+
+func TestChatSecondSessionOnAProjectDoesNotRefreshTheCheckout(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok"}}
+	r, _, calls, _ := repoRig(t, h)
+	a, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	b, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	if _, err := r.send(t, r.ana, a.ID, ChatSend{Content: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.send(t, r.ana, b.ID, ChatSend{Content: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(*calls) != "[{p1 true} {p1 false}]" {
+		t.Fatalf("the second chat must reuse the checkout as is: %v", *calls)
+	}
+	r.chat.forget(a.ID)
+	r.chat.forget(b.ID)
+	c, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	if _, err := r.send(t, r.ana, c.ID, ChatSend{Content: "three"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := (*calls)[len(*calls)-1]; !got.refresh {
+		t.Fatalf("with no other kept session the new one refreshes: %v", *calls)
 	}
 }

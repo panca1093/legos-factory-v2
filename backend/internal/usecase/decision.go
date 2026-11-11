@@ -277,6 +277,7 @@ func (f *Factory) DeleteProject(ctx context.Context, projectID string) error {
 	for _, wo := range own {
 		f.removeWorkspaces(wo.ID)
 	}
+	f.removeWorkspaces("chat-" + projectID)
 	f.Log.Info("project deleted", "project", projectID, "work_orders", len(own))
 	return nil
 }

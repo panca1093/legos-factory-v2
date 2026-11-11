@@ -397,6 +397,10 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	if err != nil {
 		return err
 	}
+	if ch.ProjectID != "" && c.Projects.Authorize(ctx, u, ch.ProjectID) != nil {
+		ch.ProjectID = ""
+		c.forget(id)
+	}
 	if allowed := c.allowedModels(ctx); ch.Model != "" && len(allowed) > 0 && !allowed[ch.Model] {
 		return fmt.Errorf("%w: model %q is no longer allowed; pick another one for this chat", ErrInvalid, ch.Model)
 	}
@@ -537,6 +541,26 @@ func (c *Chat) resolve(ctx context.Context, ch *model.Chat) string {
 // repoChat reports whether ch's turns read its project's code.
 func (c *Chat) repoChat(ch *model.Chat) bool { return ch.ProjectID != "" && c.Repo != nil }
 
+// readableProject is the project whose checkout ch's turns read, or "".
+func (c *Chat) readableProject(ch *model.Chat) string {
+	if c.repoChat(ch) {
+		return ch.ProjectID
+	}
+	return ""
+}
+
+// otherKeeps reports whether another chat has a kept session on ch's project, whose files a refresh would shift.
+func (c *Chat) otherKeeps(ch *model.Chat) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, s := range c.ses {
+		if id != ch.ID && s.projectID == ch.ProjectID {
+			return true
+		}
+	}
+	return false
+}
+
 // answer runs one turn; emit (guarded like onText) receives the "repo" and "step" events.
 func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatMessage, turn string, images []model.AgentImage, onText func(string), emit func(ChatEvent)) (model.AgentResult, error) {
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
@@ -563,6 +587,10 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 		c.mu.Lock()
 		kept, ok := c.ses[ch.ID]
 		c.mu.Unlock()
+		if ok && kept.projectID != c.readableProject(ch) {
+			c.forget(ch.ID)
+			ok = false
+		}
 		if ok {
 			cur = kept
 			req.Prompt = turn
@@ -582,7 +610,7 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 		cur = chatSession{}
 		preamble, seed := chatPreamble, ""
 		if c.repoChat(ch) {
-			dir, sha, err := c.Repo(ctx, ch.ProjectID, true)
+			dir, sha, err := c.Repo(ctx, ch.ProjectID, !c.otherKeeps(ch))
 			if err != nil {
 				preamble += chatRepoUnreadable
 				keep = false // the next turn tries the checkout again
