@@ -19,6 +19,10 @@ import (
 
 // The test binary doubles as a fake ACP agent when ACP_FAKE_AGENT is set.
 func TestMain(m *testing.M) {
+	if mode := os.Getenv("MCP_FAKE_SERVER"); mode != "" {
+		fakeMCPStdio(mode)
+		os.Exit(0)
+	}
 	if scenario := os.Getenv("ACP_FAKE_AGENT"); scenario != "" {
 		fakeAgent(scenario)
 		os.Exit(0)
