@@ -15,6 +15,7 @@ import "../factory.css";
 import "./add-project.css";
 import AppDialog from "../../../components/ui/AppDialog.vue";
 import Popover from "../../../components/ui/Popover.vue";
+import ProjectBindingRow from "../../settings/ProjectBindingRow.vue";
 import { api, ApiError } from "../../../services/api/client";
 import { useFactory } from "../../../stores/factory";
 import { useSession } from "../../../stores/session";
@@ -607,32 +608,13 @@ function close() {
             placeholder="/path/to/repo or https://…"
           />
         </div>
-        <div class="form-group">
-          <label for="prj-conn">Pull requests (optional)</label>
-          <select id="prj-conn" v-model="form.git_connection_id">
-            <option value="">Local only · no pull requests</option>
-            <option v-for="c in gitConnections" :key="c.id" :value="c.id">
-              {{ c.name }} · {{ c.provider }}
-            </option>
-          </select>
-          <p class="help">
-            Shared connections only. After a human approves a work order, its
-            verified commit is pushed to a branch and a pull request is opened.
-          </p>
-        </div>
-        <div v-if="form.git_connection_id" class="form-group">
-          <label for="prj-remote">Remote repository</label>
-          <input
-            id="prj-remote"
-            v-model="form.remote_repo"
-            required
-            placeholder="owner/repo"
-          />
-          <p class="help">
-            The repository above must be its clone URL, e.g.
-            https://github.com/owner/repo.git.
-          </p>
-        </div>
+        <ProjectBindingRow
+          id-prefix="prj"
+          label="the new project"
+          :repo-url="form.repo_url"
+          v-model:connection-id="form.git_connection_id"
+          v-model:remote-repo="form.remote_repo"
+        />
       </form>
 
       <form
@@ -770,25 +752,15 @@ function close() {
         <details
           v-if="kind === 'repo' && gitConnections.length && !used(info.path)"
         >
-          <summary>Advanced</summary>
+          <summary>Publish through a connection</summary>
           <div class="ap">
-            <div class="form-group">
-              <label for="prj-conn">Use a Settings connection instead</label>
-              <select id="prj-conn" v-model="form.git_connection_id">
-                <option value="">None · use gh or stay local</option>
-                <option v-for="c in gitConnections" :key="c.id" :value="c.id">
-                  {{ c.name }} · {{ c.provider }}
-                </option>
-              </select>
-            </div>
-            <div v-if="form.git_connection_id" class="form-group">
-              <label for="prj-remote">Remote repository</label>
-              <input
-                id="prj-remote"
-                v-model="form.remote_repo"
-                placeholder="owner/repo"
-              />
-            </div>
+            <ProjectBindingRow
+              id-prefix="prj"
+              :label="form.name || 'the new project'"
+              :repo-url="info.path"
+              v-model:connection-id="form.git_connection_id"
+              v-model:remote-repo="form.remote_repo"
+            />
           </div>
         </details>
       </form>

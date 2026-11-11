@@ -41,3 +41,11 @@ func SplitModelRef(ref string) (provider, modelID string) {
 	}
 	return "", ref
 }
+
+// ChatAuto is the model a chat on "auto" runs: the workspace chat model when set, else fallback.
+func ChatAuto(s *model.Settings, fallback string) string {
+	if s != nil && s.ChatModel != "" {
+		return s.ChatModel
+	}
+	return fallback
+}

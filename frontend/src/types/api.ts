@@ -198,9 +198,66 @@ export interface Settings {
   architect_model: string;
   builder_model: string;
   inspector_model: string;
+  chat_model?: string;
   allowed_models: string[] | null;
-  cataloger_summaries?: boolean;
   jev_enabled?: boolean;
+}
+
+export type SettingsPatch = Partial<
+  Pick<
+    Settings,
+    | "budget_limit_micros"
+    | "foreman_model"
+    | "architect_model"
+    | "builder_model"
+    | "inspector_model"
+    | "chat_model"
+  >
+>;
+
+export interface RuntimeInfo {
+  harness: "acp" | "opencode" | "mock";
+  acp_command: string;
+  jev: { enabled: boolean; model: string };
+  credentials_configured: boolean;
+  max_concurrent_runs: number;
+}
+
+export const MCP_ROLES = [
+  "foreman",
+  "architect",
+  "builder",
+  "inspector",
+  "chat",
+] as const;
+
+export interface McpTool {
+  name: string;
+  description: string;
+  read_only: boolean;
+  enabled: boolean;
+  size: number;
+  unusable: boolean;
+  unusable_reason?: string;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  transport: "stdio" | "http";
+  command: string;
+  args: string[];
+  url: string;
+  auth: string;
+  roles: string[];
+  tools: McpTool[];
+  status: "active" | "disabled";
+  last_error: string;
+  discovered_at?: string;
+  created_at: string;
+  updated_at: string;
+  secret_keys: string[];
+  approx_tokens: number;
 }
 
 export type Trust = "verified" | "human_decision" | "ai_interpretation";

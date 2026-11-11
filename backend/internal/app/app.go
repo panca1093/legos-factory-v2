@@ -134,6 +134,10 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		return usecase.SplitModelRef(usecase.ResolveModel(role, wo, s, modelDefaults))
 	}
 
+	workOrders.ResolveDefault = func(role model.AgentRole, s *model.Settings) string {
+		return usecase.ResolveModel(role, &model.WorkOrder{}, s, modelDefaults)
+	}
+
 	factory := &usecase.Factory{
 		WO: woRepo, Runs: runRepo, Findings: findingRepo, CodeFacts: &store.CodeFactRepo{DB: db}, Quality: qualityRepo,
 		Proj:    projRepo,
@@ -220,17 +224,21 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		Models: listModels,
 		Default: func(ctx context.Context) string {
 			p, m := modelFor(model.AgentArchitect, &model.WorkOrder{})
-			if m == "" {
-				return ""
+			fallback := ""
+			if m != "" {
+				fallback = p + "/" + m
 			}
-			return p + "/" + m
+			s, _ := settingsRepo.Get(ctx)
+			return usecase.ChatAuto(s, fallback)
 		},
 		RepoDefault: func(ctx context.Context) string {
 			p, m := modelFor(model.AgentBuilder, &model.WorkOrder{})
-			if m == "" {
-				return ""
+			fallback := ""
+			if m != "" {
+				fallback = p + "/" + m
 			}
-			return p + "/" + m
+			s, _ := settingsRepo.Get(ctx)
+			return usecase.ChatAuto(s, fallback)
 		},
 		Dir: filepath.Join(cfg.DataDir, "chat"),
 		Repo: func(ctx context.Context, projectID string, refresh bool) (dir, sha string, err error) {

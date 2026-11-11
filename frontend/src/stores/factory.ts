@@ -12,6 +12,8 @@ import {
   type QualityCheck,
   type Run,
   type Settings,
+  type SettingsPatch,
+  type RuntimeInfo,
   type UsageSummary,
   type Task,
   type WorkOrder,
@@ -378,8 +380,11 @@ export const useFactory = defineStore("factory", {
       await api.post(`/api/v1/work-orders/${id}/cancel`);
       await this.reloadDetail();
     },
-    async saveSettings(s: Settings) {
-      await api.put("/api/v1/settings", s);
+    async patchSettings(patch: SettingsPatch): Promise<Settings> {
+      return api.patch<Settings>("/api/v1/settings", patch);
+    },
+    async loadRuntime(): Promise<RuntimeInfo> {
+      return api.get<RuntimeInfo>("/api/v1/settings/runtime");
     },
     async loadSettings(): Promise<Settings> {
       return api.get<Settings>("/api/v1/settings");

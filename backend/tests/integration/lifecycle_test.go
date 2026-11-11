@@ -101,8 +101,6 @@ func bootAt(t *testing.T, dataDir string) *testApp {
 		DevUserName:       "Test User",
 		SessionTTL:        3600,
 		MaxConcurrentRuns: 2,
-		RunTimeoutSec:     60,
-		SandboxMode:       "local",
 		FrontendOrigin:    "http://localhost:5173",
 	}
 	a, err := app.Build(cfg, slog.New(slog.NewJSONHandler(os.Stderr, nil)))

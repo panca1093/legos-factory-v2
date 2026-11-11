@@ -265,7 +265,7 @@ async function logout() {
             {{ railQuery && onChats ? "No matching chats." : "No chats yet." }}
           </p>
         </nav>
-        <RouterLink to="/settings?tab=usage" class="usage-card"
+        <RouterLink to="/settings#budget" class="usage-card"
           ><div class="top">
             <span>Workspace budget</span><Gauge class="icon" />
           </div>

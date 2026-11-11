@@ -19,6 +19,16 @@ async function fixture(page: Page) {
     else if (p.endsWith("/usage/summary")) body = usage;
     else if (p.endsWith("/models")) body = { models };
     else if (p.endsWith("/settings")) body = settings;
+    else if (p.endsWith("/settings/runtime"))
+      body = {
+        harness: "mock",
+        acp_command: "opencode acp",
+        jev: { enabled: false, model: "jev-1.14.0" },
+        credentials_configured: true,
+        max_concurrent_runs: 2,
+      };
+    else if (p.endsWith("/mcp-servers"))
+      body = { servers: [], credentials_configured: true };
     else if (p.endsWith("/connections"))
       body = { credentials_configured: true, connections: [] };
     else if (p.endsWith("/events")) {
