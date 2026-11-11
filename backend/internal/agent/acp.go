@@ -80,13 +80,18 @@ var acpChatDeny = []string{"read", "grep", "glob", "list", "webfetch", "websearc
 // its workspace, and every role but the builder is read-only. Deny (not ask)
 // keeps turns alive: a rejected permission request cancels the whole turn.
 func acpRoleConfig(role model.AgentRole) string {
+	return acpConfig(role, false)
+}
+
+// acpConfig is acpRoleConfig for a chat that may read its repository when repoAccess is set.
+func acpConfig(role model.AgentRole, repoAccess bool) string {
 	perm := map[string]string{"external_directory": "deny"}
 	if role != model.AgentBuilder {
 		for _, t := range acpReadOnlyDeny {
 			perm[t] = "deny"
 		}
 	}
-	if role == model.AgentChat {
+	if role == model.AgentChat && !repoAccess {
 		for _, t := range acpChatDeny {
 			perm[t] = "deny"
 		}
@@ -121,6 +126,15 @@ var claudeChatMeta = map[string]any{"claudeCode": map[string]any{"options": map[
 	"strictMcpConfig": true,
 }}}
 
+// claudeRepoChatMeta is claudeReadOnlyMeta for a chat reading its project checkout, minus the common secret files.
+var claudeRepoChatMeta = map[string]any{"claudeCode": map[string]any{"options": map[string]any{
+	"tools": []string{"Read", "Grep", "Glob"},
+	"disallowedTools": []string{"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent", "Task",
+		"Read(./.env)", "Read(./.env.*)", "Read(./**/.env)", "Read(./**/*.pem)", "Read(./**/*.key)"},
+	"settingSources":  []string{},
+	"strictMcpConfig": true,
+}}}
+
 type acpRun struct {
 	h         *ACPHarness
 	conn      *acpConn
@@ -133,11 +147,12 @@ type acpRun struct {
 }
 
 func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.AgentSession, error) {
-	conn, err := h.spawn(req.Role, req.WorkspaceDir)
+	repo := req.Role == model.AgentChat && req.RepoAccess
+	conn, err := h.spawn(acpConfig(req.Role, repo), req.WorkspaceDir)
 	if err != nil {
 		return nil, err
 	}
-	conn.role, conn.workspace, conn.onStep, conn.onText = req.Role, req.WorkspaceDir, req.OnStep, req.OnText
+	conn.role, conn.repo, conn.workspace, conn.onStep, conn.onText = req.Role, repo, req.WorkspaceDir, req.OnStep, req.OnText
 	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder
 	var meta map[string]any
 	if h.Provider == "claude" {
@@ -146,6 +161,9 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 			meta = claudeBuilderMeta
 		case model.AgentChat:
 			meta = claudeChatMeta
+			if repo {
+				meta = claudeRepoChatMeta
+			}
 		default:
 			meta = claudeReadOnlyMeta
 		}
@@ -315,7 +333,7 @@ func (h *ACPHarness) Models(ctx context.Context) ([]Model, error) {
 	if err := os.MkdirAll(h.probe, 0o755); err != nil {
 		return nil, err
 	}
-	conn, err := h.spawn(model.AgentForeman, h.probe)
+	conn, err := h.spawn(acpRoleConfig(model.AgentForeman), h.probe)
 	if err != nil {
 		return nil, err
 	}
@@ -350,13 +368,13 @@ func (h *ACPHarness) forgetRun(run *acpRun) {
 	h.mu.Unlock()
 }
 
-func (h *ACPHarness) spawn(role model.AgentRole, dir string) (*acpConn, error) {
+func (h *ACPHarness) spawn(config, dir string) (*acpConn, error) {
 	if len(h.Command) == 0 {
 		return nil, fmt.Errorf("acp: no agent command configured")
 	}
 	cmd := exec.Command(h.Command[0], h.Command[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), "OPENCODE_DISABLE_AUTOUPDATE=1", "OPENCODE_CONFIG_CONTENT="+acpRoleConfig(role)), h.Env...)
+	cmd.Env = append(append(os.Environ(), "OPENCODE_DISABLE_AUTOUPDATE=1", "OPENCODE_CONFIG_CONTENT="+config), h.Env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -500,6 +518,7 @@ type acpConn struct {
 	steering bool // the agent accepts _session/steering
 
 	role      model.AgentRole
+	repo      bool // a chat that may read its workspace, fixed for the session's lifetime
 	workspace string
 	onStep    func(model.AgentStep)
 	onText    func(string)
@@ -514,8 +533,9 @@ type acpConn struct {
 }
 
 type acpTool struct {
-	name  string
-	input map[string]any
+	name      string
+	input     map[string]any
+	locations []string
 }
 
 type acpMsg struct {
@@ -731,13 +751,16 @@ func (c *acpConn) readLoop(r io.Reader) {
 func (c *acpConn) onUpdate(params json.RawMessage) {
 	var p struct {
 		Update struct {
-			Kind       string          `json:"sessionUpdate"`
-			ToolCallID string          `json:"toolCallId"`
-			Title      string          `json:"title"`
-			Status     string          `json:"status"`
-			RawInput   map[string]any  `json:"rawInput"`
-			Content    json.RawMessage `json:"content"` // an object on message chunks, an array on tool updates
-			Cost       *struct {
+			Kind       string         `json:"sessionUpdate"`
+			ToolCallID string         `json:"toolCallId"`
+			Title      string         `json:"title"`
+			Status     string         `json:"status"`
+			RawInput   map[string]any `json:"rawInput"`
+			Locations  []struct {
+				Path string `json:"path"`
+			} `json:"locations"`
+			Content json.RawMessage `json:"content"` // an object on message chunks, an array on tool updates
+			Cost    *struct {
 				Amount float64 `json:"amount"`
 			} `json:"cost"`
 		} `json:"update"`
@@ -775,10 +798,13 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 		if len(u.RawInput) > 0 {
 			t.input = u.RawInput
 		}
+		for _, l := range u.Locations {
+			t.locations = append(t.locations, l.Path)
+		}
 		if u.Status == "completed" || u.Status == "failed" {
 			delete(c.tools, u.ToolCallID)
 			c.steps++
-			step = &model.AgentStep{N: c.steps, Tools: []model.AgentTool{{Name: t.name, Target: toolTarget(t.input), Failed: u.Status == "failed"}}}
+			step = &model.AgentStep{N: c.steps, Tools: []model.AgentTool{{Name: t.name, Target: c.target(t), Failed: u.Status == "failed"}}}
 		}
 	}
 	onStep := c.onStep // Continue swaps it between prompts
@@ -808,7 +834,8 @@ func (c *acpConn) answerPermission(m acpMsg) {
 		} `json:"options"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	allow := c.role != model.AgentChat && (c.role == model.AgentBuilder || p.ToolCall.Kind == "read" || p.ToolCall.Kind == "search" || p.ToolCall.Kind == "think")
+	reads := p.ToolCall.Kind == "read" || p.ToolCall.Kind == "search" || p.ToolCall.Kind == "think"
+	allow := c.role == model.AgentBuilder || (reads && (c.role != model.AgentChat || c.repo))
 	for _, l := range p.ToolCall.Locations {
 		if !within(c.workspace, l.Path) {
 			allow = false
@@ -825,6 +852,26 @@ func (c *acpConn) answerPermission(m acpMsg) {
 		}
 	}
 	_ = c.write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{"outcome": outcome}})
+}
+
+// target is what a finished tool call worked on; claude-agent-acp names a read's file only as file_path or a location.
+func (c *acpConn) target(t *acpTool) string {
+	path, _ := t.input["file_path"].(string)
+	if path == "" {
+		if s := toolTarget(t.input); s != "" {
+			return s
+		}
+		if len(t.locations) == 0 {
+			return ""
+		}
+		path = t.locations[0]
+	}
+	if within(c.workspace, path) {
+		if rel, err := filepath.Rel(filepath.Clean(c.workspace), filepath.Clean(path)); err == nil && rel != "." {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return toolTarget(map[string]any{"path": path})
 }
 
 func within(root, path string) bool {

@@ -26,6 +26,7 @@ type AgentRequest struct {
 	OnStep       func(AgentStep) // optional; called once per finished tool-calling step
 	OnText       func(string)    // optional; called with each chunk of the reply as it streams, by harnesses that stream
 	Keep         bool            // keep the session open after the run, for harnesses that can continue it
+	RepoAccess   bool            // chat only: the agent may read and search WorkspaceDir
 }
 
 // AgentImage is one image of a turn; MediaType is image/png, image/jpeg, image/gif or image/webp.
