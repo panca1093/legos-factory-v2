@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,6 +77,9 @@ var acpReadOnlyDeny = []string{"edit", "write", "patch", "apply_patch", "bash", 
 // acpChatDeny is what the chat role loses on top of the read-only denials: it gets no tools at all.
 var acpChatDeny = []string{"read", "grep", "glob", "list", "webfetch", "websearch", "task", "skill", "todowrite", "todoread"}
 
+// acpRepoChatTools are the chat denials a repo chat lifts.
+var acpRepoChatTools = map[string]bool{"read": true, "grep": true, "glob": true, "list": true}
+
 // acpRoleConfig is the OpenCode config for a role: every role is kept inside
 // its workspace, and every role but the builder is read-only. Deny (not ask)
 // keeps turns alive: a rejected permission request cancels the whole turn.
@@ -91,8 +95,11 @@ func acpConfig(role model.AgentRole, repoAccess bool) string {
 			perm[t] = "deny"
 		}
 	}
-	if role == model.AgentChat && !repoAccess {
+	if role == model.AgentChat {
 		for _, t := range acpChatDeny {
+			if repoAccess && acpRepoChatTools[t] {
+				continue
+			}
 			perm[t] = "deny"
 		}
 	}
@@ -126,11 +133,13 @@ var claudeChatMeta = map[string]any{"claudeCode": map[string]any{"options": map[
 	"strictMcpConfig": true,
 }}}
 
-// claudeRepoChatMeta is claudeReadOnlyMeta for a chat reading its project checkout, minus the common secret files.
+// claudeRepoChatMeta is claudeReadOnlyMeta for a chat reading its project checkout, minus the common secret files;
+// Claude Code reads any host path without asking, so the ask rule routes every read through answerPermission.
 var claudeRepoChatMeta = map[string]any{"claudeCode": map[string]any{"options": map[string]any{
 	"tools": []string{"Read", "Grep", "Glob"},
 	"disallowedTools": []string{"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent", "Task",
-		"Read(./.env)", "Read(./.env.*)", "Read(./**/.env)", "Read(./**/*.pem)", "Read(./**/*.key)"},
+		"Read(./.env)", "Read(./.env.*)", "Read(./**/.env)", "Read(./**/*.pem)", "Read(./**/*.key)", "Read(./.git/**)", "Read(./**/.env.*)"},
+	"extraArgs":       map[string]any{"settings": `{"permissions":{"ask":["Read","Grep","Glob"]}}`},
 	"settingSources":  []string{},
 	"strictMcpConfig": true,
 }}}
@@ -827,6 +836,7 @@ func (c *acpConn) answerPermission(m acpMsg) {
 			Locations []struct {
 				Path string `json:"path"`
 			} `json:"locations"`
+			RawInput map[string]any `json:"rawInput"`
 		} `json:"toolCall"`
 		Options []struct {
 			OptionID string `json:"optionId"`
@@ -836,9 +846,13 @@ func (c *acpConn) answerPermission(m acpMsg) {
 	_ = json.Unmarshal(m.Params, &p)
 	reads := p.ToolCall.Kind == "read" || p.ToolCall.Kind == "search" || p.ToolCall.Kind == "think"
 	allow := c.role == model.AgentBuilder || (reads && (c.role != model.AgentChat || c.repo))
-	for _, l := range p.ToolCall.Locations {
-		if !within(c.workspace, l.Path) {
-			allow = false
+	if c.role == model.AgentChat && c.repo {
+		allow = allow && c.repoPathsAllowed(p.ToolCall.Kind, p.ToolCall.Locations, p.ToolCall.RawInput)
+	} else {
+		for _, l := range p.ToolCall.Locations {
+			if !within(c.workspace, l.Path) {
+				allow = false
+			}
 		}
 	}
 	want := "reject_once"
@@ -854,9 +868,44 @@ func (c *acpConn) answerPermission(m acpMsg) {
 	_ = c.write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{"outcome": outcome}})
 }
 
+// repoPathsAllowed holds a repo chat's call to the workspace: every path it names, however it names it, must resolve inside.
+func (c *acpConn) repoPathsAllowed(kind string, locations []struct {
+	Path string `json:"path"`
+}, input map[string]any) bool {
+	var paths []string
+	for _, l := range locations {
+		paths = append(paths, l.Path)
+	}
+	for _, k := range []string{"file_path", "filePath", "path"} {
+		if v, _ := input[k].(string); v != "" {
+			paths = append(paths, v)
+		}
+	}
+	if v, _ := input["pattern"].(string); filepath.IsAbs(v) || slices.Contains(strings.Split(filepath.ToSlash(v), "/"), "..") {
+		paths = append(paths, v)
+	}
+	if len(paths) == 0 {
+		return kind != "read"
+	}
+	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(c.workspace, p)
+		}
+		if !within(c.workspace, p) {
+			return false
+		}
+	}
+	return true
+}
+
 // target is what a finished tool call worked on; claude-agent-acp names a read's file only as file_path or a location.
 func (c *acpConn) target(t *acpTool) string {
 	path, _ := t.input["file_path"].(string)
+	if pat, _ := t.input["pattern"].(string); path == "" && strings.TrimSpace(pat) == "" {
+		if path, _ = t.input["filePath"].(string); path == "" {
+			path, _ = t.input["path"].(string)
+		}
+	}
 	if path == "" {
 		if s := toolTarget(t.input); s != "" {
 			return s
@@ -867,18 +916,36 @@ func (c *acpConn) target(t *acpTool) string {
 		path = t.locations[0]
 	}
 	if within(c.workspace, path) {
-		if rel, err := filepath.Rel(filepath.Clean(c.workspace), filepath.Clean(path)); err == nil && rel != "." {
+		if rel, err := filepath.Rel(resolvePath(c.workspace), resolvePath(path)); err == nil {
 			return filepath.ToSlash(rel)
 		}
 	}
 	return toolTarget(map[string]any{"path": path})
 }
 
+// resolvePath is p with symlinks resolved; for a path that does not exist, its deepest existing ancestor is.
+func resolvePath(p string) string {
+	p = filepath.Clean(p)
+	var rest []string
+	for cur := p; ; cur = filepath.Dir(cur) {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			for i := len(rest) - 1; i >= 0; i-- {
+				real = filepath.Join(real, rest[i])
+			}
+			return real
+		}
+		if filepath.Dir(cur) == cur {
+			return p
+		}
+		rest = append(rest, filepath.Base(cur))
+	}
+}
+
 func within(root, path string) bool {
 	if root == "" {
 		return false
 	}
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	rel, err := filepath.Rel(resolvePath(root), resolvePath(path))
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 

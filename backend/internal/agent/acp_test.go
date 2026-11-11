@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -131,7 +132,7 @@ func fakeAgent(scenario string) {
 			case "permission":
 				send(map[string]any{"id": "perm-1", "method": "session/request_permission", "params": map[string]any{
 					"sessionId": "fake-ses",
-					"toolCall":  map[string]any{"toolCallId": "t9", "kind": os.Getenv("ACP_FAKE_KIND"), "locations": []any{map[string]any{"path": os.Getenv("ACP_FAKE_PATH")}}},
+					"toolCall":  fakePermissionCall(),
 					"options": []any{
 						map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
 						map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"},
@@ -173,6 +174,19 @@ func fakeAgent(scenario string) {
 			}
 		}
 	}
+}
+
+func fakePermissionCall() map[string]any {
+	call := map[string]any{"toolCallId": "t9", "kind": os.Getenv("ACP_FAKE_KIND")}
+	if p := os.Getenv("ACP_FAKE_PATH"); p != "" {
+		call["locations"] = []any{map[string]any{"path": p}}
+	}
+	if in := os.Getenv("ACP_FAKE_INPUT"); in != "" {
+		var raw map[string]any
+		_ = json.Unmarshal([]byte(in), &raw)
+		call["rawInput"] = raw
+	}
+	return call
 }
 
 func fakeHarness(t *testing.T, scenario string, extraEnv ...string) *ACPHarness {
@@ -638,7 +652,7 @@ func TestACPRepoChatGetsReadOnlyToolsWithSecretDenials(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Text), &s); err != nil {
 		t.Fatalf("reply %q: %v", res.Text, err)
 	}
-	want := `{"claudeCode":{"options":{"disallowedTools":["Bash","Edit","Write","MultiEdit","NotebookEdit","Agent","Task","Read(./.env)","Read(./.env.*)","Read(./**/.env)","Read(./**/*.pem)","Read(./**/*.key)"],"settingSources":[],"strictMcpConfig":true,"tools":["Read","Grep","Glob"]}}}`
+	want := `{"claudeCode":{"options":{"disallowedTools":["Bash","Edit","Write","MultiEdit","NotebookEdit","Agent","Task","Read(./.env)","Read(./.env.*)","Read(./**/.env)","Read(./**/*.pem)","Read(./**/*.key)","Read(./.git/**)","Read(./**/.env.*)"],"extraArgs":{"settings":"{\"permissions\":{\"ask\":[\"Read\",\"Grep\",\"Glob\"]}}"},"settingSources":[],"strictMcpConfig":true,"tools":["Read","Grep","Glob"]}}}`
 	if s.Meta != want {
 		t.Fatalf("repo chat meta = %s\nwant %s", s.Meta, want)
 	}
@@ -656,9 +670,14 @@ func TestACPRepoChatOpenCodeConfigKeepsReadTools(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Text), &s); err != nil {
 		t.Fatalf("reply %q: %v", res.Text, err)
 	}
-	for _, tool := range []string{"read", "grep", "glob"} {
+	for _, tool := range []string{"read", "grep", "glob", "list"} {
 		if strings.Contains(s.Config, `"`+tool+`":"deny"`) {
 			t.Fatalf("repo chat must keep %s: %s", tool, s.Config)
+		}
+	}
+	for _, tool := range []string{"webfetch", "websearch", "task", "skill", "todowrite", "todoread"} {
+		if !strings.Contains(s.Config, `"`+tool+`":"deny"`) {
+			t.Fatalf("repo chat config must deny %s: %s", tool, s.Config)
 		}
 	}
 	for _, tool := range []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute", "external_directory"} {
@@ -750,5 +769,104 @@ func TestACPReadStepTargetIsWorkspaceRelative(t *testing.T) {
 	}
 	if fmt.Sprint(steps) != fmt.Sprint(want) {
 		t.Fatalf("steps = %+v\nwant   %+v", steps, want)
+	}
+}
+
+func TestACPRepoChatPermissionChecksRawInputPaths(t *testing.T) {
+	ws := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(outside+"/secret", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside+"/secret", ws+"/link.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, ws+"/linkdir"); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, kind, path, input, want string
+	}{
+		{"grep path outside", "search", "", `{"pattern":"root","path":"/etc"}`, "no"},
+		{"grep path inside", "search", "", `{"pattern":"root","path":"` + ws + `/sub"}`, "yes"},
+		{"grep relative path", "search", "", `{"pattern":"x","path":"sub"}`, "yes"},
+		{"grep relative escape", "search", "", `{"pattern":"x","path":"../x"}`, "no"},
+		{"grep no path", "search", "", `{"pattern":"x"}`, "yes"},
+		{"glob absolute pattern outside", "search", "", `{"pattern":"/etc/*"}`, "no"},
+		{"glob dotdot pattern", "search", "", `{"pattern":"../**/*.go"}`, "no"},
+		{"glob plain pattern", "search", "", `{"pattern":"**/*.go"}`, "yes"},
+		{"glob absolute pattern inside", "search", "", `{"pattern":"` + ws + `/**/*.go"}`, "yes"},
+		{"read file_path outside", "read", "", `{"file_path":"/etc/hosts"}`, "no"},
+		{"read filePath outside", "read", "", `{"filePath":"/etc/hosts"}`, "no"},
+		{"read file_path inside", "read", "", `{"file_path":"` + ws + `/main.go"}`, "yes"},
+		{"read relative", "read", "", `{"file_path":"main.go"}`, "yes"},
+		{"read names no path", "read", "", `{}`, "no"},
+		{"read location inside, input outside", "read", ws + "/main.go", `{"file_path":"/etc/hosts"}`, "no"},
+		{"read symlink file", "read", "", `{"file_path":"` + ws + `/link.txt"}`, "no"},
+		{"read through symlink dir", "read", ws + "/linkdir/secret", "", "no"},
+	}
+	for _, c := range cases {
+		res, err := runFake(t, fakeHarness(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_PATH="+c.path, "ACP_FAKE_INPUT="+c.input),
+			model.AgentRequest{Role: model.AgentChat, WorkspaceDir: ws, Prompt: "go", RepoAccess: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Text != c.want {
+			t.Fatalf("%s: answered %q, want %q", c.name, res.Text, c.want)
+		}
+	}
+}
+
+func TestWithinResolvesSymlinks(t *testing.T) {
+	ws := t.TempDir()
+	outside := t.TempDir()
+	_ = os.WriteFile(ws+"/in.txt", []byte("x"), 0o644)
+	_ = os.WriteFile(outside+"/out.txt", []byte("x"), 0o644)
+	_ = os.Symlink(outside+"/out.txt", ws+"/link.txt")
+	_ = os.Symlink(outside, ws+"/linkdir")
+	for path, want := range map[string]bool{
+		ws + "/in.txt":          true,
+		ws + "/new/file.txt":    true,
+		ws:                      true,
+		ws + "/link.txt":        false,
+		ws + "/linkdir/out.txt": false,
+		ws + "/linkdir/nope":    false,
+		outside + "/out.txt":    false,
+	} {
+		if got := within(ws, path); got != want {
+			t.Errorf("within(ws, %s) = %v, want %v", path, got, want)
+		}
+	}
+	real, _ := filepath.EvalSymlinks(ws)
+	if real != ws {
+		if !within(ws, real+"/in.txt") || !within(real, ws+"/in.txt") {
+			t.Errorf("a workspace and its real path must contain each other's files")
+		}
+	}
+	dir := t.TempDir()
+	alias := filepath.Join(dir, "alias")
+	if err := os.Symlink(ws, alias); err != nil {
+		t.Fatal(err)
+	}
+	if !within(alias, ws+"/in.txt") || !within(ws, alias+"/in.txt") {
+		t.Errorf("a symlinked workspace path must contain its own files")
+	}
+}
+
+func TestACPStepTargetFromPathInputs(t *testing.T) {
+	ws := t.TempDir()
+	c := &acpConn{workspace: ws}
+	for _, tc := range []struct {
+		input map[string]any
+		want  string
+	}{
+		{map[string]any{"filePath": ws + "/a/b.go"}, "a/b.go"},
+		{map[string]any{"path": ws + "/a/b.go"}, "a/b.go"},
+		{map[string]any{"path": ws}, "."},
+		{map[string]any{"file_path": ws}, "."},
+	} {
+		if got := c.target(&acpTool{input: tc.input}); got != tc.want {
+			t.Errorf("target(%v) = %q, want %q", tc.input, got, tc.want)
+		}
 	}
 }
