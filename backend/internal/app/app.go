@@ -228,7 +228,12 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			return p + "/" + m
 		},
 		Dir: filepath.Join(cfg.DataDir, "chat"),
-		Repo: func(ctx context.Context, projectID string, refresh bool) (string, string, error) {
+		Repo: func(ctx context.Context, projectID string, refresh bool) (dir, sha string, err error) {
+			defer func() {
+				if err != nil {
+					log.Warn("chat checkout failed", "project", projectID, "err", err)
+				}
+			}()
 			p, err := projRepo.Get(ctx, projectID)
 			if err != nil {
 				return "", "", err
