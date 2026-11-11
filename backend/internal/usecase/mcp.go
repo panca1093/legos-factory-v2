@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -186,7 +187,7 @@ func (m *MCPServers) Update(ctx context.Context, id string, in model.UpdateMCPSe
 	if err != nil {
 		return model.MCPServerView{}, err
 	}
-	before := fmt.Sprint(rec.Name, rec.Command, rec.Args, rec.URL)
+	before := mcpDefinition(rec)
 	if in.Name != nil {
 		rec.Name = *in.Name
 	}
@@ -218,13 +219,27 @@ func (m *MCPServers) Update(ctx context.Context, id string, in model.UpdateMCPSe
 			rec.Auth = model.MCPAuthToken
 		}
 	}
-	if fmt.Sprint(rec.Name, rec.Command, rec.Args, rec.URL) != before {
+	if mcpDefinition(rec) != before {
 		rec.Tools, rec.DiscoveredAt, rec.LastError = nil, nil, ""
 	}
 	if err := m.Store.Update(ctx, rec, sealed); err != nil {
 		return model.MCPServerView{}, mcpStoreErr(err)
 	}
 	return m.view(ctx, rec), nil
+}
+
+func mcpDefinition(rec *model.MCPServerRec) string {
+	b, _ := json.Marshal([]any{rec.Name, rec.Command, rec.Args, rec.URL})
+	return string(b)
+}
+
+func redactSecrets(msg string, secret map[string]string) string {
+	for _, v := range secret {
+		if len(v) >= 4 {
+			msg = strings.ReplaceAll(msg, v, "***")
+		}
+	}
+	return msg
 }
 
 func (m *MCPServers) Delete(ctx context.Context, id string) error { return m.Store.Delete(ctx, id) }
@@ -242,12 +257,17 @@ func (m *MCPServers) Discover(ctx context.Context, id string) (model.MCPServerVi
 	if err != nil {
 		return model.MCPServerView{}, err
 	}
-	tools, derr := m.Lister(ctx, m.wire(ctx, rec))
+	listed := m.wire(ctx, rec)
+	listedWire, _ := json.Marshal(listed)
+	tools, derr := m.Lister(ctx, listed)
 	if rec, err = m.Store.Get(ctx, id); err != nil {
 		return model.MCPServerView{}, err
 	}
+	if nowWire, _ := json.Marshal(m.wire(ctx, rec)); !bytes.Equal(nowWire, listedWire) {
+		return model.MCPServerView{}, stateConflict("the server changed while its tools were being listed; discover again")
+	}
 	if derr != nil {
-		rec.LastError = truncateRunes(derr.Error(), 500)
+		rec.LastError = truncateRunes(redactSecrets(derr.Error(), listed.Secret), 500)
 	} else {
 		was := map[string]bool{}
 		for _, t := range rec.Tools {

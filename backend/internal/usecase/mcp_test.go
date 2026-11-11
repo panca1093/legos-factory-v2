@@ -5,11 +5,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"legos-factory/backend/internal/agent"
 	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/store"
 )
@@ -19,6 +23,8 @@ type mcpRig struct {
 	tools []model.MCPTool
 	err   error
 	got   []model.MCPServer
+	// during runs while the lister is "connected", to change the server under it
+	during func()
 }
 
 func newMCPRig(t *testing.T) *mcpRig {
@@ -35,6 +41,9 @@ func newMCPRig(t *testing.T) *mcpRig {
 	}}
 	r.m = &MCPServers{Store: &store.MCPRepo{DB: db}, Secrets: box, Lister: func(_ context.Context, s model.MCPServer) ([]model.MCPTool, error) {
 		r.got = append(r.got, s)
+		if r.during != nil {
+			r.during()
+		}
 		return slices.Clone(r.tools), r.err
 	}}
 	return r
@@ -457,5 +466,94 @@ func TestPlanningSessionFollowsMCPChangesAndAuditsWhatItHas(t *testing.T) {
 	}
 	if b, _ := json.Marshal(evs[1].Payload); !strings.Contains(string(b), `"mcp_servers":["docs"]`) {
 		t.Fatalf("a continued session audits the servers it has: %s", b)
+	}
+}
+
+func TestMCPDiscoverDiscardsResultWhenServerChangedMeanwhile(t *testing.T) {
+	r := newMCPRig(t)
+	ctx := context.Background()
+	v := r.discovered(t, "docs", "inspector")
+	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "search", Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	r.tools = []model.MCPTool{{Name: "other", ReadOnly: true}}
+	for name, change := range map[string]model.UpdateMCPServer{
+		"url":  {URL: ptr("https://elsewhere.example/mcp")},
+		"name": {Name: ptr("docs2")},
+	} {
+		r.during = func() {
+			if _, err := r.m.Update(ctx, v.ID, change); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := r.m.Discover(ctx, v.ID)
+		if !errors.Is(err, model.ErrStateConflict) {
+			t.Fatalf("%s: err = %v; want a conflict", name, err)
+		}
+		rec, _ := r.m.Store.Get(ctx, v.ID)
+		if len(rec.Tools) != 0 || rec.DiscoveredAt != nil || rec.LastError != "" || len(got.Tools) != 0 {
+			t.Fatalf("%s: the listing of another server was recorded: %+v", name, rec)
+		}
+		r.during = nil
+		back := model.UpdateMCPServer{URL: ptr("https://mcp.example/docs"), Name: ptr("docs")}
+		if _, err := r.m.Update(ctx, v.ID, back); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMCPUpdateTellsArgSplitsApart(t *testing.T) {
+	r := newMCPRig(t)
+	ctx := context.Background()
+	v, err := r.m.Create(ctx, model.CreateMCPServer{Name: "files", Transport: model.MCPStdio, Command: "/bin/f", Args: []string{"a", "b"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, err = r.m.Discover(ctx, v.ID); err != nil || len(v.Tools) == 0 {
+		t.Fatalf("%+v %v", v, err)
+	}
+	if v, err = r.m.Update(ctx, v.ID, model.UpdateMCPServer{Args: &[]string{"a b"}}); err != nil || len(v.Tools) != 0 {
+		t.Fatalf(`["a","b"] -> ["a b"] is a different server: %+v %v`, v, err)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+func TestMCPDiscoveryErrorNeverCarriesASecret(t *testing.T) {
+	ctx := context.Background()
+	r := newMCPRig(t)
+	r.m.Lister = agent.ListMCPTools
+
+	script := filepath.Join(t.TempDir(), "srv.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"auth failed for $API_TOKEN\" >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stdio, err := r.m.Create(ctx, model.CreateMCPServer{Name: "files", Transport: model.MCPStdio, Command: script, Secret: map[string]string{"API_TOKEN": "tok-stdio-1234"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("bad credentials: " + req.Header.Get("Authorization")))
+	}))
+	defer web.Close()
+	httpSrv, err := r.m.Create(ctx, model.CreateMCPServer{Name: "docs", Transport: model.MCPHTTP, URL: web.URL, Secret: map[string]string{"Authorization": "Bearer tok-http-5678"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{stdio.ID, httpSrv.ID} {
+		v, err := r.m.Discover(ctx, id)
+		if err != nil || v.LastError == "" {
+			t.Fatalf("%+v %v", v, err)
+		}
+		rec, _ := r.m.Store.Get(ctx, id)
+		for _, leak := range []string{"tok-stdio-1234", "tok-http-5678", "Bearer tok"} {
+			if strings.Contains(v.LastError, leak) || strings.Contains(rec.LastError, leak) {
+				t.Fatalf("last_error leaks %q: %q", leak, v.LastError)
+			}
+		}
+		if !strings.Contains(v.LastError, "***") {
+			t.Fatalf("the redaction should be visible: %q", v.LastError)
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -72,6 +73,9 @@ func (s *Server) handleDiscoverMCPServer(c echo.Context) error {
 		return nil
 	}
 	v, err := s.MCP.Discover(c.Request().Context(), c.Param("id"))
+	if errors.Is(err, model.ErrStateConflict) {
+		return errorJSON(c, http.StatusConflict, "MCP_SERVER_CHANGED", err.Error())
+	}
 	if err != nil {
 		return integrationError(c, err)
 	}
