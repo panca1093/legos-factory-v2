@@ -267,8 +267,8 @@ func TestACPClaudeReadOnlyRolesStartInPlanModeWithoutWriteTools(t *testing.T) {
 	if !strings.Contains(chat.Meta, `"tools":[]`) || !strings.Contains(chat.Meta, `"Read"`) || !strings.Contains(chat.Meta, `"WebFetch"`) || chat.Set != "model=sonnet,mode=plan" {
 		t.Fatalf("chat must get no tools: meta %q, set %q", chat.Meta, chat.Set)
 	}
-	if b := run(model.AgentBuilder); b.Meta != `{"claudeCode":{"options":{"settingSources":["project","local"]}}}` || b.Set != "model=sonnet" {
-		t.Fatalf("builder must keep its tools and the repo settings but not the user's: meta %q, set %q", b.Meta, b.Set)
+	if b := run(model.AgentBuilder); b.Meta != `{"claudeCode":{"options":{"settingSources":["project","local"],"strictMcpConfig":true}}}` || b.Set != "model=sonnet" {
+		t.Fatalf("builder must keep its tools and the repo settings but not the user's settings or account connectors: meta %q, set %q", b.Meta, b.Set)
 	}
 }
 

@@ -107,9 +107,10 @@ var claudeReadOnlyMeta = map[string]any{"claudeCode": map[string]any{"options": 
 	"strictMcpConfig": true,
 }}}
 
-// claudeBuilderMeta keeps the repo's own settings and CLAUDE.md for the builder but drops the user's ~/.claude.
+// claudeBuilderMeta keeps the repo's settings and CLAUDE.md but drops the user's ~/.claude and, with strictMcpConfig, the account's claude.ai connectors: every Builder permission is granted.
 var claudeBuilderMeta = map[string]any{"claudeCode": map[string]any{"options": map[string]any{
-	"settingSources": []string{"project", "local"},
+	"settingSources":  []string{"project", "local"},
+	"strictMcpConfig": true,
 }}}
 
 // claudeChatMeta gives the chat role no tools at all.
