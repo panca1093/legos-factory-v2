@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -110,6 +111,52 @@ func (l Local) Prepare(ctx context.Context, woID, repoURL string, auth *model.Gi
 
 func (l Local) Destroy(ctx context.Context, woID string) error {
 	return Destroy(ctx, woID, l.DataDir)
+}
+
+var checkoutLocks sync.Map // checkout id → *sync.Mutex
+
+// Checkout returns a read-only clone of a project at workspaces/<id> and its HEAD, cloning it like a work
+// order workspace on first use. refresh brings an existing clone to the latest default branch in place.
+func (l Local) Checkout(ctx context.Context, id, repoURL string, auth *model.GitAuth, refresh bool) (dir, sha string, err error) {
+	mu, _ := checkoutLocks.LoadOrStore(id, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+	dir = filepath.Join(l.DataDir, "workspaces", id)
+	if !isLocalGitRepo(dir) {
+		if err := os.RemoveAll(dir); err != nil {
+			return "", "", err
+		}
+		if _, err := Prepare(ctx, l.DataDir, id, repoURL, auth); err != nil {
+			return "", "", err
+		}
+		if !isLocalGitRepo(dir) {
+			_ = os.RemoveAll(dir)
+			return "", "", fmt.Errorf("project repository %q is not a git repository", repoURL)
+		}
+	} else if refresh {
+		if err := refreshCheckout(ctx, dir, auth); err != nil {
+			return "", "", err
+		}
+	}
+	out, err := git(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return "", "", fmt.Errorf("git rev-parse: %v: %s", err, out)
+	}
+	return dir, strings.TrimSpace(out), nil
+}
+
+// refreshCheckout moves a clone to its source's head without deleting it, as other chats may be reading it.
+func refreshCheckout(ctx context.Context, dir string, auth *model.GitAuth) error {
+	if auth != nil && auth.RemoteURL != "" {
+		return retarget(ctx, dir, auth)
+	}
+	if out, err := gitAuthed(ctx, dir, auth, "fetch", "--quiet", "origin", "HEAD"); err != nil {
+		return fmt.Errorf("git fetch: %v: %s", err, redact(out, auth))
+	}
+	if out, err := git(ctx, dir, "reset", "--quiet", "--hard", "FETCH_HEAD"); err != nil {
+		return fmt.Errorf("git reset: %v: %s", err, out)
+	}
+	return nil
 }
 
 // PushBranch pushes the workspace HEAD to branch on origin and returns the

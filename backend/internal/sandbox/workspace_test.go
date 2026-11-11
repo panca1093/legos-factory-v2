@@ -232,3 +232,84 @@ func TestDiffNeverReadsSecretsSymlinksOrHugeFiles(t *testing.T) {
 		t.Fatalf("a large file keeps its line count without content: added=%d hunks=%d", b.Added, len(b.Hunks))
 	}
 }
+
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", args, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestCheckoutClonesTrackedFilesAndRefreshesInPlace(t *testing.T) {
+	src := t.TempDir()
+	commit := func(file string) string {
+		if err := os.WriteFile(filepath.Join(src, file), []byte("package a\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitIn(t, src, "add", file)
+		gitIn(t, src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", file)
+		return gitIn(t, src, "rev-parse", "HEAD")
+	}
+	gitIn(t, src, "init", "-q", "-b", "main")
+	first := commit("a.go")
+	if err := os.WriteFile(filepath.Join(src, ".env"), []byte("TOKEN=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l := Local{DataDir: t.TempDir()}
+	ctx := context.Background()
+	dir, sha, err := l.Checkout(ctx, "chat-p1", src, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dir != filepath.Join(l.DataDir, "workspaces", "chat-p1") || sha != first {
+		t.Fatalf("checkout = %s @ %s; want the clone at %s", dir, sha, first)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("an untracked file of the project folder must not be in the checkout: %v", err)
+	}
+
+	second := commit("b.go")
+	if _, sha, err = l.Checkout(ctx, "chat-p1", src, nil, false); err != nil || sha != first {
+		t.Fatalf("without refresh the checkout stays put: %s, %v", sha, err)
+	}
+	if _, sha, err = l.Checkout(ctx, "chat-p1", src, nil, true); err != nil || sha != second {
+		t.Fatalf("refresh = %s, %v; want %s", sha, err, second)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "b.go")); err != nil {
+		t.Fatalf("the refreshed checkout misses the new file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("a refresh must not bring untracked files: %v", err)
+	}
+}
+
+func TestCheckoutRefreshFollowsTheConnectedRemote(t *testing.T) {
+	remote, folder := t.TempDir(), t.TempDir()
+	gitIn(t, remote, "init", "-q", "-b", "main")
+	gitIn(t, remote, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base")
+	gitIn(t, folder, "clone", "-q", remote, ".")
+	auth := &model.GitAuth{RemoteURL: remote, DefaultBranch: "main"}
+	l := Local{DataDir: t.TempDir()}
+	if _, _, err := l.Checkout(context.Background(), "chat-p2", folder, auth, true); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, remote, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "next")
+	want := gitIn(t, remote, "rev-parse", "HEAD")
+	if _, sha, err := l.Checkout(context.Background(), "chat-p2", folder, auth, true); err != nil || sha != want {
+		t.Fatalf("refresh = %s, %v; want the remote's %s", sha, err, want)
+	}
+}
+
+func TestCheckoutOfAFolderWithoutGitFails(t *testing.T) {
+	l := Local{DataDir: t.TempDir()}
+	if _, _, err := l.Checkout(context.Background(), "chat-p3", t.TempDir(), nil, true); err == nil {
+		t.Fatal("a folder that is not a git repository has nothing to read")
+	}
+	if _, err := os.Stat(filepath.Join(l.DataDir, "workspaces", "chat-p3")); !os.IsNotExist(err) {
+		t.Fatalf("no empty checkout may be left behind: %v", err)
+	}
+}
