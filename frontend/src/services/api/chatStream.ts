@@ -1,5 +1,5 @@
 import { ApiError } from "../../types/api";
-import type { ChatMessage } from "../../stores/chats";
+import type { ChatMessage, ChatRepo, ChatStep } from "../../stores/chats";
 
 export interface ChatStreamBody {
   content: string;
@@ -13,7 +13,9 @@ export interface ChatStreamEvent {
 }
 export type ChatEvent =
   | { event: "user_message"; data: { message: ChatMessage } }
+  | { event: "repo"; data: ChatRepo }
   | { event: "delta"; data: { text: string } }
+  | { event: "step"; data: { tools: ChatStep[] } }
   | { event: "title"; data: { title: string } }
   | { event: "done"; data: { message: ChatMessage } }
   | { event: "error"; data: { message?: ChatMessage; error: string } };

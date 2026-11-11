@@ -278,6 +278,20 @@
   color: var(--muted);
   font-size: 11px;
 }
+.ch-repo {
+  display: flex;
+  width: fit-content;
+  margin-bottom: var(--space-2);
+  color: var(--muted);
+}
+.ch-step {
+  margin-top: var(--space-1);
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .composer {
   flex-shrink: 0;

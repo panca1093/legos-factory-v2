@@ -22,6 +22,15 @@ export interface Chat {
   created_at: string;
   updated_at: string;
 }
+export interface ChatRepo {
+  project_id: string;
+  sha: string;
+}
+export interface ChatStep {
+  name: string;
+  target: string;
+  failed: boolean;
+}
 export interface ChatMessage {
   id: number;
   chat_id: string;
@@ -32,6 +41,9 @@ export interface ChatMessage {
   error?: string;
   created_at: string;
   pending?: boolean;
+  // set in this browser only, while or after a turn that read the project's code
+  repo?: ChatRepo;
+  step?: ChatStep;
 }
 export interface WorkOrderDraft {
   title: string;
@@ -171,7 +183,13 @@ export const useChats = defineStore("chats", {
         if (!(m.id > 0))
           return markFailed(tmp, "The server sent an invalid message.");
         this.messages[id] = this.messages[id].map((x) =>
-          x.id === tmp ? (error ? { ...m, error } : m) : x,
+          x.id === tmp
+            ? {
+                ...m,
+                ...(x.repo ? { repo: x.repo } : {}),
+                ...(error ? { error } : {}),
+              }
+            : x,
         );
       };
       const interrupted = async (text: string) => {
@@ -193,11 +211,18 @@ export const useChats = defineStore("chats", {
             text?: string;
             title?: string;
             error?: unknown;
+            project_id?: string;
+            sha?: string;
+            tools?: ChatStep[];
           };
           const reply = find(tmpReply);
           if (event === "user_message" && typeof d.message === "object")
             swap(tmpUser, d.message);
           else if (event === "delta" && reply) reply.content += d.text ?? "";
+          else if (event === "repo" && reply && d.project_id && d.sha)
+            reply.repo = { project_id: d.project_id, sha: d.sha };
+          else if (event === "step" && reply && d.tools?.length)
+            reply.step = d.tools[d.tools.length - 1];
           else if (event === "title" && d.title)
             this.chats = this.chats.map((c) =>
               c.id === id ? { ...c, title: d.title as string } : c,

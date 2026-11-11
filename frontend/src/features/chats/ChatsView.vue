@@ -4,6 +4,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import {
   ChevronLeft,
   FileText,
+  GitCommitHorizontal,
   Image as ImageIcon,
   BookOpen,
   Layers,
@@ -18,6 +19,7 @@ import { useToast } from "../../composables/useToast";
 import { money } from "../../composables/presentation";
 import { useSession } from "../../stores/session";
 import { useChats } from "../../stores/chats";
+import { useFactory } from "../../stores/factory";
 import { ApiError } from "../../types/api";
 import ChatComposer from "./ChatComposer.vue";
 import ChatContextPanel from "./ChatContextPanel.vue";
@@ -28,10 +30,12 @@ import {
   renderMarkdownCached,
   base64Size,
   byteLength,
+  stepLine,
   type PendingFile,
 } from "./chatUtils";
 import "./chats.css";
 const store = useChats(),
+  factory = useFactory(),
   session = useSession(),
   route = useRoute(),
   router = useRouter(),
@@ -70,6 +74,8 @@ const lastErrorId = computed(() => {
   const last = messages.value[messages.value.length - 1];
   return last?.role === "assistant" && last.error && !busy.value ? last.id : 0;
 });
+const projectName = (id: string) =>
+  factory.projects.find((p) => p.id === id)?.name ?? id;
 const fail = (e: unknown) =>
   toast(
     e instanceof ApiError && e.code === "CHAT_BUSY"
@@ -308,6 +314,12 @@ onMounted(async () => {
               >L</span
             >
             <div class="bubble">
+              <span v-if="m.repo" class="ch-chip ch-repo" data-test="repo-chip"
+                ><GitCommitHorizontal class="icon" /><span class="ch-fn"
+                  >Reading {{ projectName(m.repo.project_id) }} @
+                  {{ m.repo.sha.slice(0, 7) }}</span
+                ></span
+              >
               <p v-if="m.role === 'user'" class="plain">{{ m.content }}</p>
               <div
                 v-else-if="m.content"
@@ -321,6 +333,9 @@ onMounted(async () => {
                 aria-label="Thinking"
                 ><i></i><i></i><i></i
               ></span>
+              <p v-if="m.pending && m.step" class="ch-step" data-test="step-line">
+                {{ stepLine(m.step) }}
+              </p>
               <div v-if="m.attachments?.length" class="atts">
                 <template v-for="a in m.attachments" :key="a.kind + a.name">
                   <RouterLink
