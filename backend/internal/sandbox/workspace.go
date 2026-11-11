@@ -122,7 +122,7 @@ func (l Local) Checkout(ctx context.Context, id, repoURL string, auth *model.Git
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
 	dir = filepath.Join(l.DataDir, "workspaces", id)
-	if !isLocalGitRepo(dir) {
+	if !isLocalGitRepo(dir) || !ownsRepo(ctx, dir) {
 		if err := os.RemoveAll(dir); err != nil {
 			return "", "", err
 		}
@@ -133,8 +133,14 @@ func (l Local) Checkout(ctx context.Context, id, repoURL string, auth *model.Git
 			_ = os.RemoveAll(dir)
 			return "", "", fmt.Errorf("project repository %q is not a git repository", repoURL)
 		}
+		if err := removeSymlinks(dir); err != nil {
+			return "", "", err
+		}
 	} else if refresh {
 		if err := refreshCheckout(ctx, dir, auth); err != nil {
+			return "", "", err
+		}
+		if err := removeSymlinks(dir); err != nil {
 			return "", "", err
 		}
 	}
@@ -145,8 +151,38 @@ func (l Local) Checkout(ctx context.Context, id, repoURL string, auth *model.Git
 	return dir, strings.TrimSpace(out), nil
 }
 
+// ownsRepo reports whether dir is the top of its own git repository rather than a directory git resolves to an enclosing one.
+func ownsRepo(ctx context.Context, dir string) bool {
+	out, err := git(ctx, dir, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return false
+	}
+	top, err1 := filepath.EvalSymlinks(strings.TrimSpace(out))
+	real, err2 := filepath.EvalSymlinks(dir)
+	return err1 == nil && err2 == nil && top == real
+}
+
+// removeSymlinks deletes every symlink of a checkout, which an agent could otherwise read through to files outside it.
+func removeSymlinks(dir string) error {
+	return filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && d.Name() == ".git" && p == filepath.Join(dir, ".git") {
+			return filepath.SkipDir
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return os.Remove(p)
+		}
+		return nil
+	})
+}
+
 // refreshCheckout moves a clone to its source's head without deleting it, as other chats may be reading it.
 func refreshCheckout(ctx context.Context, dir string, auth *model.GitAuth) error {
+	if out, err := git(ctx, dir, "reset", "--quiet", "--hard"); err != nil {
+		return fmt.Errorf("git reset: %v: %s", err, out)
+	}
 	if auth != nil && auth.RemoteURL != "" {
 		return retarget(ctx, dir, auth)
 	}

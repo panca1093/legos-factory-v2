@@ -313,3 +313,111 @@ func TestCheckoutOfAFolderWithoutGitFails(t *testing.T) {
 		t.Fatalf("no empty checkout may be left behind: %v", err)
 	}
 }
+
+func symlinksIn(t *testing.T, dir string) []string {
+	t.Helper()
+	var found []string
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() && d.Name() == ".git" {
+			return filepath.SkipDir
+		}
+		if err == nil && d.Type()&os.ModeSymlink != 0 {
+			found = append(found, p)
+		}
+		return nil
+	})
+	return found
+}
+
+func TestCheckoutHoldsNoSymlinks(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := t.TempDir()
+	gitIn(t, src, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(src, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(src, "link")); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, src, "add", ".")
+	gitIn(t, src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "one")
+	l := Local{DataDir: t.TempDir()}
+	dir, _, err := l.Checkout(context.Background(), "chat-p4", src, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := symlinksIn(t, dir); len(got) != 0 {
+		t.Fatalf("symlinks after clone: %v", got)
+	}
+	if err := os.Symlink(outside, filepath.Join(src, "link2")); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, src, "add", ".")
+	gitIn(t, src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "two")
+	if _, _, err := l.Checkout(context.Background(), "chat-p4", src, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := symlinksIn(t, dir); len(got) != 0 {
+		t.Fatalf("symlinks after refresh: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "a.go")); err != nil {
+		t.Fatalf("regular files must stay: %v", err)
+	}
+}
+
+func TestCheckoutWithBrokenGitReclonesAndLeavesTheEnclosingRepoAlone(t *testing.T) {
+	src := t.TempDir()
+	gitIn(t, src, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(src, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, src, "add", ".")
+	gitIn(t, src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "one")
+
+	outer := t.TempDir()
+	gitIn(t, outer, "init", "-q", "-b", "main")
+	gitIn(t, outer, "remote", "add", "origin", src)
+	mine := filepath.Join(outer, "mine.txt")
+	if err := os.WriteFile(mine, []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, outer, "add", ".")
+	gitIn(t, outer, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "outer")
+	if err := os.WriteFile(mine, []byte("uncommitted work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	l := Local{DataDir: filepath.Join(outer, "data")}
+	dir, _, err := l.Checkout(context.Background(), "chat-p5", src, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, sha, err := l.Checkout(context.Background(), "chat-p5", src, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := gitIn(t, src, "rev-parse", "HEAD"); sha != want {
+		t.Fatalf("sha = %s, want the source's %s", sha, want)
+	}
+	if top := gitIn(t, dir, "rev-parse", "--show-toplevel"); !sameDir(top, dir) {
+		t.Fatalf("the checkout must be its own repository, got toplevel %s", top)
+	}
+	if b, _ := os.ReadFile(mine); string(b) != "uncommitted work\n" {
+		t.Fatalf("the enclosing repository was touched: %q", b)
+	}
+}
+
+func sameDir(a, b string) bool {
+	ra, _ := filepath.EvalSymlinks(a)
+	rb, _ := filepath.EvalSymlinks(b)
+	return ra == rb
+}
