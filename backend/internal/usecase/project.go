@@ -170,7 +170,7 @@ func IsNotFound(err error) bool {
 	return errors.Is(err, model.ErrProjectNotFound) || errors.Is(err, model.ErrWorkOrderNotFound) ||
 		errors.Is(err, model.ErrKnowledgeNotFound) || errors.Is(err, model.ErrKBDocNotFound) || errors.Is(err, model.ErrUserNotFound) ||
 		errors.Is(err, model.ErrConnectionNotFound) || errors.Is(err, model.ErrFindingNotFound) ||
-		errors.Is(err, model.ErrChatNotFound)
+		errors.Is(err, model.ErrChatNotFound) || errors.Is(err, model.ErrMCPNotFound)
 }
 
 func toSet(ids []string) map[string]bool {

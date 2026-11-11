@@ -69,6 +69,7 @@ type Chat struct {
 	}
 	Settings SettingsReader
 	Usage    Budget
+	MCP      MCPSelector // nil: chats get no MCP servers
 	// Harness is nil when no harness can run chats read-only.
 	Harness Harness
 	// Models lists what the harness can run; Default is the "provider/model" auto resolves to.
@@ -99,8 +100,8 @@ type Chat struct {
 	listAt time.Time
 }
 
-// chatSession is a kept harness session; sha is set when it reads the project checkout at that commit.
-type chatSession struct{ id, projectID, sha string }
+// chatSession is a kept harness session; sha is set when it reads the project checkout at that commit; mcp fingerprints the MCP selection it started with.
+type chatSession struct{ id, projectID, sha, mcp string }
 
 type ChatModel struct {
 	ID         string `json:"id"` // "provider/model"; empty is auto
@@ -581,13 +582,18 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 	req.OnText = func(t string) { announced(); onText(t) }
 	req.OnStep = func(s model.AgentStep) { announced(); emit(ChatEvent{Kind: "step", Tools: s.Tools}) }
 	sh, canKeep := c.Harness.(SessionHarness)
+	var sel model.MCPSelection
+	if c.MCP != nil {
+		sel, _ = c.MCP.Selection(ctx, model.AgentChat)
+	}
+	mcp := mcpFingerprint(model.AgentRequest{MCP: sel.Servers, MCPAllow: sel.Allow, MCPDeny: sel.Deny})
 
 	var ses model.AgentSession
 	if canKeep {
 		c.mu.Lock()
 		kept, ok := c.ses[ch.ID]
 		c.mu.Unlock()
-		if ok && kept.projectID != c.readableProject(ch) {
+		if ok && (kept.projectID != c.readableProject(ch) || kept.mcp != mcp) {
 			c.forget(ch.ID)
 			ok = false
 		}
@@ -624,6 +630,7 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 				}
 			}
 		}
+		applySelection(&req, sel)
 		req.Prompt = preamble + seed + historyText(history) + turn
 		req.Keep = keep
 		var err error
@@ -642,7 +649,7 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 		if c.ses == nil {
 			c.ses = map[string]chatSession{}
 		}
-		c.ses[ch.ID] = chatSession{id: ses.ID(), projectID: cur.projectID, sha: cur.sha}
+		c.ses[ch.ID] = chatSession{id: ses.ID(), projectID: cur.projectID, sha: cur.sha, mcp: mcp}
 		c.mu.Unlock()
 	}
 	return res, nil

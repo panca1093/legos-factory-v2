@@ -5,10 +5,15 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,6 +53,7 @@ type Factory struct {
 	Catalog      *Cataloger
 	KB           *KB
 	Integrations *Integrations
+	MCP          MCPSelector // nil: agents get no MCP servers
 	Sandbox      Sandbox
 	Judge        Judge // nil when TYPESAFE_API_KEY is unset
 	DataDir      string
@@ -106,6 +112,49 @@ func (f *Factory) ResumeOnStart(ctx context.Context) error {
 
 // ---- agent run plumbing ----
 
+// applyMCP gives req the MCP servers its role may use and returns the names for the agent_started audit; failures leave the run without MCP.
+func (f *Factory) applyMCP(ctx context.Context, req *model.AgentRequest) map[string]any {
+	if f.MCP == nil {
+		return nil
+	}
+	sel, err := f.MCP.Selection(ctx, req.Role)
+	if err != nil {
+		f.Log.Warn("mcp selection failed; the run starts without MCP servers", "role", req.Role, "err", err)
+		return nil
+	}
+	return applySelection(req, sel)
+}
+
+func applySelection(req *model.AgentRequest, sel model.MCPSelection) map[string]any {
+	if len(sel.Servers) == 0 {
+		return nil
+	}
+	req.MCP, req.MCPAllow, req.MCPDeny = sel.Servers, sel.Allow, sel.Deny
+	names := make([]string, len(sel.Servers))
+	for i, s := range sel.Servers {
+		names[i] = s.Name
+	}
+	return map[string]any{"mcp_servers": names, "mcp_tools": sel.Allow}
+}
+
+// mcpFingerprint identifies the MCP selection a session was started with; secrets enter only as hashes.
+func mcpFingerprint(req model.AgentRequest) string {
+	if len(req.MCP) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(req.MCP))
+	for _, s := range req.MCP {
+		wire, _ := json.Marshal(s)
+		sum := sha256.Sum256(wire)
+		parts = append(parts, s.Name+":"+hex.EncodeToString(sum[:]))
+	}
+	sort.Strings(parts)
+	allow, deny := slices.Sorted(slices.Values(req.MCPAllow)), slices.Sorted(slices.Values(req.MCPDeny))
+	b, _ := json.Marshal([][]string{parts, allow, deny})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 // runAgent creates a run row, invokes the harness and records usage. A
 // conservative budget reservation is taken before execution so parallel
 // runs cannot over-commit the remaining budget.
@@ -156,6 +205,7 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 		Role: role, Prompt: prompt, ProviderID: provider, ModelID: modelID,
 		WorkspaceDir: dir, Context: cctx,
 	}
+	mcpAudit := f.applyMCP(ctx, &req)
 	h := f.Resolve(role, wo)
 	// the clock can be microsecond-grained, so parallel runs need the sequence to stay unique
 	runID := fmt.Sprintf("run_%d_%d", time.Now().UnixNano(), runSeq.Add(1))
@@ -165,6 +215,9 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	runRef := map[string]any{"run_id": runID, "task_id": taskID}
 	started := map[string]any{"run_id": runID, "task_id": taskID}
 	for k, v := range opts.Audit {
+		started[k] = v
+	}
+	for k, v := range mcpAudit {
 		started[k] = v
 	}
 	f.event(wo.ID, string(role), "agent_started",
@@ -233,6 +286,7 @@ type planSession struct {
 	harness SessionHarness
 	name    string
 	id      string
+	mcp     string
 }
 
 // startPlanning sends req into the work order's open Foreman session, or opens
@@ -245,7 +299,7 @@ func (f *Factory) startPlanning(ctx context.Context, woID string, h Harness, req
 	}
 	if v, ok := f.planSes.Load(woID); ok {
 		cur := v.(planSession)
-		if cur.name == h.Name() {
+		if cur.name == h.Name() && cur.mcp == mcpFingerprint(req) {
 			ses, err := sh.Continue(ctx, cur.id, req)
 			if err == nil {
 				return ses, nil
@@ -262,7 +316,7 @@ func (f *Factory) startPlanning(ctx context.Context, woID string, h Harness, req
 	if err != nil {
 		return ses, err
 	}
-	f.planSes.Store(woID, planSession{harness: sh, name: h.Name(), id: ses.ID()})
+	f.planSes.Store(woID, planSession{harness: sh, name: h.Name(), id: ses.ID(), mcp: mcpFingerprint(req)})
 	// a cancel that landed while the session was starting must not leave it parked
 	if f.cancelled(ctx, woID) {
 		f.closePlanning(woID)
