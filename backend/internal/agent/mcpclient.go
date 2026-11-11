@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -24,7 +25,7 @@ func ListMCPTools(ctx context.Context, s model.MCPServer) ([]model.MCPTool, erro
 	defer cancel()
 	var t mcpTransport
 	if s.Transport == model.MCPHTTP {
-		t = &mcpHTTP{url: s.URL, headers: s.Secret, client: &http.Client{}}
+		t = &mcpHTTP{url: s.URL, headers: s.Secret, client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 	} else {
 		st, err := startMCPStdio(ctx, s)
 		if err != nil {
@@ -101,6 +102,7 @@ type mcpTransport interface {
 
 type mcpReply struct {
 	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
 		Code    int    `json:"code"`
@@ -130,6 +132,8 @@ func startMCPStdio(ctx context.Context, s model.MCPServer) (*mcpStdio, error) {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	cmd.WaitDelay = time.Second
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	st := &mcpStdio{cmd: cmd, replies: make(chan mcpReply, 16), stderr: &tailBuffer{max: 2000}}
 	cmd.Stderr = st.stderr
 	stdin, err := cmd.StdinPipe()
@@ -150,7 +154,7 @@ func startMCPStdio(ctx context.Context, s model.MCPServer) (*mcpStdio, error) {
 		sc.Buffer(make([]byte, 1<<20), 8<<20)
 		for sc.Scan() {
 			var r mcpReply
-			if json.Unmarshal(sc.Bytes(), &r) == nil && len(r.ID) > 0 {
+			if json.Unmarshal(sc.Bytes(), &r) == nil && len(r.ID) > 0 && r.Method == "" {
 				st.replies <- r
 			}
 		}
@@ -160,7 +164,7 @@ func startMCPStdio(ctx context.Context, s model.MCPServer) (*mcpStdio, error) {
 
 func (s *mcpStdio) close() {
 	_ = s.stdin.Close()
-	_ = s.cmd.Process.Kill()
+	_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
 	_ = s.cmd.Wait()
 }
 
@@ -264,18 +268,23 @@ func (h *mcpHTTP) call(ctx context.Context, method string, params any) (json.Raw
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		sc := bufio.NewScanner(resp.Body)
 		sc.Buffer(make([]byte, 1<<20), 8<<20)
+		var data []string
 		for sc.Scan() {
-			data, ok := strings.CutPrefix(sc.Text(), "data:")
-			if !ok {
-				continue
-			}
-			var r mcpReply
-			if json.Unmarshal([]byte(strings.TrimSpace(data)), &r) == nil && string(r.ID) == want {
-				return r.result(method)
+			line := sc.Text()
+			if line == "" {
+				if r, ok := sseReply(data, want); ok {
+					return r.result(method)
+				}
+				data = nil
+			} else if d, ok := strings.CutPrefix(line, "data:"); ok {
+				data = append(data, strings.TrimPrefix(d, " "))
 			}
 		}
 		if err := sc.Err(); err != nil {
 			return nil, fmt.Errorf("mcp: %s: %w", method, err)
+		}
+		if r, ok := sseReply(data, want); ok {
+			return r.result(method)
 		}
 		return nil, fmt.Errorf("mcp: %s: the event stream ended without a reply", method)
 	}
@@ -284,4 +293,10 @@ func (h *mcpHTTP) call(ctx context.Context, method string, params any) (json.Raw
 		return nil, fmt.Errorf("mcp: %s: unreadable reply: %w", method, err)
 	}
 	return r.result(method)
+}
+
+func sseReply(data []string, want string) (mcpReply, bool) {
+	var r mcpReply
+	ok := len(data) > 0 && json.Unmarshal([]byte(strings.Join(data, "\n")), &r) == nil && r.Method == "" && string(r.ID) == want
+	return r, ok
 }

@@ -8,7 +8,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -42,6 +46,14 @@ func fakeMCPStdio(mode string) {
 			continue
 		}
 		fmt.Fprintln(os.Stderr, "log line on stderr")
+		if mode == "roots" {
+			_ = out.Encode(map[string]any{"jsonrpc": "2.0", "id": m.ID, "method": "roots/list"})
+		}
+		if mode == "spawn" && m.Method == "initialize" {
+			child := exec.Command("sleep", "60")
+			_ = child.Start()
+			_ = os.WriteFile(os.Getenv("MCP_PIDFILE"), []byte(fmt.Sprint(child.Process.Pid)), 0o600)
+		}
 		_ = out.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/message", "params": map[string]any{}})
 		switch m.Method {
 		case "initialize":
@@ -159,5 +171,75 @@ func TestMCPClientHTTPErrors(t *testing.T) {
 	defer srv.Close()
 	if _, err := ListMCPTools(context.Background(), model.MCPServer{Transport: model.MCPHTTP, URL: srv.URL}); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestMCPClientHTTPDoesNotFollowRedirects(t *testing.T) {
+	var hit bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer target.Close()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, http.StatusFound) }))
+	defer srv.Close()
+	_, err := ListMCPTools(context.Background(), model.MCPServer{Transport: model.MCPHTTP, URL: srv.URL, Secret: map[string]string{"Authorization": "Bearer abc"}})
+	if err == nil || !strings.Contains(err.Error(), "302") || hit {
+		t.Fatalf("a redirect must be an error naming 302 and must not be followed: %v, followed=%v", err, hit)
+	}
+}
+
+func TestMCPClientSSEJoinsMultiLineData(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&m)
+		if m.ID == nil {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		result := any(map[string]any{"protocolVersion": "2025-03-26"})
+		if m.Method == "tools/list" {
+			result = mcpToolsPage("p2")
+		}
+		body, _ := json.MarshalIndent(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": result}, "", " ")
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: message\n")
+		for _, line := range strings.Split(string(body), "\n") {
+			fmt.Fprintf(w, "data: %s\n", line)
+		}
+		fmt.Fprint(w, "\n")
+	}))
+	defer srv.Close()
+	tools, err := ListMCPTools(context.Background(), model.MCPServer{Transport: model.MCPHTTP, URL: srv.URL})
+	if err != nil || len(tools) != 1 || tools[0].Name != "write" {
+		t.Fatalf("a reply split over several data lines must be read: %+v %v", tools, err)
+	}
+}
+
+func TestMCPClientStdioIgnoresServerRequestsWithCollidingIDs(t *testing.T) {
+	tools, err := ListMCPTools(context.Background(), model.MCPServer{Name: "x", Transport: model.MCPStdio, Command: os.Args[0],
+		Secret: map[string]string{"MCP_FAKE_SERVER": "roots", "MCP_TOKEN": "t0k"}})
+	checkTools(t, tools, err)
+}
+
+func TestMCPClientStdioKillsTheWholeProcessGroup(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	_, err := ListMCPTools(context.Background(), model.MCPServer{Name: "x", Transport: model.MCPStdio, Command: os.Args[0],
+		Secret: map[string]string{"MCP_FAKE_SERVER": "spawn", "MCP_PIDFILE": pidFile, "MCP_TOKEN": "t0k"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, rerr := os.ReadFile(pidFile)
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	pid, _ := strconv.Atoi(string(b))
+	deadline := time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("the server's child %d outlived the call", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
