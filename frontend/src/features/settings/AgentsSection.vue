@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import { useFactory } from "../../stores/factory";
-import type { Settings } from "../../types/api";
+import type { Settings, SettingsPatch } from "../../types/api";
 import BrickBot from "../../components/agents/BrickBot.vue";
 
 const props = defineProps<{ settings: Settings; editable: boolean }>();
-const emit = defineEmits<{ saved: [Settings] }>();
+const emit = defineEmits<{ saved: [SettingsPatch] }>();
 const factory = useFactory();
-const busy = ref(""),
-  error = ref("");
+const busy = reactive(new Set<Key>());
+const error = ref("");
 
 type Key = "foreman" | "architect" | "builder" | "inspector" | "chat";
 const rows: { key: Key; label: string }[] = [
@@ -41,15 +41,17 @@ const value = (k: Key) => props.settings[field(k)] ?? "";
 
 async function change(k: Key, el: HTMLSelectElement) {
   const previous = value(k);
-  busy.value = k;
+  const key = field(k);
+  busy.add(k);
   error.value = "";
   try {
-    emit("saved", await factory.patchSettings({ [field(k)]: el.value }));
+    const saved = await factory.patchSettings({ [key]: el.value });
+    emit("saved", { [key]: saved[key] });
   } catch (e) {
     el.value = previous;
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
-    busy.value = "";
+    busy.delete(k);
   }
 }
 </script>
@@ -72,7 +74,7 @@ async function change(k: Key, el: HTMLSelectElement) {
         ><select
           :id="`set-${r.key}`"
           :value="value(r.key)"
-          :disabled="!editable || busy === r.key"
+          :disabled="!editable || busy.has(r.key)"
           @change="change(r.key, $event.target as HTMLSelectElement)"
         >
           <option value="">Default ({{ resolved(r.key) }})</option>

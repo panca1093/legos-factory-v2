@@ -447,7 +447,7 @@ func (s *Server) handleRuntimeSettings(c echo.Context) error {
 			"enabled": s.Cfg.TypeSafeKey != "",
 			"model":   s.Cfg.TypeSafeModel,
 		},
-		"credentials_configured": s.Cfg.SecretKey != "",
+		"credentials_configured": s.Integrations != nil && s.Integrations.Secrets != nil,
 		"max_concurrent_runs":    s.Cfg.MaxConcurrentRuns,
 	})
 }

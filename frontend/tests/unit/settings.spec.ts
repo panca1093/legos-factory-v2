@@ -215,6 +215,30 @@ it("shows the server error and restores the previous model when a save fails", a
   w.unmount();
 });
 
+it("keeps saved values when a model and budget response arrive out of order", async () => {
+  let finishModel!: (response: Response) => void;
+  routes["PATCH /api/v1/settings"] = (body) => {
+    if ("architect_model" in (body as object))
+      return new Promise((resolve) => {
+        finishModel = resolve;
+      });
+    return json({ ...settings, ...(body as object) });
+  };
+  const { w } = await render();
+  await w.find("#set-architect").setValue("test/inspector");
+  await w.find("#set-budget").setValue("12.34");
+  await flushPromises();
+  finishModel(json({ ...settings, architect_model: "test/inspector" }));
+  await flushPromises();
+  expect((w.find("#set-architect").element as HTMLSelectElement).value).toBe(
+    "test/inspector",
+  );
+  expect((w.find("#set-budget").element as HTMLInputElement).value).toBe(
+    "12.34",
+  );
+  w.unmount();
+});
+
 it("saves the budget cap in micros when the field changes", async () => {
   routes["PATCH /api/v1/settings"] = (body) =>
     json({ ...settings, ...(body as object) });

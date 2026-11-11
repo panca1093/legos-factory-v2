@@ -84,11 +84,19 @@ func (r *SettingsRepo) Patch(ctx context.Context, p model.SettingsPatch) error {
 			writes[k] = *v
 		}
 	}
+	if len(writes) == 0 {
+		return nil
+	}
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for k, v := range writes {
-		if _, err := r.DB.ExecContext(ctx, `INSERT INTO settings_kv (key, value) VALUES (?,?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO settings_kv (key, value) VALUES (?,?)
 			ON CONFLICT(key) DO UPDATE SET value = excluded.value`, k, v); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }

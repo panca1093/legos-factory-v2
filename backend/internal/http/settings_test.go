@@ -93,14 +93,19 @@ func TestSettingsWriteGuards(t *testing.T) {
 func TestRuntimeSettingsShapeAndNoSecrets(t *testing.T) {
 	srv := bootSettings(t, &model.Config{
 		Harness: "acp", ACPCommand: []string{"opencode", "acp"}, MaxConcurrentRuns: 3,
-		TypeSafeKey: "sk-very-secret", TypeSafeModel: "jev-1.14.0", SecretKey: "c2VjcmV0LWtleQ==",
+		TypeSafeKey: "sk-very-secret", TypeSafeModel: "jev-1.14.0",
 		OpenCodePass: "pw-secret",
 	})
+	secrets, err := store.NewSecretBox(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Integrations = &usecase.Integrations{Secrets: secrets}
 	code, body := chatDo(srv, "eng", "GET", "/api/v1/settings/runtime", "")
 	if code != 200 {
 		t.Fatalf("runtime: %d %s", code, body)
 	}
-	for _, secret := range []string{"sk-very-secret", "c2VjcmV0LWtleQ==", "pw-secret"} {
+	for _, secret := range []string{"sk-very-secret", "pw-secret"} {
 		if strings.Contains(body, secret) {
 			t.Fatalf("secret leaked: %s", body)
 		}

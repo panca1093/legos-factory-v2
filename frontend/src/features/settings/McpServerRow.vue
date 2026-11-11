@@ -104,7 +104,7 @@ function whyLocked(t: McpServer["tools"][number]) {
 }
 </script>
 <template>
-  <div class="connection" :data-mcp="server.name" style="flex-wrap: wrap">
+  <div class="connection" :data-mcp="server.name">
     <span class="provider-logo">M</span>
     <div class="grow">
       <h3>{{ server.name }}</h3>
@@ -253,3 +253,16 @@ function whyLocked(t: McpServer["tools"][number]) {
     </p>
   </div>
 </template>
+
+<style scoped>
+.connection {
+  flex-wrap: wrap;
+}
+.grow {
+  flex-basis: 220px;
+  overflow-wrap: anywhere;
+}
+.connection-meta {
+  max-width: 100%;
+}
+</style>

@@ -82,7 +82,8 @@ async function saveBudget() {
   budgetBusy.value = true;
   budgetError.value = "";
   try {
-    config.value = await factory.patchSettings({ budget_limit_micros: micros });
+    const saved = await factory.patchSettings({ budget_limit_micros: micros });
+    config.value.budget_limit_micros = saved.budget_limit_micros;
     await factory.refreshOverview();
   } catch (e) {
     budgetError.value = e instanceof Error ? e.message : String(e);
@@ -129,7 +130,7 @@ const harnessEnv = computed(() =>
       <AgentsSection
         :settings="config"
         :editable="session.isAdmin && initialized"
-        @saved="config = $event"
+        @saved="Object.assign(config, $event)"
       />
       <ConnectionsSection />
 
