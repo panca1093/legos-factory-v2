@@ -27,6 +27,9 @@ type AgentRequest struct {
 	OnText       func(string)    // optional; called with each chunk of the reply as it streams, by harnesses that stream
 	Keep         bool            // keep the session open after the run, for harnesses that can continue it
 	RepoAccess   bool            // chat only: the agent may read and search WorkspaceDir
+	MCP          []MCPServer     // MCP servers to start with the session (claude only)
+	MCPAllow     []string        // mcp__<server>__<tool> names the session may call
+	MCPDeny      []string        // mcp__<server>__<tool> names to remove from the session
 }
 
 // AgentImage is one image of a turn; MediaType is image/png, image/jpeg, image/gif or image/webp.

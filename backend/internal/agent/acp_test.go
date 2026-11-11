@@ -39,7 +39,7 @@ func fakeAgent(scenario string) {
 		send(map[string]any{"method": "session/update", "params": map[string]any{"sessionId": "fake-ses", "update": u}})
 	}
 	reply := func(id any, result any) { send(map[string]any{"id": id, "result": result}) }
-	var cwd, chosenModel, sessionMeta string
+	var cwd, chosenModel, sessionMeta, sessionMCP string
 	var setCalls []string
 	var promptID any
 	turns := 0
@@ -83,11 +83,12 @@ func fakeAgent(scenario string) {
 			promptID = nil
 		case "session/new":
 			var p struct {
-				Cwd  string
-				Meta json.RawMessage `json:"_meta"`
+				Cwd        string
+				Meta       json.RawMessage `json:"_meta"`
+				McpServers json.RawMessage `json:"mcpServers"`
 			}
 			_ = json.Unmarshal(m.Params, &p)
-			cwd, sessionMeta = p.Cwd, string(p.Meta)
+			cwd, sessionMeta, sessionMCP = p.Cwd, string(p.Meta), string(p.McpServers)
 			reply(m.ID, map[string]any{"sessionId": "fake-ses", "configOptions": []any{
 				map[string]any{"id": "mode", "category": "mode", "currentValue": "build", "options": []any{map[string]any{"value": "build", "name": "Build"}, map[string]any{"value": "plan", "name": "Plan"}}},
 				map[string]any{"id": "model", "category": "model", "currentValue": "opencode/free-a", "options": []any{
@@ -121,7 +122,7 @@ func fakeAgent(scenario string) {
 				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t2", "status": "failed"})
 				update(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "thinking"}})
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": `{"cwd":"` + cwd + `",`}})
-				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": `"model":"` + chosenModel + `","config":` + fmt.Sprintf("%q", os.Getenv("OPENCODE_CONFIG_CONTENT")) + `,"meta":` + fmt.Sprintf("%q", sessionMeta) + `,"set":` + fmt.Sprintf("%q", strings.Join(setCalls, ",")) + `}`}})
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": `"model":"` + chosenModel + `","config":` + fmt.Sprintf("%q", os.Getenv("OPENCODE_CONFIG_CONTENT")) + `,"meta":` + fmt.Sprintf("%q", sessionMeta) + `,"mcp":` + fmt.Sprintf("%q", sessionMCP) + `,"set":` + fmt.Sprintf("%q", strings.Join(setCalls, ",")) + `}`}})
 				update(map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.0123, "currency": "USD"}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 4000, "cachedWriteTokens": 900}})
 			case "read-steps":
@@ -182,6 +183,9 @@ func fakeAgent(scenario string) {
 
 func fakePermissionCall() map[string]any {
 	call := map[string]any{"toolCallId": "t9", "kind": os.Getenv("ACP_FAKE_KIND")}
+	if n := os.Getenv("ACP_FAKE_TOOLNAME"); n != "" {
+		call["_meta"] = map[string]any{"claudeCode": map[string]any{"toolName": n}}
+	}
 	if p := os.Getenv("ACP_FAKE_PATH"); p != "" {
 		call["locations"] = []any{map[string]any{"path": p}}
 	}

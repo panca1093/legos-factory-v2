@@ -144,6 +144,20 @@ var claudeRepoChatMeta = map[string]any{"claudeCode": map[string]any{"options": 
 	"strictMcpConfig": true,
 }}}
 
+// withDisallowed returns a copy of meta whose disallowedTools also lists deny; the shared package-level maps are never written.
+func withDisallowed(meta map[string]any, deny []string) map[string]any {
+	if len(deny) == 0 || meta == nil {
+		return meta
+	}
+	opts := map[string]any{}
+	for k, v := range meta["claudeCode"].(map[string]any)["options"].(map[string]any) {
+		opts[k] = v
+	}
+	cur, _ := opts["disallowedTools"].([]string)
+	opts["disallowedTools"] = append(slices.Clone(cur), deny...)
+	return map[string]any{"claudeCode": map[string]any{"options": opts}}
+}
+
 type acpRun struct {
 	h         *ACPHarness
 	conn      *acpConn
@@ -164,7 +178,13 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 	conn.role, conn.repo, conn.workspace, conn.onStep, conn.onText = req.Role, repo, req.WorkspaceDir, req.OnStep, req.OnText
 	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder
 	var meta map[string]any
+	var servers []model.MCPServer // OpenCode gets none: per-tool removal was only verified on claude-agent-acp
 	if h.Provider == "claude" {
+		servers = req.MCP
+		conn.mcpAllow = map[string]bool{}
+		for _, n := range req.MCPAllow {
+			conn.mcpAllow[n] = true
+		}
 		switch req.Role {
 		case model.AgentBuilder:
 			meta = claudeBuilderMeta
@@ -176,8 +196,9 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 		default:
 			meta = claudeReadOnlyMeta
 		}
+		meta = withDisallowed(meta, req.MCPDeny)
 	}
-	ns, err := conn.newSession(ctx, req.WorkspaceDir, meta)
+	ns, err := conn.newSession(ctx, req.WorkspaceDir, meta, servers)
 	if err != nil {
 		conn.close()
 		return nil, err
@@ -347,7 +368,7 @@ func (h *ACPHarness) Models(ctx context.Context) ([]Model, error) {
 		return nil, err
 	}
 	defer conn.close()
-	ns, err := conn.newSession(ctx, h.probe, nil)
+	ns, err := conn.newSession(ctx, h.probe, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -527,7 +548,8 @@ type acpConn struct {
 	steering bool // the agent accepts _session/steering
 
 	role      model.AgentRole
-	repo      bool // a chat that may read its workspace, fixed for the session's lifetime
+	repo      bool            // a chat that may read its workspace, fixed for the session's lifetime
+	mcpAllow  map[string]bool // mcp__<server>__<tool> names the session may call, fixed at Start so Continue cannot widen it
 	workspace string
 	onStep    func(model.AgentStep)
 	onText    func(string)
@@ -581,9 +603,12 @@ func (ns acpNewSession) modelOption() *acpOption {
 	return nil
 }
 
-func (c *acpConn) newSession(ctx context.Context, cwd string, meta map[string]any) (acpNewSession, error) {
+func (c *acpConn) newSession(ctx context.Context, cwd string, meta map[string]any, servers []model.MCPServer) (acpNewSession, error) {
 	var ns acpNewSession
-	params := map[string]any{"cwd": cwd, "mcpServers": []any{}}
+	if servers == nil {
+		servers = []model.MCPServer{}
+	}
+	params := map[string]any{"cwd": cwd, "mcpServers": servers}
 	if meta != nil {
 		params["_meta"] = meta
 	}
@@ -837,6 +862,11 @@ func (c *acpConn) answerPermission(m acpMsg) {
 				Path string `json:"path"`
 			} `json:"locations"`
 			RawInput map[string]any `json:"rawInput"`
+			Meta     struct {
+				ClaudeCode struct {
+					ToolName string `json:"toolName"`
+				} `json:"claudeCode"`
+			} `json:"_meta"`
 		} `json:"toolCall"`
 		Options []struct {
 			OptionID string `json:"optionId"`
@@ -844,14 +874,19 @@ func (c *acpConn) answerPermission(m acpMsg) {
 		} `json:"options"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	reads := p.ToolCall.Kind == "read" || p.ToolCall.Kind == "search" || p.ToolCall.Kind == "think"
-	allow := c.role == model.AgentBuilder || (reads && (c.role != model.AgentChat || c.repo))
-	if c.role == model.AgentChat && c.repo {
-		allow = allow && c.repoPathsAllowed(p.ToolCall.Kind, p.ToolCall.Locations, p.ToolCall.RawInput)
+	var allow bool
+	if tool := p.ToolCall.Meta.ClaudeCode.ToolName; strings.HasPrefix(tool, "mcp__") {
+		allow = c.mcpAllow[tool]
 	} else {
-		for _, l := range p.ToolCall.Locations {
-			if !within(c.workspace, l.Path) {
-				allow = false
+		reads := p.ToolCall.Kind == "read" || p.ToolCall.Kind == "search" || p.ToolCall.Kind == "think"
+		allow = c.role == model.AgentBuilder || (reads && (c.role != model.AgentChat || c.repo))
+		if c.role == model.AgentChat && c.repo {
+			allow = allow && c.repoPathsAllowed(p.ToolCall.Kind, p.ToolCall.Locations, p.ToolCall.RawInput)
+		} else {
+			for _, l := range p.ToolCall.Locations {
+				if !within(c.workspace, l.Path) {
+					allow = false
+				}
 			}
 		}
 	}
