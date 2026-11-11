@@ -382,3 +382,80 @@ func TestMCPToolWithUnaddressableNameIsUnusable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func selWith(secret string, allow ...string) model.MCPSelection {
+	s := testSelection
+	s.Servers = []model.MCPServer{{Name: "docs", Transport: model.MCPHTTP, URL: "https://x", Secret: map[string]string{"Authorization": secret}}}
+	s.Allow = allow
+	return s
+}
+
+func TestChatKeptSessionFollowsMCPChanges(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok"}}
+	r := newChatRig(t, h)
+	sel := &fakeSelector{sel: selWith("Bearer one", "mcp__docs__search", "mcp__docs__list")}
+	r.chat.MCP = sel
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	turn := func() {
+		t.Helper()
+		if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "hi"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	turn()
+	turn()
+	if len(h.starts) != 1 || len(h.conts) != 1 {
+		t.Fatalf("an unchanged selection must continue the session: starts %d, continues %d", len(h.starts), len(h.conts))
+	}
+	sel.sel = selWith("Bearer one", "mcp__docs__search")
+	turn()
+	if len(h.starts) != 2 || len(h.closed) != 1 || len(h.conts) != 1 {
+		t.Fatalf("a disabled tool must start a fresh session: starts %d, continues %d, closed %v", len(h.starts), len(h.conts), h.closed)
+	}
+	turn()
+	sel.sel = selWith("Bearer two", "mcp__docs__search")
+	turn()
+	if len(h.starts) != 3 || len(h.closed) != 2 {
+		t.Fatalf("a rotated secret must start a fresh session: starts %d, closed %v", len(h.starts), h.closed)
+	}
+	if got := h.starts[2].MCP[0].Secret["Authorization"]; got != "Bearer two" {
+		t.Fatalf("the new session must carry the new secret: %q", got)
+	}
+}
+
+func TestPlanningSessionFollowsMCPChangesAndAuditsWhatItHas(t *testing.T) {
+	ctx := context.Background()
+	h := &sessHarness{}
+	r := sessionRig(t, h)
+	sel := &fakeSelector{sel: selWith("Bearer one", "mcp__docs__search")}
+	r.f.MCP = sel
+	run := func() {
+		t.Helper()
+		if _, _, err := r.f.runAgent(ctx, r.wo, model.AgentForeman, "p", "m", "x", map[string]string{"stage": "answer"}, "", runOpts{Planning: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run()
+	run()
+	if len(h.starts) != 1 || len(h.conts) != 1 || len(h.closed) != 0 {
+		t.Fatalf("unchanged: starts %d, continues %d, closed %v", len(h.starts), len(h.conts), h.closed)
+	}
+	sel.sel = selWith("Bearer two", "mcp__docs__search")
+	run()
+	if len(h.starts) != 2 || !slices.Equal(h.closed, []string{"s1"}) {
+		t.Fatalf("a rotated secret: starts %d, closed %v", len(h.starts), h.closed)
+	}
+	sel.sel = model.MCPSelection{}
+	run()
+	if len(h.starts) != 3 || len(h.starts[2].MCP) != 0 {
+		t.Fatalf("losing every server must start a session without any: %+v", h.starts)
+	}
+	evs := r.events(t, "agent_started")
+	if b, _ := json.Marshal(evs[len(evs)-1].Payload); strings.Contains(string(b), "mcp_") {
+		t.Fatalf("the last session has no MCP: %s", b)
+	}
+	if b, _ := json.Marshal(evs[1].Payload); !strings.Contains(string(b), `"mcp_servers":["docs"]`) {
+		t.Fatalf("a continued session audits the servers it has: %s", b)
+	}
+}

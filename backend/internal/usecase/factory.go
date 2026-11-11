@@ -5,10 +5,15 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -130,6 +135,24 @@ func applySelection(req *model.AgentRequest, sel model.MCPSelection) map[string]
 		names[i] = s.Name
 	}
 	return map[string]any{"mcp_servers": names, "mcp_tools": sel.Allow}
+}
+
+// mcpFingerprint identifies the MCP selection a session was started with; secrets enter only as hashes.
+func mcpFingerprint(req model.AgentRequest) string {
+	if len(req.MCP) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(req.MCP))
+	for _, s := range req.MCP {
+		wire, _ := json.Marshal(s)
+		sum := sha256.Sum256(wire)
+		parts = append(parts, s.Name+":"+hex.EncodeToString(sum[:]))
+	}
+	sort.Strings(parts)
+	allow, deny := slices.Sorted(slices.Values(req.MCPAllow)), slices.Sorted(slices.Values(req.MCPDeny))
+	b, _ := json.Marshal([][]string{parts, allow, deny})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // runAgent creates a run row, invokes the harness and records usage. A
@@ -263,6 +286,7 @@ type planSession struct {
 	harness SessionHarness
 	name    string
 	id      string
+	mcp     string
 }
 
 // startPlanning sends req into the work order's open Foreman session, or opens
@@ -275,7 +299,7 @@ func (f *Factory) startPlanning(ctx context.Context, woID string, h Harness, req
 	}
 	if v, ok := f.planSes.Load(woID); ok {
 		cur := v.(planSession)
-		if cur.name == h.Name() {
+		if cur.name == h.Name() && cur.mcp == mcpFingerprint(req) {
 			ses, err := sh.Continue(ctx, cur.id, req)
 			if err == nil {
 				return ses, nil
@@ -292,7 +316,7 @@ func (f *Factory) startPlanning(ctx context.Context, woID string, h Harness, req
 	if err != nil {
 		return ses, err
 	}
-	f.planSes.Store(woID, planSession{harness: sh, name: h.Name(), id: ses.ID()})
+	f.planSes.Store(woID, planSession{harness: sh, name: h.Name(), id: ses.ID(), mcp: mcpFingerprint(req)})
 	// a cancel that landed while the session was starting must not leave it parked
 	if f.cancelled(ctx, woID) {
 		f.closePlanning(woID)
