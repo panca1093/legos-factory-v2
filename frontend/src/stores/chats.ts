@@ -218,8 +218,10 @@ export const useChats = defineStore("chats", {
           const reply = find(tmpReply);
           if (event === "user_message" && typeof d.message === "object")
             swap(tmpUser, d.message);
-          else if (event === "delta" && reply) reply.content += d.text ?? "";
-          else if (event === "repo" && reply && d.project_id && d.sha)
+          else if (event === "delta" && reply) {
+            reply.content += d.text ?? "";
+            delete reply.step;
+          } else if (event === "repo" && reply && d.project_id && d.sha)
             reply.repo = { project_id: d.project_id, sha: d.sha };
           else if (event === "step" && reply && d.tools?.length)
             reply.step = d.tools[d.tools.length - 1];

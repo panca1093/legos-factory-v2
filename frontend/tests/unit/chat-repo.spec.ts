@@ -28,7 +28,9 @@ describe("repo chat stream in the store", () => {
   it("keeps the latest step while streaming and the commit after done", async () => {
     const enc = new TextEncoder();
     let ctl!: ReadableStreamDefaultController<Uint8Array>;
-    const body = new ReadableStream<Uint8Array>({ start: (c) => void (ctl = c) });
+    const body = new ReadableStream<Uint8Array>({
+      start: (c) => void (ctl = c),
+    });
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_url: string, init?: { method?: string }) =>
@@ -48,12 +50,11 @@ describe("repo chat stream in the store", () => {
           }) +
           frame("step", {
             tools: [{ name: "grep", target: "decidePlanGate", failed: false }],
-          }) +
-          frame("delta", { text: "See a.go:1" }),
+          }),
       ),
     );
     const reply = () => s.messages.c.at(-1)!;
-    await vi.waitFor(() => expect(reply().content).toBe("See a.go:1"));
+    await vi.waitFor(() => expect(reply().step?.name).toBe("grep"));
     expect(reply().pending).toBe(true);
     expect(reply().repo).toEqual({ project_id: "p1", sha: SHA });
     expect(reply().step).toEqual({
@@ -61,6 +62,9 @@ describe("repo chat stream in the store", () => {
       target: "decidePlanGate",
       failed: false,
     });
+    ctl.enqueue(enc.encode(frame("delta", { text: "See a.go:1" })));
+    await vi.waitFor(() => expect(reply().content).toBe("See a.go:1"));
+    expect(reply().step).toBeUndefined();
     ctl.enqueue(
       enc.encode(frame("done", { message: msg(2, "assistant", "See a.go:1") })),
     );
@@ -102,6 +106,33 @@ describe("repo chat stream in the store", () => {
 });
 
 describe("step line", () => {
+  it("says a failed step could not be done", () => {
+    expect(stepLine({ name: "Read File", target: "a.go", failed: true })).toBe(
+      "Could not read a.go",
+    );
+    expect(stepLine({ name: "grep", target: "x", failed: true })).toBe(
+      "Could not search x",
+    );
+    expect(stepLine({ name: "Read File", target: "", failed: true })).toBe(
+      "Could not read",
+    );
+  });
+
+  it("decides read or search from the first word of the tool name only", () => {
+    expect(stepLine({ name: "todoread", target: "", failed: false })).toBe(
+      "todoread",
+    );
+    expect(
+      stepLine({ name: "Thread summary", target: "x", failed: false }),
+    ).toBe("Thread summary x");
+    expect(
+      stepLine({ name: "Update the grep list", target: "", failed: false }),
+    ).toBe("Update the grep list");
+    expect(stepLine({ name: "Read File", target: "a", failed: false })).toBe(
+      "Reading a",
+    );
+  });
+
   it("names what the agent reads or searches", () => {
     expect(
       stepLine({
@@ -151,7 +182,13 @@ describe("repo chat in the thread", () => {
         if (url.endsWith("/api/v1/chats"))
           return json({
             chats: [
-              { id: "c", title: "t", model: "", project_id: "p1", updated_at: "" },
+              {
+                id: "c",
+                title: "t",
+                model: "",
+                project_id: "p1",
+                updated_at: "",
+              },
             ],
           });
         if (url.endsWith("/api/v1/chat/models")) return json({ models: [] });

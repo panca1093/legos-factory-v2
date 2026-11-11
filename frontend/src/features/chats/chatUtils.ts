@@ -57,14 +57,21 @@ export const formatSize = (n: number) =>
   n < 1024 ? `${n} B` : `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
 export const chatTitle = (c?: Pick<Chat, "title">) => c?.title || "New chat";
 
-// agents name tools differently ("Read File", "read", "grep", "Glob"), so the verb comes from the name
+// agents name tools differently ("Read File", "read", "grep", "Glob"), so the verb comes from the name's first word
 export function stepLine(s: ChatStep) {
-  const n = s.name.toLowerCase();
-  const verb = /read|view/.test(n)
-    ? "Reading"
-    : /grep|glob|search|find|list/.test(n)
-      ? "Searching"
-      : s.name;
+  const first = s.name.trim().split(/\s+/)[0].toLowerCase();
+  const kind = ["read", "view"].includes(first)
+    ? "read"
+    : ["grep", "glob", "search", "find", "list"].includes(first)
+      ? "search"
+      : "";
+  const verb = !kind
+    ? s.name
+    : s.failed
+      ? `Could not ${kind}`
+      : kind === "read"
+        ? "Reading"
+        : "Searching";
   return s.target ? `${verb} ${s.target}` : verb;
 }
 
