@@ -128,8 +128,8 @@ func (m *MCPServers) seal(transport string, secret map[string]string) ([]byte, e
 }
 
 func validateMCP(r *model.MCPServerRec) error {
-	if !model.MCPNamePattern.MatchString(r.Name) {
-		return mcpInvalid("name must be 1-40 characters of a-z, 0-9 and _")
+	if len(r.Name) > 40 || !model.MCPNamePattern.MatchString(r.Name) {
+		return mcpInvalid("name must be 1-40 characters of a-z and 0-9, with single _ between words")
 	}
 	switch r.Transport {
 	case model.MCPStdio:
@@ -254,7 +254,10 @@ func (m *MCPServers) Discover(ctx context.Context, id string) (model.MCPServerVi
 			was[t.Name] = t.Enabled
 		}
 		for i := range tools {
-			tools[i].Enabled = was[tools[i].Name] && (tools[i].ReadOnly || builderOnly(rec.Roles))
+			if !model.MCPToolNamePattern.MatchString(tools[i].Name) {
+				tools[i].Unusable, tools[i].UnusableReason = true, "the name has characters or a length Claude Code cannot address"
+			}
+			tools[i].Enabled = !tools[i].Unusable && was[tools[i].Name] && (tools[i].ReadOnly || builderOnly(rec.Roles))
 		}
 		now := time.Now()
 		rec.Tools, rec.DiscoveredAt, rec.LastError = tools, &now, ""
@@ -316,6 +319,9 @@ func (m *MCPServers) SetTools(ctx context.Context, id string, toggles []model.MC
 		if i < 0 {
 			return model.MCPServerView{}, mcpInvalid("the server has no tool %q", tg.Name)
 		}
+		if tg.Enabled && rec.Tools[i].Unusable {
+			return model.MCPServerView{}, mcpInvalid("tool %q has a name Claude Code cannot address, so it cannot be enabled", tg.Name)
+		}
 		if tg.Enabled && !rec.Tools[i].ReadOnly && !builderOnly(rec.Roles) {
 			return model.MCPServerView{}, mcpInvalid("tool %q writes, so it can be enabled only on a server offered to the builder alone", tg.Name)
 		}
@@ -343,7 +349,7 @@ func (m *MCPServers) Selection(ctx context.Context, role model.AgentRole) (model
 		var allow, deny []string
 		for _, t := range rec.Tools {
 			// a writing tool outside a builder-only server is dropped even if its flag says enabled
-			if t.Enabled && (t.ReadOnly || (role == model.AgentBuilder && builderOnly(rec.Roles))) {
+			if t.Enabled && !t.Unusable && (t.ReadOnly || (role == model.AgentBuilder && builderOnly(rec.Roles))) {
 				allow = append(allow, mcpToolName(rec.Name, t.Name))
 			} else {
 				deny = append(deny, mcpToolName(rec.Name, t.Name))

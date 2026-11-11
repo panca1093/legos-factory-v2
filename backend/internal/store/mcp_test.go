@@ -53,7 +53,7 @@ func TestMCPRepoRoundTripKeepsSealedSecret(t *testing.T) {
 func TestMCPRepoRejectsBadAndDuplicateNames(t *testing.T) {
 	r := &MCPRepo{DB: openTestDB(t)}
 	ctx := context.Background()
-	for _, name := range []string{"", "Upper", "has-dash", "sp ace", "dot.name", "a_very_long_name_that_is_over_forty_characters_long"} {
+	for _, name := range []string{"", "Upper", "has-dash", "sp ace", "dot.name", "a__b", "_a", "a_", "a_very_long_name_that_is_over_forty_characters_long"} {
 		s := &model.MCPServerRec{Name: name, Transport: model.MCPHTTP, Auth: model.MCPAuthNone, Status: model.MCPActive}
 		if err := r.Create(ctx, s, nil); err == nil {
 			t.Fatalf("name %q must be rejected", name)

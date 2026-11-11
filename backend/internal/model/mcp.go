@@ -19,8 +19,12 @@ const (
 	MCPDisabled = "disabled"
 )
 
-// MCPNamePattern constrains a server name because it becomes the mcp__<name>__ tool prefix.
-var MCPNamePattern = regexp.MustCompile(`^[a-z0-9_]{1,40}$`)
+// MCPNamePattern (with a 40-character limit) constrains a server name because it becomes the mcp__<name>__ tool prefix;
+// it has no "__", so Claude Code can split the tool name back into server and tool.
+var MCPNamePattern = regexp.MustCompile(`^[a-z0-9]+(_[a-z0-9]+)*$`)
+
+// MCPToolNamePattern is what Claude Code can address exactly; a tool outside it can never be enabled.
+var MCPToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // MCPRoles are the agent roles a server can be offered to.
 var MCPRoles = []string{"foreman", "architect", "builder", "inspector", "chat"}
@@ -34,6 +38,9 @@ type MCPTool struct {
 	ReadOnly    bool   `json:"read_only"`
 	Enabled     bool   `json:"enabled"`
 	Size        int    `json:"size"`
+	Unusable    bool   `json:"unusable"`
+	// UnusableReason says why Unusable is set.
+	UnusableReason string `json:"unusable_reason,omitempty"`
 }
 
 // MCPServerRec is a stored server; its credentials live sealed beside it and never appear here.

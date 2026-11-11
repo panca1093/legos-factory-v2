@@ -2,7 +2,7 @@
 -- name becomes the mcp__<name>__ prefix of the server's tools, so the database enforces its shape.
 CREATE TABLE mcp_servers (
   id            TEXT PRIMARY KEY,
-  name          TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 40 AND name NOT GLOB '*[^a-z0-9_]*'),
+  name          TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 40 AND name NOT GLOB '*[^a-z0-9_]*' AND name NOT GLOB '*__*' AND name NOT GLOB '_*' AND name NOT GLOB '*_'),
   transport     TEXT NOT NULL CHECK (transport IN ('stdio','http')),
   command       TEXT NOT NULL DEFAULT '',
   args          TEXT NOT NULL DEFAULT '[]',

@@ -69,6 +69,10 @@ func TestMCPCreateValidatesAndNeverReturnsSecrets(t *testing.T) {
 	ctx := context.Background()
 	for _, bad := range []model.CreateMCPServer{
 		{Name: "Bad-Name", Transport: model.MCPHTTP, URL: "https://x"},
+		{Name: "a__b", Transport: model.MCPHTTP, URL: "https://x"},
+		{Name: "_a", Transport: model.MCPHTTP, URL: "https://x"},
+		{Name: "a_", Transport: model.MCPHTTP, URL: "https://x"},
+		{Name: strings.Repeat("a", 41), Transport: model.MCPHTTP, URL: "https://x"},
 		{Name: "a", Transport: "ws", URL: "https://x"},
 		{Name: "a", Transport: model.MCPStdio, Command: "relative/bin"},
 		{Name: "a", Transport: model.MCPHTTP, URL: "ftp://x"},
@@ -351,5 +355,30 @@ func TestMCPSelectionAllowsOnlyReadToolsForEveryRoleButBuilder(t *testing.T) {
 		if !slices.Equal(sel.Allow, []string{"mcp__docs__search"}) || !slices.Contains(sel.Deny, "mcp__docs__write") {
 			t.Fatalf("%s: %+v", role, sel)
 		}
+	}
+}
+
+func TestMCPToolWithUnaddressableNameIsUnusable(t *testing.T) {
+	r := newMCPRig(t)
+	ctx := context.Background()
+	r.tools = []model.MCPTool{{Name: "search", ReadOnly: true}, {Name: "has space", ReadOnly: true}, {Name: "dot.name", ReadOnly: true}, {Name: strings.Repeat("a", 65), ReadOnly: true}}
+	v := r.server(t, "docs")
+	v, err := r.m.Discover(ctx, v.ID)
+	if err != nil || v.LastError != "" || len(v.Tools) != 4 {
+		t.Fatalf("an unusable tool must not block the server: %+v %v", v, err)
+	}
+	for i, want := range []bool{false, true, true, true} {
+		if v.Tools[i].Unusable != want {
+			t.Fatalf("tool %q unusable = %v, want %v", v.Tools[i].Name, v.Tools[i].Unusable, want)
+		}
+	}
+	if b, _ := json.Marshal(v); !strings.Contains(string(b), `"unusable":true`) {
+		t.Fatalf("the API view must carry the flag: %s", b)
+	}
+	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "has space", Enabled: true}}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("enabling an unusable tool: %v", err)
+	}
+	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "search", Enabled: true}}); err != nil {
+		t.Fatal(err)
 	}
 }
