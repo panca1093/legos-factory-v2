@@ -39,8 +39,8 @@ type oauthState struct {
 }
 
 type oauthPending struct {
-	serverID, userID, verifier string
-	expires                    time.Time
+	serverID, userID, verifier, serverURL, tokenEndpoint string
+	expires                                              time.Time
 }
 
 type oauthMeta struct {
@@ -144,6 +144,12 @@ func (m *MCPServers) markNeedsSignIn(ctx context.Context, id, msg string) {
 	_ = m.Store.Update(ctx, rec, nil)
 }
 
+func (m *MCPServers) lockServer(id string) func() {
+	l := m.serverLock(id)
+	l.Lock()
+	return l.Unlock
+}
+
 func (m *MCPServers) serverLock(id string) *sync.Mutex {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -158,9 +164,14 @@ func (m *MCPServers) serverLock(id string) *sync.Mutex {
 
 // oauthHeaders returns the bearer header for rec, refreshing the access token first when it is expired or about to be.
 func (m *MCPServers) oauthHeaders(ctx context.Context, rec *model.MCPServerRec) (map[string]string, error) {
-	lock := m.serverLock(rec.ID)
-	lock.Lock()
-	defer lock.Unlock()
+	defer m.lockServer(rec.ID)()
+	cur, err := m.Store.Get(ctx, rec.ID)
+	if err != nil {
+		return nil, err
+	}
+	if cur.URL != rec.URL {
+		return nil, stateConflict("the server changed; try again")
+	}
 	st, err := m.loadOAuth(ctx, rec.ID)
 	if err != nil {
 		return nil, err
@@ -195,6 +206,9 @@ func (m *MCPServers) refresh(ctx context.Context, rec *model.MCPServerRec, st oa
 	cur, err := m.Store.Get(ctx, rec.ID)
 	if err != nil {
 		return st, err
+	}
+	if cur.URL != rec.URL {
+		return st, stateConflict("the server changed while its sign-in was refreshed")
 	}
 	sealed, err := m.sealOAuth(st)
 	if err != nil {
@@ -394,30 +408,43 @@ func (m *MCPServers) OAuthStart(ctx context.Context, id, userID string) (string,
 	if rec.Auth != model.MCPAuthOAuth {
 		return "", mcpInvalid("this server does not use OAuth sign-in")
 	}
-	lock := m.serverLock(id)
-	lock.Lock()
-	defer lock.Unlock()
+	serverURL := rec.URL
+	meta, scope, err := m.discoverOAuth(ctx, serverURL)
+	if err != nil {
+		return "", err
+	}
 	st, err := m.loadOAuth(ctx, id)
 	if err != nil {
 		return "", err
 	}
-	meta, scope, err := m.discoverOAuth(ctx, rec.URL)
-	if err != nil {
+	needClient := func(st oauthState) bool {
+		return st.ClientID == "" || (st.Dynamic && st.TokenEndpoint != meta.TokenEndpoint)
+	}
+	var cid string
+	if needClient(st) {
+		if cid, err = m.register(ctx, meta.RegistrationEndpoint); err != nil {
+			return "", err
+		}
+	}
+	defer m.lockServer(id)()
+	if rec, err = m.Store.Get(ctx, id); err != nil {
 		return "", err
 	}
-	if st.ClientID == "" || (st.Dynamic && st.TokenEndpoint != meta.TokenEndpoint) {
-		cid, err := m.register(ctx, meta.RegistrationEndpoint)
-		if err != nil {
-			return "", err
+	if rec.URL != serverURL {
+		return "", stateConflict("the server changed while the sign-in was starting; start again")
+	}
+	if st, err = m.loadOAuth(ctx, id); err != nil {
+		return "", err
+	}
+	if needClient(st) {
+		if cid == "" {
+			return "", stateConflict("the sign-in changed while it was starting; start again")
 		}
 		st.ClientID, st.ClientSecret, st.Dynamic = cid, "", true
 	}
 	st.AuthEndpoint, st.TokenEndpoint = meta.AuthorizationEndpoint, meta.TokenEndpoint
 	sealed, err := m.sealOAuth(st)
 	if err != nil {
-		return "", err
-	}
-	if rec, err = m.Store.Get(ctx, id); err != nil {
 		return "", err
 	}
 	if err := m.Store.Update(ctx, rec, sealed); err != nil {
@@ -451,7 +478,7 @@ func (m *MCPServers) OAuthStart(ctx context.Context, id, userID string) (string,
 			delete(m.pending, k)
 		}
 	}
-	m.pending[state] = oauthPending{serverID: id, userID: userID, verifier: verifier, expires: m.now().Add(oauthPendingTTL)}
+	m.pending[state] = oauthPending{serverID: id, userID: userID, verifier: verifier, serverURL: rec.URL, tokenEndpoint: meta.TokenEndpoint, expires: m.now().Add(oauthPendingTTL)}
 	return u.String(), nil
 }
 
@@ -464,9 +491,17 @@ func (m *MCPServers) OAuthCallback(ctx context.Context, userID, code, state stri
 	if !ok || m.now().After(p.expires) || p.userID != userID {
 		return mcpInvalid("the sign-in link is unknown, expired or already used; start again")
 	}
+	defer m.lockServer(p.serverID)()
 	srv, err := m.Store.Get(ctx, p.serverID)
 	if err != nil {
 		return err
+	}
+	st, err := m.loadOAuth(ctx, p.serverID)
+	if err != nil {
+		return err
+	}
+	if srv.URL != p.serverURL || st.TokenEndpoint != p.tokenEndpoint {
+		return mcpInvalid("the server changed since the sign-in started; start again")
 	}
 	fail := func(err error) error {
 		if cur, gerr := m.Store.Get(ctx, p.serverID); gerr == nil {
@@ -477,13 +512,6 @@ func (m *MCPServers) OAuthCallback(ctx context.Context, userID, code, state stri
 	}
 	if code == "" {
 		return fail(mcpInvalid("the provider did not grant access"))
-	}
-	lock := m.serverLock(p.serverID)
-	lock.Lock()
-	defer lock.Unlock()
-	st, err := m.loadOAuth(ctx, p.serverID)
-	if err != nil {
-		return err
 	}
 	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {m.CallbackURL},
 		"code_verifier": {p.verifier}, "resource": {srv.URL}}
@@ -499,6 +527,9 @@ func (m *MCPServers) OAuthCallback(ctx context.Context, userID, code, state stri
 	cur, err := m.Store.Get(ctx, p.serverID)
 	if err != nil {
 		return err
+	}
+	if cur.URL != p.serverURL {
+		return mcpInvalid("the server changed while signing in; start again")
 	}
 	if cur.Status == model.MCPNeedsSignIn {
 		cur.Status = model.MCPActive

@@ -22,6 +22,14 @@ type Provider struct {
 	// switches, set before use
 	OIDCOnly, NoDCR, NoHint, RefreshFail, RefreshDown, NoRotate bool
 	ExpiresIn                                                   int
+	// ExpiresInRaw, when set, is sent as expires_in instead of ExpiresIn.
+	ExpiresInRaw any
+	// TokenStatus, when set, is the status every token request answers with, with an empty body.
+	TokenStatus int
+	// MetaOverride and PRMOverride replace fields of the authorization server metadata and the protected resource metadata.
+	MetaOverride, PRMOverride map[string]any
+	// HintOverride replaces the resource_metadata URL of the 401 challenge.
+	HintOverride string
 
 	mu        sync.Mutex
 	grants    map[string]grant
@@ -31,6 +39,12 @@ type Provider struct {
 	dcr       int
 	refreshes int
 	forms     []url.Values
+	gates     map[string]*gate
+}
+
+type gate struct {
+	open chan struct{}
+	hit  chan struct{}
 }
 
 func New(t testing.TB) *Provider {
@@ -38,6 +52,29 @@ func New(t testing.TB) *Provider {
 	p.Server = httptest.NewServer(http.HandlerFunc(p.serve))
 	t.Cleanup(p.Server.Close)
 	return p
+}
+
+// Hold makes the endpoint ("metadata" or "token") block every request until release is called; hit receives one value per blocked request.
+func (p *Provider) Hold(endpoint string) (hit <-chan struct{}, release func()) {
+	g := &gate{open: make(chan struct{}), hit: make(chan struct{}, 16)}
+	p.mu.Lock()
+	if p.gates == nil {
+		p.gates = map[string]*gate{}
+	}
+	p.gates[endpoint] = g
+	p.mu.Unlock()
+	var once sync.Once
+	return g.hit, func() { once.Do(func() { close(g.open) }) }
+}
+
+func (p *Provider) wait(endpoint string) {
+	p.mu.Lock()
+	g := p.gates[endpoint]
+	p.mu.Unlock()
+	if g != nil {
+		g.hit <- struct{}{}
+		<-g.open
+	}
 }
 
 func (p *Provider) MCPURL() string { return p.Server.URL + "/mcp" }
@@ -81,7 +118,11 @@ func (p *Provider) serve(w http.ResponseWriter, r *http.Request) {
 	case "/mcp":
 		p.mcp(w, r)
 	case "/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp":
-		writeJSON(w, map[string]any{"resource": p.MCPURL(), "authorization_servers": []string{p.Server.URL}})
+		prm := map[string]any{"resource": p.MCPURL(), "authorization_servers": []string{p.Server.URL}}
+		for k, v := range p.PRMOverride {
+			prm[k] = v
+		}
+		writeJSON(w, prm)
 	case "/.well-known/oauth-authorization-server":
 		if p.OIDCOnly {
 			http.NotFound(w, r)
@@ -107,10 +148,14 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func (p *Provider) meta(w http.ResponseWriter) {
+	p.wait("metadata")
 	m := map[string]any{"issuer": p.Server.URL, "authorization_endpoint": p.Server.URL + "/authorize", "token_endpoint": p.Server.URL + "/token",
 		"code_challenge_methods_supported": []string{"S256"}}
 	if !p.NoDCR {
 		m["registration_endpoint"] = p.Server.URL + "/register"
+	}
+	for k, v := range p.MetaOverride {
+		m[k] = v
 	}
 	writeJSON(w, m)
 }
@@ -126,7 +171,11 @@ func (p *Provider) mcp(w http.ResponseWriter, r *http.Request) {
 	p.mu.Unlock()
 	if !ok {
 		if !p.NoHint {
-			w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s/.well-known/oauth-protected-resource/mcp"`, p.Server.URL))
+			hint := p.Server.URL + "/.well-known/oauth-protected-resource/mcp"
+			if p.HintOverride != "" {
+				hint = p.HintOverride
+			}
+			w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer resource_metadata="%s"`, hint))
 		}
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -180,11 +229,20 @@ func (p *Provider) authorize(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
+	p.wait("token")
 	_ = r.ParseForm()
 	f := r.PostForm
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.forms = append(p.forms, f)
+	if p.TokenStatus != 0 {
+		w.WriteHeader(p.TokenStatus)
+		return
+	}
+	expires := any(p.ExpiresIn)
+	if p.ExpiresInRaw != nil {
+		expires = p.ExpiresInRaw
+	}
 	deny := func() {
 		w.WriteHeader(http.StatusBadRequest)
 		writeJSON(w, map[string]any{"error": "invalid_grant"})
@@ -213,7 +271,7 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 			p.seq++
 			at := fmt.Sprintf("access-%d", p.seq)
 			p.access[at] = true
-			writeJSON(w, map[string]any{"access_token": at, "token_type": "Bearer", "expires_in": p.ExpiresIn})
+			writeJSON(w, map[string]any{"access_token": at, "token_type": "Bearer", "expires_in": expires})
 			return
 		}
 		delete(p.refresh, f.Get("refresh_token"))
@@ -224,5 +282,5 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	p.seq++
 	at, rt := fmt.Sprintf("access-%d", p.seq), fmt.Sprintf("refresh-%d", p.seq)
 	p.access[at], p.refresh[rt] = true, true
-	writeJSON(w, map[string]any{"access_token": at, "refresh_token": rt, "token_type": "Bearer", "expires_in": p.ExpiresIn})
+	writeJSON(w, map[string]any{"access_token": at, "refresh_token": rt, "token_type": "Bearer", "expires_in": expires})
 }

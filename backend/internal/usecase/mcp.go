@@ -211,6 +211,7 @@ func (m *MCPServers) Create(ctx context.Context, in model.CreateMCPServer) (mode
 // Update changes a server. Changing what it connects to, or its name (the tool prefix),
 // drops the discovered tools: they belong to the old server and must be listed and enabled again.
 func (m *MCPServers) Update(ctx context.Context, id string, in model.UpdateMCPServer) (model.MCPServerView, error) {
+	defer m.lockServer(id)()
 	rec, err := m.Store.Get(ctx, id)
 	if err != nil {
 		return model.MCPServerView{}, err
@@ -346,6 +347,7 @@ func (m *MCPServers) Discover(ctx context.Context, id string) (model.MCPServerVi
 }
 
 func (m *MCPServers) SetRoles(ctx context.Context, id string, roles []string) (model.MCPServerView, error) {
+	defer m.lockServer(id)()
 	rec, err := m.Store.Get(ctx, id)
 	if err != nil {
 		return model.MCPServerView{}, err
@@ -384,6 +386,7 @@ func dedupe(in []string) []string {
 }
 
 func (m *MCPServers) SetTools(ctx context.Context, id string, toggles []model.MCPToolToggle) (model.MCPServerView, error) {
+	defer m.lockServer(id)()
 	rec, err := m.Store.Get(ctx, id)
 	if err != nil {
 		return model.MCPServerView{}, err

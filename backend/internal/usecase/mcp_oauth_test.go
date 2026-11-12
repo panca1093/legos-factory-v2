@@ -381,3 +381,172 @@ func TestOAuthKeepsRefreshTokenWhenNotRotated(t *testing.T) {
 		}
 	}
 }
+
+func recv(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+func signedOut(t *testing.T, r *oauthRig, id string) {
+	t.Helper()
+	st, err := r.m.loadOAuth(context.Background(), id)
+	if err != nil || st.Access != "" || st.Refresh != "" {
+		t.Fatalf("tokens survived: %+v %v", st, err)
+	}
+	if got, _ := r.m.Get(context.Background(), id); got.SignedIn {
+		t.Fatalf("still signed in: %+v", got)
+	}
+}
+
+func TestOAuthURLChangeDuringRefreshLeavesNoTokensOnTheNewHost(t *testing.T) {
+	r := newOAuthRig(t)
+	ctx := context.Background()
+	v := r.create(t, model.CreateMCPServer{})
+	r.signIn(t, v.ID, "adm")
+	r.offered(t, v.ID)
+	hit, release := r.fp.Hold("token")
+	r.advance(time.Hour)
+	done, patched := make(chan struct{}), make(chan error, 1)
+	go func() { _, _ = r.m.Selection(ctx, model.AgentInspector); close(done) }()
+	recv(t, hit, "the refresh request")
+	other := "https://elsewhere.example/mcp"
+	go func() { _, err := r.m.Update(ctx, v.ID, model.UpdateMCPServer{URL: &other}); patched <- err }()
+	time.Sleep(50 * time.Millisecond)
+	release()
+	recv(t, done, "the refresh")
+	if err := <-patched; err != nil {
+		t.Fatal(err)
+	}
+	signedOut(t, r, v.ID)
+}
+
+func TestOAuthRefreshDoesNotWriteWhenTheURLChangedUnderIt(t *testing.T) {
+	r := newOAuthRig(t)
+	ctx := context.Background()
+	v := r.create(t, model.CreateMCPServer{})
+	r.signIn(t, v.ID, "adm")
+	r.offered(t, v.ID)
+	before, _ := r.m.loadOAuth(ctx, v.ID)
+	hit, release := r.fp.Hold("token")
+	r.advance(time.Hour)
+	done := make(chan struct{})
+	go func() { _, _ = r.m.Selection(ctx, model.AgentInspector); close(done) }()
+	recv(t, hit, "the refresh request")
+	rec, _ := r.repo.Get(ctx, v.ID)
+	rec.URL = "https://elsewhere.example/mcp"
+	if err := r.repo.Update(ctx, rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	recv(t, done, "the refresh")
+	if after, _ := r.m.loadOAuth(ctx, v.ID); after.Access != before.Access {
+		t.Fatal("the refreshed token was stored for a server that moved")
+	}
+}
+
+func TestOAuthURLChangeDuringCallbackLeavesNoTokensOnTheNewHost(t *testing.T) {
+	r := newOAuthRig(t)
+	ctx := context.Background()
+	v := r.create(t, model.CreateMCPServer{})
+	u, err := r.m.OAuthStart(ctx, v.ID, "adm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, state, _ := r.fp.Browser(u)
+	hit, release := r.fp.Hold("token")
+	called, patched := make(chan struct{}), make(chan error, 1)
+	go func() { _ = r.m.OAuthCallback(ctx, "adm", code, state); close(called) }()
+	recv(t, hit, "the token request")
+	other := "https://elsewhere.example/mcp"
+	go func() { _, err := r.m.Update(ctx, v.ID, model.UpdateMCPServer{URL: &other}); patched <- err }()
+	time.Sleep(50 * time.Millisecond)
+	release()
+	recv(t, called, "the callback")
+	if err := <-patched; err != nil {
+		t.Fatal(err)
+	}
+	signedOut(t, r, v.ID)
+}
+
+func TestOAuthPendingSignInIsBoundToTheServerItStartedFor(t *testing.T) {
+	t.Run("url changed", func(t *testing.T) {
+		r := newOAuthRig(t)
+		ctx := context.Background()
+		v := r.create(t, model.CreateMCPServer{})
+		u, _ := r.m.OAuthStart(ctx, v.ID, "adm")
+		code, state, _ := r.fp.Browser(u)
+		other := "https://elsewhere.example/mcp"
+		if _, err := r.m.Update(ctx, v.ID, model.UpdateMCPServer{URL: &other}); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.m.OAuthCallback(ctx, "adm", code, state); !errors.Is(err, ErrInvalid) || len(r.fp.Forms()) != 0 {
+			t.Fatalf("err=%v token requests=%d", err, len(r.fp.Forms()))
+		}
+		signedOut(t, r, v.ID)
+	})
+	t.Run("token endpoint changed", func(t *testing.T) {
+		r := newOAuthRig(t)
+		ctx := context.Background()
+		v := r.create(t, model.CreateMCPServer{})
+		u, _ := r.m.OAuthStart(ctx, v.ID, "adm")
+		code, state, _ := r.fp.Browser(u)
+		r.fp.MetaOverride = map[string]any{"token_endpoint": r.fp.Server.URL + "/token?v=2"}
+		if _, err := r.m.OAuthStart(ctx, v.ID, "adm"); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.m.OAuthCallback(ctx, "adm", code, state); !errors.Is(err, ErrInvalid) || len(r.fp.Forms()) != 0 {
+			t.Fatalf("err=%v token requests=%d", err, len(r.fp.Forms()))
+		}
+	})
+}
+
+func TestOAuthStartDoesNotHoldTheServerLockWhileTalkingToTheNetwork(t *testing.T) {
+	r := newOAuthRig(t)
+	ctx := context.Background()
+	v := r.create(t, model.CreateMCPServer{})
+	r.signIn(t, v.ID, "adm")
+	r.offered(t, v.ID)
+	hit, release := r.fp.Hold("metadata")
+	defer release()
+	started := make(chan struct{})
+	go func() { _, _ = r.m.OAuthStart(ctx, v.ID, "adm"); close(started) }()
+	recv(t, hit, "the metadata request")
+	sel := make(chan int, 1)
+	go func() { s, _ := r.m.Selection(ctx, model.AgentInspector); sel <- len(s.Servers) }()
+	select {
+	case n := <-sel:
+		if n != 1 {
+			t.Fatalf("selection lost the server: %d", n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Selection blocked behind a sign-in that was waiting on the network")
+	}
+	release()
+	recv(t, started, "OAuthStart")
+}
+
+func TestOAuthStartAbortsWhenTheURLChangedDuringDiscovery(t *testing.T) {
+	r := newOAuthRig(t)
+	ctx := context.Background()
+	v := r.create(t, model.CreateMCPServer{})
+	hit, release := r.fp.Hold("metadata")
+	defer release()
+	res := make(chan error, 1)
+	go func() { _, err := r.m.OAuthStart(ctx, v.ID, "adm"); res <- err }()
+	recv(t, hit, "the metadata request")
+	other := "https://elsewhere.example/mcp"
+	if _, err := r.m.Update(ctx, v.ID, model.UpdateMCPServer{URL: &other}); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if err := <-res; !errors.Is(err, model.ErrStateConflict) {
+		t.Fatalf("got %v", err)
+	}
+	if st, _ := r.m.loadOAuth(ctx, v.ID); st.TokenEndpoint != "" || st.ClientID != "" {
+		t.Fatalf("discovery of the old host was stored: %+v", st)
+	}
+}
