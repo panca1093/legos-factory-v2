@@ -531,7 +531,11 @@ it("Sign in starts the flow and opens the authorize URL in a new window", async 
     json({ servers: [oauthServer()], credentials_configured: true });
   routes["POST /api/v1/mcp-servers/m1/oauth/start"] = () =>
     json({ authorize_url: "https://auth.example/authorize?state=s" });
-  const win = { location: { href: "" }, close: vi.fn() };
+  const win = {
+    location: { href: "" },
+    close: vi.fn(),
+    opener: window as Window | null,
+  };
   const open = vi.spyOn(window, "open").mockReturnValue(win as never);
   const { w } = await render();
   const row = w.find('[data-mcp="docs_search"]');
@@ -546,6 +550,7 @@ it("Sign in starts the flow and opens the authorize URL in a new window", async 
   expect(open).toHaveBeenCalledWith("", "_blank");
   expect(sent("POST", "/api/v1/mcp-servers/m1/oauth/start")).toHaveLength(1);
   expect(win.location.href).toBe("https://auth.example/authorize?state=s");
+  expect(win.opener).toBeNull();
   w.unmount();
 });
 

@@ -43,6 +43,7 @@ async function run(action: () => Promise<unknown>) {
 }
 async function signIn() {
   const win = window.open("", "_blank");
+  if (win) win.opener = null;
   const ok = await run(async () => {
     const res = await api.post<{ authorize_url: string }>(
       `${base.value}/oauth/start`,
