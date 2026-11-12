@@ -248,16 +248,19 @@ export interface McpServer {
   command: string;
   args: string[];
   url: string;
-  auth: string;
+  auth: "none" | "token" | "oauth";
   roles: string[];
   tools: McpTool[];
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "needs_sign_in";
   last_error: string;
   discovered_at?: string;
   created_at: string;
   updated_at: string;
   secret_keys: string[];
   approx_tokens: number;
+  signed_in: boolean;
+  expires_at?: string;
+  oauth_client: "" | "dynamic" | "manual";
 }
 
 export type Trust = "verified" | "human_decision" | "ai_interpretation";

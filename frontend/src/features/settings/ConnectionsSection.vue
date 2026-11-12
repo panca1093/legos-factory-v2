@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { Laptop } from "lucide-vue-next";
 import { publishLabel } from "../../composables/presentation";
 import { useFactory } from "../../stores/factory";
@@ -15,7 +16,10 @@ import McpServerRow from "./McpServerRow.vue";
 import ProjectBindingRow from "./ProjectBindingRow.vue";
 
 const factory = useFactory(),
-  session = useSession();
+  session = useSession(),
+  route = useRoute(),
+  router = useRouter();
+const oauthFlag = ref("");
 const busy = ref(""),
   error = ref(""),
   loadError = ref("");
@@ -66,6 +70,10 @@ const mcp = reactive({
   command: "",
   args: "",
   url: "",
+  auth: "token" as "none" | "token" | "oauth",
+  clientId: "",
+  clientSecret: "",
+  scopes: "",
   secrets: [{ key: "", value: "" }],
 });
 const isMcp = computed(() => form.kind === "mcp");
@@ -103,6 +111,11 @@ async function loadServers() {
   }
 }
 onMounted(async () => {
+  const flag = route.query.mcp_oauth;
+  if (flag === "ok" || flag === "error") {
+    oauthFlag.value = flag;
+    void router.replace({ query: {}, hash: "#connections" });
+  }
   factory.refreshProjects().catch(() => {});
   void loadServers();
   try {
@@ -134,11 +147,15 @@ async function run(key: string, action: () => Promise<unknown>) {
 
 async function create() {
   if (isMcp.value) {
-    const secret = Object.fromEntries(
-      mcp.secrets
-        .filter((s) => s.key.trim())
-        .map((s) => [s.key.trim(), s.value]),
-    );
+    const oauth = mcp.transport === "http" && mcp.auth === "oauth";
+    const secret =
+      oauth || (mcp.transport === "http" && mcp.auth === "none")
+        ? {}
+        : Object.fromEntries(
+            mcp.secrets
+              .filter((s) => s.key.trim())
+              .map((s) => [s.key.trim(), s.value]),
+          );
     const ok = await run("create", async () => {
       await api.post("/api/v1/mcp-servers", {
         name: form.name.trim(),
@@ -153,6 +170,14 @@ async function create() {
             : [],
         url: mcp.transport === "http" ? mcp.url.trim() : "",
         secret,
+        ...(oauth
+          ? {
+              auth: "oauth",
+              client_id: mcp.clientId.trim(),
+              client_secret: mcp.clientSecret.trim(),
+              scopes: mcp.scopes.trim(),
+            }
+          : {}),
       });
       await loadServers();
     });
@@ -162,6 +187,10 @@ async function create() {
         command: "",
         args: "",
         url: "",
+        auth: "token",
+        clientId: "",
+        clientSecret: "",
+        scopes: "",
         secrets: [{ key: "", value: "" }],
       });
     }
@@ -224,6 +253,24 @@ function setContract(p: Project, on: boolean) {
       encrypted at rest and never shown again.
     </p>
     <p v-if="loadError" class="notice" role="alert">{{ loadError }}</p>
+    <p
+      v-if="oauthFlag === 'ok'"
+      class="notice"
+      role="status"
+      data-test="mcp-oauth-flag"
+    >
+      Signed in. Discover the server's tools to choose which ones agents may
+      use.
+    </p>
+    <p
+      v-else-if="oauthFlag === 'error'"
+      class="notice"
+      role="alert"
+      data-test="mcp-oauth-flag"
+    >
+      Sign-in did not complete: the link may have expired or the provider
+      refused it. Check the server's error below and sign in again.
+    </p>
 
     <div
       v-for="c in factory.connections"
@@ -457,7 +504,58 @@ function setContract(p: Project, on: boolean) {
             placeholder="https://mcp.example.com/mcp"
           />
         </div>
-        <div class="form-group">
+        <div v-if="mcp.transport === 'http'" class="form-group">
+          <label for="mcp-auth">Authentication</label
+          ><select id="mcp-auth" v-model="mcp.auth">
+            <option value="none">None</option>
+            <option value="token">Token or header</option>
+            <option value="oauth">OAuth sign-in</option>
+          </select>
+          <p v-if="mcp.auth === 'oauth'" class="help">
+            After adding the server, use Sign in to authorize it with its
+            provider. The access token is stored encrypted and refreshed
+            automatically.
+          </p>
+        </div>
+        <details
+          v-if="mcp.transport === 'http' && mcp.auth === 'oauth'"
+          class="form-group"
+        >
+          <summary>Advanced</summary>
+          <div class="form-group">
+            <label for="mcp-client-id">Client ID</label
+            ><input
+              id="mcp-client-id"
+              v-model="mcp.clientId"
+              autocomplete="off"
+            />
+            <p class="help">
+              Leave empty to register automatically. Needed when the provider
+              does not allow that.
+            </p>
+          </div>
+          <div class="form-group">
+            <label for="mcp-client-secret">Client secret</label
+            ><input
+              id="mcp-client-secret"
+              v-model="mcp.clientSecret"
+              type="password"
+              autocomplete="new-password"
+            />
+          </div>
+          <div class="form-group">
+            <label for="mcp-scopes">Scopes</label
+            ><input
+              id="mcp-scopes"
+              v-model="mcp.scopes"
+              placeholder="Space-separated; empty uses the provider default"
+            />
+          </div>
+        </details>
+        <div
+          v-if="mcp.transport === 'stdio' || mcp.auth === 'token'"
+          class="form-group"
+        >
           <span class="form-label">Secrets</span>
           <div v-for="(s, i) in mcp.secrets" :key="i" class="row">
             <input

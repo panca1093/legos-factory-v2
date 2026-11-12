@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -112,4 +113,27 @@ func (s *Server) handleSetMCPTools(c echo.Context) error {
 		return integrationError(c, err)
 	}
 	return c.JSON(http.StatusOK, v)
+}
+
+func (s *Server) handleMCPOAuthStart(c echo.Context) error {
+	if !s.mcpReady(c) {
+		return nil
+	}
+	u, err := s.MCP.OAuthStart(c.Request().Context(), c.Param("id"), currentUser(c).ID)
+	if err != nil {
+		return integrationError(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]string{"authorize_url": u})
+}
+
+func (s *Server) handleMCPOAuthCallback(c echo.Context) error {
+	if !s.mcpReady(c) {
+		return nil
+	}
+	err := s.MCP.OAuthCallback(c.Request().Context(), currentUser(c).ID, c.QueryParam("code"), c.QueryParam("state"))
+	flag := "ok"
+	if err != nil {
+		flag = "error"
+	}
+	return c.Redirect(http.StatusFound, strings.TrimRight(s.Cfg.FrontendOrigin, "/")+"/settings?mcp_oauth="+flag+"#connections")
 }

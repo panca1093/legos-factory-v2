@@ -252,6 +252,8 @@ func (s *Server) routes() {
 	api.POST("/mcp-servers/:id/discover", s.requireRole(model.RoleAdmin, s.handleDiscoverMCPServer))
 	api.PUT("/mcp-servers/:id/roles", s.requireRole(model.RoleAdmin, s.handleSetMCPRoles))
 	api.PUT("/mcp-servers/:id/tools", s.requireRole(model.RoleAdmin, s.handleSetMCPTools))
+	api.POST("/mcp-servers/:id/oauth/start", s.requireRole(model.RoleAdmin, s.handleMCPOAuthStart))
+	api.GET("/mcp/oauth/callback", s.requireRole(model.RoleAdmin, s.handleMCPOAuthCallback))
 	api.PUT("/projects/:id/contract-tests", s.requireRole(model.RoleEngineer, s.handleProjectContractTests))
 	api.PUT("/projects/:id/kb-scope", s.requireRole(model.RoleEngineer, s.handleProjectKBScope))
 	api.PUT("/projects/:id/binding", s.requireRole(model.RoleEngineer, s.handleBindProject))

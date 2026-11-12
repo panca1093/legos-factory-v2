@@ -3,8 +3,12 @@ package store
 import (
 	"bytes"
 	"context"
+	"database/sql"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/pressly/goose/v3"
 
 	"legos-factory/backend/internal/model"
 )
@@ -65,5 +69,61 @@ func TestMCPRepoRejectsBadAndDuplicateNames(t *testing.T) {
 	}
 	if err := r.Create(ctx, &model.MCPServerRec{Name: "ok_1", Transport: model.MCPHTTP, Auth: model.MCPAuthNone, Status: model.MCPActive}, nil); err == nil {
 		t.Fatal("duplicate name must be rejected")
+	}
+}
+
+func TestMigration022KeepsMCPRowsAndConstraints(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "old.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { db.Close() })
+	goose.SetBaseFS(migrationsFS)
+	if err := goose.SetDialect("sqlite3"); err != nil {
+		t.Fatal(err)
+	}
+	if err := goose.UpTo(db, "migrations", 21); err != nil {
+		t.Fatal(err)
+	}
+	const cols = `INSERT INTO mcp_servers (id, name, transport, command, args, url, auth, secret_enc, roles, tools, status, last_error, discovered_at, created_at, updated_at) VALUES `
+	for _, q := range []string{
+		cols + `('m1','jira_docs','http','','[]','https://x.example/mcp','token',x'0102','["builder"]','[{"name":"t"}]','active','boom',5,10,11)`,
+		cols + `('m2','plain','stdio','/bin/x','["-a"]','','none',x'','[]','[]','disabled','',NULL,20,21)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := goose.UpTo(db, "migrations", 22); err != nil {
+		t.Fatal(err)
+	}
+	var name, url, auth, status, roles, lastErr string
+	var secret []byte
+	var disc sql.NullInt64
+	var created int64
+	if err := db.QueryRow(`SELECT name, url, auth, secret_enc, roles, status, last_error, discovered_at, created_at FROM mcp_servers WHERE id='m1'`).
+		Scan(&name, &url, &auth, &secret, &roles, &status, &lastErr, &disc, &created); err != nil {
+		t.Fatal(err)
+	}
+	if name != "jira_docs" || url != "https://x.example/mcp" || auth != "token" || !bytes.Equal(secret, []byte{1, 2}) || roles != `["builder"]` ||
+		status != "active" || lastErr != "boom" || disc.Int64 != 5 || created != 10 {
+		t.Fatalf("token row changed: %s %s %s %x %s %s %s %v %d", name, url, auth, secret, roles, status, lastErr, disc, created)
+	}
+	if err := db.QueryRow(`SELECT auth, status, discovered_at FROM mcp_servers WHERE id='m2'`).Scan(&auth, &status, &disc); err != nil || auth != "none" || status != "disabled" || disc.Valid {
+		t.Fatalf("none row changed: %s %s %v %v", auth, status, disc, err)
+	}
+	if _, err := db.Exec(cols + `('m3','oauth_srv','http','','[]','https://y.example/mcp','oauth',x'','[]','[]','needs_sign_in','',NULL,1,1)`); err != nil {
+		t.Fatalf("oauth / needs_sign_in must be accepted: %v", err)
+	}
+	for name, q := range map[string]string{
+		"junk auth":   cols + `('m4','a','http','','[]','','junk',x'','[]','[]','active','',NULL,1,1)`,
+		"junk status": cols + `('m5','b','http','','[]','','none',x'','[]','[]','junk','',NULL,1,1)`,
+		"bad name":    cols + `('m6','Bad Name','http','','[]','','none',x'','[]','[]','active','',NULL,1,1)`,
+		"duplicate":   cols + `('m7','plain','http','','[]','','none',x'','[]','[]','active','',NULL,1,1)`,
+	} {
+		if _, err := db.Exec(q); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
 	}
 }

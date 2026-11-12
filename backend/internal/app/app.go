@@ -81,7 +81,8 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	if secrets != nil { // a nil *SecretBox in the interface would not be nil
 		integrations.Secrets = secrets
 	}
-	mcpServers := &usecase.MCPServers{Store: &store.MCPRepo{DB: db}, Lister: agent.ListMCPTools}
+	mcpServers := &usecase.MCPServers{Store: &store.MCPRepo{DB: db}, Lister: agent.ListMCPTools,
+		CallbackURL: cfg.FrontendOrigin + "/api/v1/mcp/oauth/callback"}
 	if secrets != nil {
 		mcpServers.Secrets = secrets
 	}

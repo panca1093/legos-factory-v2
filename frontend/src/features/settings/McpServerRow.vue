@@ -41,11 +41,29 @@ async function run(action: () => Promise<unknown>) {
     busy.value = false;
   }
 }
+async function signIn() {
+  const win = window.open("", "_blank");
+  if (win) win.opener = null;
+  const ok = await run(async () => {
+    const res = await api.post<{ authorize_url: string }>(
+      `${base.value}/oauth/start`,
+    );
+    if (win) win.location.href = res.authorize_url;
+    else window.location.assign(res.authorize_url);
+  });
+  if (!ok) win?.close();
+}
+const isOAuth = computed(() => props.server.auth === "oauth");
+const expiry = computed(() =>
+  props.server.expires_at
+    ? new Date(props.server.expires_at).toLocaleString()
+    : "",
+);
 const discover = () => run(() => api.post(`${base.value}/discover`));
 const toggleStatus = () =>
   run(() =>
     api.patch(base.value, {
-      status: props.server.status === "active" ? "disabled" : "active",
+      status: props.server.status === "disabled" ? "active" : "disabled",
     }),
   );
 async function toggleRole(role: string, el: HTMLInputElement) {
@@ -114,6 +132,19 @@ function whyLocked(t: McpServer["tools"][number]) {
           · secrets: {{ server.secret_keys.join(", ") }}</template
         >
       </p>
+      <p v-if="isOAuth" class="help" data-test="mcp-oauth-state">
+        OAuth ·
+        <template v-if="server.status === 'needs_sign_in' || !server.signed_in"
+          >sign-in needed</template
+        ><template v-else
+          >signed in<template v-if="expiry">
+            · access token until {{ expiry }}</template
+          ></template
+        >
+        <template v-if="server.oauth_client">
+          · {{ server.oauth_client }} client</template
+        >
+      </p>
       <p v-if="server.last_error" class="form-error" data-test="mcp-last-error">
         {{ server.last_error }}
       </p>
@@ -123,20 +154,35 @@ function whyLocked(t: McpServer["tools"][number]) {
       <span
         class="pill"
         :class="
-          server.status === 'disabled' ? 'red' : discovered ? 'green' : 'orange'
+          server.status === 'disabled'
+            ? 'red'
+            : discovered && server.status === 'active'
+              ? 'green'
+              : 'orange'
         "
         >{{
           server.status === "disabled"
             ? "Disabled"
-            : discovered
-              ? `${enabledCount} of ${server.tools.length} tools on`
-              : "Not discovered"
+            : server.status === "needs_sign_in"
+              ? "Sign-in needed"
+              : discovered
+                ? `${enabledCount} of ${server.tools.length} tools on`
+                : "Not discovered"
         }}</span
       >
       <span v-if="server.approx_tokens" class="pill" data-test="mcp-tokens"
         >~{{ server.approx_tokens }} tokens</span
       >
       <template v-if="canManage">
+        <button
+          v-if="isOAuth"
+          class="btn small primary"
+          data-test="mcp-sign-in"
+          :disabled="busy"
+          @click="signIn"
+        >
+          {{ server.signed_in ? "Sign in again" : "Sign in" }}
+        </button>
         <button class="btn small" :disabled="busy" @click="discover">
           {{ discovered ? "Discover again" : "Discover" }}
         </button>
@@ -144,7 +190,7 @@ function whyLocked(t: McpServer["tools"][number]) {
           {{ open ? "Hide tools" : "Tools and roles" }}
         </button>
         <button class="btn small" :disabled="busy" @click="toggleStatus">
-          {{ server.status === "active" ? "Disable" : "Enable" }}
+          {{ server.status === "disabled" ? "Enable" : "Disable" }}
         </button>
         <button class="btn small" :disabled="busy" @click="startEdit">
           Rename or rotate
@@ -168,7 +214,7 @@ function whyLocked(t: McpServer["tools"][number]) {
         <label :for="`mcp-rename-${server.id}`">Name</label>
         <input :id="`mcp-rename-${server.id}`" v-model="edit.name" />
       </div>
-      <div class="form-group">
+      <div v-if="!isOAuth" class="form-group">
         <span class="form-label">Replace secrets</span>
         <p class="help">
           Anything entered here replaces all stored secrets. Leave empty to keep

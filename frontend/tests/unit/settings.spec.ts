@@ -34,13 +34,15 @@ const server = (over: Partial<McpServer> = {}): McpServer => ({
   command: "",
   args: [],
   url: "https://mcp.example.com/mcp",
-  auth: "",
+  auth: "token",
   roles: ["builder"],
   status: "active",
   last_error: "",
   created_at: "",
   updated_at: "",
   secret_keys: ["Authorization"],
+  signed_in: false,
+  oauth_client: "",
   approx_tokens: 0,
   discovered_at: undefined,
   tools: [],
@@ -480,4 +482,131 @@ it("uses the same project row and wording in the Add project dialog", async () =
   expect(dialogText).toContain(settingsHelp.slice(0, 60));
   expect(dialogText).not.toContain("work orders cannot start");
   d.unmount();
+});
+
+const oauthServer = (over: Partial<McpServer> = {}) =>
+  server({
+    auth: "oauth",
+    secret_keys: [],
+    status: "needs_sign_in",
+    signed_in: false,
+    ...over,
+  });
+
+it("offers None, Token and OAuth for http servers and sends the OAuth fields", async () => {
+  routes["POST /api/v1/mcp-servers"] = () => json(oauthServer(), 201);
+  const { w } = await render();
+  await w.find("#conn-provider").setValue("mcp");
+  expect(w.find("#mcp-auth").exists()).toBe(false);
+  await w.find("#mcp-transport").setValue("http");
+  const options = w.findAll("#mcp-auth option").map((o) => o.text());
+  expect(options).toEqual(["None", "Token or header", "OAuth sign-in"]);
+  expect(w.find('input[aria-label="Secret name"]').exists()).toBe(true);
+  await w.find("#mcp-auth").setValue("oauth");
+  expect(w.find('input[aria-label="Secret name"]').exists()).toBe(false);
+  await w.find("#conn-name").setValue("docs_search");
+  await w.find("#mcp-url").setValue("https://mcp.example.com/mcp");
+  await w.find("#mcp-client-id").setValue(" cid ");
+  await w.find("#mcp-client-secret").setValue("csec");
+  await w.find("#mcp-scopes").setValue("read write");
+  await w.find('[data-test="connection-form"]').trigger("submit");
+  await flushPromises();
+  expect(sent("POST", "/api/v1/mcp-servers")[0].body).toEqual({
+    name: "docs_search",
+    transport: "http",
+    command: "",
+    args: [],
+    url: "https://mcp.example.com/mcp",
+    secret: {},
+    auth: "oauth",
+    client_id: "cid",
+    client_secret: "csec",
+    scopes: "read write",
+  });
+  w.unmount();
+});
+
+it("Sign in starts the flow and opens the authorize URL in a new window", async () => {
+  routes["GET /api/v1/mcp-servers"] = () =>
+    json({ servers: [oauthServer()], credentials_configured: true });
+  routes["POST /api/v1/mcp-servers/m1/oauth/start"] = () =>
+    json({ authorize_url: "https://auth.example/authorize?state=s" });
+  const win = {
+    location: { href: "" },
+    close: vi.fn(),
+    opener: window as Window | null,
+  };
+  const open = vi.spyOn(window, "open").mockReturnValue(win as never);
+  const { w } = await render();
+  const row = w.find('[data-mcp="docs_search"]');
+  expect(row.find('[data-test="mcp-oauth-state"]').text()).toContain(
+    "sign-in needed",
+  );
+  expect(row.text()).toContain("Sign-in needed");
+  const btn = row.find('[data-test="mcp-sign-in"]');
+  expect(btn.text()).toBe("Sign in");
+  await btn.trigger("click");
+  await flushPromises();
+  expect(open).toHaveBeenCalledWith("", "_blank");
+  expect(sent("POST", "/api/v1/mcp-servers/m1/oauth/start")).toHaveLength(1);
+  expect(win.location.href).toBe("https://auth.example/authorize?state=s");
+  expect(win.opener).toBeNull();
+  w.unmount();
+});
+
+it("closes the opened window and shows the error when start fails", async () => {
+  routes["GET /api/v1/mcp-servers"] = () =>
+    json({ servers: [oauthServer()], credentials_configured: true });
+  routes["POST /api/v1/mcp-servers/m1/oauth/start"] = () =>
+    fail(400, "VALIDATION_FAILED", "enter a client ID under Advanced");
+  const win = { location: { href: "" }, close: vi.fn() };
+  vi.spyOn(window, "open").mockReturnValue(win as never);
+  const { w } = await render();
+  await w.find('[data-test="mcp-sign-in"]').trigger("click");
+  await flushPromises();
+  expect(win.close).toHaveBeenCalled();
+  expect(win.location.href).toBe("");
+  expect(w.text()).toContain("enter a client ID under Advanced");
+  w.unmount();
+});
+
+it("shows signed-in state with expiry and offers Sign in again", async () => {
+  routes["GET /api/v1/mcp-servers"] = () =>
+    json({
+      servers: [
+        oauthServer({
+          status: "active",
+          signed_in: true,
+          expires_at: "2026-11-12T10:00:00Z",
+          oauth_client: "dynamic",
+        }),
+      ],
+      credentials_configured: true,
+    });
+  const { w } = await render();
+  const row = w.find('[data-mcp="docs_search"]');
+  const state = row.find('[data-test="mcp-oauth-state"]').text();
+  expect(state).toContain("signed in");
+  expect(state).toContain("access token until");
+  expect(state).toContain("dynamic client");
+  expect(row.find('[data-test="mcp-sign-in"]').text()).toBe("Sign in again");
+  expect(row.text()).not.toContain("Replace secrets");
+  w.unmount();
+});
+
+it("shows the callback result from the URL once and clears it", async () => {
+  let r = await render("/settings?mcp_oauth=ok#connections");
+  expect(r.w.find('[data-test="mcp-oauth-flag"]').text()).toContain(
+    "Signed in",
+  );
+  expect(r.router.currentRoute.value.query.mcp_oauth).toBeUndefined();
+  r.w.unmount();
+  r = await render("/settings?mcp_oauth=error#connections");
+  expect(r.w.find('[data-test="mcp-oauth-flag"]').text()).toContain(
+    "Sign-in did not complete",
+  );
+  r.w.unmount();
+  r = await render("/settings#connections");
+  expect(r.w.find('[data-test="mcp-oauth-flag"]').exists()).toBe(false);
+  r.w.unmount();
 });
