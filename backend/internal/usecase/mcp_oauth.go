@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,6 +45,7 @@ type oauthPending struct {
 }
 
 type oauthMeta struct {
+	Issuer                string `json:"issuer"`
 	AuthorizationEndpoint string `json:"authorization_endpoint"`
 	TokenEndpoint         string `json:"token_endpoint"`
 	RegistrationEndpoint  string `json:"registration_endpoint"`
@@ -286,7 +288,18 @@ func safeToken(s string) string {
 
 func isHTTPURL(raw string) bool {
 	u, err := url.Parse(raw)
-	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Scheme == "https" || (u.Scheme == "http" && isLoopbackHost(u.Hostname()))
+}
+
+func isLoopbackHost(h string) bool {
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (m *MCPServers) getJSON(ctx context.Context, u string, out any) bool {
@@ -303,18 +316,55 @@ func (m *MCPServers) getJSON(ctx context.Context, u string, out any) bool {
 	return resp.StatusCode == http.StatusOK && json.NewDecoder(io.LimitReader(resp.Body, oauthMaxBody)).Decode(out) == nil
 }
 
-// wwwAuthParam reads a quoted parameter such as resource_metadata or scope from a WWW-Authenticate value.
+// wwwAuthParam reads the parameter called name from a WWW-Authenticate value, matching whole names only.
 func wwwAuthParam(header, name string) string {
-	i := strings.Index(header, name+`="`)
-	if i < 0 {
-		return ""
+	s := header
+	for {
+		s = strings.TrimLeft(s, " \t,")
+		i := strings.IndexAny(s, "= \t,")
+		if i < 0 {
+			return ""
+		}
+		key := s[:i]
+		s = strings.TrimLeft(s[i:], " \t")
+		if !strings.HasPrefix(s, "=") {
+			continue
+		}
+		s = strings.TrimLeft(s[1:], " \t")
+		var val strings.Builder
+		if strings.HasPrefix(s, `"`) {
+			s = s[1:]
+			closed := false
+			for len(s) > 0 && !closed {
+				switch c := s[0]; {
+				case c == '\\' && len(s) > 1:
+					val.WriteByte(s[1])
+					s = s[2:]
+				case c == '"':
+					closed, s = true, s[1:]
+				default:
+					val.WriteByte(c)
+					s = s[1:]
+				}
+			}
+			if !closed {
+				return ""
+			}
+		} else {
+			j := strings.IndexAny(s, ", \t")
+			if j < 0 {
+				j = len(s)
+			}
+			val.WriteString(s[:j])
+			s = s[j:]
+		}
+		if strings.EqualFold(key, name) {
+			return val.String()
+		}
 	}
-	v := header[i+len(name)+2:]
-	if j := strings.Index(v, `"`); j >= 0 {
-		return v[:j]
-	}
-	return ""
 }
+
+func sameURL(a, b string) bool { return strings.TrimSuffix(a, "/") == strings.TrimSuffix(b, "/") }
 
 // discoverOAuth follows the MCP authorization spec: the server's 401 hint or well-known path leads to the
 // protected resource metadata, whose first authorization server leads to its metadata.
@@ -344,21 +394,33 @@ func (m *MCPServers) discoverOAuth(ctx context.Context, serverURL string) (oauth
 		hint = su.Scheme + "://" + su.Host + "/.well-known/oauth-protected-resource"
 	}
 	var prm struct {
+		Resource             string   `json:"resource"`
 		AuthorizationServers []string `json:"authorization_servers"`
 	}
 	if !isHTTPURL(hint) || !m.getJSON(ctx, hint, &prm) || len(prm.AuthorizationServers) == 0 {
 		return none, "", mcpInvalid("the server does not publish OAuth protected resource metadata, so it cannot be signed in to")
+	}
+	if !sameURL(prm.Resource, serverURL) {
+		return none, "", mcpInvalid("the server's metadata describes a different resource (%q), so it cannot be signed in to", truncateRunes(prm.Resource, 100))
 	}
 	issuer, err := url.Parse(prm.AuthorizationServers[0])
 	if err != nil || !isHTTPURL(prm.AuthorizationServers[0]) {
 		return none, "", mcpInvalid("the server names an invalid authorization server")
 	}
 	host, path := issuer.Scheme+"://"+issuer.Host, strings.TrimRight(issuer.Path, "/")
+	var wrongIssuer string
 	for _, u := range []string{host + "/.well-known/oauth-authorization-server" + path, host + "/.well-known/openid-configuration" + path, host + path + "/.well-known/openid-configuration"} {
 		var cand oauthMeta
 		if m.getJSON(ctx, u, &cand) && isHTTPURL(cand.AuthorizationEndpoint) && isHTTPURL(cand.TokenEndpoint) {
+			if !sameURL(cand.Issuer, prm.AuthorizationServers[0]) {
+				wrongIssuer = cand.Issuer
+				continue
+			}
 			return cand, scope, nil
 		}
+	}
+	if wrongIssuer != "" {
+		return none, "", mcpInvalid("the authorization server's metadata names a different issuer (%q)", truncateRunes(wrongIssuer, 100))
 	}
 	return none, "", mcpInvalid("could not read the authorization server's metadata")
 }

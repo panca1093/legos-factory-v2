@@ -550,3 +550,127 @@ func TestOAuthStartAbortsWhenTheURLChangedDuringDiscovery(t *testing.T) {
 		t.Fatalf("discovery of the old host was stored: %+v", st)
 	}
 }
+
+func TestOAuthPlainHTTPOnlyForLoopback(t *testing.T) {
+	for raw, want := range map[string]bool{
+		"https://example.com/x": true, "http://localhost:8080/x": true, "http://127.0.0.1/x": true, "http://127.9.9.9:1/x": true,
+		"http://[::1]:9/x": true, "http://example.com/x": false, "http://localhost.evil.com/x": false, "http://127.0.0.1.evil.com/x": false,
+		"http://10.0.0.1/x": false, "ftp://localhost/x": false, "http:///x": false,
+	} {
+		if got := isHTTPURL(raw); got != want {
+			t.Errorf("isHTTPURL(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+func TestOAuthServerURLMustBeHTTPSUnlessLoopback(t *testing.T) {
+	r := newOAuthRig(t)
+	ctx := context.Background()
+	if _, err := r.m.Create(ctx, model.CreateMCPServer{Name: "a", Transport: model.MCPHTTP, URL: "http://example.com/mcp", Auth: model.MCPAuthOAuth}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("create: %v", err)
+	}
+	v := r.create(t, model.CreateMCPServer{})
+	plain := "http://example.com/mcp"
+	if _, err := r.m.Update(ctx, v.ID, model.UpdateMCPServer{URL: &plain}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("update: %v", err)
+	}
+	if _, err := r.m.Create(ctx, model.CreateMCPServer{Name: "tok", Transport: model.MCPHTTP, URL: plain}); err != nil {
+		t.Fatalf("a server without OAuth keeps accepting http: %v", err)
+	}
+}
+
+func TestOAuthDiscoveryRejectsPlainHTTPAtEveryPoint(t *testing.T) {
+	for name, tc := range map[string]struct {
+		set  func(*mcpfake.Provider)
+		want string
+	}{
+		"resource metadata hint": {func(p *mcpfake.Provider) { p.HintOverride = "http://example.com/prm" }, "protected resource metadata"},
+		"authorization server": {func(p *mcpfake.Provider) {
+			p.PRMOverride = map[string]any{"authorization_servers": []string{"http://example.com"}}
+		}, "invalid authorization server"},
+		"authorization endpoint": {func(p *mcpfake.Provider) {
+			p.MetaOverride = map[string]any{"authorization_endpoint": "http://example.com/authorize"}
+		}, "metadata"},
+		"token endpoint": {func(p *mcpfake.Provider) {
+			p.MetaOverride = map[string]any{"token_endpoint": "http://example.com/token"}
+		}, "metadata"},
+		"registration endpoint": {func(p *mcpfake.Provider) {
+			p.MetaOverride = map[string]any{"registration_endpoint": "http://example.com/register"}
+		}, "enter a client ID"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newOAuthRig(t)
+			tc.set(r.fp)
+			v := r.create(t, model.CreateMCPServer{})
+			_, err := r.m.OAuthStart(context.Background(), v.ID, "adm")
+			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v", err)
+			}
+		})
+	}
+}
+
+func TestOAuthMetadataMustDescribeItself(t *testing.T) {
+	start := func(t *testing.T, set func(*mcpfake.Provider)) error {
+		r := newOAuthRig(t)
+		set(r.fp)
+		v := r.create(t, model.CreateMCPServer{})
+		_, err := r.m.OAuthStart(context.Background(), v.ID, "adm")
+		return err
+	}
+	t.Run("resource mismatch", func(t *testing.T) {
+		err := start(t, func(p *mcpfake.Provider) { p.PRMOverride = map[string]any{"resource": "https://other.example/mcp"} })
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "different resource") {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("missing resource", func(t *testing.T) {
+		err := start(t, func(p *mcpfake.Provider) { p.PRMOverride = map[string]any{"resource": ""} })
+		if !errors.Is(err, ErrInvalid) {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("issuer mismatch", func(t *testing.T) {
+		err := start(t, func(p *mcpfake.Provider) { p.MetaOverride = map[string]any{"issuer": "https://other.example"} })
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "different issuer") {
+			t.Fatalf("got %v", err)
+		}
+	})
+	t.Run("trailing slashes match", func(t *testing.T) {
+		err := start(t, func(p *mcpfake.Provider) {
+			p.PRMOverride = map[string]any{"resource": p.MCPURL() + "/", "authorization_servers": []string{p.Server.URL + "/"}}
+			p.MetaOverride = map[string]any{"issuer": p.Server.URL + "/"}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("endpoints may live on another host", func(t *testing.T) {
+		err := start(t, func(p *mcpfake.Provider) {
+			other := strings.Replace(p.Server.URL, "127.0.0.1", "localhost", 1)
+			p.MetaOverride = map[string]any{"token_endpoint": other + "/token", "authorization_endpoint": other + "/authorize", "registration_endpoint": other + "/register"}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestWWWAuthParamMatchesWholeNames(t *testing.T) {
+	for _, tc := range []struct{ header, name, want string }{
+		{`Bearer resource_metadata="https://a/prm", scope="read write"`, "scope", "read write"},
+		{`Bearer resource_metadata="https://a/prm", scope="read write"`, "resource_metadata", "https://a/prm"},
+		{`Bearer error_scope="x"`, "scope", ""},
+		{`Bearer error_scope="x", scope="read"`, "scope", "read"},
+		{`Bearer myscope="x" scope=read`, "scope", "read"},
+		{`Bearer realm="a, scope=\"evil\"", scope="ok"`, "scope", "ok"},
+		{`Bearer Scope="read"`, "scope", "read"},
+		{`Bearer`, "scope", ""},
+		{``, "scope", ""},
+		{`Bearer scope="unterminated`, "scope", ""},
+	} {
+		if got := wwwAuthParam(tc.header, tc.name); got != tc.want {
+			t.Errorf("wwwAuthParam(%q, %q) = %q, want %q", tc.header, tc.name, got, tc.want)
+		}
+	}
+}

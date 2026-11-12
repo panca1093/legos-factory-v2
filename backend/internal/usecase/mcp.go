@@ -163,6 +163,9 @@ func validateMCP(r *model.MCPServerRec) error {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return mcpInvalid("url must be an http(s) address")
 		}
+		if r.Auth == model.MCPAuthOAuth && !isHTTPURL(r.URL) {
+			return mcpInvalid("an OAuth server's url must be https, or http on localhost")
+		}
 		if r.Command != "" || len(r.Args) > 0 {
 			return mcpInvalid("an http server has no command")
 		}
@@ -182,6 +185,9 @@ func mcpStoreErr(err error) error {
 func (m *MCPServers) Create(ctx context.Context, in model.CreateMCPServer) (model.MCPServerView, error) {
 	rec := &model.MCPServerRec{Name: in.Name, Transport: in.Transport, Command: in.Command, Args: in.Args, URL: in.URL,
 		Auth: model.MCPAuthNone, Status: model.MCPActive}
+	if in.Auth == model.MCPAuthOAuth {
+		rec.Auth = model.MCPAuthOAuth
+	}
 	if err := validateMCP(rec); err != nil {
 		return model.MCPServerView{}, err
 	}
