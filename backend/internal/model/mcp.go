@@ -14,9 +14,11 @@ const (
 
 	MCPAuthNone  = "none"
 	MCPAuthToken = "token"
+	MCPAuthOAuth = "oauth"
 
-	MCPActive   = "active"
-	MCPDisabled = "disabled"
+	MCPActive      = "active"
+	MCPDisabled    = "disabled"
+	MCPNeedsSignIn = "needs_sign_in"
 )
 
 // MCPNamePattern (with a 40-character limit) constrains a server name because it becomes the mcp__<name>__ tool prefix;
@@ -66,6 +68,10 @@ type MCPServerView struct {
 	MCPServerRec
 	SecretKeys   []string `json:"secret_keys"`
 	ApproxTokens int      `json:"approx_tokens"`
+	// the OAuth fields are zero unless Auth is "oauth"; OAuthClient is "dynamic" or "manual" once a client is known
+	SignedIn    bool       `json:"signed_in"`
+	ExpiresAt   *time.Time `json:"expires_at"`
+	OAuthClient string     `json:"oauth_client"`
 }
 
 // MCPServer is the ACP session/new wire object of one server, credentials included.
@@ -112,6 +118,11 @@ type CreateMCPServer struct {
 	Args      []string          `json:"args"`
 	URL       string            `json:"url"`
 	Secret    map[string]string `json:"secret"`
+	// Auth "oauth" (http only) signs in through the server's authorization server; the client fields are optional manual registration.
+	Auth         string `json:"auth"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	Scopes       string `json:"scopes"`
 }
 
 // UpdateMCPServer leaves a nil field unchanged; a non-nil Secret replaces the whole map.
