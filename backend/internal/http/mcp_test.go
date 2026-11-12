@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	nethttp "net/http"
 	"net/http/httptest"
@@ -47,21 +48,23 @@ func tinyMCP(t *testing.T) *httptest.Server {
 	return srv
 }
 
-func bootMCP(t *testing.T) *Server {
+func bootMCP(t *testing.T) *Server { return bootMCPLog(t, testDiscard{}) }
+
+func bootMCPLog(t *testing.T, logs io.Writer) *Server {
 	t.Helper()
 	db, err := store.Open(filepath.Join(t.TempDir(), "factory.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	srv := New(&model.Config{FrontendOrigin: "http://localhost:5173"}, slog.New(slog.NewTextHandler(testDiscard{}, nil)))
+	srv := New(&model.Config{FrontendOrigin: "http://localhost:5173"}, slog.New(slog.NewTextHandler(logs, nil)))
 	srv.Auth = &usecase.Identity{Users: &store.UserRepo{DB: db}, Mode: "dev", DevUser: model.User{ID: "u1", Email: "a@b", Name: "A", Role: model.RoleOwner}}
 	box, _ := store.NewSecretBox(bytes.Repeat([]byte{9}, 32))
 	srv.MCP = &usecase.MCPServers{Store: &store.MCPRepo{DB: db}, Secrets: box, Lister: agent.ListMCPTools}
 	for _, u := range []struct {
 		id   string
 		role model.Role
-	}{{"eng", model.RoleEngineer}, {"adm", model.RoleAdmin}} {
+	}{{"eng", model.RoleEngineer}, {"adm", model.RoleAdmin}, {"adm2", model.RoleAdmin}} {
 		if _, err := db.Exec(`INSERT INTO users (id, email, name, role, created_at) VALUES (?,?,?,?,?)`, u.id, u.id+"@t", u.id, string(u.role), time.Now().Unix()); err != nil {
 			t.Fatal(err)
 		}
