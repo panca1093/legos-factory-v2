@@ -674,3 +674,40 @@ func TestWWWAuthParamMatchesWholeNames(t *testing.T) {
 		}
 	}
 }
+
+func TestOAuthReSignInToAnotherAuthorizationServerDropsOldTokens(t *testing.T) {
+	r := newOAuthRig(t)
+	ctx := context.Background()
+	v := r.create(t, model.CreateMCPServer{})
+	r.signIn(t, v.ID, "adm")
+	r.fp.MetaOverride = map[string]any{"token_endpoint": r.fp.Server.URL + "/token?v=2"}
+	if _, err := r.m.OAuthStart(ctx, v.ID, "adm"); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := r.m.loadOAuth(ctx, v.ID)
+	got, _ := r.m.Get(ctx, v.ID)
+	if st.Access != "" || st.Refresh != "" || !st.Expiry.IsZero() || got.SignedIn || got.Status != model.MCPNeedsSignIn || st.ClientID != "dyn-2" {
+		t.Fatalf("old secrets survived: %+v %+v", st, got)
+	}
+}
+
+func TestOAuthReSignInRefusesToCarryAManualClientToAnotherAuthorizationServer(t *testing.T) {
+	r := newOAuthRig(t)
+	ctx := context.Background()
+	r.fp.NoDCR = true
+	v := r.create(t, model.CreateMCPServer{ClientID: "my-client", ClientSecret: "my-client-secret"})
+	r.signIn(t, v.ID, "adm")
+	before, _ := r.m.loadOAuth(ctx, v.ID)
+	r.fp.MetaOverride = map[string]any{"token_endpoint": r.fp.Server.URL + "/token?v=2"}
+	_, err := r.m.OAuthStart(ctx, v.ID, "adm")
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "the authorization server changed; enter the client again") {
+		t.Fatalf("got %v", err)
+	}
+	after, _ := r.m.loadOAuth(ctx, v.ID)
+	if after != before {
+		t.Fatalf("stored state changed: %+v -> %+v", before, after)
+	}
+	if got, _ := r.m.Get(ctx, v.ID); !got.SignedIn || got.Status != model.MCPActive {
+		t.Fatalf("view: %+v", got)
+	}
+}

@@ -498,6 +498,15 @@ func (m *MCPServers) OAuthStart(ctx context.Context, id, userID string) (string,
 	if st, err = m.loadOAuth(ctx, id); err != nil {
 		return "", err
 	}
+	if st.TokenEndpoint != "" && st.TokenEndpoint != meta.TokenEndpoint {
+		if !st.Dynamic && st.ClientID != "" {
+			return "", mcpInvalid("the authorization server changed; enter the client again")
+		}
+		st.Access, st.Refresh, st.Expiry = "", "", time.Time{}
+		if rec.Status == model.MCPActive {
+			rec.Status = model.MCPNeedsSignIn
+		}
+	}
 	if needClient(st) {
 		if cid == "" {
 			return "", stateConflict("the sign-in changed while it was starting; start again")
