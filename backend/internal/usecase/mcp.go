@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -44,6 +45,8 @@ type MCPServers struct {
 
 	// CallbackURL is the OAuth redirect URI the browser returns to.
 	CallbackURL string
+	// Log receives the warning when a run goes on without a server; nil means slog.Default.
+	Log *slog.Logger
 	// HTTP and Now are for OAuth calls and expiry; nil means a client without redirects and the wall clock.
 	HTTP *http.Client
 	Now  func() time.Time
@@ -57,6 +60,13 @@ var (
 	mcpEnvName    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	mcpHeaderName = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 )
+
+func (m *MCPServers) logger() *slog.Logger {
+	if m.Log != nil {
+		return m.Log
+	}
+	return slog.Default()
+}
 
 func mcpInvalid(format string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, a...))
@@ -446,6 +456,7 @@ func (m *MCPServers) Selection(ctx context.Context, role model.AgentRole) (model
 		}
 		srv, err := m.wire(ctx, rec)
 		if err != nil {
+			m.logger().Warn("mcp server left out of the run", "server", rec.Name, "error", truncateRunes(err.Error(), 200))
 			continue
 		}
 		sel.Servers = append(sel.Servers, srv)

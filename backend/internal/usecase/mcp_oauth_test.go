@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -709,5 +710,103 @@ func TestOAuthReSignInRefusesToCarryAManualClientToAnotherAuthorizationServer(t 
 	}
 	if got, _ := r.m.Get(ctx, v.ID); !got.SignedIn || got.Status != model.MCPActive {
 		t.Fatalf("view: %+v", got)
+	}
+}
+
+func TestOAuthRefreshesEarlyEnoughToOutliveARun(t *testing.T) {
+	for name, tc := range map[string]struct {
+		expiresIn          int
+		quiet, wantRefresh time.Duration
+	}{
+		"15 minutes before expiry":         {1200, 4 * time.Minute, 6 * time.Minute},
+		"half the lifetime of a long one":  {7200, 59 * time.Minute, 61 * time.Minute},
+		"half the lifetime of a short one": {3600, 29 * time.Minute, 31 * time.Minute},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newOAuthRig(t)
+			ctx := context.Background()
+			r.fp.ExpiresIn = tc.expiresIn
+			v := r.create(t, model.CreateMCPServer{})
+			r.signIn(t, v.ID, "adm")
+			r.offered(t, v.ID)
+			r.advance(tc.quiet)
+			if _, err := r.m.Selection(ctx, model.AgentInspector); err != nil || r.fp.Refreshes() != 0 {
+				t.Fatalf("refreshed too early: refreshes=%d err=%v", r.fp.Refreshes(), err)
+			}
+			r.advance(tc.wantRefresh - tc.quiet)
+			if sel, err := r.m.Selection(ctx, model.AgentInspector); err != nil || len(sel.Servers) != 1 || r.fp.Refreshes() != 1 {
+				t.Fatalf("not refreshed in time: refreshes=%d err=%v", r.fp.Refreshes(), err)
+			}
+		})
+	}
+}
+
+func TestOAuthSelectionLogsOneWarningWhenItDropsAServer(t *testing.T) {
+	r := newOAuthRig(t)
+	var buf bytes.Buffer
+	r.m.Log = slog.New(slog.NewTextHandler(&buf, nil))
+	v := r.create(t, model.CreateMCPServer{})
+	r.signIn(t, v.ID, "adm")
+	r.offered(t, v.ID)
+	r.advance(time.Hour)
+	r.fp.RefreshFail = true
+	if sel, _ := r.m.Selection(context.Background(), model.AgentInspector); len(sel.Servers) != 0 {
+		t.Fatal("the server must be dropped")
+	}
+	out := buf.String()
+	if strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "docs") || !strings.Contains(out, "invalid_grant") {
+		t.Fatalf("log: %q", out)
+	}
+	assertNoSecrets(t, "log", []string{"access-", "refresh-"}, out)
+}
+
+func TestOAuthTransientTokenStatusesKeepSignIn(t *testing.T) {
+	for _, status := range []int{408, 429, 503} {
+		r := newOAuthRig(t)
+		v := r.create(t, model.CreateMCPServer{})
+		r.signIn(t, v.ID, "adm")
+		r.offered(t, v.ID)
+		r.advance(time.Hour)
+		r.fp.TokenStatus = status
+		if sel, _ := r.m.Selection(context.Background(), model.AgentInspector); len(sel.Servers) != 0 {
+			t.Fatalf("%d: the run goes on without the server", status)
+		}
+		if got, _ := r.m.Get(context.Background(), v.ID); got.Status != model.MCPActive {
+			t.Fatalf("%d must not force a new sign-in: %+v", status, got)
+		}
+	}
+	r := newOAuthRig(t)
+	v := r.create(t, model.CreateMCPServer{})
+	r.signIn(t, v.ID, "adm")
+	r.offered(t, v.ID)
+	r.advance(time.Hour)
+	r.fp.TokenStatus = 400
+	r.m.Selection(context.Background(), model.AgentInspector)
+	if got, _ := r.m.Get(context.Background(), v.ID); got.Status != model.MCPNeedsSignIn {
+		t.Fatalf("a 400 is a refusal: %+v", got)
+	}
+}
+
+func TestOAuthExpiresInMayBeANumberOrANumericString(t *testing.T) {
+	for name, raw := range map[string]any{"number": 7200, "string": "7200", "float": 7200.0, "junk": "soon"} {
+		t.Run(name, func(t *testing.T) {
+			r := newOAuthRig(t)
+			r.fp.ExpiresInRaw = raw
+			v := r.create(t, model.CreateMCPServer{})
+			r.signIn(t, v.ID, "adm")
+			got, _ := r.m.Get(context.Background(), v.ID)
+			if !got.SignedIn {
+				t.Fatalf("sign-in failed: %+v", got)
+			}
+			if name == "junk" {
+				if got.ExpiresAt != nil {
+					t.Fatalf("junk must mean no expiry: %v", got.ExpiresAt)
+				}
+				return
+			}
+			if got.ExpiresAt == nil || !got.ExpiresAt.Equal(r.clock.Add(2*time.Hour)) {
+				t.Fatalf("expires at %v", got.ExpiresAt)
+			}
+		})
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +22,7 @@ import (
 
 const (
 	oauthPendingTTL   = 10 * time.Minute
-	oauthRefreshSkew  = 60 * time.Second
+	oauthRefreshEarly = 15 * time.Minute
 	oauthMaxBody      = 1 << 20
 	oauthNoDCRMessage = "this server's authorization server does not support dynamic client registration; enter a client ID under Advanced"
 )
@@ -37,6 +38,16 @@ type oauthState struct {
 	Access        string    `json:"access,omitempty"`
 	Refresh       string    `json:"refresh,omitempty"`
 	Expiry        time.Time `json:"expiry"`
+	Issued        time.Time `json:"issued"`
+}
+
+// refreshDue is true once less than 15 minutes, or less than half of the token's lifetime, remains.
+func (st oauthState) refreshDue(now time.Time) bool {
+	if st.Expiry.IsZero() {
+		return false
+	}
+	left := st.Expiry.Sub(now)
+	return left < oauthRefreshEarly || (!st.Issued.IsZero() && left < st.Expiry.Sub(st.Issued)/2)
 }
 
 type oauthPending struct {
@@ -181,7 +192,7 @@ func (m *MCPServers) oauthHeaders(ctx context.Context, rec *model.MCPServerRec) 
 	if st.Access == "" {
 		return nil, errors.New("not signed in")
 	}
-	if !st.Expiry.IsZero() && m.now().Add(oauthRefreshSkew).After(st.Expiry) {
+	if st.refreshDue(m.now()) {
 		if st, err = m.refresh(ctx, rec, st); err != nil {
 			return nil, err
 		}
@@ -220,11 +231,23 @@ func (m *MCPServers) refresh(ctx context.Context, rec *model.MCPServerRec, st oa
 }
 
 type oauthToken struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int64  `json:"expires_in"`
-	Error        string `json:"error"`
+	AccessToken  string  `json:"access_token"`
+	RefreshToken string  `json:"refresh_token"`
+	TokenType    string  `json:"token_type"`
+	ExpiresIn    seconds `json:"expires_in"`
+	Error        string  `json:"error"`
+}
+
+// seconds reads a JSON number or numeric string; anything else counts as absent.
+type seconds int64
+
+func (s *seconds) UnmarshalJSON(b []byte) error {
+	n, err := strconv.ParseFloat(strings.Trim(string(b), `"`), 64)
+	if err != nil {
+		n = 0
+	}
+	*s = seconds(n)
+	return nil
 }
 
 func (st *oauthState) applyToken(t oauthToken, now time.Time) {
@@ -232,7 +255,7 @@ func (st *oauthState) applyToken(t oauthToken, now time.Time) {
 	if t.RefreshToken != "" {
 		st.Refresh = t.RefreshToken
 	}
-	st.Expiry = time.Time{}
+	st.Issued, st.Expiry = now, time.Time{}
 	if t.ExpiresIn > 0 {
 		st.Expiry = now.Add(time.Duration(t.ExpiresIn) * time.Second)
 	}
@@ -258,7 +281,7 @@ func (m *MCPServers) tokenRequest(ctx context.Context, st oauthState, form url.V
 	defer resp.Body.Close()
 	var t oauthToken
 	_ = json.NewDecoder(io.LimitReader(resp.Body, oauthMaxBody)).Decode(&t)
-	if resp.StatusCode >= 500 {
+	if resp.StatusCode >= 500 || resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests {
 		return t, false, fmt.Errorf("the token endpoint answered %d", resp.StatusCode)
 	}
 	if resp.StatusCode/100 != 2 || t.AccessToken == "" {
@@ -502,7 +525,7 @@ func (m *MCPServers) OAuthStart(ctx context.Context, id, userID string) (string,
 		if !st.Dynamic && st.ClientID != "" {
 			return "", mcpInvalid("the authorization server changed; enter the client again")
 		}
-		st.Access, st.Refresh, st.Expiry = "", "", time.Time{}
+		st.Access, st.Refresh, st.Issued, st.Expiry = "", "", time.Time{}, time.Time{}
 		if rec.Status == model.MCPActive {
 			rec.Status = model.MCPNeedsSignIn
 		}
