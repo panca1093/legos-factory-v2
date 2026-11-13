@@ -210,7 +210,7 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 	if err != nil {
 		return nil, err
 	}
-	conn.role, conn.repo, conn.workspace, conn.onStep, conn.onText = req.Role, repo, req.WorkspaceDir, req.OnStep, req.OnText
+	conn.role, conn.repo, conn.workspace, conn.onStep, conn.onText, conn.onPerm = req.Role, repo, req.WorkspaceDir, req.OnStep, req.OnText, req.OnPermission
 	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder
 	var meta map[string]any
 	var servers []model.MCPServer // OpenCode gets none: per-tool removal was only verified on claude-agent-acp
@@ -219,6 +219,10 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 		conn.mcpAllow = map[string]bool{}
 		for _, n := range req.MCPAllow {
 			conn.mcpAllow[n] = true
+		}
+		conn.mcpAsk = map[string]bool{}
+		for _, n := range req.MCPAsk {
+			conn.mcpAsk[n] = true
 		}
 		switch req.Role {
 		case model.AgentBuilder:
@@ -311,7 +315,7 @@ func (h *ACPHarness) Continue(_ context.Context, sessionID string, req model.Age
 	conn.text.Reset()
 	conn.steps, conn.tools = 0, nil
 	conn.costSeen = conn.cost != conn.costAttr // cost reported between turns belongs to this run
-	conn.onStep, conn.onText = req.OnStep, req.OnText
+	conn.onStep, conn.onText, conn.onPerm = req.OnStep, req.OnText, req.OnPermission
 	run.costBase = conn.costAttr
 	conn.mu.Unlock()
 	return h.launch(run, req.Prompt, req.Images)
@@ -509,7 +513,7 @@ func (h *ACPHarness) Steer(ctx context.Context, sessionID, text string) error {
 func (r *acpRun) finish(wait func(context.Context) (json.RawMessage, error)) {
 	r.collect(wait)
 	r.conn.mu.Lock()
-	r.conn.onStep, r.conn.onText = nil, nil // a parked session must not call back into a finished caller
+	r.conn.onStep, r.conn.onText, r.conn.onPerm = nil, nil, nil // a parked session must not call back into a finished caller
 	r.conn.mu.Unlock()
 	// parked before done closes, so the caller's next Continue always finds it
 	if r.err != nil || !r.h.park(r) {
@@ -585,9 +589,11 @@ type acpConn struct {
 	role      model.AgentRole
 	repo      bool            // a chat that may read its workspace, fixed for the session's lifetime
 	mcpAllow  map[string]bool // mcp__<server>__<tool> names the session may call, fixed at Start so Continue cannot widen it
+	mcpAsk    map[string]bool // the mcpAllow names a human decides per call, fixed at Start like mcpAllow
 	workspace string
 	onStep    func(model.AgentStep)
 	onText    func(string)
+	onPerm    func(context.Context, model.PermissionRequest) bool // guarded by mu
 
 	mu       sync.Mutex
 	text     strings.Builder
@@ -920,6 +926,14 @@ func (c *acpConn) answerPermission(m acpMsg) {
 	}
 	if strings.HasPrefix(tool, "mcp__") {
 		allow = c.mcpAllow[tool]
+		if allow && c.mcpAsk[tool] {
+			c.mu.Lock()
+			onPerm := c.onPerm
+			c.mu.Unlock()
+			// a human may take minutes, and readLoop must keep delivering updates meanwhile
+			go c.askPermission(m.ID, p.Options, tool, p.ToolCall.RawInput, onPerm)
+			return
+		}
 	} else if tool == "" && p.ToolCall.Kind == "other" {
 		allow = false
 	} else {
@@ -935,17 +949,50 @@ func (c *acpConn) answerPermission(m acpMsg) {
 			}
 		}
 	}
+	c.reply(m.ID, p.Options, allow)
+}
+
+type acpPermOption = struct {
+	OptionID string `json:"optionId"`
+	Kind     string `json:"kind"`
+}
+
+func (c *acpConn) reply(id json.RawMessage, options []acpPermOption, allow bool) {
 	want := "reject_once"
 	if allow {
 		want = "allow_once"
 	}
 	outcome := map[string]any{"outcome": "cancelled"}
-	for _, o := range p.Options {
+	for _, o := range options {
 		if o.Kind == want {
 			outcome = map[string]any{"outcome": "selected", "optionId": o.OptionID}
 		}
 	}
-	_ = c.write(map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": map[string]any{"outcome": outcome}})
+	if c.gone() {
+		return
+	}
+	_ = c.write(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"outcome": outcome}})
+}
+
+// askPermission lets onPerm decide a call to a writing MCP tool; without one the call is rejected.
+func (c *acpConn) askPermission(id json.RawMessage, options []acpPermOption, tool string, input map[string]any, onPerm func(context.Context, model.PermissionRequest) bool) {
+	allow := false
+	if onPerm != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-c.exited:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		parts := strings.SplitN(strings.TrimPrefix(tool, "mcp__"), "__", 2)
+		if len(parts) == 2 {
+			allow = onPerm(ctx, model.PermissionRequest{ID: strings.Trim(string(id), `"`), Server: parts[0], Tool: parts[1], Input: input})
+		}
+	}
+	c.reply(id, options, allow)
 }
 
 // repoPathsAllowed holds a repo chat's call to the workspace: every path it names, however it names it, must resolve inside.

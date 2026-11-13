@@ -223,6 +223,16 @@ export interface RuntimeInfo {
   max_concurrent_runs: number;
 }
 
+export type ChatPermissionDecision = "allow" | "allow_all" | "deny";
+
+export interface ChatPermission {
+  id: string;
+  server: string;
+  tool: string;
+  input: string;
+  state: "pending" | "answering" | "allowed" | "denied" | "expired";
+}
+
 export const MCP_ROLES = [
   "foreman",
   "architect",

@@ -109,6 +109,7 @@ type MCPSelection struct {
 	Servers []MCPServer
 	Allow   []string
 	Deny    []string
+	Ask     []string // the Allow entries that write; a human approves each call
 }
 
 type CreateMCPServer struct {

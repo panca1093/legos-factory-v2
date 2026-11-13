@@ -14,8 +14,8 @@ const edit = reactive({
   secrets: [] as { key: string; value: string }[],
 });
 const base = computed(() => `/api/v1/mcp-servers/${props.server.id}`);
-const builderOnly = computed(
-  () => props.server.roles.length === 1 && props.server.roles[0] === "builder",
+const unattendedRole = computed(() =>
+  props.server.roles.some((r) => r !== "chat"),
 );
 const discovered = computed(() => !!props.server.discovered_at);
 const enabledCount = computed(
@@ -111,13 +111,10 @@ async function saveEdit() {
 }
 const toolKind = (t: McpServer["tools"][number]) =>
   t.unusable ? "Unusable" : t.read_only ? "Read-only" : "Writing";
-const canEnable = (t: McpServer["tools"][number]) =>
-  !t.unusable && (t.read_only || builderOnly.value);
+const canEnable = (t: McpServer["tools"][number]) => !t.unusable;
 function whyLocked(t: McpServer["tools"][number]) {
   if (t.unusable)
     return t.unusable_reason || "Claude Code cannot address this tool name";
-  if (!t.read_only && !builderOnly.value)
-    return "Writing tools can be enabled only when this server is offered to Builder alone";
   return "";
 }
 </script>
@@ -280,6 +277,13 @@ function whyLocked(t: McpServer["tools"][number]) {
           <span class="help"> · ~{{ t.size }} tokens</span>
           <p class="help">{{ t.description }}</p>
           <p v-if="whyLocked(t)" class="help">{{ whyLocked(t) }}</p>
+          <p
+            v-if="t.enabled && !t.read_only && !t.unusable && unattendedRole"
+            class="help"
+            :data-test="`mcp-warn-${t.name}`"
+          >
+            Agent bisa menjalankan tool ini tanpa persetujuan
+          </p>
         </div>
         <label class="switch"
           ><input

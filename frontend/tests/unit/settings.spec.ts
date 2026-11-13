@@ -415,8 +415,14 @@ it("toggles tools and roles, enforcing the writing-tool rule in the UI and showi
   });
   expect(
     w.find('[data-test="mcp-tool-write_page"]').attributes("disabled"),
-  ).toBeDefined();
-  expect(w.find('[data-tool="write_page"]').text()).toContain("Builder alone");
+  ).toBeUndefined();
+  expect(w.find('[data-test="mcp-warn-write_page"]').exists()).toBe(false);
+  await w.find('[data-test="mcp-tool-write_page"]').setValue(true);
+  await flushPromises();
+  expect(w.find('[data-test="mcp-warn-write_page"]').text()).toBe(
+    "Agent bisa menjalankan tool ini tanpa persetujuan",
+  );
+  expect(w.find('[data-test="mcp-warn-search"]').exists()).toBe(false);
 
   await w.find('[data-test="mcp-role-chat"]').setValue(true);
   await flushPromises();

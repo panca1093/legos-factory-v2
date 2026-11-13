@@ -1,5 +1,10 @@
 import { defineStore } from "pinia";
-import { api, ApiError } from "../types/api";
+import {
+  api,
+  ApiError,
+  type ChatPermission,
+  type ChatPermissionDecision,
+} from "../types/api";
 import { base64Size } from "../features/chats/chatUtils";
 import { streamChat, type ChatStreamBody } from "../services/api/chatStream";
 
@@ -44,6 +49,7 @@ export interface ChatMessage {
   // set in this browser only, while or after a turn that read the project's code
   repo?: ChatRepo;
   step?: ChatStep;
+  permissions?: ChatPermission[];
 }
 export interface WorkOrderDraft {
   title: string;
@@ -134,6 +140,27 @@ export const useChats = defineStore("chats", {
       if (token === epoch.get(id) && !this.busy[id])
         this.messages[id] = r.messages ?? [];
     },
+    async answerPermission(
+      chatId: string,
+      reqId: string,
+      decision: ChatPermissionDecision,
+    ) {
+      const p = this.messages[chatId]
+        ?.flatMap((m) => m.permissions ?? [])
+        .find((x) => x.id === reqId);
+      if (!p || p.state !== "pending") return;
+      p.state = "answering";
+      try {
+        await api.post(`/api/v1/chats/${chatId}/permissions/${reqId}`, {
+          decision,
+        });
+      } catch (e) {
+        if (p.state === "answering")
+          p.state =
+            e instanceof ApiError && e.status === 404 ? "expired" : "pending";
+        throw e;
+      }
+    },
     async send(id: string, body: ChatStreamBody) {
       const tmpUser = --tmpId;
       const tmpReply = --tmpId;
@@ -187,6 +214,7 @@ export const useChats = defineStore("chats", {
             ? {
                 ...m,
                 ...(x.repo ? { repo: x.repo } : {}),
+                ...(x.permissions ? { permissions: x.permissions } : {}),
                 ...(error ? { error } : {}),
               }
             : x,
@@ -214,8 +242,17 @@ export const useChats = defineStore("chats", {
             project_id?: string;
             sha?: string;
             tools?: ChatStep[];
+            id?: string;
+            server?: string;
+            tool?: string;
+            input?: string;
+            outcome?: string;
           };
           const reply = find(tmpReply);
+          if ((event === "done" || event === "error") && reply)
+            for (const p of reply.permissions ?? [])
+              if (p.state === "pending" || p.state === "answering")
+                p.state = "expired";
           if (event === "user_message" && typeof d.message === "object")
             swap(tmpUser, d.message);
           else if (event === "delta" && reply) {
@@ -225,7 +262,33 @@ export const useChats = defineStore("chats", {
             reply.repo = { project_id: d.project_id, sha: d.sha };
           else if (event === "step" && reply && d.tools?.length)
             reply.step = d.tools[d.tools.length - 1];
-          else if (event === "title" && d.title)
+          else if (
+            event === "permission" &&
+            reply &&
+            d.id &&
+            d.server &&
+            d.tool
+          )
+            reply.permissions = [
+              ...(reply.permissions ?? []),
+              {
+                id: d.id,
+                server: d.server,
+                tool: d.tool,
+                input: d.input ?? "",
+                state: "pending",
+              },
+            ];
+          else if (event === "permission_resolved" && reply && d.id) {
+            const p = reply.permissions?.find((x) => x.id === d.id);
+            if (
+              p &&
+              (d.outcome === "allowed" ||
+                d.outcome === "denied" ||
+                d.outcome === "expired")
+            )
+              p.state = d.outcome;
+          } else if (event === "title" && d.title)
             this.chats = this.chats.map((c) =>
               c.id === id ? { ...c, title: d.title as string } : c,
             );

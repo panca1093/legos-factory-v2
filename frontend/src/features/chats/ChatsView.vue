@@ -20,9 +20,10 @@ import { money } from "../../composables/presentation";
 import { useSession } from "../../stores/session";
 import { useChats } from "../../stores/chats";
 import { useFactory } from "../../stores/factory";
-import { ApiError } from "../../types/api";
+import { ApiError, type ChatPermissionDecision } from "../../types/api";
 import ChatComposer from "./ChatComposer.vue";
 import ChatContextPanel from "./ChatContextPanel.vue";
+import ChatPermissionCard from "./ChatPermissionCard.vue";
 import {
   chatTitle,
   formatSize,
@@ -84,6 +85,8 @@ const fail = (e: unknown) =>
         ? e.message
         : String(e),
   );
+const answerPermission = (reqId: string, d: ChatPermissionDecision) =>
+  store.answerPermission(chatId.value, reqId, d).catch(fail);
 function closeCtx() {
   ctxOpen.value = false;
   void nextTick(() => ctxBtn.value?.$el.focus());
@@ -336,6 +339,12 @@ onMounted(async () => {
               <p v-if="m.pending && m.step" class="ch-step" data-test="step-line">
                 {{ stepLine(m.step) }}
               </p>
+              <ChatPermissionCard
+                v-for="p in m.permissions"
+                :key="p.id"
+                :permission="p"
+                @answer="(d) => answerPermission(p.id, d)"
+              />
               <div v-if="m.attachments?.length" class="atts">
                 <template v-for="a in m.attachments" :key="a.kind + a.name">
                   <RouterLink

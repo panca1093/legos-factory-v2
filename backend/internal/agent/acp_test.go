@@ -152,6 +152,25 @@ func fakeAgent(scenario string) {
 				_ = json.Unmarshal(in.Bytes(), &r)
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": r.Result.Outcome.OptionID}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "permission-live":
+				send(map[string]any{"id": "perm-1", "method": "session/request_permission", "params": map[string]any{
+					"sessionId": "fake-ses",
+					"toolCall":  fakePermissionCall(),
+					"options": []any{
+						map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
+						map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"},
+					},
+				}})
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "while-asking;"}})
+				in.Scan()
+				var r struct {
+					Result struct {
+						Outcome struct{ OptionID string } `json:"outcome"`
+					} `json:"result"`
+				}
+				_ = json.Unmarshal(in.Bytes(), &r)
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": r.Result.Outcome.OptionID}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "multi":
 				var p struct{ Prompt []struct{ Text string } }
 				_ = json.Unmarshal(m.Params, &p)

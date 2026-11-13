@@ -35,8 +35,8 @@ type MCPSelector interface {
 
 // MCPServers manages the MCP servers offered to agent roles. Rules:
 //   - admins only (the HTTP layer enforces it); credentials are sealed and never returned;
-//   - a tool is available to a run only when enabled, and a tool that is not read-only
-//     may be enabled only on a server offered to the Builder alone.
+//   - a tool is available to a run only when enabled; the server's roles are the only other gate, and the chat
+//     asks before each call to a tool that is not read-only.
 type MCPServers struct {
 	Store   MCPStore
 	Secrets Sealer // nil: only servers without credentials can be stored
@@ -73,10 +73,6 @@ func mcpInvalid(format string, a ...any) error {
 }
 
 func mcpToolName(server, tool string) string { return "mcp__" + server + "__" + tool }
-
-func builderOnly(roles []string) bool {
-	return len(roles) == 1 && roles[0] == string(model.AgentBuilder)
-}
 
 func (m *MCPServers) List(ctx context.Context) ([]model.MCPServerView, error) {
 	recs, err := m.Store.List(ctx)
@@ -351,7 +347,7 @@ func (m *MCPServers) Discover(ctx context.Context, id string) (model.MCPServerVi
 			if !model.MCPToolNamePattern.MatchString(tools[i].Name) {
 				tools[i].Unusable, tools[i].UnusableReason = true, "the name has characters or a length Claude Code cannot address"
 			}
-			tools[i].Enabled = !tools[i].Unusable && was[tools[i].Name] && (tools[i].ReadOnly || builderOnly(rec.Roles))
+			tools[i].Enabled = !tools[i].Unusable && was[tools[i].Name]
 		}
 		now := time.Now()
 		rec.Tools, rec.DiscoveredAt, rec.LastError = tools, &now, ""
@@ -376,13 +372,6 @@ func (m *MCPServers) SetRoles(ctx context.Context, id string, roles []string) (m
 	}
 	if len(clean) != len(dedupe(roles)) {
 		return model.MCPServerView{}, mcpInvalid("roles must be among %s", strings.Join(model.MCPRoles, ", "))
-	}
-	if !builderOnly(clean) {
-		for _, t := range rec.Tools {
-			if t.Enabled && !t.ReadOnly {
-				return model.MCPServerView{}, mcpInvalid("tool %q writes, so this server can only be offered to the builder; disable it first", t.Name)
-			}
-		}
 	}
 	rec.Roles = clean
 	if err := m.Store.Update(ctx, rec, nil); err != nil {
@@ -418,9 +407,6 @@ func (m *MCPServers) SetTools(ctx context.Context, id string, toggles []model.MC
 		if tg.Enabled && rec.Tools[i].Unusable {
 			return model.MCPServerView{}, mcpInvalid("tool %q has a name Claude Code cannot address, so it cannot be enabled", tg.Name)
 		}
-		if tg.Enabled && !rec.Tools[i].ReadOnly && !builderOnly(rec.Roles) {
-			return model.MCPServerView{}, mcpInvalid("tool %q writes, so it can be enabled only on a server offered to the builder alone", tg.Name)
-		}
 		rec.Tools[i].Enabled = tg.Enabled
 	}
 	if err := m.Store.Update(ctx, rec, nil); err != nil {
@@ -442,11 +428,13 @@ func (m *MCPServers) Selection(ctx context.Context, role model.AgentRole) (model
 		if rec.Status != model.MCPActive || !slices.Contains(rec.Roles, string(role)) {
 			continue
 		}
-		var allow, deny []string
+		var allow, ask, deny []string
 		for _, t := range rec.Tools {
-			// a writing tool outside a builder-only server is dropped even if its flag says enabled
-			if t.Enabled && !t.Unusable && (t.ReadOnly || (role == model.AgentBuilder && builderOnly(rec.Roles))) {
+			if t.Enabled && !t.Unusable {
 				allow = append(allow, mcpToolName(rec.Name, t.Name))
+				if !t.ReadOnly && role == model.AgentChat {
+					ask = append(ask, mcpToolName(rec.Name, t.Name))
+				}
 			} else {
 				deny = append(deny, mcpToolName(rec.Name, t.Name))
 			}
@@ -461,6 +449,7 @@ func (m *MCPServers) Selection(ctx context.Context, role model.AgentRole) (model
 		}
 		sel.Servers = append(sel.Servers, srv)
 		sel.Allow = append(sel.Allow, allow...)
+		sel.Ask = append(sel.Ask, ask...)
 		sel.Deny = append(sel.Deny, deny...)
 	}
 	return sel, nil

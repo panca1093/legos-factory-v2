@@ -293,6 +293,32 @@
   white-space: nowrap;
 }
 
+.ch-perm {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  font-size: 13px;
+}
+.ch-perm pre {
+  max-height: 200px;
+  margin: var(--space-1) 0 0;
+  overflow: auto;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.ch-perm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.ch-perm-outcome {
+  margin-top: var(--space-1);
+  color: var(--muted);
+}
+
 .composer {
   flex-shrink: 0;
   display: grid;
