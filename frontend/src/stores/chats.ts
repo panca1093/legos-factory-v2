@@ -249,6 +249,10 @@ export const useChats = defineStore("chats", {
             outcome?: string;
           };
           const reply = find(tmpReply);
+          if ((event === "done" || event === "error") && reply)
+            for (const p of reply.permissions ?? [])
+              if (p.state === "pending" || p.state === "answering")
+                p.state = "expired";
           if (event === "user_message" && typeof d.message === "object")
             swap(tmpUser, d.message);
           else if (event === "delta" && reply) {

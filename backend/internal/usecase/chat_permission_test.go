@@ -54,51 +54,57 @@ type permTurn struct {
 	chatID string
 	mu     sync.Mutex
 	evs    []ChatEvent
-	seen   chan struct{}
+	next   int
+	ctx    context.Context
+	cancel context.CancelFunc
 	done   chan struct{}
-	reply  string
 }
 
 func startPermTurn(t *testing.T, h *permHarness) *permTurn {
 	t.Helper()
+	old := permissionWait
+	permissionWait = 2 * time.Second
+	t.Cleanup(func() { permissionWait = old })
 	r := newChatRig(t, h)
 	ch, err := r.chat.Create(context.Background(), r.ana, "", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &permTurn{r: r, chatID: ch.ID, seen: make(chan struct{}, 8), done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return &permTurn{r: r, chatID: ch.ID, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 }
 
 func (p *permTurn) send(t *testing.T) {
 	t.Helper()
 	go func() {
 		defer close(p.done)
-		_ = p.r.chat.Send(context.Background(), p.r.ana, p.chatID, ChatSend{Content: "go"}, func(e ChatEvent) {
+		_ = p.r.chat.Send(p.ctx, p.r.ana, p.chatID, ChatSend{Content: "go"}, func(e ChatEvent) {
 			p.mu.Lock()
 			p.evs = append(p.evs, e)
 			p.mu.Unlock()
-			if e.Kind == "permission" || e.Kind == "permission_resolved" {
-				p.seen <- struct{}{}
-			}
 		})
 	}()
 }
 
 func (p *permTurn) waitEvent(t *testing.T, kind string) ChatEvent {
 	t.Helper()
-	for {
-		select {
-		case <-p.seen:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("no %s event; got %s", kind, p.kinds())
-		}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		p.mu.Lock()
-		last := p.evs[len(p.evs)-1]
-		p.mu.Unlock()
-		if last.Kind == kind {
-			return last
+		for p.next < len(p.evs) {
+			e := p.evs[p.next]
+			p.next++
+			if e.Kind == kind {
+				p.mu.Unlock()
+				return e
+			}
 		}
+		p.mu.Unlock()
+		time.Sleep(2 * time.Millisecond)
 	}
+	t.Fatalf("no %s event; got %s", kind, p.kinds())
+	return ChatEvent{}
 }
 
 func (p *permTurn) kinds() string {
@@ -183,10 +189,8 @@ func TestChatPermissionAllowAllSkipsLaterAsks(t *testing.T) {
 }
 
 func TestChatPermissionTimesOutAsExpired(t *testing.T) {
-	old := permissionWait
-	permissionWait = 30 * time.Millisecond
-	t.Cleanup(func() { permissionWait = old })
 	p := startPermTurn(t, &permHarness{calls: []string{"write"}})
+	permissionWait = 30 * time.Millisecond
 	p.send(t)
 	ask := p.waitEvent(t, "permission")
 	if res := p.waitEvent(t, "permission_resolved"); res.Outcome != "expired" {
@@ -257,3 +261,57 @@ func TestChatFingerprintIncludesAskSet(t *testing.T) {
 		t.Fatal("a changed ask set must start a fresh session")
 	}
 }
+
+func TestChatPermissionEndsWhenTheCallerLeavesAndTheChatIsFreed(t *testing.T) {
+	p := startPermTurn(t, &permHarness{calls: []string{"write"}})
+	p.send(t)
+	p.waitEvent(t, "permission")
+	p.cancel()
+	if res := p.waitEvent(t, "permission_resolved"); res.Outcome != "expired" {
+		t.Fatalf("resolved: %+v", res)
+	}
+	if got := p.finish(t); got != "refused" {
+		t.Fatalf("reply %q", got)
+	}
+	title := "x"
+	if _, err := p.r.chat.Update(context.Background(), p.r.ana, p.chatID, &title, nil, nil); err != nil {
+		t.Fatalf("the chat must not stay busy: %v", err)
+	}
+}
+
+func TestChatAllowAllDropsWhenTheMCPSelectionChanges(t *testing.T) {
+	h := &permKeeper{permHarness: &permHarness{calls: []string{"write"}}}
+	p := startPermTurn(t, h.permHarness)
+	p.r.chat.Harness = h
+	sel := &fakeSelector{sel: selWith("Bearer one", "mcp__docs__write")}
+	p.r.chat.MCP = sel
+	p.send(t)
+	ask := p.waitEvent(t, "permission")
+	if err := p.r.chat.AnswerPermission(context.Background(), p.r.ana, p.chatID, ask.ReqID, "allow_all"); err != nil {
+		t.Fatal(err)
+	}
+	p.finish(t)
+	has := func() bool {
+		p.r.chat.mu.Lock()
+		defer p.r.chat.mu.Unlock()
+		return len(p.r.chat.allowAll[p.chatID]) > 0
+	}
+	if !has() {
+		t.Fatal("allow-all must be recorded")
+	}
+	sel.sel = selWith("Bearer two", "mcp__docs__write")
+	p2 := &permTurn{r: p.r, chatID: p.chatID, ctx: p.ctx, cancel: p.cancel, done: make(chan struct{})}
+	p2.send(t)
+	p2.waitEvent(t, "permission")
+	if has() {
+		t.Fatal("a changed selection starts a fresh session, so allow-all must not carry over")
+	}
+}
+
+// permKeeper lets the chat keep a session so a changed fingerprint is noticed.
+type permKeeper struct{ *permHarness }
+
+func (*permKeeper) Continue(context.Context, string, model.AgentRequest) (model.AgentSession, error) {
+	return nil, model.ErrAgentSessionNotFound
+}
+func (*permKeeper) Close(string) {}

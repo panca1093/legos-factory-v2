@@ -133,6 +133,65 @@ describe("permission events in the store", () => {
   });
 });
 
+describe("permission cards when the turn ends", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+  for (const end of ["done", "error"]) {
+    it(`expires a card still open at ${end}`, async () => {
+      const enc = new TextEncoder();
+      const final =
+        end === "done"
+          ? frame("done", { message: msg(2, "assistant", "ok") })
+          : frame("error", {
+              message: msg(2, "assistant", "x"),
+              error: "boom",
+            });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string): Promise<unknown> =>
+          url.endsWith("/messages")
+            ? {
+                ok: true,
+                body: new ReadableStream({
+                  start(c) {
+                    c.enqueue(
+                      enc.encode(
+                        frame("user_message", { message: msg(1, "user", "go") }) +
+                          frame("permission", {
+                            id: "p1",
+                            server: "docs",
+                            tool: "w",
+                            input: "{}",
+                          }) +
+                          frame("permission", {
+                            id: "p2",
+                            server: "docs",
+                            tool: "w",
+                            input: "{}",
+                          }) +
+                          frame("permission_resolved", {
+                            id: "p2",
+                            outcome: "denied",
+                          }) +
+                          final,
+                      ),
+                    );
+                    c.close();
+                  },
+                }),
+              }
+            : { ok: true, text: async () => '{"chats":[]}' },
+        ),
+      );
+      const s = useChats();
+      await s.send("c", { content: "go" });
+      expect(s.messages.c.at(-1)!.permissions!.map((p) => p.state)).toEqual([
+        "expired",
+        "denied",
+      ]);
+    });
+  }
+});
+
 describe("permission card", () => {
   it("offers the three answers and pretty-prints the input", async () => {
     const w = mount(ChatPermissionCard, {

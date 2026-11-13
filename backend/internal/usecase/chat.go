@@ -294,7 +294,7 @@ func (c *Chat) AnswerPermission(ctx context.Context, u *model.User, chatID, reqI
 }
 
 // askUser parks a writing tool call until the user answers, the turn ends, or permissionWait passes; only an explicit allow lets it run.
-func (c *Chat) askUser(ctx, turn context.Context, chatID string, req model.PermissionRequest, announced func(), emit func(ChatEvent)) bool {
+func (c *Chat) askUser(ctx, turn context.Context, gone <-chan struct{}, chatID string, req model.PermissionRequest, announced func(), emit func(ChatEvent)) bool {
 	name := mcpToolName(req.Server, req.Tool)
 	c.mu.Lock()
 	_, always := c.allowAll[chatID][name]
@@ -325,6 +325,7 @@ func (c *Chat) askUser(ctx, turn context.Context, chatID string, req model.Permi
 	case decision = <-p.answer:
 	case <-ctx.Done():
 	case <-turn.Done():
+	case <-gone:
 	case <-timer.C:
 	}
 	if decision == "" {
@@ -533,6 +534,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		defer release(0)
 	}
 
+	gone := ctx.Done() // the caller left; a pending ask ends, the turn itself keeps running
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatTurnTimeout)
 	defer cancel()
 	history, err := c.Store.Messages(ctx, id)
@@ -579,7 +581,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	}
 	send(ChatEvent{Kind: "user_message", Message: um})
 
-	res, err := c.answer(ctx, ch, history, prompt, images, func(t string) {
+	res, err := c.answer(ctx, gone, ch, history, prompt, images, func(t string) {
 		mu.Lock()
 		defer mu.Unlock()
 		if finished {
@@ -675,7 +677,7 @@ func (c *Chat) otherKeeps(ch *model.Chat) bool {
 }
 
 // answer runs one turn; emit (guarded like onText) receives the "repo" and "step" events.
-func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatMessage, turn string, images []model.AgentImage, onText func(string), emit func(ChatEvent)) (model.AgentResult, error) {
+func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat, history []model.ChatMessage, turn string, images []model.AgentImage, onText func(string), emit func(ChatEvent)) (model.AgentResult, error) {
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
 		return model.AgentResult{}, err
 	}
@@ -694,7 +696,7 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 	req.OnText = func(t string) { announced(); onText(t) }
 	req.OnStep = func(s model.AgentStep) { announced(); emit(ChatEvent{Kind: "step", Tools: s.Tools}) }
 	req.OnPermission = func(hctx context.Context, p model.PermissionRequest) bool {
-		return c.askUser(hctx, ctx, ch.ID, p, announced, emit)
+		return c.askUser(hctx, ctx, gone, ch.ID, p, announced, emit)
 	}
 	sh, canKeep := c.Harness.(SessionHarness)
 	var sel model.MCPSelection
@@ -710,6 +712,9 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 		c.mu.Unlock()
 		if ok && (kept.projectID != c.readableProject(ch) || kept.mcp != mcp) {
 			c.forget(ch.ID)
+			c.mu.Lock()
+			delete(c.allowAll, ch.ID)
+			c.mu.Unlock()
 			ok = false
 		}
 		if ok {
