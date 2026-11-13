@@ -16,6 +16,14 @@ export type ChatEvent =
   | { event: "repo"; data: ChatRepo }
   | { event: "delta"; data: { text: string } }
   | { event: "step"; data: { tools: ChatStep[] } }
+  | {
+      event: "permission";
+      data: { id: string; server: string; tool: string; input: string };
+    }
+  | {
+      event: "permission_resolved";
+      data: { id: string; outcome: "allowed" | "denied" | "expired" };
+    }
   | { event: "title"; data: { title: string } }
   | { event: "done"; data: { message: ChatMessage } }
   | { event: "error"; data: { message?: ChatMessage; error: string } };

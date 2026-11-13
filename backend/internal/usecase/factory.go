@@ -129,7 +129,7 @@ func applySelection(req *model.AgentRequest, sel model.MCPSelection) map[string]
 	if len(sel.Servers) == 0 {
 		return nil
 	}
-	req.MCP, req.MCPAllow, req.MCPDeny = sel.Servers, sel.Allow, sel.Deny
+	req.MCP, req.MCPAllow, req.MCPDeny, req.MCPAsk = sel.Servers, sel.Allow, sel.Deny, sel.Ask
 	names := make([]string, len(sel.Servers))
 	for i, s := range sel.Servers {
 		names[i] = s.Name
@@ -149,8 +149,8 @@ func mcpFingerprint(req model.AgentRequest) string {
 		parts = append(parts, s.Name+":"+hex.EncodeToString(sum[:]))
 	}
 	sort.Strings(parts)
-	allow, deny := slices.Sorted(slices.Values(req.MCPAllow)), slices.Sorted(slices.Values(req.MCPDeny))
-	b, _ := json.Marshal([][]string{parts, allow, deny})
+	allow, deny, ask := slices.Sorted(slices.Values(req.MCPAllow)), slices.Sorted(slices.Values(req.MCPDeny)), slices.Sorted(slices.Values(req.MCPAsk))
+	b, _ := json.Marshal([][]string{parts, allow, deny, ask})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }

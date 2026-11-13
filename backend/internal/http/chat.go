@@ -117,6 +117,19 @@ func (s *Server) handleChatModels(c echo.Context) error {
 	return c.JSON(http.StatusOK, list)
 }
 
+func (s *Server) handleChatPermission(c echo.Context) error {
+	var req struct {
+		Decision string `json:"decision"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
+	}
+	if err := s.Chat.AnswerPermission(c.Request().Context(), currentUser(c), c.Param("id"), c.Param("reqId"), req.Decision); err != nil {
+		return chatError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 // chatStepTool is model.AgentTool with every field always present in a step frame.
 type chatStepTool struct {
 	Name   string `json:"name"`
@@ -125,7 +138,7 @@ type chatStepTool struct {
 }
 
 // handleChatSend answers the message as a server-sent event stream:
-// user_message, repo (a project chat), delta and step..., then done or error.
+// user_message, repo (a project chat), delta, step, permission and permission_resolved..., then done or error.
 // Failures before the message is stored are ordinary JSON errors.
 func (s *Server) handleChatSend(c echo.Context) error {
 	var in usecase.ChatSend
@@ -163,6 +176,10 @@ func (s *Server) handleChatSend(c echo.Context) error {
 				tools = append(tools, chatStepTool(t))
 			}
 			payload["tools"] = tools
+		case "permission":
+			payload["id"], payload["server"], payload["tool"], payload["input"] = ev.ReqID, ev.Server, ev.Tool, ev.Input
+		case "permission_resolved":
+			payload["id"], payload["outcome"] = ev.ReqID, ev.Outcome
 		case "error":
 			payload["message"], payload["error"] = ev.Message, ev.Error
 		default:

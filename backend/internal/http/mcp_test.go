@@ -121,8 +121,8 @@ func TestMCPAPIFlowAgainstARealServer(t *testing.T) {
 	if code, body = mcpDo(srv, "adm", "PUT", "/mcp-servers/"+v.ID+"/roles", `{"roles":["inspector","chat"]}`); code != 200 {
 		t.Fatalf("roles: %d %s", code, body)
 	}
-	if code, body = mcpDo(srv, "adm", "PUT", "/mcp-servers/"+v.ID+"/tools", `[{"name":"write","enabled":true}]`); code != 400 || !strings.Contains(body, "builder") {
-		t.Fatalf("a writing tool on a read-only role: %d %s", code, body)
+	if code, body = mcpDo(srv, "adm", "PUT", "/mcp-servers/"+v.ID+"/tools", `[{"name":"write","enabled":true}]`); code != 200 || !strings.Contains(body, `"read_only":false,"enabled":true`) {
+		t.Fatalf("a writing tool on any roles: %d %s", code, body)
 	}
 	if code, body = mcpDo(srv, "adm", "PUT", "/mcp-servers/"+v.ID+"/tools", `[{"name":"search","enabled":true}]`); code != 200 || !strings.Contains(body, `"approx_tokens"`) {
 		t.Fatalf("tools: %d %s", code, body)

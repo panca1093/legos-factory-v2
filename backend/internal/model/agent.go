@@ -1,6 +1,9 @@
 package model
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // AgentRole identifies which persona a harness invocation serves.
 type AgentRole string
@@ -30,6 +33,18 @@ type AgentRequest struct {
 	MCP          []MCPServer     // MCP servers to start with the session (claude only)
 	MCPAllow     []string        // mcp__<server>__<tool> names the session may call
 	MCPDeny      []string        // mcp__<server>__<tool> names to remove from the session
+	MCPAsk       []string        // MCPAllow entries that need a human's approval for each call
+
+	// OnPermission decides an MCPAsk call; optional, nil rejects it.
+	OnPermission func(context.Context, PermissionRequest) bool
+}
+
+// PermissionRequest is a tool call waiting for a human's approval.
+type PermissionRequest struct {
+	ID     string
+	Server string
+	Tool   string
+	Input  map[string]any
 }
 
 // AgentImage is one image of a turn; MediaType is image/png, image/jpeg, image/gif or image/webp.

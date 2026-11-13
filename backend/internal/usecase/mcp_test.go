@@ -169,8 +169,8 @@ func TestMCPDiscoverKeepsEnabledDropsVanishedStartsNewDisabled(t *testing.T) {
 		t.Fatalf("approx_tokens = %d, want enabled bytes/4 = 125", v.ApproxTokens)
 	}
 	r.tools = []model.MCPTool{{Name: "search", ReadOnly: false, Size: 500}}
-	if v, _ = r.m.Discover(ctx, v.ID); v.Tools[0].Enabled {
-		t.Fatal("a tool that turned into a writing tool must not stay enabled on a server that is not builder-only")
+	if v, _ = r.m.Discover(ctx, v.ID); !v.Tools[0].Enabled {
+		t.Fatal("a tool that turned into a writing tool keeps its toggle; the server's roles are the only gate")
 	}
 	r.err = errors.New("dial tcp: refused")
 	v, err := r.m.Discover(ctx, v.ID)
@@ -179,33 +179,59 @@ func TestMCPDiscoverKeepsEnabledDropsVanishedStartsNewDisabled(t *testing.T) {
 	}
 }
 
-func TestMCPWritingToolNeedsBuilderOnlyServer(t *testing.T) {
+func TestMCPWritingToolCanBeEnabledOnAnyRoles(t *testing.T) {
 	r := newMCPRig(t)
 	ctx := context.Background()
 	if _, err := r.m.SetTools(ctx, r.server(t, "early").ID, []model.MCPToolToggle{{Name: "search", Enabled: true}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("enabling before discovery: %v", err)
 	}
 	v := r.discovered(t, "docs", "inspector", "builder")
-	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "write", Enabled: true}}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("a writing tool on a shared server: %v", err)
-	}
 	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "nope", Enabled: true}}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unknown tool: %v", err)
 	}
-	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "search", Enabled: true}}); err != nil {
-		t.Fatalf("a read-only tool is fine anywhere: %v", err)
+	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "write", Enabled: true}, {Name: "search", Enabled: true}}); err != nil {
+		t.Fatalf("a writing tool on a shared server: %v", err)
 	}
-	if _, err := r.m.SetRoles(ctx, v.ID, []string{"builder"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "write", Enabled: true}}); err != nil {
-		t.Fatalf("builder-only server may enable a writing tool: %v", err)
-	}
-	if _, err := r.m.SetRoles(ctx, v.ID, []string{"builder", "chat"}); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("widening roles while a writing tool is enabled: %v", err)
+	for _, roles := range [][]string{{"architect"}, {"chat", "architect", "foreman"}, {"builder"}} {
+		if _, err := r.m.SetRoles(ctx, v.ID, roles); err != nil {
+			t.Fatalf("changing roles to %v with a writing tool enabled: %v", roles, err)
+		}
 	}
 	if _, err := r.m.SetRoles(ctx, v.ID, []string{"builder", "wizard"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unknown role: %v", err)
+	}
+}
+
+func TestMCPSelectionGivesCheckedRolesAllEnabledToolsAndChatAsks(t *testing.T) {
+	ctx := context.Background()
+	r := newMCPRig(t)
+	v := r.discovered(t, "docs", "foreman", "architect", "builder", "inspector", "chat")
+	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "write", Enabled: true}, {Name: "search", Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []model.AgentRole{model.AgentForeman, model.AgentArchitect, model.AgentBuilder, model.AgentInspector, model.AgentChat} {
+		sel, _ := r.m.Selection(ctx, role)
+		if !slices.Equal(sel.Allow, []string{"mcp__docs__search", "mcp__docs__write"}) || len(sel.Deny) != 0 {
+			t.Fatalf("%s: %+v", role, sel)
+		}
+		wantAsk := []string(nil)
+		if role == model.AgentChat {
+			wantAsk = []string{"mcp__docs__write"}
+		}
+		if !slices.Equal(sel.Ask, wantAsk) {
+			t.Fatalf("%s ask = %v, want %v", role, sel.Ask, wantAsk)
+		}
+	}
+	only := r.discovered(t, "ops", "architect")
+	if _, err := r.m.SetTools(ctx, only.ID, []model.MCPToolToggle{{Name: "write", Enabled: true}}); err != nil {
+		t.Fatal(err)
+	}
+	sel, _ := r.m.Selection(ctx, model.AgentArchitect)
+	if !slices.Contains(sel.Allow, "mcp__ops__write") || slices.Contains(sel.Ask, "mcp__ops__write") {
+		t.Fatalf("an architect-only server's writing tool is allowed without asking: %+v", sel)
+	}
+	if sel, _ = r.m.Selection(ctx, model.AgentChat); slices.Contains(sel.Allow, "mcp__ops__write") {
+		t.Fatalf("a role that is not checked gets nothing: %+v", sel)
 	}
 }
 
@@ -248,18 +274,16 @@ func TestMCPSelectionPerRole(t *testing.T) {
 	}
 }
 
-func TestMCPSelectionDropsWritingToolOnSharedServerEvenIfFlagged(t *testing.T) {
+func TestMCPSelectionStillDropsDisabledTools(t *testing.T) {
 	r := newMCPRig(t)
 	ctx := context.Background()
 	v := r.discovered(t, "docs", "inspector")
-	rec, _ := r.m.Store.Get(ctx, v.ID)
-	rec.Tools[0].Enabled, rec.Tools[1].Enabled = true, true
-	if err := r.m.Store.Update(ctx, rec, nil); err != nil {
+	if _, err := r.m.SetTools(ctx, v.ID, []model.MCPToolToggle{{Name: "search", Enabled: true}}); err != nil {
 		t.Fatal(err)
 	}
 	sel, _ := r.m.Selection(ctx, model.AgentInspector)
 	if !slices.Equal(sel.Allow, []string{"mcp__docs__search"}) || !slices.Contains(sel.Deny, "mcp__docs__write") {
-		t.Fatalf("a writing tool must never reach a read-only role: %+v", sel)
+		t.Fatalf("a tool that is not enabled stays out: %+v", sel)
 	}
 }
 
@@ -347,23 +371,6 @@ func TestChatStartsWithMCPSelectionForChatRole(t *testing.T) {
 	}
 	if q := h2.starts[0]; q.MCP != nil || q.MCPAllow != nil || q.MCPDeny != nil {
 		t.Fatalf("a nil port leaves the request unchanged: %+v", q)
-	}
-}
-
-func TestMCPSelectionAllowsOnlyReadToolsForEveryRoleButBuilder(t *testing.T) {
-	r := newMCPRig(t)
-	ctx := context.Background()
-	v := r.discovered(t, "docs", "foreman", "architect", "builder", "inspector", "chat")
-	rec, _ := r.m.Store.Get(ctx, v.ID)
-	rec.Tools[0].Enabled, rec.Tools[1].Enabled = true, true
-	if err := r.m.Store.Update(ctx, rec, nil); err != nil {
-		t.Fatal(err)
-	}
-	for _, role := range []model.AgentRole{model.AgentForeman, model.AgentArchitect, model.AgentBuilder, model.AgentInspector, model.AgentChat} {
-		sel, _ := r.m.Selection(ctx, role)
-		if !slices.Equal(sel.Allow, []string{"mcp__docs__search"}) || !slices.Contains(sel.Deny, "mcp__docs__write") {
-			t.Fatalf("%s: %+v", role, sel)
-		}
 	}
 }
 

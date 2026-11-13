@@ -281,6 +281,7 @@ func (s *Server) routes() {
 	api.DELETE("/chats/:id", s.requireRole(model.RoleEngineer, s.handleDeleteChat))
 	api.GET("/chats/:id/messages", s.handleChatMessages)
 	api.POST("/chats/:id/messages", s.requireRole(model.RoleEngineer, s.handleChatSend), echomw.BodyLimit("12MiB"))
+	api.POST("/chats/:id/permissions/:reqId", s.requireRole(model.RoleEngineer, s.handleChatPermission))
 	api.POST("/chats/:id/work-order-draft", s.requireRole(model.RoleEngineer, s.handleChatWorkOrderDraft))
 	api.GET("/chats/:id/related-knowledge", s.handleChatRelatedKnowledge)
 	api.GET("/chat/models", s.handleChatModels)

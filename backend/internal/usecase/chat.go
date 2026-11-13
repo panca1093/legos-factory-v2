@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -40,6 +41,14 @@ const (
 
 // ErrDraftFailed means the model did not return a usable work order draft.
 var ErrDraftFailed = errors.New("could not draft a work order from this chat")
+
+// permissionWait is how long a writing MCP tool call waits for the user before it is rejected.
+var permissionWait = 5 * time.Minute
+
+const maxPermissionInput = 4 << 10
+
+// ErrPermissionNotFound means the request was answered, expired, or never belonged to this chat.
+var ErrPermissionNotFound = fmt.Errorf("%w: permission request not found or already answered", model.ErrChatNotFound)
 
 // titleWait is how long a finished reply waits for its generated title.
 var titleWait = 5 * time.Second
@@ -90,14 +99,22 @@ type Chat struct {
 	// Gen runs one cheap, tool-less model call; nil uses Harness.
 	Gen func(ctx context.Context, modelRef, prompt string) (model.AgentResult, error)
 
-	mu    sync.Mutex // busy, turns and ses
-	busy  map[string]bool
-	turns int
-	ses   map[string]chatSession
+	mu       sync.Mutex // busy, turns, ses, perms and allowAll
+	busy     map[string]bool
+	turns    int
+	ses      map[string]chatSession
+	perms    map[string]chatPerm            // pending permission requests by id
+	allowAll map[string]map[string]struct{} // chat id → mcp__server__tool the user allowed for the rest of the chat
 
 	lmu    sync.Mutex // the model-list cache, never held while fetching
 	listed []model.ModelInfo
 	listAt time.Time
+}
+
+// chatPerm is a writing tool call waiting for the user; answer has room for the one decision.
+type chatPerm struct {
+	chatID string
+	answer chan string
 }
 
 // chatSession is a kept harness session; sha is set when it reads the project checkout at that commit; mcp fingerprints the MCP selection it started with.
@@ -135,7 +152,8 @@ type ChatSend struct {
 }
 
 // ChatEvent is one step of a streamed turn: "user_message", "repo" when the turn reads
-// the project's code, "delta" and "step" as the reply streams, then exactly one of "done" or "error".
+// the project's code, "delta" and "step" as the reply streams, "permission" and "permission_resolved"
+// around a writing tool call that needs the user's approval, then exactly one of "done" or "error".
 type ChatEvent struct {
 	Kind      string
 	Text      string
@@ -144,6 +162,11 @@ type ChatEvent struct {
 	ProjectID string            // repo
 	SHA       string            // repo
 	Tools     []model.AgentTool // step
+	ReqID     string            // permission, permission_resolved
+	Server    string            // permission
+	Tool      string            // permission
+	Input     string            // permission: the call's input as JSON, cut to maxPermissionInput bytes
+	Outcome   string            // permission_resolved: allowed, denied or expired
 }
 
 func (c *Chat) Create(ctx context.Context, u *model.User, title, projectID, modelRef string) (*model.Chat, error) {
@@ -244,7 +267,96 @@ func (c *Chat) Delete(ctx context.Context, u *model.User, id string) error {
 	}
 	defer c.unlock(id)
 	c.forget(id)
+	c.mu.Lock()
+	delete(c.allowAll, id)
+	c.mu.Unlock()
 	return c.Store.Delete(ctx, id)
+}
+
+// AnswerPermission settles a pending writing tool call of the user's chat; decision is allow, allow_all or deny.
+func (c *Chat) AnswerPermission(ctx context.Context, u *model.User, chatID, reqID, decision string) error {
+	if decision != "allow" && decision != "allow_all" && decision != "deny" {
+		return fmt.Errorf("%w: decision must be allow, allow_all or deny", ErrInvalid)
+	}
+	if _, err := c.own(ctx, u, chatID); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	p, ok := c.perms[reqID]
+	if !ok || p.chatID != chatID {
+		c.mu.Unlock()
+		return ErrPermissionNotFound
+	}
+	delete(c.perms, reqID)
+	c.mu.Unlock()
+	p.answer <- decision
+	return nil
+}
+
+// askUser parks a writing tool call until the user answers, the turn ends, or permissionWait passes; only an explicit allow lets it run.
+func (c *Chat) askUser(ctx, turn context.Context, chatID string, req model.PermissionRequest, announced func(), emit func(ChatEvent)) bool {
+	name := mcpToolName(req.Server, req.Tool)
+	c.mu.Lock()
+	_, always := c.allowAll[chatID][name]
+	c.mu.Unlock()
+	if always {
+		return true
+	}
+	idb := make([]byte, 8)
+	if _, err := rand.Read(idb); err != nil {
+		return false
+	}
+	id := "perm_" + hex.EncodeToString(idb)
+	p := chatPerm{chatID: chatID, answer: make(chan string, 1)}
+	c.mu.Lock()
+	if c.perms == nil {
+		c.perms = map[string]chatPerm{}
+	}
+	c.perms[id] = p
+	c.mu.Unlock()
+	input, _ := json.Marshal(req.Input)
+	announced()
+	emit(ChatEvent{Kind: "permission", ReqID: id, Server: req.Server, Tool: req.Tool, Input: truncateBytes(string(input), maxPermissionInput)})
+
+	timer := time.NewTimer(permissionWait)
+	defer timer.Stop()
+	var decision string
+	select {
+	case decision = <-p.answer:
+	case <-ctx.Done():
+	case <-turn.Done():
+	case <-timer.C:
+	}
+	if decision == "" {
+		c.mu.Lock()
+		_, pending := c.perms[id]
+		delete(c.perms, id)
+		c.mu.Unlock()
+		if !pending {
+			decision = <-p.answer // answered in the same instant
+		}
+	}
+	allowed := decision == "allow" || decision == "allow_all"
+	if decision == "allow_all" {
+		c.mu.Lock()
+		if c.allowAll == nil {
+			c.allowAll = map[string]map[string]struct{}{}
+		}
+		if c.allowAll[chatID] == nil {
+			c.allowAll[chatID] = map[string]struct{}{}
+		}
+		c.allowAll[chatID][name] = struct{}{}
+		c.mu.Unlock()
+	}
+	outcome := "expired"
+	switch {
+	case allowed:
+		outcome = "allowed"
+	case decision == "deny":
+		outcome = "denied"
+	}
+	emit(ChatEvent{Kind: "permission_resolved", ReqID: id, Outcome: outcome})
+	return allowed
 }
 
 func (c *Chat) Messages(ctx context.Context, u *model.User, id string) ([]model.ChatMessage, error) {
@@ -581,12 +693,15 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 	}
 	req.OnText = func(t string) { announced(); onText(t) }
 	req.OnStep = func(s model.AgentStep) { announced(); emit(ChatEvent{Kind: "step", Tools: s.Tools}) }
+	req.OnPermission = func(hctx context.Context, p model.PermissionRequest) bool {
+		return c.askUser(hctx, ctx, ch.ID, p, announced, emit)
+	}
 	sh, canKeep := c.Harness.(SessionHarness)
 	var sel model.MCPSelection
 	if c.MCP != nil {
 		sel, _ = c.MCP.Selection(ctx, model.AgentChat)
 	}
-	mcp := mcpFingerprint(model.AgentRequest{MCP: sel.Servers, MCPAllow: sel.Allow, MCPDeny: sel.Deny})
+	mcp := mcpFingerprint(model.AgentRequest{MCP: sel.Servers, MCPAllow: sel.Allow, MCPDeny: sel.Deny, MCPAsk: sel.Ask})
 
 	var ses model.AgentSession
 	if canKeep {
@@ -655,11 +770,13 @@ func (c *Chat) answer(ctx context.Context, ch *model.Chat, history []model.ChatM
 	return res, nil
 }
 
-const chatPreamble = "You are an assistant in the Legos factory app, in a general conversation. You cannot run commands or change files; answer from what you know and the context you are given.\n\n"
+const chatMCPNote = "You may call the MCP tools you are offered; those that change something ask the user to approve each call, and a refused call means the user said no.\n\n"
+
+const chatPreamble = "You are an assistant in the Legos factory app, in a general conversation. You cannot run commands or change local files; answer from what you know, the context you are given and the MCP tools you are offered. " + chatMCPNote
 
 const chatRepoUnreadable = "This chat is bound to a project, but its repository could not be read for this conversation; tell the user so before you answer.\n\n"
 
-const chatRepoPreamble = "You are an assistant in the Legos factory app, in a conversation about this project. Your working directory is a checkout of the project's repository: you may read and search it, and you should whenever a question is about the code. Cite every claim about the code as path:line. You cannot run commands or change files. When you describe code you have not read, say so.\n\n"
+const chatRepoPreamble = "You are an assistant in the Legos factory app, in a conversation about this project. Your working directory is a checkout of the project's repository: you may read and search it, and you should whenever a question is about the code. Cite every claim about the code as path:line. You cannot run commands or change local files; the MCP tools you are offered are the only way to act. When you describe code you have not read, say so.\n\n" + chatMCPNote
 
 // RepoFacts is Chat.RepoFacts: the checkout's repository facts, then the project's Code Map lines.
 func (f *Factory) RepoFacts(ctx context.Context, projectID, dir string) string {
