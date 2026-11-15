@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { RouterLink } from "vue-router";
 import {
   Plus,
@@ -56,15 +63,24 @@ const roles = computed(() =>
 const compact = new Intl.NumberFormat("en-US", { notation: "compact" });
 const tokens = (t: { tokens_in: number; tokens_out: number }) =>
   compact.format(t.tokens_in + t.tokens_out);
-const now = new Date();
-const hour = now.getHours();
-const greeting =
-  hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
-const date = new Intl.DateTimeFormat("en-US", {
-  weekday: "long",
-  month: "long",
-  day: "numeric",
-}).format(now);
+const now = ref(new Date());
+const clock = setInterval(() => (now.value = new Date()), 60_000);
+onBeforeUnmount(() => clearInterval(clock));
+const greeting = computed(() => {
+  const hour = now.value.getHours();
+  return hour >= 5 && hour < 12
+    ? "Good morning"
+    : hour >= 12 && hour < 18
+      ? "Good afternoon"
+      : "Good evening";
+});
+const date = computed(() =>
+  new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(now.value),
+);
 const name = computed(() => session.user?.name.split(" ").at(-1) ?? "there");
 const projectName = (id: string) =>
   factory.projects.find((p) => p.id === id)?.name ?? "";
