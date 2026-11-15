@@ -903,10 +903,6 @@
   background: var(--success-soft);
   color: var(--success);
 }
-.rail-pill.cold {
-  background: var(--surface-2);
-  color: var(--muted);
-}
 .rail-bar {
   display: flex;
   height: 8px;
@@ -946,8 +942,58 @@
   display: grid;
   gap: var(--space-2);
   padding: var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  border-radius: var(--radius-lg);
+}
+.rail-cache .rail-top > span:first-child {
+  font-size: 13px;
+  font-weight: 650;
+}
+.rail-pill.cold {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.rail-pill.ok {
+  background: var(--success-soft);
+  color: var(--success);
+}
+.rail-pill.muted {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.rail-sum.rail-pill {
+  font-size: 11px;
+  font-weight: 600;
+}
+.rail-big {
+  font-family: var(--font-display);
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.rail-bar.thin {
+  height: 6px;
+  background: var(--surface);
+}
+.rail-box {
+  padding: 10px var(--space-3);
+  background: var(--surface-2);
+  border-radius: var(--radius-lg);
+}
+.rail-dot .rail-name::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: var(--space-2);
+  border-radius: 50%;
+  background: var(--dot, var(--chart-3));
+  vertical-align: 1px;
+}
+.rail-list > li.off {
+  border-style: dashed;
+  border-color: var(--line-strong);
 }
 
 .thread-wrap {

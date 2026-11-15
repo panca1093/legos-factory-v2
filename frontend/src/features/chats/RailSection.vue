@@ -1,6 +1,12 @@
 <script setup lang="ts">
 import { ChevronDown } from "lucide-vue-next";
-defineProps<{ id: string; title: string; summary?: string; open: boolean }>();
+defineProps<{
+  id: string;
+  title: string;
+  summary?: string;
+  tone?: "ok" | "muted";
+  open: boolean;
+}>();
 const emit = defineEmits<{ toggle: [] }>();
 </script>
 <template>
@@ -15,7 +21,12 @@ const emit = defineEmits<{ toggle: [] }>();
         @click="emit('toggle')"
       >
         <span class="rail-t">{{ title }}</span>
-        <span v-if="summary" class="rail-sum">{{ summary }}</span>
+        <span
+          v-if="summary"
+          class="rail-sum"
+          :class="tone && ['rail-pill', tone]"
+          >{{ summary }}</span
+        >
         <ChevronDown
           class="icon rail-chev"
           :data-open="open"

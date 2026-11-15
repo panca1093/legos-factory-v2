@@ -227,7 +227,20 @@ const barLabel = computed(() =>
 );
 const offered = computed(() => info.value?.mcp.filter((m) => m.offered) ?? []);
 const sp = computed(() => info.value?.project ?? null);
-const projectSummary = computed(() => sp.value?.local?.branch ?? "");
+const projectSummary = computed(() =>
+  props.chat.project_id ? "Bound" : "Not bound",
+);
+const crewColor = (role: string) =>
+  ["foreman", "architect", "builder", "inspector", "cataloger"].includes(role)
+    ? `var(--crew-${role})`
+    : "var(--chart-2)";
+const cacheBar = computed(() => {
+  const c = ctx.value?.cache;
+  const total = c ? c.read + c.write + c.uncached : 0;
+  return c && total > 0
+    ? { read: (c.read / total) * 100, write: (c.write / total) * 100 }
+    : null;
+});
 function agentRole(r: string) {
   return r ? r[0].toUpperCase() + r.slice(1) : "Agent";
 }
@@ -266,6 +279,7 @@ onBeforeUnmount(() => {
       id="project"
       title="Project"
       :summary="projectSummary"
+      :tone="chat.project_id ? 'ok' : 'muted'"
       :open="open.project"
       @toggle="toggle('project')"
     >
@@ -315,7 +329,11 @@ onBeforeUnmount(() => {
         <p v-if="sp.local" class="mono rail-path" :title="sp.local.path">
           {{ sp.local.path }}
         </p>
-        <dl class="rail-kv" aria-label="Project checkout">
+        <dl
+          v-if="sp.local || sp.checkout"
+          class="rail-kv rail-box"
+          aria-label="Project checkout"
+        >
           <template v-if="sp.local">
             <dt>Your folder</dt>
             <dd class="mono">
@@ -345,7 +363,17 @@ onBeforeUnmount(() => {
             Worktrees <span>{{ sp.worktrees.length }}</span>
           </h5>
           <ul class="rail-list" aria-label="Worktrees">
-            <li v-for="w in sp.worktrees" :key="w.path">
+            <li
+              v-for="w in sp.worktrees"
+              :key="w.path"
+              class="rail-dot"
+              :style="{
+                '--dot':
+                  sp.local && w.branch === sp.local.branch
+                    ? 'var(--success)'
+                    : 'var(--chart-3)',
+              }"
+            >
               <span class="mono rail-name">{{ w.branch || "detached" }}</span>
               <span
                 v-if="sp.local && w.branch === sp.local.branch"
@@ -368,7 +396,12 @@ onBeforeUnmount(() => {
             class="rail-list"
             aria-label="Running agents"
           >
-            <li v-for="r in sp.running" :key="r.work_order_id + r.task_id">
+            <li
+              v-for="r in sp.running"
+              :key="r.work_order_id + r.task_id"
+              class="rail-dot"
+              :style="{ '--dot': crewColor(r.role) }"
+            >
               <RouterLink :to="`/factory/${r.work_order_id}`">
                 <span class="rail-name"
                   >{{ agentRole(r.role) }} · {{ r.state }}</span
@@ -401,8 +434,10 @@ onBeforeUnmount(() => {
           Could not refresh: {{ infoError }}
         </p>
         <div class="rail-top">
-          <span v-if="pct !== null" data-test="ctx-pct">{{ pct }}% used</span>
-          <span v-else data-test="ctx-pct"
+          <span v-if="pct !== null" class="rail-big" data-test="ctx-pct"
+            >{{ pct }}% used</span
+          >
+          <span v-else class="rail-big" data-test="ctx-pct"
             >{{ fmtTokens(ctx.used) }} tokens</span
           >
           <span class="mono" data-test="ctx-used">
@@ -457,6 +492,22 @@ onBeforeUnmount(() => {
               cache?.warm ? `Warm · ${cache.minutesLeft} min left` : "Cold"
             }}</span>
           </div>
+          <div v-if="cacheBar" class="rail-bar thin" aria-hidden="true">
+            <span
+              v-if="cacheBar.read > 0"
+              :style="{
+                width: `${cacheBar.read}%`,
+                background: 'var(--chart-1)',
+              }"
+            ></span>
+            <span
+              v-if="cacheBar.write > 0"
+              :style="{
+                width: `${cacheBar.write}%`,
+                background: 'var(--crew-foreman)',
+              }"
+            ></span>
+          </div>
           <dl v-if="ctx.cache" class="rail-kv">
             <dt>Read from cache</dt>
             <dd class="mono">
@@ -493,10 +544,21 @@ onBeforeUnmount(() => {
       </p>
       <template v-else-if="info">
         <ul v-if="info.mcp.length" class="rail-list" aria-label="MCP servers">
-          <li v-for="m in info.mcp" :key="m.id" class="rail-mcp">
+          <li
+            v-for="m in info.mcp"
+            :key="m.id"
+            class="rail-mcp rail-dot"
+            :class="{ off: !m.offered }"
+            :style="{
+              '--dot':
+                m.offered && m.status === 'active'
+                  ? 'var(--success)'
+                  : 'var(--chart-3)',
+            }"
+          >
             <div class="rail-top">
               <span class="mono rail-name">{{ m.name }}</span>
-              <span class="rail-pill" :class="m.offered ? 'warm' : 'cold'">{{
+              <span class="rail-pill" :class="m.offered ? 'ok' : 'muted'">{{
                 m.offered ? "Offered to chat" : "Not offered to chat"
               }}</span>
             </div>
