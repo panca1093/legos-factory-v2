@@ -3,10 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import {
   ChevronLeft,
-  FileText,
   GitCommitHorizontal,
-  Image as ImageIcon,
-  BookOpen,
   Layers,
   PanelLeft,
   Plus,
@@ -22,17 +19,15 @@ import { useChats } from "../../stores/chats";
 import { useFactory } from "../../stores/factory";
 import { ApiError, type ChatPermissionDecision } from "../../types/api";
 import ChatComposer from "./ChatComposer.vue";
+import AttachmentChip from "./AttachmentChip.vue";
 import ChatContextPanel from "./ChatContextPanel.vue";
 import ChatPermissionCard from "./ChatPermissionCard.vue";
 import {
   chatTitle,
-  formatSize,
   groupByRecency,
   renderMarkdownCached,
-  base64Size,
-  byteLength,
   stepLine,
-  type PendingFile,
+  type ChatUpload,
 } from "./chatUtils";
 import "./chats.css";
 const store = useChats(),
@@ -52,8 +47,10 @@ const query = ref(""),
   ctxBtn = ref<{ $el: HTMLElement }>(),
   ctxPanel = ref<HTMLElement>(),
   narrow = ref(false),
+  dropping = ref(false),
   composer = ref<InstanceType<typeof ChatComposer>>();
 let stick = true;
+let dragDepth = 0;
 const chatId = computed(() => (route.params.id as string | undefined) || "");
 const chat = computed(() => store.chats.find((c) => c.id === chatId.value));
 const messages = computed(() => store.messages[chatId.value] ?? []);
@@ -148,27 +145,36 @@ async function remove() {
     fail(e);
   }
 }
-async function send(p: { content: string; files: PendingFile[] }) {
-  let id = chatId.value;
+let pendingChat: Promise<string> | null = null;
+function ensureChat() {
+  if (chatId.value) return Promise.resolve(chatId.value);
+  return (pendingChat ??= (async () => {
+    creating.value = true;
+    try {
+      const id = (await store.create({ model: draftModel.value })).id;
+      await router.replace(`/chats/${id}`);
+      return id;
+    } finally {
+      creating.value = false;
+      pendingChat = null;
+    }
+  })());
+}
+async function send(p: { content: string; files: ChatUpload[] }) {
   const body = {
     content: p.content,
-    files: p.files.map(({ name, content, encoding }) =>
-      encoding ? { name, content, encoding } : { name, content },
-    ),
+    ...(p.files.length ? { file_ids: p.files.map((f) => f.id!) } : {}),
   };
+  const attachments = p.files.map((f) => ({
+    kind: f.kind,
+    name: f.name,
+    size: f.size,
+    file_id: f.id,
+  }));
   try {
-    if (!id) {
-      if (creating.value) return;
-      creating.value = true;
-      try {
-        id = (await store.create({ model: draftModel.value })).id;
-        await router.replace(`/chats/${id}`);
-      } finally {
-        creating.value = false;
-      }
-    }
+    const id = await ensureChat();
     stick = true;
-    await store.send(id, body);
+    await store.send(id, body, attachments);
   } catch (e) {
     if (e instanceof ApiError) composer.value?.restore(p.content, p.files);
     fail(e);
@@ -177,15 +183,33 @@ async function send(p: { content: string; files: PendingFile[] }) {
 function retry() {
   const last = [...messages.value].reverse().find((m) => m.role === "user");
   const body = store.lastBody[chatId.value] ?? { content: last?.content ?? "" };
-  if (body.content)
-    void send({
-      content: body.content,
-      files: (body.files ?? []).map((f) => ({
-        ...f,
-        size: f.encoding ? base64Size(f.content) : byteLength(f.content),
-        ...(f.encoding ? { kind: "image" as const } : {}),
-      })),
-    });
+  if (!body.content) return;
+  if (body.file_ids?.length) {
+    composer.value?.restore(body.content, []);
+    toast("Attach the files again to retry.");
+  } else void send({ content: body.content, files: [] });
+}
+const canDrop = () => session.canWrite && !busy.value && !creating.value;
+const hasFiles = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files");
+function dragOver(e: DragEvent) {
+  if (hasFiles(e)) e.preventDefault();
+}
+function dragEnter(e: DragEvent) {
+  if (!hasFiles(e) || !canDrop()) return;
+  dragDepth++;
+  dropping.value = true;
+}
+function dragLeave(e: DragEvent) {
+  if (!hasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropping.value = false;
+}
+function dropFiles(e: DragEvent) {
+  if (hasFiles(e)) e.preventDefault();
+  dragDepth = 0;
+  dropping.value = false;
+  if (hasFiles(e) && canDrop())
+    void composer.value?.attach([...(e.dataTransfer?.files ?? [])]);
 }
 function scrolled() {
   const el = scroller.value;
@@ -270,7 +294,13 @@ onMounted(async () => {
         </p>
       </div>
     </aside>
-    <div class="thread-wrap">
+    <div
+      class="thread-wrap"
+      @dragenter="dragEnter"
+      @dragover="dragOver"
+      @dragleave="dragLeave"
+      @drop="dropFiles"
+    >
       <div class="thread-head">
         <IconButton
           class="list-btn"
@@ -353,25 +383,16 @@ onMounted(async () => {
                 @answer="(d) => answerPermission(p.id, d)"
               />
               <div v-if="m.attachments?.length" class="atts">
-                <template v-for="a in m.attachments" :key="a.kind + a.name">
-                  <RouterLink
-                    v-if="a.kind === 'kb'"
-                    class="ch-chip kb"
-                    :to="{ path: '/knowledge', query: { doc: a.doc_id } }"
-                    ><BookOpen class="icon" /><span class="ch-fn">{{
-                      a.name
-                    }}</span></RouterLink
-                  >
-                  <span v-else class="ch-chip"
-                    ><ImageIcon
-                      v-if="a.kind === 'image'"
-                      class="icon"
-                    /><FileText v-else class="icon" /><span class="ch-fn">{{
-                      a.name
-                    }}</span
-                    ><span class="ch-fs">{{ formatSize(a.size) }}</span></span
-                  >
-                </template>
+                <AttachmentChip
+                  v-for="a in m.attachments"
+                  :key="
+                    a.kind +
+                    (a.kind === 'kb' ? a.doc_id : (a.file_id ?? a.name))
+                  "
+                  :a="a"
+                  :chat-id="chatId"
+                  thumb
+                />
               </div>
               <div v-if="m.error" class="ch-err" role="alert">
                 {{ m.error }}
@@ -395,8 +416,14 @@ onMounted(async () => {
           </article>
         </div>
       </div>
+      <div v-if="dropping" class="ch-dropzone" aria-hidden="true">
+        Drop files to attach
+      </div>
       <ChatComposer
         ref="composer"
+        :chat-id="chatId"
+        :ensure-chat="ensureChat"
+        :dragging="dropping"
         v-model:model="model"
         :models="store.models"
         :busy="busy || creating"

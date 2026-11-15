@@ -5,13 +5,17 @@ import {
   type ChatPermission,
   type ChatPermissionDecision,
 } from "../types/api";
-import { base64Size } from "../features/chats/chatUtils";
 import type { SessionInfo } from "../features/chats/sessionRail";
 import { streamChat, type ChatStreamBody } from "../services/api/chatStream";
 
 export type ChatAttachment =
-  | { kind: "file"; name: string; size: number }
-  | { kind: "image"; name: string; size: number }
+  | {
+      kind: "file" | "image" | "pdf" | "text";
+      name: string;
+      size: number;
+      file_id?: string;
+      media_type?: string;
+    }
   | { kind: "kb"; name: string; doc_id: string; quote?: string };
 export interface ChatUsage {
   model: string;
@@ -178,7 +182,11 @@ export const useChats = defineStore("chats", {
         throw e;
       }
     },
-    async send(id: string, body: ChatStreamBody) {
+    async send(
+      id: string,
+      body: ChatStreamBody,
+      attachments: ChatAttachment[] = [],
+    ) {
       const tmpUser = --tmpId;
       const tmpReply = --tmpId;
       const base = {
@@ -194,19 +202,7 @@ export const useChats = defineStore("chats", {
           id: tmpUser,
           role: "user",
           content: body.content,
-          attachments: (body.files ?? []).map((f) =>
-            f.encoding === "base64"
-              ? {
-                  kind: "image" as const,
-                  name: f.name,
-                  size: base64Size(f.content),
-                }
-              : {
-                  kind: "file" as const,
-                  name: f.name,
-                  size: new TextEncoder().encode(f.content).length,
-                },
-          ),
+          attachments,
         },
         {
           ...base,

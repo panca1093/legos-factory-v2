@@ -3,7 +3,7 @@ import type { ChatMessage, ChatRepo, ChatStep } from "../../stores/chats";
 
 export interface ChatStreamBody {
   content: string;
-  files?: { name: string; content: string; encoding?: "base64" }[];
+  file_ids?: string[];
   kb?: { id: string; quote?: string };
 }
 export type ChatBody = ChatStreamBody;
