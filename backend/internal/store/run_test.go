@@ -34,6 +34,33 @@ func TestRunningByProjectListsOnlyLiveRunsOfThatProject(t *testing.T) {
 	if got, err = repo.RunningByProject(ctx, "other"); err != nil || len(got) != 0 {
 		t.Fatalf("other project: %v %+v", err, got)
 	}
+
+	if err := repo.Start(ctx, "run_live2", wo.ID, "", "inspector", "acp"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE runs SET created_at = created_at + 5 WHERE id = 'run_live2'`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = repo.RunningByProject(ctx, "p1"); err != nil || len(got) != 1 || got[0].Kind != "inspector" {
+		t.Fatalf("one entry per work order, the newest run: %v %+v", err, got)
+	}
+
+	n, err := repo.FailOrphans(ctx, "interrupted by restart")
+	if err != nil || n != 2 {
+		t.Fatalf("orphans: %d %v", n, err)
+	}
+	if got, _ = repo.RunningByProject(ctx, "p1"); len(got) != 0 {
+		t.Fatalf("nothing runs after a restart: %+v", got)
+	}
+	runs, _ := repo.List(ctx, wo.ID)
+	for _, r := range runs {
+		if r.ID == "run_live" && (r.State != "failed" || r.Error == nil || *r.Error != "interrupted by restart" || r.FinishedAt == nil) {
+			t.Fatalf("orphan not failed: %+v", r)
+		}
+		if r.ID == "run_done" && r.State != "completed" {
+			t.Fatalf("a finished run must stay: %+v", r)
+		}
+	}
 }
 
 func TestRunListReportsFinishedAtOnlyForEndedRuns(t *testing.T) {

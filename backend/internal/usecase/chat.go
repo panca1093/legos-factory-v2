@@ -695,7 +695,7 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 	req := model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, Images: images}
 	// the repo event must reach the browser before the first delta or step, which the harness may send before Start returns
 	var cur chatSession
-	defer func() { info.sha = cur.sha }()
+	defer func() { info.sha, info.project = cur.sha, cur.projectID }()
 	var announce sync.Once
 	announced := func() {
 		announce.Do(func() {

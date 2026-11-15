@@ -188,7 +188,7 @@ func parseSSE(body string) []sseEvent {
 type sessionMCPList struct{}
 
 func (sessionMCPList) List(context.Context) ([]model.MCPServerRec, error) {
-	return []model.MCPServerRec{{ID: "m1", Name: "docs", Transport: model.MCPHTTP, Status: model.MCPActive, Roles: []string{"chat"}}}, nil
+	return []model.MCPServerRec{{ID: "m1", Name: "docs", Transport: model.MCPHTTP, Status: model.MCPActive, Roles: []string{"chat"}, Tools: []model.MCPTool{{Name: "search", Enabled: true}}}}, nil
 }
 
 func TestChatSessionAPI(t *testing.T) {

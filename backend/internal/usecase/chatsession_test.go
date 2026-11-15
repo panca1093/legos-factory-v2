@@ -134,9 +134,15 @@ func TestChatSessionMCPAndOwnership(t *testing.T) {
 		{ID: "m3", Name: "ro", Transport: model.MCPHTTP, Status: model.MCPActive, Roles: []string{"chat"}, Tools: []model.MCPTool{{Name: "get", Enabled: true, ReadOnly: true}}},
 	}}
 	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
-	ses, err := r.chat.Session(ctx, r.ana, ch.ID)
+	admin := *r.ana
+	admin.Role = model.RoleAdmin
+	ses, err := r.chat.Session(ctx, &admin, ch.ID)
 	if err != nil || ses.Project != nil || len(ses.MCP) != 3 {
 		t.Fatalf("session: %v %+v", err, ses)
+	}
+	member, err := r.chat.Session(ctx, r.ana, ch.ID)
+	if err != nil || len(member.MCP) != 2 || member.MCP[0].Name != "docs" || member.MCP[1].Name != "ro" {
+		t.Fatalf("a non-admin sees only offered servers: %v %+v", err, member.MCP)
 	}
 	d, o, ro := ses.MCP[0], ses.MCP[1], ses.MCP[2]
 	if !d.Offered || d.ToolsEnabled != 2 || d.ToolsTotal != 4 || !d.Asks || d.Calls == nil {
@@ -264,6 +270,79 @@ func TestLocalDirOnlyForExistingAbsoluteFolders(t *testing.T) {
 	}
 	if localDir(f) != "" {
 		t.Fatal("a file is not a folder")
+	}
+}
+
+func TestSessionPrefersContextUsedAndWindowFromTheAgent(t *testing.T) {
+	at := time.Now()
+	turn := asst(at, model.ChatUsage{TokensIn: 90_000, TokensOut: 2_000, ContextUsed: 31_000, ContextWindow: 1_000_000})
+	sc, _ := sessionContext("claude/sonnet", []model.ChatMessage{turn})
+	if sc.Used != 31_000 || sc.Window != 1_000_000 {
+		t.Fatalf("agent figures win: %+v", sc)
+	}
+	turn = asst(at, model.ChatUsage{TokensIn: 90_000, TokensOut: 2_000})
+	sc, _ = sessionContext("claude/sonnet", []model.ChatMessage{turn})
+	if sc.Used != 92_000 || sc.Window != 200_000 {
+		t.Fatalf("fallback to tokens and the table: %+v", sc)
+	}
+}
+
+func TestSessionAgentPartOnlyFromAToollessStart(t *testing.T) {
+	at := time.Now()
+	base := model.ChatUsage{TokensIn: 50_000, TokensOut: 100, NewSession: true, PromptBytes: 4_000, MCPToolBytes: 4_000, ContextUsed: 12_000}
+	sc, _ := sessionContext("claude/sonnet", []model.ChatMessage{asst(at, base)})
+	if got := partsOf(sc); got["agent"] != 10_000 {
+		t.Fatalf("agent from context_used: %+v", sc.Parts)
+	}
+	base.Steps = 3
+	sc, _ = sessionContext("claude/sonnet", []model.ChatMessage{asst(at, base)})
+	if got := partsOf(sc); got["agent"] != 0 || got["messages"] != 12_000-1_000 {
+		t.Fatalf("a start turn that used tools has no agent part: %+v", sc.Parts)
+	}
+}
+
+func TestSessionFilesSkipFailedTurns(t *testing.T) {
+	at := time.Now()
+	start := asst(at, model.ChatUsage{TokensIn: 1_000, NewSession: true, AttachBytes: 400})
+	bad := asst(at, model.ChatUsage{AttachBytes: 4_000})
+	bad.Error = "boom"
+	sc, _ := sessionContext("claude/sonnet", []model.ChatMessage{start, bad})
+	if got := partsOf(sc); got["files"] != 100 {
+		t.Fatalf("files: %+v", sc.Parts)
+	}
+}
+
+func TestSessionCheckoutOnlyFromTheChatsCurrentProject(t *testing.T) {
+	ctx := context.Background()
+	r := newChatRig(t, &chatPlain{reply: "ok"})
+	ch, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	add := func(project string) {
+		u := &model.ChatUsage{RepoSHA: "0123456789abcdef0123456789abcdef01234567", RepoProject: project}
+		if err := r.chat.Store.AddMessage(ctx, &model.ChatMessage{ChatID: ch.ID, Role: "assistant", Usage: u, CreatedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("other")
+	if ses, err := r.chat.Session(ctx, r.ana, ch.ID); err != nil || ses.Project.Checkout != nil {
+		t.Fatalf("a sha from another project must not show: %v %+v", err, ses.Project.Checkout)
+	}
+	add("p1")
+	if ses, _ := r.chat.Session(ctx, r.ana, ch.ID); ses.Project.Checkout == nil {
+		t.Fatal("the current project's sha shows")
+	}
+}
+
+func TestChatTurnRecordsStepsAndRepoProject(t *testing.T) {
+	ctx := context.Background()
+	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok", steps: []model.AgentStep{{N: 1, Tools: []model.AgentTool{{Name: "Read File"}}}, {N: 2, Tools: []model.AgentTool{{Name: "Grep"}}}}}}
+	r := repoRigWith(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q"}); err != nil {
+		t.Fatal(err)
+	}
+	msgs, _ := r.chat.Messages(ctx, r.ana, ch.ID)
+	if u := msgs[1].Usage; u.Steps != 2 || u.RepoProject != "p1" {
+		t.Fatalf("usage: %+v", u)
 	}
 }
 

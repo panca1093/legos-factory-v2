@@ -26,6 +26,8 @@ var shaPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 type turnInfo struct {
 	newSession  bool
 	sha         string
+	project     string
+	steps       int
 	promptBytes int
 	factsBytes  int
 	mcpBytes    int
@@ -37,6 +39,7 @@ type turnInfo struct {
 func (t *turnInfo) countCalls(tools []model.AgentTool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.steps++
 	for _, tool := range tools {
 		rest, ok := strings.CutPrefix(tool.Name, "mcp__")
 		if !ok {
@@ -64,7 +67,7 @@ func (t *turnInfo) usage(modelRef string, res model.AgentResult, atts []model.Ch
 	}
 	u := &model.ChatUsage{
 		Model: modelRef, TokensIn: res.TokensIn, TokensOut: res.TokensOut, CostMicros: res.CostMicros,
-		CacheRead: res.CacheRead, CacheWrite: res.CacheWrite, RepoSHA: t.sha, NewSession: t.newSession,
+		CacheRead: res.CacheRead, CacheWrite: res.CacheWrite, RepoSHA: t.sha, RepoProject: t.project, Steps: t.steps, ContextUsed: res.ContextUsed, ContextWindow: res.ContextSize, NewSession: t.newSession,
 		PromptBytes: t.promptBytes, FactsBytes: t.factsBytes, MCPToolBytes: t.mcpBytes, AttachBytes: attach,
 	}
 	if len(t.calls) > 0 {
@@ -204,7 +207,7 @@ func (c *Chat) Session(ctx context.Context, u *model.User, id string) (*ChatSess
 			}
 		}
 	}
-	out.MCP = c.sessionMCP(ctx, calls)
+	out.MCP = c.sessionMCP(ctx, u.Role.IsAdmin(), calls)
 	if ch.ProjectID != "" && c.Projects != nil {
 		if p, err := c.Projects.Get(ctx, u, ch.ProjectID); err == nil && p != nil {
 			out.Project = c.sessionProject(ctx, p, msgs)
@@ -240,6 +243,12 @@ func sessionContext(modelRef string, msgs []model.ChatMessage) (SessionContext, 
 	}
 	lu := msgs[last].Usage
 	sc.Used = lu.TokensIn + lu.TokensOut
+	if lu.ContextUsed > 0 {
+		sc.Used = lu.ContextUsed
+	}
+	if lu.ContextWindow > 0 {
+		sc.Window = int(lu.ContextWindow)
+	}
 	if lu.TokensIn > 0 {
 		sc.Cache = &SessionCache{
 			Read: lu.CacheRead, Write: lu.CacheWrite, Uncached: max(0, lu.TokensIn-lu.CacheRead-lu.CacheWrite),
@@ -255,11 +264,18 @@ func sessionContext(modelRef string, msgs []model.ChatMessage) (SessionContext, 
 	mcp, facts := int64(su.MCPToolBytes/4), int64(su.FactsBytes/4)
 	var files int64
 	for _, m := range msgs[start:] {
-		if m.Role == "assistant" && m.Usage != nil {
+		if m.Role == "assistant" && m.Usage != nil && m.Error == "" {
 			files += int64(m.Usage.AttachBytes / 4)
 		}
 	}
-	agent := max(0, su.TokensIn-int64(su.PromptBytes/4)-mcp)
+	var agent int64
+	if su.Steps == 0 {
+		base := su.TokensIn
+		if su.ContextUsed > 0 {
+			base = su.ContextUsed
+		}
+		agent = max(0, base-int64(su.PromptBytes/4)-mcp)
+	}
 	sc.Parts = []SessionPart{
 		{"agent", agent}, {"mcp", mcp}, {"facts", facts}, {"files", files},
 		{"messages", max(0, sc.Used-agent-mcp-facts-files)},
@@ -267,7 +283,7 @@ func sessionContext(modelRef string, msgs []model.ChatMessage) (SessionContext, 
 	return sc, tot
 }
 
-func (c *Chat) sessionMCP(ctx context.Context, calls map[string]map[string]int) []SessionMCP {
+func (c *Chat) sessionMCP(ctx context.Context, admin bool, calls map[string]map[string]int) []SessionMCP {
 	out := []SessionMCP{}
 	if c.MCPServers == nil {
 		return out
@@ -290,6 +306,9 @@ func (c *Chat) sessionMCP(ctx context.Context, calls map[string]map[string]int) 
 		}
 		s.Offered = r.Status == model.MCPActive && slices.Contains(r.Roles, string(model.AgentChat)) && s.ToolsEnabled > 0
 		s.Asks = s.Offered && writes
+		if !admin && !s.Offered {
+			continue
+		}
 		out = append(out, s)
 	}
 	return out
@@ -304,7 +323,7 @@ func (c *Chat) sessionProject(ctx context.Context, p *model.Project, msgs []mode
 		sp.Local, sp.Worktrees = gitLocal(gctx, dir)
 	}
 	for i := len(msgs) - 1; i >= 0; i-- {
-		if m := msgs[i]; m.Role == "assistant" && m.Usage != nil && m.Usage.RepoSHA != "" {
+		if m := msgs[i]; m.Role == "assistant" && m.Usage != nil && m.Usage.RepoSHA != "" && m.Usage.RepoProject == p.ID {
 			sp.Checkout = &SessionCheckout{SHA: m.Usage.RepoSHA}
 			if dir != "" && shaPattern.MatchString(m.Usage.RepoSHA) {
 				if n, err := strconv.Atoi(gitOut(gctx, dir, "rev-list", "--count", m.Usage.RepoSHA+"..HEAD")); err == nil {
@@ -347,6 +366,7 @@ func localDir(repoURL string) string {
 // gitOut runs one read-only git command in dir without a shell; the repo's own config must not run commands. A failure gives "".
 func gitOut(ctx context.Context, dir string, args ...string) string {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", dir}, args...)...)
+	cmd.WaitDelay = time.Second
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "GIT_TERMINAL_PROMPT=0")
 	b, err := cmd.Output()
 	if err != nil {

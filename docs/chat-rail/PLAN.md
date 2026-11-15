@@ -74,3 +74,7 @@ Rules:
 ## B. UI (separate PR)
 
 Replace `ChatContextPanel.vue` content with the rail from the prototype's Main/General frames: sections Project / Context / MCP / From this conversation, each collapsible (state kept per section in localStorage, try/catch). Data from `GET /chats/:id/session`, refetched after each turn's `done`/`error` and when the project changes. Keep existing features: project select (bind/unbind), create work order, related knowledge, attachments list, delete chat. Running agents link to `/factory/<wo>`. Context bar segments with a legend that shows numbers (colour is never the only cue); "estimated" hint on parts. Cache card: Warm with minutes left / Cold. Thin scrollbar: transparent track, thumb on hover for `.ch-scroll, .ch-ctx, .chatlist .ch-items`.
+
+## Known limits
+
+- `git status` may still run a repo's own clean/process filters; the folder is one the user registered.

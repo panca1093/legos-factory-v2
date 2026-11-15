@@ -270,6 +270,11 @@ func (a *App) Start(ctx context.Context) error {
 	if _, err := a.Server.Auth.EnsureDevUser(ctx); err != nil {
 		return err
 	}
+	if n, err := a.Server.Runs.FailOrphans(ctx, "interrupted by restart"); err != nil {
+		return err
+	} else if n > 0 {
+		a.log.Warn("failed runs left running by a dead process", "count", n)
+	}
 	a.Sched.Start(ctx)
 	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {
 		return err
