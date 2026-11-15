@@ -313,6 +313,52 @@ describe("composer upload chips", () => {
     expect(w.find(".ch-fn").text()).toMatch(/^pasted-\d+-1\.png$/);
   });
 
+  it("ignores a restore that belongs to another chat", async () => {
+    const w = mountComposer({ chatId: "c2" });
+    const vm = w.vm as unknown as {
+      restore: (o: string, c: string, f: unknown[]) => void;
+    };
+    const file = f("a.txt");
+    vm.restore("c1", "old draft", [
+      {
+        key: "k",
+        name: "a.txt",
+        size: 10,
+        kind: "text",
+        status: "done",
+        progress: 1,
+        id: "cf_1",
+        file,
+      },
+    ]);
+    await flushPromises();
+    expect((w.find("textarea").element as HTMLTextAreaElement).value).toBe("");
+    expect(w.find(".ch-chips").exists()).toBe(false);
+    vm.restore("c2", "mine", []);
+    await flushPromises();
+    expect((w.find("textarea").element as HTMLTextAreaElement).value).toBe(
+      "mine",
+    );
+  });
+
+  it("restore with no files keeps current chips and a non-empty draft", async () => {
+    const w = mountComposer();
+    const vm = w.vm as unknown as {
+      restore: (o: string, c: string, f: unknown[]) => void;
+    };
+    await w.find("textarea").setValue("typing");
+    await pick(w, f("a.txt"));
+    FakeXHR.all[0].reply(200, info("cf_1", "a.txt"));
+    await flushPromises();
+    vm.restore("c1", "retry text", []);
+    await flushPromises();
+    expect((w.find("textarea").element as HTMLTextAreaElement).value).toBe(
+      "typing",
+    );
+    expect(w.findAll(".ch-chip")).toHaveLength(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the remove button reachable by keyboard and labelled", async () => {
     const w = mountComposer();
     await pick(w, f("a.txt"));

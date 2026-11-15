@@ -150,9 +150,10 @@ function ensureChat() {
   if (chatId.value) return Promise.resolve(chatId.value);
   return (pendingChat ??= (async () => {
     creating.value = true;
+    const from = route.fullPath;
     try {
       const id = (await store.create({ model: draftModel.value })).id;
-      await router.replace(`/chats/${id}`);
+      if (route.fullPath === from) await router.replace(`/chats/${id}`);
       return id;
     } finally {
       creating.value = false;
@@ -171,12 +172,14 @@ async function send(p: { content: string; files: ChatUpload[] }) {
     size: f.size,
     file_id: f.id,
   }));
+  let owner = chatId.value;
   try {
-    const id = await ensureChat();
+    owner = await ensureChat();
     stick = true;
-    await store.send(id, body, attachments);
+    await store.send(owner, body, attachments);
   } catch (e) {
-    if (e instanceof ApiError) composer.value?.restore(p.content, p.files);
+    if (e instanceof ApiError)
+      composer.value?.restore(owner, p.content, p.files);
     fail(e);
   }
 }
@@ -185,7 +188,7 @@ function retry() {
   const body = store.lastBody[chatId.value] ?? { content: last?.content ?? "" };
   if (!body.content) return;
   if (body.file_ids?.length) {
-    composer.value?.restore(body.content, []);
+    composer.value?.restore(chatId.value, body.content, []);
     toast("Attach the files again to retry.");
   } else void send({ content: body.content, files: [] });
 }
@@ -195,9 +198,9 @@ function dragOver(e: DragEvent) {
   if (hasFiles(e)) e.preventDefault();
 }
 function dragEnter(e: DragEvent) {
-  if (!hasFiles(e) || !canDrop()) return;
+  if (!hasFiles(e)) return;
   dragDepth++;
-  dropping.value = true;
+  if (canDrop()) dropping.value = true;
 }
 function dragLeave(e: DragEvent) {
   if (!hasFiles(e)) return;

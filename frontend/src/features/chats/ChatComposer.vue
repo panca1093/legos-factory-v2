@@ -233,13 +233,16 @@ function onPick(e: Event) {
   void attach(input.files ? [...input.files] : null);
   input.value = "";
 }
-function restore(content: string, restored: ChatUpload[]) {
-  draft.value = content;
-  uploadChat = props.chatId || uploadChat;
-  files.value = restored.map((f) => ({
-    ...f,
-    preview: f.kind === "image" ? makePreview(f.file) : undefined,
-  }));
+function restore(owner: string, content: string, restored: ChatUpload[]) {
+  if (owner !== (props.chatId || "")) return;
+  if (!draft.value.trim()) draft.value = content;
+  if (restored.length && !files.value.length) {
+    uploadChat = owner;
+    files.value = restored.map((f) => ({
+      ...f,
+      preview: f.kind === "image" ? makePreview(f.file) : undefined,
+    }));
+  }
   void nextTick(resize);
 }
 watch(
