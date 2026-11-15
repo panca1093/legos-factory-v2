@@ -280,6 +280,7 @@ func (s *Server) routes() {
 	api.PATCH("/chats/:id", s.requireRole(model.RoleEngineer, s.handleUpdateChat))
 	api.DELETE("/chats/:id", s.requireRole(model.RoleEngineer, s.handleDeleteChat))
 	api.GET("/chats/:id/messages", s.handleChatMessages)
+	api.GET("/chats/:id/session", s.handleChatSession)
 	api.POST("/chats/:id/messages", s.requireRole(model.RoleEngineer, s.handleChatSend), echomw.BodyLimit("12MiB"))
 	api.POST("/chats/:id/permissions/:reqId", s.requireRole(model.RoleEngineer, s.handleChatPermission))
 	api.POST("/chats/:id/work-order-draft", s.requireRole(model.RoleEngineer, s.handleChatWorkOrderDraft))

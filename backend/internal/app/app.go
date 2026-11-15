@@ -222,6 +222,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Chat = &usecase.Chat{
 		Store: &store.ChatRepo{DB: db}, Docs: srv.KBDocs, Related: srv.KBDocs, Projects: projects,
 		Settings: settingsRepo, Usage: usageTracker, Harness: chatH, MCP: mcpServers,
+		Runs: runRepo, MCPServers: mcpServers.Store, DataDir: cfg.DataDir,
 		Models: listModels,
 		Default: func(ctx context.Context) string {
 			p, m := modelFor(model.AgentArchitect, &model.WorkOrder{})

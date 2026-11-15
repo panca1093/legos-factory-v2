@@ -93,6 +93,14 @@ func (s *Server) handleChatMessages(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"messages": msgs})
 }
 
+func (s *Server) handleChatSession(c echo.Context) error {
+	ses, err := s.Chat.Session(c.Request().Context(), currentUser(c), c.Param("id"))
+	if err != nil {
+		return chatError(c, err)
+	}
+	return c.JSON(http.StatusOK, ses)
+}
+
 func (s *Server) handleChatWorkOrderDraft(c echo.Context) error {
 	d, err := s.Chat.DraftWorkOrder(c.Request().Context(), currentUser(c), c.Param("id"))
 	if err != nil {

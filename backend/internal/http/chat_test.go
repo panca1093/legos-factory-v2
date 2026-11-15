@@ -185,6 +185,48 @@ func parseSSE(body string) []sseEvent {
 	return out
 }
 
+type sessionMCPList struct{}
+
+func (sessionMCPList) List(context.Context) ([]model.MCPServerRec, error) {
+	return []model.MCPServerRec{{ID: "m1", Name: "docs", Transport: model.MCPHTTP, Status: model.MCPActive, Roles: []string{"chat"}}}, nil
+}
+
+func TestChatSessionAPI(t *testing.T) {
+	srv := bootChat(t)
+	srv.Chat.MCPServers = sessionMCPList{}
+	mk := func(as, body string) string {
+		code, out := chatDo(srv, as, "POST", "/api/v1/chats", body)
+		if code != http.StatusCreated {
+			t.Fatalf("create: %d %s", code, out)
+		}
+		var c struct{ Chat struct{ ID string } }
+		_ = json.Unmarshal([]byte(out), &c)
+		return c.Chat.ID
+	}
+	plain, bound := mk("ana", `{}`), mk("ana", `{"project_id":"p1"}`)
+
+	code, body := chatDo(srv, "ana", "GET", "/api/v1/chats/"+plain+"/session", "")
+	if code != 200 || !strings.Contains(body, `"project":null`) || !strings.Contains(body, `"parts":[]`) || !strings.Contains(body, `"calls":{}`) || !strings.Contains(body, `"cache":null`) {
+		t.Fatalf("unbound: %d %s", code, body)
+	}
+	code, body = chatDo(srv, "ana", "GET", "/api/v1/chats/"+bound+"/session", "")
+	for _, want := range []string{`"worktrees":[]`, `"running":[]`, `"parts":[]`, `"calls":{}`, `"local":null`, `"checkout":null`} {
+		if code != 200 || !strings.Contains(body, want) {
+			t.Fatalf("bound: want %s in %d %s", want, code, body)
+		}
+	}
+	if strings.Contains(body, "null,") && strings.Contains(body, `"mcp":null`) {
+		t.Fatalf("mcp must be a list: %s", body)
+	}
+
+	if code, _ := chatDo(srv, "bob", "GET", "/api/v1/chats/"+plain+"/session", ""); code != http.StatusNotFound {
+		t.Fatalf("other user: %d", code)
+	}
+	if code, _ := chatDo(srv, "", "GET", "/api/v1/chats/"+plain+"/session", ""); code != http.StatusUnauthorized {
+		t.Fatalf("anonymous: %d", code)
+	}
+}
+
 func TestChatUnavailableIs503(t *testing.T) {
 	srv := bootChat(t)
 	_, body := chatDo(srv, "ana", "POST", "/api/v1/chats", `{}`)

@@ -75,7 +75,16 @@ type Chat struct {
 	}
 	Projects interface {
 		Authorize(ctx context.Context, u *model.User, projectID string) error
+		Get(ctx context.Context, u *model.User, id string) (*model.Project, error)
 	}
+	// Runs, MCPServers and DataDir feed the session rail; each may be nil/empty.
+	Runs interface {
+		RunningByProject(ctx context.Context, projectID string) ([]model.RunningRun, error)
+	}
+	MCPServers interface {
+		List(ctx context.Context) ([]model.MCPServerRec, error)
+	}
+	DataDir  string
 	Settings SettingsReader
 	Usage    Budget
 	MCP      MCPSelector // nil: chats get no MCP servers
@@ -581,7 +590,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	}
 	send(ChatEvent{Kind: "user_message", Message: um})
 
-	res, err := c.answer(ctx, gone, ch, history, prompt, images, func(t string) {
+	res, info, err := c.answer(ctx, gone, ch, history, prompt, images, func(t string) {
 		mu.Lock()
 		defer mu.Unlock()
 		if finished {
@@ -623,6 +632,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		}
 	}
 	am := &model.ChatMessage{ChatID: id, Role: "assistant", Attachments: []model.ChatAttachment{}, CreatedAt: time.Now()}
+	am.Usage = info.usage(c.resolve(ctx, ch), res, atts)
 	if err != nil {
 		am.Content, am.Error = partial(), err.Error()
 		_ = c.Store.AddMessage(ctx, am)
@@ -630,7 +640,6 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		return nil
 	}
 	am.Content = res.Text
-	am.Usage = &model.ChatUsage{Model: c.resolve(ctx, ch), TokensIn: res.TokensIn, TokensOut: res.TokensOut, CostMicros: res.CostMicros}
 	if err := c.Store.AddMessage(ctx, am); err != nil {
 		am.Error = "reply could not be saved: " + err.Error()
 		finish(ChatEvent{Kind: "error", Message: am, Error: am.Error})
@@ -677,14 +686,16 @@ func (c *Chat) otherKeeps(ch *model.Chat) bool {
 }
 
 // answer runs one turn; emit (guarded like onText) receives the "repo" and "step" events.
-func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat, history []model.ChatMessage, turn string, images []model.AgentImage, onText func(string), emit func(ChatEvent)) (model.AgentResult, error) {
+func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat, history []model.ChatMessage, turn string, images []model.AgentImage, onText func(string), emit func(ChatEvent)) (model.AgentResult, *turnInfo, error) {
+	info := &turnInfo{}
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
-		return model.AgentResult{}, err
+		return model.AgentResult{}, info, err
 	}
 	provider, modelID := SplitModelRef(c.resolve(ctx, ch))
 	req := model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, Images: images}
 	// the repo event must reach the browser before the first delta or step, which the harness may send before Start returns
 	var cur chatSession
+	defer func() { info.sha = cur.sha }()
 	var announce sync.Once
 	announced := func() {
 		announce.Do(func() {
@@ -694,7 +705,11 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		})
 	}
 	req.OnText = func(t string) { announced(); onText(t) }
-	req.OnStep = func(s model.AgentStep) { announced(); emit(ChatEvent{Kind: "step", Tools: s.Tools}) }
+	req.OnStep = func(s model.AgentStep) {
+		announced()
+		info.countCalls(s.Tools)
+		emit(ChatEvent{Kind: "step", Tools: s.Tools})
+	}
 	req.OnPermission = func(hctx context.Context, p model.PermissionRequest) bool {
 		return c.askUser(hctx, ctx, gone, ch.ID, p, announced, emit)
 	}
@@ -704,6 +719,9 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		sel, _ = c.MCP.Selection(ctx, model.AgentChat)
 	}
 	mcp := mcpFingerprint(model.AgentRequest{MCP: sel.Servers, MCPAllow: sel.Allow, MCPDeny: sel.Deny, MCPAsk: sel.Ask})
+	if len(sel.Servers) > 0 {
+		info.mcpBytes = sel.Bytes
+	}
 
 	var ses model.AgentSession
 	if canKeep {
@@ -727,8 +745,9 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 				ses = nil
 			} else if err != nil {
 				c.forget(ch.ID)
-				return model.AgentResult{}, err
+				return model.AgentResult{}, info, err
 			}
+			info.promptBytes = len(req.Prompt)
 		}
 	}
 	keep := canKeep
@@ -753,16 +772,17 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		applySelection(&req, sel)
 		req.Prompt = preamble + seed + historyText(history) + turn
 		req.Keep = keep
+		info.newSession, info.promptBytes, info.factsBytes = true, len(req.Prompt), len(seed)
 		var err error
 		if ses, err = c.Harness.Start(ctx, req); err != nil {
-			return model.AgentResult{}, err
+			return model.AgentResult{}, info, err
 		}
 	}
 	announced()
 	res, err := c.Harness.Result(ctx, ses.ID())
 	if err != nil {
 		c.forget(ch.ID)
-		return res, err
+		return res, info, err
 	}
 	if keep {
 		c.mu.Lock()
@@ -772,7 +792,7 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		c.ses[ch.ID] = chatSession{id: ses.ID(), projectID: cur.projectID, sha: cur.sha, mcp: mcp}
 		c.mu.Unlock()
 	}
-	return res, nil
+	return res, info, nil
 }
 
 const chatMCPNote = "You may call the MCP tools you are offered; those that change something ask the user to approve each call, and a refused call means the user said no.\n\n"

@@ -32,6 +32,16 @@ type ChatUsage struct {
 	TokensIn   int64  `json:"tokens_in"`
 	TokensOut  int64  `json:"tokens_out"`
 	CostMicros int64  `json:"cost_micros"`
+
+	CacheRead    int64          `json:"cache_read,omitempty"`
+	CacheWrite   int64          `json:"cache_write,omitempty"`
+	RepoSHA      string         `json:"repo_sha,omitempty"`
+	NewSession   bool           `json:"new_session,omitempty"`
+	PromptBytes  int            `json:"prompt_bytes,omitempty"`
+	FactsBytes   int            `json:"facts_bytes,omitempty"`
+	MCPToolBytes int            `json:"mcp_tool_bytes,omitempty"`
+	AttachBytes  int            `json:"attach_bytes,omitempty"`
+	MCPCalls     map[string]int `json:"mcp_calls,omitempty"`
 }
 
 type ChatMessage struct {

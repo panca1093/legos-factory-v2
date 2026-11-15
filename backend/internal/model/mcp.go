@@ -110,6 +110,7 @@ type MCPSelection struct {
 	Allow   []string
 	Deny    []string
 	Ask     []string // the Allow entries that write; a human approves each call
+	Bytes   int      // summed Size of the tools in Allow
 }
 
 type CreateMCPServer struct {

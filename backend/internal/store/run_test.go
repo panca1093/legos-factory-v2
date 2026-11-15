@@ -7,6 +7,35 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
+func TestRunningByProjectListsOnlyLiveRunsOfThatProject(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	seedProject(t, db, "p1")
+	if err := (&UserRepo{DB: db}).EnsureUser(ctx, model.User{ID: "u1", Email: "u1@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	wo := &model.WorkOrder{ProjectID: "p1", Title: "t", State: model.StateCreated, CreatedBy: "u1"}
+	if err := (&WorkOrderRepo{DB: db}).Create(ctx, wo); err != nil {
+		t.Fatal(err)
+	}
+	repo := &RunRepo{DB: db}
+	for _, id := range []string{"run_live", "run_done"} {
+		if err := repo.Start(ctx, id, wo.ID, "", "builder", "acp"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.Complete(ctx, "run_done", model.AgentResult{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.RunningByProject(ctx, "p1")
+	if err != nil || len(got) != 1 || got[0].WOID != wo.ID || got[0].Kind != "builder" || got[0].WOTitle != "t" {
+		t.Fatalf("running: %v %+v", err, got)
+	}
+	if got, err = repo.RunningByProject(ctx, "other"); err != nil || len(got) != 0 {
+		t.Fatalf("other project: %v %+v", err, got)
+	}
+}
+
 func TestRunListReportsFinishedAtOnlyForEndedRuns(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
