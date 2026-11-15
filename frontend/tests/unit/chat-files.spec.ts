@@ -45,32 +45,39 @@ describe("precheckFile", () => {
   it("enforces per-kind limits at the boundary", () => {
     const ok = (name: string, size: number) =>
       "kind" in precheckFile({ name, type: "", size }, []);
-    expect(ok("a.png", 5 * MB)).toBe(true);
-    expect(ok("a.png", 5 * MB + 1)).toBe(false);
-    expect(ok("a.pdf", 20 * MB)).toBe(true);
-    expect(ok("a.pdf", 20 * MB + 1)).toBe(false);
+    expect(ok("a.png", 3_932_160)).toBe(true);
+    expect(ok("a.png", 3_932_161)).toBe(false);
+    expect(ok("a.pdf", 18 * MB)).toBe(true);
+    expect(ok("a.pdf", 18 * MB + 1)).toBe(false);
     expect(ok("a.txt", MB)).toBe(true);
     expect(ok("a.txt", MB + 1)).toBe(false);
     expect(precheckFile({ name: "e.txt", type: "", size: 0 }, [])).toEqual({
       error: "e.txt is empty.",
     });
   });
+  it("words size errors exactly", () => {
+    const err = (name: string, size: number) =>
+      (precheckFile({ name, type: "", size }, []) as { error: string }).error;
+    expect(err("a.png", 3_932_161)).toBe("a.png is over 3.75 MB.");
+    expect(err("a.pdf", 18 * MB + 1)).toBe("a.pdf is over 18 MB.");
+    expect(err("a.txt", MB + 1)).toBe("a.txt is over 1 MB.");
+  });
   it("enforces 10 files and 25 MB per message", () => {
     const ten = Array.from({ length: 10 }, () => ({ size: 1 }));
     expect(precheckFile(f("a.txt"), ten)).toEqual({
       error: "Up to 10 files per message.",
     });
-    const r = precheckFile({ name: "b.pdf", type: "", size: 6 * MB }, [
-      { size: 20 * MB },
+    const r = precheckFile({ name: "b.pdf", type: "", size: 4 * MB }, [
+      { size: 15 * MB },
     ]);
-    expect(r).toEqual({ error: "Attachments can total 25 MB at most." });
+    expect(r).toEqual({ error: "Attachments can total 18 MB at most." });
   });
   it("formats sizes", () => {
     expect(formatSize(12)).toBe("12 B");
     expect(formatSize(2048)).toBe("2.0 KB");
     expect(formatSize(300 * 1024)).toBe("300 KB");
-    expect(formatSize(5 * MB)).toBe("5.0 MB");
-    expect(formatSize(25 * MB)).toBe("25 MB");
+    expect(formatSize(3_932_160)).toBe("3.75 MB");
+    expect(formatSize(18 * MB)).toBe("18 MB");
   });
 });
 
@@ -181,6 +188,23 @@ describe("composer upload chips", () => {
     expect(sent.files.map((x) => [x.id, x.kind])).toEqual([["cf_1", "pdf"]]);
     expect(w.find(".ch-chips").exists()).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the busy-queue error on the chip and strips an invalid request prefix", async () => {
+    const w = mountComposer();
+    await pick(w, f("a.txt"));
+    FakeXHR.all[0].reply(409, {
+      error: {
+        code: "X",
+        message:
+          "invalid request: Too many files waiting to be sent in this chat. Send or remove some first.",
+      },
+    });
+    await flushPromises();
+    expect(w.find(".ch-chip").text()).toContain(
+      "Too many files waiting to be sent in this chat. Send or remove some first.",
+    );
+    expect(w.find(".ch-chip").text()).not.toContain("invalid request");
   });
 
   it("keeps send disabled after a failed upload, with the file named, until removed", async () => {

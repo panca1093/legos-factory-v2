@@ -3,8 +3,12 @@ import type { Chat, ChatStep } from "../../stores/chats";
 export const MAX_MESSAGE_BYTES = 32 * 1024;
 export const MAX_FILES = 10;
 const MB = 1024 * 1024;
-export const MAX_TOTAL_BYTES = 25 * MB;
-export const KIND_LIMITS = { image: 5 * MB, pdf: 20 * MB, text: MB } as const;
+export const MAX_TOTAL_BYTES = 18 * MB;
+export const KIND_LIMITS = {
+  image: 3_932_160,
+  pdf: 18 * MB,
+  text: MB,
+} as const;
 export type FileKind = keyof typeof KIND_LIMITS;
 
 export type UploadStatus = "uploading" | "done" | "error";
@@ -82,7 +86,7 @@ export const formatSize = (n: number) =>
     ? `${n} B`
     : n < MB
       ? `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`
-      : `${(n / MB).toFixed(n < 10 * MB ? 1 : 0)} MB`;
+      : `${+(n / MB).toFixed(2)} MB`;
 export const chatTitle = (c?: Pick<Chat, "title">) => c?.title || "New chat";
 
 // agents name tools differently ("Read File", "read", "grep", "Glob"), so the verb comes from the name's first word

@@ -40,7 +40,7 @@ export function uploadChatFile(
         new ApiError(
           xhr.status,
           err?.code ?? "HTTP_ERROR",
-          err?.message ??
+          err?.message?.replace(/^invalid request: /i, "") ??
             (xhr.status === 413
               ? "File is too large."
               : `Upload failed (${xhr.status}).`),
