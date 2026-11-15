@@ -8,14 +8,7 @@ import {
   watch,
 } from "vue";
 import { RouterLink, useRouter } from "vue-router";
-import {
-  ArrowRight,
-  BookOpen,
-  FileText,
-  GitBranch,
-  Plus,
-  Trash2,
-} from "lucide-vue-next";
+import { ArrowRight, BookOpen, GitBranch, Plus, Trash2 } from "lucide-vue-next";
 import Button from "../../components/ui/Button.vue";
 import Popover from "../../components/ui/Popover.vue";
 import NewWorkOrderDrawer from "../factory/work-orders/NewWorkOrderDrawer.vue";
@@ -30,7 +23,8 @@ import type { RelatedDoc, WorkOrderDraft } from "../../stores/chats";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
 import { ApiError } from "../../types/api";
-import { chatTitle, formatSize } from "./chatUtils";
+import { chatTitle } from "./chatUtils";
+import AttachmentChip from "./AttachmentChip.vue";
 import RailSection from "./RailSection.vue";
 import {
   cacheState,
@@ -101,7 +95,7 @@ const attachments = computed(() => {
   return props.messages
     .flatMap((m) => m.attachments ?? [])
     .filter((a) => {
-      const k = a.kind + (a.kind === "kb" ? a.doc_id : a.name);
+      const k = a.kind + (a.kind === "kb" ? a.doc_id : (a.file_id ?? a.name));
       return !seen.has(k) && !!seen.add(k);
     });
 });
@@ -623,20 +617,12 @@ onBeforeUnmount(() => {
       <div class="rail-group">
         <h5>Attachments</h5>
         <div v-if="attachments.length" class="atts">
-          <template v-for="a in attachments" :key="a.kind + a.name">
-            <RouterLink
-              v-if="a.kind === 'kb'"
-              class="ch-chip kb"
-              :to="{ path: '/knowledge', query: { doc: a.doc_id } }"
-              ><BookOpen class="icon" /><span class="ch-fn">{{
-                a.name
-              }}</span></RouterLink
-            >
-            <span v-else class="ch-chip"
-              ><FileText class="icon" /><span class="ch-fn">{{ a.name }}</span
-              ><span class="ch-fs">{{ formatSize(a.size) }}</span></span
-            >
-          </template>
+          <AttachmentChip
+            v-for="a in attachments"
+            :key="a.kind + (a.kind === 'kb' ? a.doc_id : (a.file_id ?? a.name))"
+            :a="a"
+            :chat-id="chat.id"
+          />
         </div>
         <p v-else class="empty-note">None yet.</p>
       </div>

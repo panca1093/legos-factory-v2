@@ -7,7 +7,6 @@ import {
   type ChatStreamEvent,
 } from "../../src/services/api/chatStream";
 import {
-  addFiles,
   groupByRecency,
   renderMarkdown,
 } from "../../src/features/chats/chatUtils";
@@ -101,45 +100,6 @@ describe("recency grouping", () => {
     expect(groupByRecency([at(1)], now).map((x) => x.label)).toEqual([
       "Yesterday",
     ]);
-  });
-});
-
-describe("attachment validation", () => {
-  const file = (name: string, bytes: number | number[]) =>
-    new File(
-      [
-        typeof bytes === "number"
-          ? "a".repeat(bytes)
-          : new Uint8Array(bytes).buffer,
-      ],
-      name,
-    );
-  it("accepts UTF-8 text and rejects oversize, binary and extra files", async () => {
-    let r = await addFiles(
-      [],
-      [file("a.txt", 10), file("big.txt", 101 * 1024)],
-    );
-    expect(r.files.map((f) => f.name)).toEqual(["a.txt"]);
-    expect(r.errors.join()).toContain("big.txt");
-    r = await addFiles(r.files, [file("bin", [0xff, 0xfe, 0x00])]);
-    expect(r.errors.join()).toContain("UTF-8");
-    const six = Array.from({ length: 6 }, (_, i) => file(`f${i}`, 5));
-    r = await addFiles([], six);
-    expect(r.files).toHaveLength(5);
-    expect(r.errors.join()).toContain("5 files");
-  });
-  it("enforces the 300KB total", async () => {
-    const r = await addFiles(
-      [],
-      [
-        file("a", 100 * 1024),
-        file("b", 100 * 1024),
-        file("c", 100 * 1024),
-        file("d", 1024),
-      ],
-    );
-    expect(r.files.map((f) => f.name)).toEqual(["a", "b", "c"]);
-    expect(r.errors.join()).toContain("300 KB");
   });
 });
 

@@ -949,3 +949,59 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
 }
+
+.thread-wrap {
+  position: relative;
+}
+.ch-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-xl);
+  background: var(--tint);
+  color: var(--ink);
+  font-weight: 600;
+  opacity: 0.92;
+  pointer-events: none;
+}
+.ch-att-img {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.ch-att-img img {
+  display: block;
+  max-width: 220px;
+  max-height: 160px;
+  object-fit: cover;
+}
+.composer .ch-chip.up {
+  position: relative;
+  overflow: hidden;
+}
+.composer .ch-chip.up .ch-bar-fill {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--accent);
+}
+.composer .ch-chip.err {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+.composer .ch-chip .ch-thumb {
+  width: 18px;
+  height: 18px;
+  object-fit: cover;
+  border-radius: 3px;
+}
+.composer .ch-chip button:focus-visible {
+  outline: 2px solid var(--accent);
+  border-radius: var(--radius-full);
+}
