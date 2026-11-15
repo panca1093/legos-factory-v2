@@ -54,6 +54,9 @@ func fakeAgent(scenario string) {
 		switch m.Method {
 		case "initialize":
 			res := map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": "Fake", "version": "0"}}
+			if os.Getenv("ACP_FAKE_EMBEDDED") != "" {
+				res["agentCapabilities"] = map[string]any{"promptCapabilities": map[string]any{"image": true, "embeddedContext": true}}
+			}
 			if scenario == "steer" || scenario == "steer-exit" {
 				res["_meta"] = map[string]any{"steering": map[string]any{"supported": true}}
 			}
@@ -633,7 +636,7 @@ func TestACPImageBlock(t *testing.T) {
 	ws := t.TempDir()
 	png := []byte("\x89PNG\r\n\x1a\nbytes")
 	jpg := []byte("\xff\xd8\xffjpg")
-	imgs := []model.AgentImage{{MediaType: "image/png", Data: png}, {MediaType: "image/jpeg", Data: jpg}}
+	imgs := []model.AgentAttachment{{Name: "a.png", MediaType: "image/png", Data: png}, {Name: "b.jpg", MediaType: "image/jpeg", Data: jpg}}
 	want := func(text string) string {
 		b, _ := json.Marshal([]any{
 			map[string]any{"type": "image", "mimeType": "image/png", "data": base64.StdEncoding.EncodeToString(png)},
@@ -642,7 +645,7 @@ func TestACPImageBlock(t *testing.T) {
 		})
 		return string(b)
 	}
-	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentChat, Prompt: "look", WorkspaceDir: ws, Keep: true, Images: imgs})
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentChat, Prompt: "look", WorkspaceDir: ws, Keep: true, Attachments: imgs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,13 +653,56 @@ func TestACPImageBlock(t *testing.T) {
 	if err != nil || res.Text != want("look") {
 		t.Fatalf("start prompt = %q, %v", res.Text, err)
 	}
-	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentChat, Prompt: "again", WorkspaceDir: ws, Images: imgs})
+	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentChat, Prompt: "again", WorkspaceDir: ws, Attachments: imgs})
 	if err != nil {
 		t.Fatal(err)
 	}
 	res, err = h.Result(ctx, next.ID())
 	if err != nil || res.Text != want("again") {
 		t.Fatalf("continue prompt = %q, %v", res.Text, err)
+	}
+}
+
+func TestACPFileBlocks(t *testing.T) {
+	pdf := []byte("%PDF-1.4 body")
+	txt := []byte("hello\nworld")
+	atts := []model.AgentAttachment{
+		{Name: "my report.pdf", MediaType: "application/pdf", Data: pdf},
+		{Name: "n.txt", MediaType: "text/plain", Data: txt},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	run := func(h *ACPHarness) (string, error) {
+		ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentChat, Prompt: "q", WorkspaceDir: t.TempDir(), Attachments: atts})
+		if err != nil {
+			return "", err
+		}
+		res, err := h.Result(ctx, ses.ID())
+		return res.Text, err
+	}
+
+	got, err := run(fakeHarness(t, "echo", "ACP_FAKE_EMBEDDED=1"))
+	b64 := base64.StdEncoding.EncodeToString
+	want, _ := json.Marshal([]any{
+		map[string]any{"type": "resource", "resource": map[string]any{"uri": "file:///attachments/my%20report.pdf", "mimeType": "application/pdf", "blob": b64(pdf)}},
+		map[string]any{"type": "resource", "resource": map[string]any{"uri": "file:///attachments/n.txt", "mimeType": "text/plain", "blob": b64(txt)}},
+		map[string]any{"type": "text", "text": "q"},
+	})
+	if err != nil || got != string(want) {
+		t.Fatalf("with embeddedContext: %q, %v", got, err)
+	}
+
+	if _, err := run(fakeHarness(t, "echo")); !errors.Is(err, model.ErrPermanent) || !strings.Contains(err.Error(), "cannot read PDF") {
+		t.Fatalf("pdf without embeddedContext: %v", err)
+	}
+	atts = atts[1:]
+	got, err = run(fakeHarness(t, "echo"))
+	want, _ = json.Marshal([]any{
+		map[string]any{"type": "text", "text": "Attached file n.txt:\n<file>\nhello\nworld\n</file>"},
+		map[string]any{"type": "text", "text": "q"},
+	})
+	if err != nil || got != string(want) {
+		t.Fatalf("text without embeddedContext: %q, %v", got, err)
 	}
 }
 

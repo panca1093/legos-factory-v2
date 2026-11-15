@@ -2,10 +2,20 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
 var ErrChatNotFound = errors.New("chat not found")
+
+// ErrChatFilesUnavailable means a file meant for a message is gone or already belongs to another message.
+var ErrChatFilesUnavailable = errors.New("an attached file is no longer available")
+
+// ErrChatTooManyFiles means the chat already has as many uploaded files waiting to be sent as it may.
+var ErrChatTooManyFiles = errors.New("too many files waiting to be sent")
+
+// ErrChatFileNotFound is also a not-found chat, so every file endpoint answers 404 for a stranger's chat or file.
+var ErrChatFileNotFound = fmt.Errorf("%w: file not found", ErrChatNotFound)
 
 type Chat struct {
 	ID        string    `json:"id"`
@@ -17,14 +27,32 @@ type Chat struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// ChatAttachment is what is kept of something sent with a message: a text file
-// ("file"), an image ("image") or a knowledge document ("kb"). The content itself is not stored.
+// ChatAttachment is what a message records of something sent with it: an uploaded
+// file ("image", "pdf" or "text", with FileID) or a knowledge document ("kb").
+// Rows from before uploads have kind "text" and no FileID.
 type ChatAttachment struct {
-	Kind  string `json:"kind"`
-	Name  string `json:"name"`
-	Size  int    `json:"size,omitempty"`
-	DocID string `json:"doc_id,omitempty"`
-	Quote string `json:"quote,omitempty"`
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Size      int    `json:"size,omitempty"`
+	DocID     string `json:"doc_id,omitempty"`
+	Quote     string `json:"quote,omitempty"`
+	FileID    string `json:"file_id,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+}
+
+// ChatFileRec is an uploaded file; its bytes live on disk under the chat's file directory.
+type ChatFileRec struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	Kind      string `json:"kind"` // image | pdf | text
+	Size      int    `json:"size"`
+
+	ChatID    string    `json:"-"`
+	UserID    string    `json:"-"`
+	MessageID *int64    `json:"-"` // nil until a message carries the file
+	SHA256    string    `json:"-"`
+	CreatedAt time.Time `json:"-"`
 }
 
 type ChatUsage struct {

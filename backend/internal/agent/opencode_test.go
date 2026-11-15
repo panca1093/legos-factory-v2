@@ -324,7 +324,7 @@ func TestOpenCodeImagePart(t *testing.T) {
 	png := []byte("\x89PNG\r\n\x1a\nbytes")
 	if _, err := h.Start(context.Background(), model.AgentRequest{
 		Prompt: "look", ProviderID: "p1", ModelID: "m1",
-		Images: []model.AgentImage{{MediaType: "image/png", Data: png}},
+		Attachments: []model.AgentAttachment{{Name: "a.png", MediaType: "image/png", Data: png}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -338,6 +338,25 @@ func TestOpenCodeImagePart(t *testing.T) {
 	if got.Text != "look" || len(got.Files) != 1 || got.Files[0].Name != "image-1" ||
 		got.Files[0].URI != "data:image/png;base64,"+base64.StdEncoding.EncodeToString(png) {
 		t.Fatalf("payload = %s", st.lastBody)
+	}
+}
+
+func TestOpenCodeTextInlinePdfRefused(t *testing.T) {
+	srv, st := fakeServer(t)
+	h := NewOpenCodeHarness(NewOpenCodeClient(srv.URL, "opencode", "pass"))
+	if _, err := h.Start(context.Background(), model.AgentRequest{
+		Prompt: "q", ProviderID: "p1", ModelID: "m1",
+		Attachments: []model.AgentAttachment{{Name: "n.txt", MediaType: "text/plain", Data: []byte("hi")}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Text string }
+	if err := json.Unmarshal(st.lastBody, &got); err != nil || got.Text != "Attached file n.txt:\n<file>\nhi\n</file>\n\nq" {
+		t.Fatalf("payload = %s", st.lastBody)
+	}
+	_, err := h.Start(context.Background(), model.AgentRequest{Prompt: "q", Attachments: []model.AgentAttachment{{Name: "a.pdf", MediaType: "application/pdf", Data: []byte("%PDF-")}}})
+	if !errors.Is(err, model.ErrPermanent) {
+		t.Fatalf("pdf: %v", err)
 	}
 }
 

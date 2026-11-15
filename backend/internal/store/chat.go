@@ -90,26 +90,7 @@ func (r *ChatRepo) Delete(ctx context.Context, id string) error {
 }
 
 func (r *ChatRepo) AddMessage(ctx context.Context, m *model.ChatMessage) error {
-	if m.Attachments == nil {
-		m.Attachments = []model.ChatAttachment{}
-	}
-	atts, err := json.Marshal(m.Attachments)
-	if err != nil {
-		return err
-	}
-	usage := []byte{}
-	if m.Usage != nil {
-		if usage, err = json.Marshal(m.Usage); err != nil {
-			return err
-		}
-	}
-	res, err := r.DB.ExecContext(ctx, `INSERT INTO chat_messages (chat_id, role, content, attachments, usage, error, created_at) VALUES (?,?,?,?,?,?,?)`,
-		m.ChatID, m.Role, m.Content, string(atts), string(usage), m.Error, m.CreatedAt.Unix())
-	if err != nil {
-		return err
-	}
-	m.ID, err = res.LastInsertId()
-	return err
+	return addMessage(ctx, r.DB, m)
 }
 
 func (r *ChatRepo) Messages(ctx context.Context, chatID string) ([]model.ChatMessage, error) {
@@ -128,6 +109,11 @@ func (r *ChatRepo) Messages(ctx context.Context, chatID string) ([]model.ChatMes
 		}
 		if err := json.Unmarshal([]byte(atts), &m.Attachments); err != nil {
 			return nil, err
+		}
+		for i := range m.Attachments {
+			if m.Attachments[i].Kind == "file" { // text files were stored as "file" before uploads
+				m.Attachments[i].Kind = "text"
+			}
 		}
 		if usage != "" {
 			m.Usage = &model.ChatUsage{}

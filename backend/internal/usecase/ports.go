@@ -82,6 +82,11 @@ type ChatStore interface {
 	Delete(ctx context.Context, id string) error
 	AddMessage(ctx context.Context, m *model.ChatMessage) error
 	Messages(ctx context.Context, chatID string) ([]model.ChatMessage, error)
+	AddFile(ctx context.Context, f *model.ChatFileRec, maxPending int) error
+	File(ctx context.Context, chatID, fileID string) (*model.ChatFileRec, error)
+	DeleteFile(ctx context.Context, chatID, fileID string) (bool, error)
+	StaleFiles(ctx context.Context, cutoff time.Time) ([]model.ChatFileRec, error)
+	AddMessageFiles(ctx context.Context, m *model.ChatMessage, fileIDs []string) error
 }
 
 type SettingsReader interface {

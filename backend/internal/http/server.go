@@ -59,7 +59,7 @@ func New(cfg *model.Config, log *slog.Logger) *Server {
 	e.Use(echomw.BodyLimitWithConfig(echomw.BodyLimitConfig{
 		Limit: "1MB",
 		Skipper: func(c echo.Context) bool {
-			return c.Request().Method == http.MethodPost && c.Path() == "/api/v1/chats/:id/messages"
+			return c.Request().Method == http.MethodPost && (c.Path() == "/api/v1/chats/:id/messages" || c.Path() == "/api/v1/chats/:id/files")
 		},
 	}))
 	e.Use(echomw.CORSWithConfig(echomw.CORSConfig{
@@ -282,6 +282,9 @@ func (s *Server) routes() {
 	api.GET("/chats/:id/messages", s.handleChatMessages)
 	api.GET("/chats/:id/session", s.handleChatSession)
 	api.POST("/chats/:id/messages", s.requireRole(model.RoleEngineer, s.handleChatSend), echomw.BodyLimit("12MiB"))
+	api.POST("/chats/:id/files", s.requireRole(model.RoleEngineer, s.handleChatFileUpload), echomw.BodyLimit("19MiB"))
+	api.GET("/chats/:id/files/:fileId", s.handleChatFileGet)
+	api.DELETE("/chats/:id/files/:fileId", s.requireRole(model.RoleEngineer, s.handleChatFileDelete))
 	api.POST("/chats/:id/permissions/:reqId", s.requireRole(model.RoleEngineer, s.handleChatPermission))
 	api.POST("/chats/:id/work-order-draft", s.requireRole(model.RoleEngineer, s.handleChatWorkOrderDraft))
 	api.GET("/chats/:id/related-knowledge", s.handleChatRelatedKnowledge)

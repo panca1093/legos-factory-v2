@@ -275,6 +275,11 @@ func (a *App) Start(ctx context.Context) error {
 	} else if n > 0 {
 		a.log.Warn("failed runs left running by a dead process", "count", n)
 	}
+	if a.Server.Chat != nil {
+		if err := a.Server.Chat.CollectFiles(ctx); err != nil {
+			a.log.Warn("chat file cleanup failed", "err", err)
+		}
+	}
 	a.Sched.Start(ctx)
 	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {
 		return err

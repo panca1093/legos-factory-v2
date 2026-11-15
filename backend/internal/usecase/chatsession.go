@@ -31,6 +31,7 @@ type turnInfo struct {
 	promptBytes int
 	factsBytes  int
 	mcpBytes    int
+	attachBytes int
 
 	mu    sync.Mutex
 	calls map[string]int
@@ -56,19 +57,13 @@ func (t *turnInfo) countCalls(tools []model.AgentTool) {
 	}
 }
 
-func (t *turnInfo) usage(modelRef string, res model.AgentResult, atts []model.ChatAttachment) *model.ChatUsage {
+func (t *turnInfo) usage(modelRef string, res model.AgentResult) *model.ChatUsage {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	attach := 0
-	for _, a := range atts {
-		if a.Kind == "file" || a.Kind == "image" {
-			attach += a.Size
-		}
-	}
 	u := &model.ChatUsage{
 		Model: modelRef, TokensIn: res.TokensIn, TokensOut: res.TokensOut, CostMicros: res.CostMicros,
 		CacheRead: res.CacheRead, CacheWrite: res.CacheWrite, RepoSHA: t.sha, RepoProject: t.project, Steps: t.steps, ContextUsed: res.ContextUsed, ContextWindow: res.ContextSize, NewSession: t.newSession,
-		PromptBytes: t.promptBytes, FactsBytes: t.factsBytes, MCPToolBytes: t.mcpBytes, AttachBytes: attach,
+		PromptBytes: t.promptBytes, FactsBytes: t.factsBytes, MCPToolBytes: t.mcpBytes, AttachBytes: t.attachBytes,
 	}
 	if len(t.calls) > 0 {
 		u.MCPCalls = make(map[string]int, len(t.calls))
