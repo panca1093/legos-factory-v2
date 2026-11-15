@@ -384,7 +384,9 @@ onMounted(async () => {
                   <RotateCw class="icon" />Retry
                 </button>
               </div>
-              <small v-if="m.usage" class="ch-meta"
+              <small
+                v-if="m.usage && m.usage.tokens_in + m.usage.tokens_out > 0"
+                class="ch-meta"
                 >{{ m.usage.model }} ·
                 {{ m.usage.tokens_in + m.usage.tokens_out }} tokens ·
                 {{ money(m.usage.cost_micros) }}</small
