@@ -193,6 +193,7 @@ async function loadInfo() {
   try {
     const r = await store.sessionInfo(props.chat.id);
     if (seq !== infoSeq) return;
+    now.value = Date.now();
     info.value = r;
     infoError.value = "";
   } catch (e) {
