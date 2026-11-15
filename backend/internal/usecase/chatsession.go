@@ -219,7 +219,7 @@ func (c *Chat) Session(ctx context.Context, u *model.User, id string) (*ChatSess
 func sessionContext(modelRef string, msgs []model.ChatMessage) (SessionContext, SessionTotals) {
 	sc := SessionContext{Model: modelRef, Window: contextWindow(modelRef), Parts: []SessionPart{}}
 	var tot SessionTotals
-	last, start := -1, -1
+	last, start, clean := -1, -1, -1
 	for i, m := range msgs {
 		if m.Role != "assistant" || m.Usage == nil {
 			continue
@@ -236,6 +236,9 @@ func sessionContext(modelRef string, msgs []model.ChatMessage) (SessionContext, 
 		last = i
 		if m.Usage.NewSession {
 			start = i
+			if m.Usage.Steps == 0 {
+				clean = i
+			}
 		}
 	}
 	if last < 0 {
@@ -269,12 +272,14 @@ func sessionContext(modelRef string, msgs []model.ChatMessage) (SessionContext, 
 		}
 	}
 	var agent int64
-	if su.Steps == 0 {
-		base := su.TokensIn
-		if su.ContextUsed > 0 {
-			base = su.ContextUsed
+	// a session start that used tools has tool results in its context, so the agent's own share comes from the latest clean start in this chat
+	if clean >= 0 {
+		cu := msgs[clean].Usage
+		base := cu.TokensIn
+		if cu.ContextUsed > 0 {
+			base = cu.ContextUsed
 		}
-		agent = max(0, base-int64(su.PromptBytes/4)-mcp)
+		agent = max(0, base-int64(cu.PromptBytes/4)-int64(cu.MCPToolBytes/4))
 	}
 	sc.Parts = []SessionPart{
 		{"agent", agent}, {"mcp", mcp}, {"facts", facts}, {"files", files},

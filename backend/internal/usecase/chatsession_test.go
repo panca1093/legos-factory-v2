@@ -299,6 +299,12 @@ func TestSessionAgentPartOnlyFromAToollessStart(t *testing.T) {
 	if got := partsOf(sc); got["agent"] != 0 || got["messages"] != 12_000-1_000 {
 		t.Fatalf("a start turn that used tools has no agent part: %+v", sc.Parts)
 	}
+	clean := base
+	clean.Steps = 0
+	sc, _ = sessionContext("claude/sonnet", []model.ChatMessage{asst(at, clean), asst(at, base)})
+	if got := partsOf(sc); got["agent"] != 10_000 || got["messages"] != 12_000-1_000-10_000 {
+		t.Fatalf("an earlier toolless start in the chat supplies the agent part: %+v", sc.Parts)
+	}
 }
 
 func TestSessionFilesSkipFailedTurns(t *testing.T) {
