@@ -6,6 +6,7 @@ import {
   type ChatPermissionDecision,
 } from "../types/api";
 import { base64Size } from "../features/chats/chatUtils";
+import type { SessionInfo } from "../features/chats/sessionRail";
 import { streamChat, type ChatStreamBody } from "../services/api/chatStream";
 
 export type ChatAttachment =
@@ -125,6 +126,10 @@ export const useChats = defineStore("chats", {
         `/api/v1/chats/${id}/related-knowledge`,
       );
       return r.docs ?? [];
+    },
+    async sessionInfo(id: string) {
+      const r = await api.get<SessionInfo>(`/api/v1/chats/${id}/session`);
+      return { ...r, mcp: r.mcp ?? [] };
     },
     async remove(id: string) {
       await api.del(`/api/v1/chats/${id}`);
