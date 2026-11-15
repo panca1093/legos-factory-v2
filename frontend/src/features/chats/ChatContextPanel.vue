@@ -178,6 +178,8 @@ watch(
     related.value = [];
     info.value = null;
     infoError.value = "";
+    infoSeq++;
+    infoLoading.value = false;
     saved.value = null;
     drawerOpen.value = false;
     draftError.value = "";
@@ -249,7 +251,9 @@ watch(
 watch(
   () => [props.chat.id, props.chat.project_id] as const,
   ([id, pid], [wasId, wasPid]) => {
-    if (props.active && id === wasId && pid !== wasPid) void loadInfo();
+    if (id !== wasId || pid === wasPid) return;
+    if (info.value) info.value = { ...info.value, project: null };
+    if (props.active) void loadInfo();
   },
 );
 onMounted(() => {

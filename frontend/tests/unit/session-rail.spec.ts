@@ -307,4 +307,68 @@ describe("session rail panel", () => {
     expect(loadOpen().context).toBe(false);
     w.unmount();
   });
+
+  it("renders a payload with null arrays and maps", async () => {
+    const base = info();
+    body = {
+      ...base,
+      project: {
+        ...base.project,
+        worktrees: null,
+        running: null,
+      },
+      context: { ...base.context, parts: null },
+      mcp: [{ ...base.mcp[0], calls: null }, ...base.mcp.slice(1)],
+    };
+    const w = await mountPanel();
+    expect(w.find('[data-test="ctx-pct"]').text()).toBe("32% used");
+    expect(w.text()).toContain("No agents running");
+    w.unmount();
+  });
+
+  it("drops a response for the previous chat after switching", async () => {
+    body = info();
+    let release: () => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/v1/chats/c1/session")
+          await new Promise<void>((r) => (release = r));
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify(url.endsWith("/session") ? body : {}),
+        };
+      }),
+    );
+    const r = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/:p(.*)*", component: { template: "<div />" } }],
+    });
+    await r.push("/chats/c1");
+    const w = mount(ChatContextPanel, {
+      props: { chat, messages: [], busy: false, active: false },
+      global: { plugins: [r] },
+    });
+    await w.setProps({ active: true });
+    await w.setProps({ active: false });
+    await w.setProps({ chat: { ...chat, id: "c2" } });
+    release();
+    await flushPromises();
+    await w.setProps({ active: true });
+    expect(w.text()).not.toContain("32% used");
+    w.unmount();
+  });
+
+  it("clears the old project details when the project changes", async () => {
+    body = info();
+    const w = await mountPanel();
+    expect(w.text()).toContain("factory checkout");
+    body = "fail";
+    await w.setProps({ chat: { ...chat, project_id: "" } });
+    await flushPromises();
+    expect(w.text()).not.toContain("factory checkout");
+    w.unmount();
+  });
 });

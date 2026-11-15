@@ -95,10 +95,13 @@ watch(ctxOpen, async (open) => {
   if (!open) return;
   narrow.value = window.matchMedia("(max-width: 860px)").matches;
   await nextTick();
-  (
-    ctxPanel.value?.querySelector<HTMLElement>("select:not(:disabled)") ??
-    ctxPanel.value?.querySelector<HTMLElement>("button")
-  )?.focus();
+  [
+    ...(ctxPanel.value?.querySelectorAll<HTMLElement>(
+      "select:not(:disabled), button",
+    ) ?? []),
+  ]
+    .find((el) => el.offsetParent !== null)
+    ?.focus();
 });
 watch(busy, (now, was) => {
   if (!was || now) return;
@@ -336,7 +339,11 @@ onMounted(async () => {
                 aria-label="Thinking"
                 ><i></i><i></i><i></i
               ></span>
-              <p v-if="m.pending && m.step" class="ch-step" data-test="step-line">
+              <p
+                v-if="m.pending && m.step"
+                class="ch-step"
+                data-test="step-line"
+              >
                 {{ stepLine(m.step) }}
               </p>
               <ChatPermissionCard

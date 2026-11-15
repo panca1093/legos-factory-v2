@@ -129,7 +129,19 @@ export const useChats = defineStore("chats", {
     },
     async sessionInfo(id: string) {
       const r = await api.get<SessionInfo>(`/api/v1/chats/${id}/session`);
-      return { ...r, mcp: r.mcp ?? [] };
+      return {
+        ...r,
+        project: r.project && {
+          ...r.project,
+          worktrees: r.project.worktrees ?? [],
+          running: r.project.running ?? [],
+        },
+        context: r.context && {
+          ...r.context,
+          parts: r.context.parts ?? [],
+        },
+        mcp: (r.mcp ?? []).map((m) => ({ ...m, calls: m.calls ?? {} })),
+      };
     },
     async remove(id: string) {
       await api.del(`/api/v1/chats/${id}`);
