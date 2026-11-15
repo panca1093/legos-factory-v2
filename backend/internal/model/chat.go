@@ -11,6 +11,9 @@ var ErrChatNotFound = errors.New("chat not found")
 // ErrChatFilesUnavailable means a file meant for a message is gone or already belongs to another message.
 var ErrChatFilesUnavailable = errors.New("an attached file is no longer available")
 
+// ErrChatTooManyFiles means the chat already has as many uploaded files waiting to be sent as it may.
+var ErrChatTooManyFiles = errors.New("too many files waiting to be sent")
+
 // ErrChatFileNotFound is also a not-found chat, so every file endpoint answers 404 for a stranger's chat or file.
 var ErrChatFileNotFound = fmt.Errorf("%w: file not found", ErrChatNotFound)
 

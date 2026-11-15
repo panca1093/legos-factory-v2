@@ -22,12 +22,14 @@ import (
 )
 
 const (
-	maxChatImageFile    = 5 << 20
-	maxChatPDFFile      = 20 << 20
+	// the provider measures images on their base64 form and takes 32 MB of it per request
+	maxChatImageFile    = 3_932_160
+	maxChatPDFFile      = 18 << 20
 	maxChatTextFile     = 1 << 20
 	maxChatMessageFiles = 10
-	maxChatMessageBytes = 25 << 20
+	maxChatMessageBytes = 18 << 20
 	chatReplayBudget    = 10 << 20
+	maxChatPending      = 20
 	maxChatFileName     = 200
 	unattachedFileTTL   = 24 * time.Hour
 )
@@ -40,26 +42,55 @@ const (
 var fileIDPattern = regexp.MustCompile(`^cf_[0-9a-f]{16}$`)
 
 // sniffFile names a file's kind and media type from its bytes alone; the client's name and MIME never count.
-func sniffFile(b []byte) (kind, mediaType string, err error) {
-	switch {
-	case len(b) == 0:
+func sniffFile(ra io.ReaderAt, size int64) (kind, mediaType string, err error) {
+	if size == 0 {
 		return "", "", fmt.Errorf("%w: the file is empty.", ErrInvalid)
-	case imageType(b) != "":
-		return "image", imageType(b), nil
-	case bytes.HasPrefix(b, []byte("%PDF-")):
+	}
+	head := make([]byte, min(size, 16))
+	if _, err := ra.ReadAt(head, 0); err != nil {
+		return "", "", err
+	}
+	switch {
+	case imageType(head) != "":
+		return "image", imageType(head), nil
+	case bytes.HasPrefix(head, []byte("%PDF-")):
 		return "pdf", "application/pdf", nil
-	case bytes.HasPrefix(b, []byte("PK\x03\x04")):
-		if zr, zerr := zip.NewReader(bytes.NewReader(b), int64(len(b))); zerr == nil {
+	case bytes.HasPrefix(head, []byte("PK\x03\x04")):
+		if zr, zerr := zip.NewReader(ra, size); zerr == nil {
 			for _, f := range zr.File {
 				if f.Name == "[Content_Types].xml" {
 					return "", "", fmt.Errorf("%w: %s", ErrInvalid, errOfficeFile)
 				}
 			}
 		}
-	case utf8.Valid(b) && !bytes.ContainsRune(b, 0):
-		return "text", "text/plain; charset=utf-8", nil
+	default:
+		b := make([]byte, size)
+		if _, err := ra.ReadAt(b, 0); err != nil && err != io.EOF {
+			return "", "", err
+		}
+		if utf8.Valid(b) && !bytes.ContainsRune(b, 0) {
+			return "text", "text/plain; charset=utf-8", nil
+		}
 	}
 	return "", "", fmt.Errorf("%w: %s", ErrInvalid, errOtherFile)
+}
+
+// headLimit is the size cap for a file that starts with head; a zip gets the largest so an Office file is named as one.
+func headLimit(head []byte) int {
+	switch {
+	case imageType(head) != "":
+		return maxChatImageFile
+	case bytes.HasPrefix(head, []byte("%PDF-")), bytes.HasPrefix(head, []byte("PK\x03\x04")):
+		return maxChatPDFFile
+	}
+	return maxChatTextFile
+}
+
+func sizeLabel(limit int) string {
+	if limit == maxChatImageFile {
+		return "3.75 MB"
+	}
+	return fmt.Sprintf("%d MB", limit>>20)
 }
 
 func cleanFileName(name string) string {
@@ -90,7 +121,8 @@ func agentMediaType(mt string) string {
 	return mt
 }
 
-// Upload stores one file for the user's chat, deciding its kind from its bytes. It is not attached to anything yet.
+// Upload streams one file of the user's chat to disk, deciding its kind from its bytes and enforcing
+// the kind's size cap while copying. It is not attached to anything yet.
 func (c *Chat) Upload(ctx context.Context, u *model.User, chatID, name string, r io.Reader) (*model.ChatFileRec, error) {
 	if _, err := c.own(ctx, u, chatID); err != nil {
 		return nil, err
@@ -98,61 +130,81 @@ func (c *Chat) Upload(ctx context.Context, u *model.User, chatID, name string, r
 	if c.DataDir == "" {
 		return nil, errors.New("file storage is not configured")
 	}
-	data, err := io.ReadAll(io.LimitReader(r, maxChatPDFFile+1))
-	if err != nil {
-		return nil, fmt.Errorf("%w: the upload could not be read", ErrInvalid)
-	}
 	name = cleanFileName(name)
-	kind, mediaType, err := sniffFile(data)
+	dir := filepath.Join(c.DataDir, "chat-files", chatID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	tmp, err := os.CreateTemp(dir, ".upload-*")
 	if err != nil {
 		return nil, err
 	}
-	limit := map[string]int{"image": maxChatImageFile, "pdf": maxChatPDFFile, "text": maxChatTextFile}[kind]
-	if len(data) > limit {
-		return nil, fmt.Errorf("%w: %s is over %d MB.", ErrInvalid, name, limit>>20)
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+
+	head := make([]byte, 16)
+	n, err := io.ReadFull(r, head)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return nil, fmt.Errorf("%w: the upload could not be read: %w", ErrInvalid, err)
+	}
+	head = head[:n]
+	limit := headLimit(head)
+	sum := sha256.New()
+	size, err := io.Copy(io.MultiWriter(tmp, sum), io.MultiReader(bytes.NewReader(head), io.LimitReader(r, int64(limit)+1-int64(n))))
+	if err != nil {
+		return nil, fmt.Errorf("%w: the upload could not be read: %w", ErrInvalid, err)
+	}
+	if size > int64(limit) {
+		return nil, c.overLimit(tmp, name, limit)
+	}
+	kind, mediaType, err := sniffFile(tmp, size)
+	if err != nil {
+		return nil, err
+	}
+	if err := tmp.Sync(); err != nil {
+		return nil, err
 	}
 	idb := make([]byte, 8)
 	if _, err := rand.Read(idb); err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(data)
 	rec := &model.ChatFileRec{
 		ID: "cf_" + hex.EncodeToString(idb), ChatID: chatID, UserID: u.ID, Name: name,
-		MediaType: mediaType, Kind: kind, Size: len(data), SHA256: hex.EncodeToString(sum[:]), CreatedAt: time.Now(),
+		MediaType: mediaType, Kind: kind, Size: int(size), SHA256: hex.EncodeToString(sum.Sum(nil)), CreatedAt: time.Now(),
 	}
-	// the row goes first: a crash before the write leaves a row the orphan sweep removes, never bytes nobody tracks
-	if err := c.Store.AddFile(ctx, rec); err != nil {
+	// the row goes first: a crash before the rename leaves a row the orphan sweep removes, never bytes nobody tracks
+	if err := c.Store.AddFile(ctx, rec, maxChatPending); err != nil {
+		if errors.Is(err, model.ErrChatTooManyFiles) {
+			return nil, fmt.Errorf("%w: Too many files waiting to be sent in this chat. Send or remove some first.", ErrInvalid)
+		}
+		if errors.Is(err, model.ErrChatNotFound) { // deleted while this upload ran
+			c.removeChatFiles(chatID)
+		}
 		return nil, err
 	}
-	if err := writeFileAtomic(c.filePath(chatID, rec.ID), data); err != nil {
+	if err := os.Rename(tmp.Name(), c.filePath(chatID, rec.ID)); err != nil {
 		_, _ = c.Store.DeleteFile(ctx, chatID, rec.ID)
 		return nil, err
+	}
+	if _, err := c.Store.Get(ctx, chatID); errors.Is(err, model.ErrChatNotFound) { // deleted while this upload ran
+		c.removeChatFiles(chatID)
+		return nil, model.ErrChatNotFound
 	}
 	return rec, nil
 }
 
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+// overLimit explains a file that passed limit: too big when it is what its first bytes say, otherwise not a supported type.
+func (c *Chat) overLimit(f *os.File, name string, limit int) error {
+	if limit == maxChatTextFile {
+		// the cut can fall inside a multi-byte character
+		for trim := 0; trim <= 3; trim++ {
+			if kind, _, err := sniffFile(io.NewSectionReader(f, 0, int64(limit-trim)), int64(limit-trim)); err == nil && kind == "text" {
+				return fmt.Errorf("%w: %s is over %s.", ErrInvalid, name, sizeLabel(limit))
+			}
+		}
+		return fmt.Errorf("%w: %s", ErrInvalid, errOtherFile)
 	}
-	tmp, err := os.CreateTemp(dir, ".upload-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return fmt.Errorf("%w: %s is over %s.", ErrInvalid, name, sizeLabel(limit))
 }
 
 // ownFile loads a file of the user's own chat; anyone else's is not found.
@@ -244,19 +296,19 @@ func (c *Chat) sendFiles(ctx context.Context, u *model.User, chatID string, ids 
 }
 
 // replayFiles re-reads the files of the recent user messages for a session that has no memory of them:
-// newest first, skipping any that would pass the replay budget or are gone from disk.
-func (c *Chat) replayFiles(chatID string, history []model.ChatMessage) []model.AgentAttachment {
+// newest first, skipping any that would pass budget, are gone from disk, or belong to a turn whose reply failed.
+func (c *Chat) replayFiles(chatID string, history []model.ChatMessage, budget int) []model.AgentAttachment {
 	if len(history) > historyMessages {
 		history = history[len(history)-historyMessages:]
 	}
 	var out []model.AgentAttachment
 	spent := 0
 	for i := len(history) - 1; i >= 0; i-- {
-		if history[i].Role != "user" {
+		if history[i].Role != "user" || (i+1 < len(history) && history[i+1].Error != "") {
 			continue
 		}
 		for _, a := range history[i].Attachments {
-			if !fileIDPattern.MatchString(a.FileID) || spent+a.Size > chatReplayBudget {
+			if !fileIDPattern.MatchString(a.FileID) || spent+a.Size > budget {
 				continue
 			}
 			data, err := os.ReadFile(c.filePath(chatID, a.FileID))

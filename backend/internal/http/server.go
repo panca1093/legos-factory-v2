@@ -282,7 +282,7 @@ func (s *Server) routes() {
 	api.GET("/chats/:id/messages", s.handleChatMessages)
 	api.GET("/chats/:id/session", s.handleChatSession)
 	api.POST("/chats/:id/messages", s.requireRole(model.RoleEngineer, s.handleChatSend), echomw.BodyLimit("12MiB"))
-	api.POST("/chats/:id/files", s.requireRole(model.RoleEngineer, s.handleChatFileUpload), echomw.BodyLimit("21MiB"))
+	api.POST("/chats/:id/files", s.requireRole(model.RoleEngineer, s.handleChatFileUpload), echomw.BodyLimit("19MiB"))
 	api.GET("/chats/:id/files/:fileId", s.handleChatFileGet)
 	api.DELETE("/chats/:id/files/:fileId", s.requireRole(model.RoleEngineer, s.handleChatFileDelete))
 	api.POST("/chats/:id/permissions/:reqId", s.requireRole(model.RoleEngineer, s.handleChatPermission))

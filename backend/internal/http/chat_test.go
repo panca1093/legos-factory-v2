@@ -342,15 +342,15 @@ func TestChatBodyLimits(t *testing.T) {
 		t.Fatalf("over 1 MB on the same path with another method: %d", code)
 	}
 
-	pdf := append([]byte("%PDF-1.7\n"), make([]byte, 20<<20-9)...)
+	pdf := append([]byte("%PDF-1.7\n"), make([]byte, 18<<20-9)...)
 	if code, body := chatUpload(srv, "ana", id, "max.pdf", pdf); code != http.StatusCreated {
-		t.Fatalf("a 20 MB PDF must pass the upload limit: %d %s", code, body[:min(len(body), 200)])
+		t.Fatalf("an 18 MB PDF must pass the upload limit: %d %s", code, body[:min(len(body), 200)])
 	}
 	if code, _ := chatUpload(srv, "ana", id, "huge.pdf", append(pdf, make([]byte, 2<<20)...)); code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("over 21 MB on the upload route: %d", code)
+		t.Fatalf("over 19 MB on the upload route: %d", code)
 	}
-	if code, body := chatUpload(srv, "ana", id, "p.pdf", append(pdf, 'x')); code != http.StatusBadRequest || !strings.Contains(body, "p.pdf is over 20 MB.") {
-		t.Fatalf("20 MB + 1: %d %s", code, body[:min(len(body), 200)])
+	if code, body := chatUpload(srv, "ana", id, "p.pdf", append(pdf, 'x')); code != http.StatusBadRequest || !strings.Contains(body, "p.pdf is over 18 MB.") {
+		t.Fatalf("18 MB + 1: %d %s", code, body[:min(len(body), 200)])
 	}
 }
 

@@ -140,20 +140,32 @@ func (s *Server) handleChatPermission(c echo.Context) error {
 }
 
 func (s *Server) handleChatFileUpload(c echo.Context) error {
-	fh, err := c.FormFile("file")
+	mr, err := c.Request().MultipartReader()
 	if err != nil {
-		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "multipart field \"file\" is required")
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "multipart upload required")
 	}
-	src, err := fh.Open()
-	if err != nil {
-		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "the upload could not be read")
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			var he *echo.HTTPError
+			if errors.As(err, &he) {
+				return he
+			}
+			return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "multipart field \"file\" is required")
+		}
+		if part.FormName() != "file" || part.FileName() == "" {
+			continue
+		}
+		rec, err := s.Chat.Upload(c.Request().Context(), currentUser(c), c.Param("id"), part.FileName(), part)
+		var he *echo.HTTPError
+		if errors.As(err, &he) {
+			return he
+		}
+		if err != nil {
+			return chatError(c, err)
+		}
+		return c.JSON(http.StatusCreated, rec)
 	}
-	defer src.Close()
-	rec, err := s.Chat.Upload(c.Request().Context(), currentUser(c), c.Param("id"), fh.Filename, src)
-	if err != nil {
-		return chatError(c, err)
-	}
-	return c.JSON(http.StatusCreated, rec)
 }
 
 func (s *Server) handleChatFileGet(c echo.Context) error {

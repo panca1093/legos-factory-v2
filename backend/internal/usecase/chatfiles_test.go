@@ -69,7 +69,7 @@ func TestSniffFile(t *testing.T) {
 		{"empty", nil, "", "", "empty"},
 	}
 	for _, c := range cases {
-		kind, mt, err := sniffFile(c.data)
+		kind, mt, err := sniffFile(bytes.NewReader(c.data), int64(len(c.data)))
 		if c.errPart != "" {
 			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), c.errPart) {
 				t.Errorf("%s: err=%v", c.name, err)
@@ -113,12 +113,81 @@ func TestChatUploadLimits(t *testing.T) {
 		}
 	}
 	img := func(n int) []byte { return append(append([]byte{}, pngBytes...), make([]byte, n-len(pngBytes))...) }
-	over("big.png", img(maxChatImageFile+1), "big.png is over 5 MB.")
-	over("big.pdf", pdfBytes(maxChatPDFFile), "big.pdf is over 20 MB.")
+	over("big.png", img(maxChatImageFile+1), "big.png is over 3.75 MB.")
+	over("big.pdf", pdfBytes(maxChatPDFFile), "big.pdf is over 18 MB.")
+	over("big.docx", append(zipWith(t, "[Content_Types].xml"), make([]byte, maxChatPDFFile)...), "big.docx is over 18 MB.")
+	over("big.bin", bytes.Repeat([]byte{0, 1, 2}, maxChatTextFile), "Only images (PNG, JPEG, GIF, WebP), PDF and text files can be attached.")
+	over("cut.txt", bytes.Repeat([]byte("é"), maxChatTextFile), "cut.txt is over 1 MB.")
 	over("big.txt", bytes.Repeat([]byte("a"), maxChatTextFile+1), "big.txt is over 1 MB.")
 	r.mustUpload(t, ch.ID, "ok.png", img(maxChatImageFile))
 	r.mustUpload(t, ch.ID, "ok.txt", bytes.Repeat([]byte("a"), maxChatTextFile))
 	r.mustUpload(t, ch.ID, "ok.pdf", pdfBytes(maxChatPDFFile-9))
+}
+
+func TestChatUploadCapsPendingFiles(t *testing.T) {
+	ctx := context.Background()
+	r := newChatRig(t, &chatPlain{reply: "ok"})
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	other, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	var first *model.ChatFileRec
+	for i := 0; i < maxChatPending; i++ {
+		f := r.mustUpload(t, ch.ID, fmt.Sprintf("%d.txt", i), []byte("x"))
+		if first == nil {
+			first = f
+		}
+	}
+	_, err := r.upload(t, r.ana, ch.ID, "21.txt", []byte("x"))
+	if !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), "Too many files waiting to be sent in this chat. Send or remove some first.") {
+		t.Fatalf("21st: %v", err)
+	}
+	if ents, _ := os.ReadDir(filepath.Join(r.chat.DataDir, "chat-files", ch.ID)); len(ents) != maxChatPending {
+		t.Fatalf("a refused upload must leave no bytes: %d entries", len(ents))
+	}
+	r.mustUpload(t, other.ID, "o.txt", []byte("x"))
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", FileIDs: []string{first.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	r.mustUpload(t, ch.ID, "after.txt", []byte("x"))
+}
+
+type racingStore struct {
+	ChatStore
+	deleteBefore bool
+}
+
+func (s racingStore) AddFile(ctx context.Context, f *model.ChatFileRec, max int) error {
+	if s.deleteBefore {
+		_ = s.ChatStore.Delete(ctx, f.ChatID)
+	}
+	err := s.ChatStore.AddFile(ctx, f, max)
+	if !s.deleteBefore && err == nil {
+		_ = s.ChatStore.Delete(ctx, f.ChatID)
+	}
+	return err
+}
+
+func TestChatUploadRacingChatDelete(t *testing.T) {
+	ctx := context.Background()
+	r := newChatRig(t, &chatPlain{reply: "ok"})
+	real := r.chat.Store
+	for _, before := range []bool{true, false} {
+		ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+		r.chat.Store = racingStore{real, before}
+		if _, err := r.upload(t, r.ana, ch.ID, "a.txt", []byte("x")); !errors.Is(err, model.ErrChatNotFound) {
+			t.Errorf("deleteBefore=%v: %v", before, err)
+		}
+		if _, err := os.Stat(filepath.Join(r.chat.DataDir, "chat-files", ch.ID)); !os.IsNotExist(err) {
+			t.Errorf("deleteBefore=%v: directory of a deleted chat must not stay: %v", before, err)
+		}
+	}
+}
+
+func TestChatStoreAddFileMapsMissingChat(t *testing.T) {
+	r := newChatRig(t, &chatPlain{reply: "ok"})
+	f := &model.ChatFileRec{ID: "cf_1", ChatID: "chat_missing", UserID: "ana", Name: "a", MediaType: "text/plain", Kind: "text", CreatedAt: time.Now()}
+	if err := r.chat.Store.AddFile(context.Background(), f, maxChatPending); !errors.Is(err, model.ErrChatNotFound) {
+		t.Fatalf("got %v", err)
+	}
 }
 
 func TestChatFileOwnership(t *testing.T) {
@@ -325,6 +394,49 @@ func TestChatReplayBudgetAndWindow(t *testing.T) {
 	}
 	if got := h.starts[len(h.starts)-1].Attachments; len(got) != 0 {
 		t.Fatalf("files outside the history window are not replayed: %d", len(got))
+	}
+}
+
+func TestChatReplaySkipsFailedTurns(t *testing.T) {
+	ctx := context.Background()
+	h := &chatPlain{reply: "ok"}
+	r := newChatRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	good := r.mustUpload(t, ch.ID, "good.txt", []byte("g"))
+	bad := r.mustUpload(t, ch.ID, "bad.txt", []byte("b"))
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", FileIDs: []string{good.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	h.err = errors.New("boom")
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", FileIDs: []string{bad.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	h.err = nil
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "next"}); err != nil {
+		t.Fatal(err)
+	}
+	got := h.starts[len(h.starts)-1].Attachments
+	if len(got) != 1 || got[0].Name != "good.txt" {
+		t.Fatalf("replays: %+v", got)
+	}
+}
+
+func TestChatReplayBudgetShrinksWithThisTurn(t *testing.T) {
+	ctx := context.Background()
+	h := &chatPlain{reply: "ok"}
+	r := newChatRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	old := r.mustUpload(t, ch.ID, "old.pdf", pdfBytes(2<<20))
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", FileIDs: []string{old.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	big := r.mustUpload(t, ch.ID, "big.pdf", pdfBytes(maxChatMessageBytes-(1<<20)))
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", FileIDs: []string{big.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	got := h.starts[len(h.starts)-1].Attachments
+	if len(got) != 1 || got[0].Name != "big.pdf" {
+		t.Fatalf("2 MB replay must not fit beside a 17 MB turn: %d attachments", len(got))
 	}
 }
 

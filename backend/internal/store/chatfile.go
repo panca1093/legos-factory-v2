@@ -12,10 +12,22 @@ import (
 
 const chatFileCols = `id, chat_id, user_id, message_id, name, media_type, kind, size, sha256, created_at`
 
-func (r *ChatRepo) AddFile(ctx context.Context, f *model.ChatFileRec) error {
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO chat_files (`+chatFileCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		f.ID, f.ChatID, f.UserID, f.MessageID, f.Name, f.MediaType, f.Kind, f.Size, f.SHA256, f.CreatedAt.Unix())
-	return err
+// AddFile stores f unless the chat already has maxPending files waiting for a message
+// (ErrChatTooManyFiles) or no longer exists (ErrChatNotFound).
+func (r *ChatRepo) AddFile(ctx context.Context, f *model.ChatFileRec, maxPending int) error {
+	res, err := r.DB.ExecContext(ctx, `INSERT INTO chat_files (`+chatFileCols+`)
+		SELECT ?,?,?,?,?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM chat_files WHERE chat_id = ? AND message_id IS NULL) < ?`,
+		f.ID, f.ChatID, f.UserID, f.MessageID, f.Name, f.MediaType, f.Kind, f.Size, f.SHA256, f.CreatedAt.Unix(), f.ChatID, maxPending)
+	if err != nil {
+		if strings.Contains(err.Error(), "FOREIGN KEY") {
+			return model.ErrChatNotFound
+		}
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return model.ErrChatTooManyFiles
+	}
+	return nil
 }
 
 func scanChatFile(scan rowScanner) (*model.ChatFileRec, error) {

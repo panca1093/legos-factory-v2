@@ -777,7 +777,7 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 			}
 		}
 		applySelection(&req, sel)
-		replays := c.replayFiles(ch.ID, history)
+		replays := c.replayFiles(ch.ID, history, min(chatReplayBudget, maxChatMessageBytes-info.attachBytes))
 		for _, f := range replays {
 			info.attachBytes += len(f.Data)
 		}
