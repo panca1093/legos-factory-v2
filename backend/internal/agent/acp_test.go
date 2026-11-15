@@ -176,6 +176,10 @@ func fakeAgent(scenario string) {
 				_ = json.Unmarshal(m.Params, &p)
 				turns++
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": fmt.Sprintf("turn %d: %s", turns, p.Prompt[0].Text)}})
+				if turns == 1 {
+					update(map[string]any{"sessionUpdate": "usage_update", "used": 3000, "size": 200000})
+					update(map[string]any{"sessionUpdate": "usage_update", "used": 5000, "size": 200000})
+				}
 				update(map[string]any{"sessionUpdate": "usage_update", "cost": map[string]any{"amount": 0.01 * float64(turns), "currency": "USD"}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 10, "outputTokens": 2}})
 			case "echo":
@@ -478,6 +482,9 @@ func TestACPKeptSessionTakesFurtherPrompts(t *testing.T) {
 	if err != nil || res.Text != "turn 1: first" || res.CostMicros != 10000 {
 		t.Fatalf("first turn: %+v, %v", res, err)
 	}
+	if res.ContextUsed != 5000 || res.ContextSize != 200000 {
+		t.Fatalf("the latest usage_update sets context use and window: %+v", res)
+	}
 	var streamed string
 	next, err := h.Continue(ctx, ses.ID(), model.AgentRequest{Role: model.AgentForeman, Prompt: "second", WorkspaceDir: ws, OnText: func(s string) { streamed += s }})
 	if err != nil {
@@ -486,6 +493,9 @@ func TestACPKeptSessionTakesFurtherPrompts(t *testing.T) {
 	res, err = h.Result(ctx, next.ID())
 	if err != nil || res.Text != "turn 2: second" || res.CostMicros != 10000 || res.TokensOut != 2 {
 		t.Fatalf("a continued turn reports its own text and cost: %+v, %v", res, err)
+	}
+	if res.ContextUsed != 0 || res.ContextSize != 0 {
+		t.Fatalf("context use resets per turn: %+v", res)
 	}
 	if streamed != "turn 2: second" {
 		t.Fatalf("a continued turn streams to its own OnText: %q", streamed)

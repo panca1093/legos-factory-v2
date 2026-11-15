@@ -2,6 +2,16 @@ package model
 
 import "time"
 
+// RunningRun is a run in progress, with the work order it belongs to.
+type RunningRun struct {
+	WOID      string
+	WOTitle   string
+	WOState   State
+	TaskID    string
+	Kind      string
+	StartedAt time.Time
+}
+
 type Run struct {
 	ID         string     `json:"id"`
 	WOID       string     `json:"-"`

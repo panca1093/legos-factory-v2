@@ -314,6 +314,7 @@ func (h *ACPHarness) Continue(_ context.Context, sessionID string, req model.Age
 	conn.mu.Lock()
 	conn.text.Reset()
 	conn.steps, conn.tools = 0, nil
+	conn.ctxUsed, conn.ctxSize = 0, 0
 	conn.costSeen = conn.cost != conn.costAttr // cost reported between turns belongs to this run
 	conn.onStep, conn.onText, conn.onPerm = req.OnStep, req.OnText, req.OnPermission
 	run.costBase = conn.costAttr
@@ -559,10 +560,11 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 	r.result = model.AgentResult{
 		Text: c.text.String(), SessionRef: r.sessionID,
 		// inputTokens excludes cache reads/writes, which carry nearly all of a cached prompt
-		TokensIn:   res.Usage.InputTokens + res.Usage.CachedReadTokens + res.Usage.CachedWriteTokens,
-		TokensOut:  res.Usage.OutputTokens,
-		CacheRead:  res.Usage.CachedReadTokens,
-		CacheWrite: res.Usage.CachedWriteTokens,
+		TokensIn:    res.Usage.InputTokens + res.Usage.CachedReadTokens + res.Usage.CachedWriteTokens,
+		TokensOut:   res.Usage.OutputTokens,
+		CacheRead:   res.Usage.CachedReadTokens,
+		CacheWrite:  res.Usage.CachedWriteTokens,
+		ContextUsed: c.ctxUsed, ContextSize: c.ctxSize,
 		CostMicros: int64((c.cost - r.costBase) * 1_000_000), CostSource: "unknown",
 	}
 	if c.costSeen {
@@ -602,6 +604,8 @@ type acpConn struct {
 	costAttr float64 // cost already attributed to finished runs
 	tools    map[string]*acpTool
 	steps    int
+
+	ctxUsed, ctxSize int64 // the latest usage_update: context occupancy after the last call, and the window
 }
 
 type acpTool struct {
@@ -835,6 +839,8 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 				Path string `json:"path"`
 			} `json:"locations"`
 			Content json.RawMessage `json:"content"` // an object on message chunks, an array on tool updates
+			Used    int64           `json:"used"`
+			Size    int64           `json:"size"`
 			Cost    *struct {
 				Amount float64 `json:"amount"`
 			} `json:"cost"`
@@ -858,6 +864,12 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 			delta = chunk.Text
 		}
 	case "usage_update":
+		if u.Used > 0 {
+			c.ctxUsed = u.Used
+		}
+		if u.Size > 0 {
+			c.ctxSize = u.Size
+		}
 		if u.Cost != nil {
 			c.cost, c.costSeen = u.Cost.Amount, true
 		}

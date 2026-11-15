@@ -75,8 +75,10 @@ type AgentResult struct {
 	TokensOut  int64
 	CacheRead  int64
 	CacheWrite int64
-	CostMicros int64
-	CostSource string // "measured" | "estimated" | "unknown"
+	// ContextUsed and ContextSize are the context occupancy after the last call and the model window, 0 when the agent did not say
+	ContextUsed, ContextSize int64
+	CostMicros               int64
+	CostSource               string // "measured" | "estimated" | "unknown"
 }
 
 // AgentSession is a handle to an in-flight invocation.

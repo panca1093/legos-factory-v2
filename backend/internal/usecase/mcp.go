@@ -429,9 +429,11 @@ func (m *MCPServers) Selection(ctx context.Context, role model.AgentRole) (model
 			continue
 		}
 		var allow, ask, deny []string
+		bytes := 0
 		for _, t := range rec.Tools {
 			if t.Enabled && !t.Unusable {
 				allow = append(allow, mcpToolName(rec.Name, t.Name))
+				bytes += t.Size
 				if !t.ReadOnly && role == model.AgentChat {
 					ask = append(ask, mcpToolName(rec.Name, t.Name))
 				}
@@ -451,6 +453,7 @@ func (m *MCPServers) Selection(ctx context.Context, role model.AgentRole) (model
 		sel.Allow = append(sel.Allow, allow...)
 		sel.Ask = append(sel.Ask, ask...)
 		sel.Deny = append(sel.Deny, deny...)
+		sel.Bytes += bytes
 	}
 	return sel, nil
 }

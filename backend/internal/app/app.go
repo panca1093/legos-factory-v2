@@ -222,6 +222,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Chat = &usecase.Chat{
 		Store: &store.ChatRepo{DB: db}, Docs: srv.KBDocs, Related: srv.KBDocs, Projects: projects,
 		Settings: settingsRepo, Usage: usageTracker, Harness: chatH, MCP: mcpServers,
+		Runs: runRepo, MCPServers: mcpServers.Store, DataDir: cfg.DataDir,
 		Models: listModels,
 		Default: func(ctx context.Context) string {
 			p, m := modelFor(model.AgentArchitect, &model.WorkOrder{})
@@ -268,6 +269,11 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 func (a *App) Start(ctx context.Context) error {
 	if _, err := a.Server.Auth.EnsureDevUser(ctx); err != nil {
 		return err
+	}
+	if n, err := a.Server.Runs.FailOrphans(ctx, "interrupted by restart"); err != nil {
+		return err
+	} else if n > 0 {
+		a.log.Warn("failed runs left running by a dead process", "count", n)
 	}
 	a.Sched.Start(ctx)
 	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {

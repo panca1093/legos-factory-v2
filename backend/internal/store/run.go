@@ -69,6 +69,40 @@ func (r *RunRepo) LatestRemediationState(ctx context.Context, woID string) (stri
 	return state, err
 }
 
+// FailOrphans fails runs still marked running by a process that is gone.
+func (r *RunRepo) FailOrphans(ctx context.Context, reason string) (int64, error) {
+	res, err := r.DB.ExecContext(ctx, `UPDATE runs SET state = 'failed', error = ?, finished_at = ? WHERE state = 'running'`,
+		reason, time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// RunningByProject lists the newest run in progress of each of the project's work orders, oldest first.
+func (r *RunRepo) RunningByProject(ctx context.Context, projectID string) ([]model.RunningRun, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT r.work_order_id, w.title, w.state, COALESCE(r.task_id,''), r.kind, r.created_at
+		FROM runs r JOIN work_orders w ON w.id = r.work_order_id
+		WHERE w.project_id = ? AND r.state = 'running'
+		AND r.id = (SELECT r2.id FROM runs r2 WHERE r2.work_order_id = r.work_order_id AND r2.state = 'running' ORDER BY r2.created_at DESC, r2.id DESC LIMIT 1)
+		ORDER BY r.created_at, r.id`, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.RunningRun{}
+	for rows.Next() {
+		var x model.RunningRun
+		var at int64
+		if err := rows.Scan(&x.WOID, &x.WOTitle, &x.WOState, &x.TaskID, &x.Kind, &at); err != nil {
+			return nil, err
+		}
+		x.StartedAt = time.Unix(at, 0)
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+
 func (r *RunRepo) List(ctx context.Context, woID string) ([]model.Run, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT id, task_id, kind, state, harness,
 		output, error, tokens_in, tokens_out, cache_read_tokens, cache_write_tokens, cost_micros, created_at, finished_at
