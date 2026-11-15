@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -23,11 +21,6 @@ const (
 	defaultChatTitle = "New chat"
 	chatTitleRunes   = 60
 	maxChatMessage   = 32 << 10
-	maxChatFiles     = 5
-	maxChatFile      = 100 << 10
-	maxChatFilesAll  = 300 << 10
-	maxChatImageB64  = 5 << 20  // base64 characters; the provider measures the encoded string
-	maxChatImagesB64 = 10 << 20 // base64 characters per message
 	maxChatQuote     = 8 << 10
 	maxChatDoc       = 60 << 10
 	historyMessages  = 20
@@ -142,13 +135,6 @@ type ChatModels struct {
 	Models  []ChatModel `json:"models"`
 }
 
-type ChatFile struct {
-	Name    string `json:"name"`
-	Content string `json:"content"`
-	// Encoding is "base64" for image bytes; empty means text.
-	Encoding string `json:"encoding,omitempty"`
-}
-
 type ChatKBRef struct {
 	ID    string `json:"id"`
 	Quote string `json:"quote,omitempty"`
@@ -156,7 +142,7 @@ type ChatKBRef struct {
 
 type ChatSend struct {
 	Content string     `json:"content"`
-	Files   []ChatFile `json:"files"`
+	FileIDs []string   `json:"file_ids"`
 	KB      *ChatKBRef `json:"kb"`
 }
 
@@ -279,7 +265,11 @@ func (c *Chat) Delete(ctx context.Context, u *model.User, id string) error {
 	c.mu.Lock()
 	delete(c.allowAll, id)
 	c.mu.Unlock()
-	return c.Store.Delete(ctx, id)
+	if err := c.Store.Delete(ctx, id); err != nil {
+		return err
+	}
+	c.removeChatFiles(id)
+	return nil
 }
 
 // AnswerPermission settles a pending writing tool call of the user's chat; decision is allow, allow_all or deny.
@@ -508,7 +498,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	if c.Harness == nil {
 		return ErrChatUnavailable
 	}
-	prompt, atts, images, err := c.compose(ctx, u, in)
+	prompt, atts, err := c.compose(ctx, u, in)
 	if err != nil {
 		return err
 	}
@@ -526,6 +516,13 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	}
 	if allowed := c.allowedModels(ctx); ch.Model != "" && len(allowed) > 0 && !allowed[ch.Model] {
 		return fmt.Errorf("%w: model %q is no longer allowed; pick another one for this chat", ErrInvalid, ch.Model)
+	}
+	recs, files, err := c.sendFiles(ctx, u, id, in.FileIDs)
+	if err != nil {
+		return err
+	}
+	for _, f := range recs {
+		atts = append(atts, model.ChatAttachment{Kind: f.Kind, Name: f.Name, Size: f.Size, FileID: f.ID, MediaType: f.MediaType})
 	}
 	if !c.startTurn() {
 		return ErrChatSaturated
@@ -551,7 +548,14 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		return err
 	}
 	um := &model.ChatMessage{ChatID: id, Role: "user", Content: strings.TrimSpace(in.Content), Attachments: atts, CreatedAt: time.Now()}
-	if err := c.Store.AddMessage(ctx, um); err != nil {
+	fileIDs := make([]string, len(recs))
+	for i, f := range recs {
+		fileIDs[i] = f.ID
+	}
+	if err := c.Store.AddMessageFiles(ctx, um, fileIDs); err != nil {
+		if errors.Is(err, model.ErrChatFilesUnavailable) {
+			return fmt.Errorf("%w: %s; upload it again", ErrInvalid, err)
+		}
 		return err
 	}
 	var titled <-chan string
@@ -590,7 +594,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	}
 	send(ChatEvent{Kind: "user_message", Message: um})
 
-	res, info, err := c.answer(ctx, gone, ch, history, prompt, images, func(t string) {
+	res, info, err := c.answer(ctx, gone, ch, history, prompt, files, func(t string) {
 		mu.Lock()
 		defer mu.Unlock()
 		if finished {
@@ -632,7 +636,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 		}
 	}
 	am := &model.ChatMessage{ChatID: id, Role: "assistant", Attachments: []model.ChatAttachment{}, CreatedAt: time.Now()}
-	am.Usage = info.usage(c.resolve(ctx, ch), res, atts)
+	am.Usage = info.usage(c.resolve(ctx, ch), res)
 	if err != nil {
 		am.Content, am.Error = partial(), err.Error()
 		_ = c.Store.AddMessage(ctx, am)
@@ -686,13 +690,16 @@ func (c *Chat) otherKeeps(ch *model.Chat) bool {
 }
 
 // answer runs one turn; emit (guarded like onText) receives the "repo" and "step" events.
-func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat, history []model.ChatMessage, turn string, images []model.AgentImage, onText func(string), emit func(ChatEvent)) (model.AgentResult, *turnInfo, error) {
+func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat, history []model.ChatMessage, turn string, files []model.AgentAttachment, onText func(string), emit func(ChatEvent)) (model.AgentResult, *turnInfo, error) {
 	info := &turnInfo{}
+	for _, f := range files {
+		info.attachBytes += len(f.Data)
+	}
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
 		return model.AgentResult{}, info, err
 	}
 	provider, modelID := SplitModelRef(c.resolve(ctx, ch))
-	req := model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, Images: images}
+	req := model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, Attachments: files}
 	// the repo event must reach the browser before the first delta or step, which the harness may send before Start returns
 	var cur chatSession
 	defer func() { info.sha, info.project = cur.sha, cur.projectID }()
@@ -770,7 +777,12 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 			}
 		}
 		applySelection(&req, sel)
-		req.Prompt = preamble + seed + historyText(history) + turn
+		replays := c.replayFiles(ch.ID, history)
+		for _, f := range replays {
+			info.attachBytes += len(f.Data)
+		}
+		req.Attachments = append(replays, files...)
+		req.Prompt = preamble + seed + replayNote(replays) + historyText(history) + turn
 		req.Keep = keep
 		info.newSession, info.promptBytes, info.factsBytes = true, len(req.Prompt), len(seed)
 		var err error
@@ -853,30 +865,30 @@ func historyText(history []model.ChatMessage) string {
 }
 
 // compose validates the message and builds this turn's prompt: knowledge
-// context, attached files, then the question.
-func (c *Chat) compose(ctx context.Context, u *model.User, in ChatSend) (string, []model.ChatAttachment, []model.AgentImage, error) {
+// context, then the question. Uploaded files travel separately, as attachments.
+func (c *Chat) compose(ctx context.Context, u *model.User, in ChatSend) (string, []model.ChatAttachment, error) {
 	content := strings.TrimSpace(in.Content)
 	if content == "" {
-		return "", nil, nil, fmt.Errorf("%w: content is required", ErrInvalid)
+		return "", nil, fmt.Errorf("%w: content is required", ErrInvalid)
 	}
 	if len(content) > maxChatMessage {
-		return "", nil, nil, fmt.Errorf("%w: message is over %d KB", ErrInvalid, maxChatMessage>>10)
+		return "", nil, fmt.Errorf("%w: message is over %d KB", ErrInvalid, maxChatMessage>>10)
 	}
-	if len(in.Files) > maxChatFiles {
-		return "", nil, nil, fmt.Errorf("%w: at most %d files per message", ErrInvalid, maxChatFiles)
+	if len(in.FileIDs) > maxChatMessageFiles {
+		return "", nil, fmt.Errorf("%w: Up to %d files per message.", ErrInvalid, maxChatMessageFiles)
 	}
 	var b strings.Builder
 	atts := []model.ChatAttachment{}
 	if in.KB != nil && in.KB.ID != "" {
 		if c.Docs == nil {
-			return "", nil, nil, fmt.Errorf("%w: knowledge context is not available", ErrInvalid)
+			return "", nil, fmt.Errorf("%w: knowledge context is not available", ErrInvalid)
 		}
 		if len(in.KB.Quote) > maxChatQuote {
-			return "", nil, nil, fmt.Errorf("%w: quoted selection is over %d KB", ErrInvalid, maxChatQuote>>10)
+			return "", nil, fmt.Errorf("%w: quoted selection is over %d KB", ErrInvalid, maxChatQuote>>10)
 		}
 		det, err := c.Docs.Detail(ctx, u, in.KB.ID)
 		if err != nil {
-			return "", nil, nil, err
+			return "", nil, err
 		}
 		body := det.Body
 		if len(body) > maxChatDoc {
@@ -888,50 +900,8 @@ func (c *Chat) compose(ctx context.Context, u *model.User, in ChatSend) (string,
 		}
 		atts = append(atts, model.ChatAttachment{Kind: "kb", Name: det.Doc.Title, DocID: det.Doc.ID, Quote: strings.TrimSpace(in.KB.Quote)})
 	}
-	total, imgTotal := 0, 0
-	var images []model.AgentImage
-	for _, f := range in.Files {
-		name := filepath.Base(strings.ReplaceAll(strings.TrimSpace(f.Name), "\\", "/"))
-		if name == "" || name == "." || name == "/" {
-			return "", nil, nil, fmt.Errorf("%w: every file needs a name", ErrInvalid)
-		}
-		switch f.Encoding {
-		case "":
-		case "base64":
-			if len(f.Content) > maxChatImageB64 {
-				return "", nil, nil, fmt.Errorf("%w: %s is over 3.75 MB.", ErrInvalid, name)
-			}
-			if imgTotal += len(f.Content); imgTotal > maxChatImagesB64 {
-				return "", nil, nil, fmt.Errorf("%w: Images can total 7.5 MB at most.", ErrInvalid)
-			}
-			data, err := base64.StdEncoding.DecodeString(f.Content)
-			if err != nil {
-				return "", nil, nil, fmt.Errorf("%w: %s is not valid base64", ErrInvalid, name)
-			}
-			mt := imageType(data)
-			if mt == "" {
-				return "", nil, nil, fmt.Errorf("%w: %s is not a supported image (PNG, JPEG, GIF or WebP).", ErrInvalid, name)
-			}
-			images = append(images, model.AgentImage{MediaType: mt, Data: data})
-			atts = append(atts, model.ChatAttachment{Kind: "image", Name: name, Size: len(data)})
-			continue
-		default:
-			return "", nil, nil, fmt.Errorf("%w: %s has an unsupported encoding", ErrInvalid, name)
-		}
-		if len(f.Content) > maxChatFile {
-			return "", nil, nil, fmt.Errorf("%w: %s is over %d KB", ErrInvalid, name, maxChatFile>>10)
-		}
-		if total += len(f.Content); total > maxChatFilesAll {
-			return "", nil, nil, fmt.Errorf("%w: files total over %d KB", ErrInvalid, maxChatFilesAll>>10)
-		}
-		if !utf8.ValidString(f.Content) || strings.ContainsRune(f.Content, 0) {
-			return "", nil, nil, fmt.Errorf("%w: %s looks binary; only text files can be attached", ErrInvalid, name)
-		}
-		fmt.Fprintf(&b, "Attached file %s:\n<file>\n%s\n</file>\n\n", name, f.Content)
-		atts = append(atts, model.ChatAttachment{Kind: "file", Name: name, Size: len(f.Content)})
-	}
 	b.WriteString(content)
-	return b.String(), atts, images, nil
+	return b.String(), atts, nil
 }
 
 // imageType names the image type by its signature, or "" if it is none of PNG, JPEG, GIF, WebP.

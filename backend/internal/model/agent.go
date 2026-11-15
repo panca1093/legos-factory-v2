@@ -21,8 +21,8 @@ const (
 type AgentRequest struct {
 	Role         AgentRole
 	Prompt       string
-	Images       []AgentImage // optional; sent with this turn only, before the text
-	ProviderID   string       // selected model, provider-qualified
+	Attachments  []AgentAttachment // optional; sent with this turn only, before the text
+	ProviderID   string            // selected model, provider-qualified
 	ModelID      string
 	WorkspaceDir string // directory the agent may operate on (builder/inspector)
 	Context      map[string]string
@@ -47,8 +47,10 @@ type PermissionRequest struct {
 	Input  map[string]any
 }
 
-// AgentImage is one image of a turn; MediaType is image/png, image/jpeg, image/gif or image/webp.
-type AgentImage struct {
+// AgentAttachment is one file of a turn. MediaType is image/png, image/jpeg, image/gif, image/webp,
+// application/pdf or text/plain; text is UTF-8.
+type AgentAttachment struct {
+	Name      string
 	MediaType string
 	Data      []byte
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -136,6 +137,67 @@ func (s *Server) handleChatPermission(c echo.Context) error {
 		return chatError(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+func (s *Server) handleChatFileUpload(c echo.Context) error {
+	fh, err := c.FormFile("file")
+	if err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "multipart field \"file\" is required")
+	}
+	src, err := fh.Open()
+	if err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "the upload could not be read")
+	}
+	defer src.Close()
+	rec, err := s.Chat.Upload(c.Request().Context(), currentUser(c), c.Param("id"), fh.Filename, src)
+	if err != nil {
+		return chatError(c, err)
+	}
+	return c.JSON(http.StatusCreated, rec)
+}
+
+func (s *Server) handleChatFileGet(c echo.Context) error {
+	rec, f, err := s.Chat.OpenFile(c.Request().Context(), currentUser(c), c.Param("id"), c.Param("fileId"))
+	if err != nil {
+		return chatError(c, err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return chatError(c, err)
+	}
+	h := c.Response().Header()
+	h.Set(echo.HeaderContentType, rec.MediaType)
+	h.Set("X-Content-Type-Options", "nosniff")
+	if rec.Kind != "pdf" { // Chrome's PDF viewer refuses to render a sandboxed document
+		h.Set("Content-Security-Policy", "sandbox")
+	}
+	h.Set("Content-Disposition", "inline; filename*=UTF-8''"+attrEscape(rec.Name))
+	h.Set("Cache-Control", "private, max-age=3600")
+	http.ServeContent(c.Response(), c.Request(), "", info.ModTime(), f)
+	return nil
+}
+
+func (s *Server) handleChatFileDelete(c echo.Context) error {
+	if err := s.Chat.RemoveFile(c.Request().Context(), currentUser(c), c.Param("id"), c.Param("fileId")); err != nil {
+		return chatError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// attrEscape percent-encodes s for an RFC 5987 ext-value.
+func attrEscape(s string) string {
+	const attrChars = "!#$&+-.^_`|~"
+	var b strings.Builder
+	for _, by := range []byte(s) {
+		switch {
+		case by >= 'a' && by <= 'z', by >= 'A' && by <= 'Z', by >= '0' && by <= '9', strings.IndexByte(attrChars, by) >= 0:
+			b.WriteByte(by)
+		default:
+			fmt.Fprintf(&b, "%%%02X", by)
+		}
+	}
+	return b.String()
 }
 
 // chatStepTool is model.AgentTool with every field always present in a step frame.

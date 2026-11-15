@@ -1,10 +1,11 @@
 package http
 
 import (
+	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -49,7 +50,7 @@ func bootChat(t *testing.T) *Server {
 	srv := New(&model.Config{FrontendOrigin: "http://localhost:5173"}, log)
 	srv.Auth = &usecase.Identity{Users: users, Mode: "dev"}
 	srv.Chat = &usecase.Chat{
-		Store: &store.ChatRepo{DB: db}, Harness: agent.NewMock(), Projects: &usecase.Projects{Store: projRepo, Members: members, Users: users}, Dir: filepath.Join(t.TempDir(), "chat"),
+		Store: &store.ChatRepo{DB: db}, Harness: agent.NewMock(), Projects: &usecase.Projects{Store: projRepo, Members: members, Users: users}, Dir: filepath.Join(t.TempDir(), "chat"), DataDir: t.TempDir(),
 		Models: func(context.Context) ([]model.ModelInfo, error) {
 			return []model.ModelInfo{{ProviderID: "mock", ModelID: "mock-local", Name: "Mock", Harness: "mock"}}, nil
 		},
@@ -67,6 +68,28 @@ func chatDo(srv *Server, as, method, url, body string) (int, string) {
 	rec := httptest.NewRecorder()
 	srv.Echo.ServeHTTP(rec, req)
 	return rec.Code, rec.Body.String()
+}
+
+func chatUpload(srv *Server, as, chatID, name string, data []byte) (int, string) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, _ := mw.CreateFormFile("file", name)
+	fw.Write(data)
+	mw.Close()
+	req := httptest.NewRequest("POST", "/api/v1/chats/"+chatID+"/files", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.AddCookie(&http.Cookie{Name: "factory_session", Value: "sess-" + as})
+	rec := httptest.NewRecorder()
+	srv.Echo.ServeHTTP(rec, req)
+	return rec.Code, rec.Body.String()
+}
+
+func chatGet(srv *Server, as, url string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest("GET", url, nil)
+	req.AddCookie(&http.Cookie{Name: "factory_session", Value: "sess-" + as})
+	rec := httptest.NewRecorder()
+	srv.Echo.ServeHTTP(rec, req)
+	return rec
 }
 
 func TestChatAPI(t *testing.T) {
@@ -101,7 +124,13 @@ func TestChatAPI(t *testing.T) {
 		t.Fatalf("models: %d %s", code, body)
 	}
 
-	code, body = chatDo(srv, "ana", "POST", "/api/v1/chats/"+id+"/messages", `{"content":"hello there","files":[{"name":"n.txt","content":"abc"}]}`)
+	code, body = chatUpload(srv, "ana", id, "n.txt", []byte("abc"))
+	var up model.ChatFileRec
+	_ = json.Unmarshal([]byte(body), &up)
+	if code != http.StatusCreated || up.ID == "" {
+		t.Fatalf("upload: %d %s", code, body)
+	}
+	code, body = chatDo(srv, "ana", "POST", "/api/v1/chats/"+id+"/messages", `{"content":"hello there","file_ids":["`+up.ID+`"]}`)
 	if code != 200 {
 		t.Fatalf("send: %d %s", code, body)
 	}
@@ -134,7 +163,7 @@ func TestChatAPI(t *testing.T) {
 		t.Fatalf("messages: %d %s", code, body)
 	}
 
-	if code, body := chatDo(srv, "ana", "POST", "/api/v1/chats/"+id+"/messages", `{"content":"x","files":[{"name":"a.bin","content":"a\u0000b"}]}`); code != http.StatusBadRequest || strings.Contains(body, "event:") {
+	if code, body := chatUpload(srv, "ana", id, "a.bin", []byte("a\x00b")); code != http.StatusBadRequest || strings.Contains(body, "event:") {
 		t.Fatalf("binary file: %d %s", code, body)
 	}
 
@@ -296,56 +325,101 @@ func TestChatTitleFrameAndProjectAndDraftAPI(t *testing.T) {
 	}
 }
 
-func TestChatSendBodyLimit(t *testing.T) {
+func TestChatBodyLimits(t *testing.T) {
 	srv := bootChat(t)
 	_, body := chatDo(srv, "ana", "POST", "/api/v1/chats", `{"model":"mock/mock-local"}`)
 	var created struct{ Chat model.Chat }
 	_ = json.Unmarshal([]byte(body), &created)
-	url := "/api/v1/chats/" + created.Chat.ID + "/messages"
+	id := created.Chat.ID
 
-	img := strings.Repeat("A", 5242880)
-	ctrl := strings.Repeat(`\u0001`, 100<<10) // JSON-escaped control characters: 6 bytes each
-	worst := `{"content":"` + strings.Repeat(`\u0001`, 32<<10) + `","files":[` +
-		`{"name":"1.png","encoding":"base64","content":"` + img + `"},` +
-		`{"name":"2.png","encoding":"base64","content":"` + img + `"},` +
-		`{"name":"a.txt","content":"` + ctrl + `"},{"name":"b.txt","content":"` + ctrl + `"},{"name":"c.txt","content":"` + ctrl + `"}]}`
-	if len(worst) <= 12<<20-300<<10 || len(worst) > 12<<20 {
-		t.Fatalf("worst-case body is %d bytes", len(worst))
-	}
-	if code, body := chatDo(srv, "ana", "POST", url, worst); code == http.StatusRequestEntityTooLarge {
-		t.Fatalf("worst-case send rejected by the body limit: %s", body[:min(len(body), 200)])
-	}
-
-	if code, _ := chatDo(srv, "ana", "POST", url, `{"content":"`+strings.Repeat("a", 12<<20)+`"}`); code != http.StatusRequestEntityTooLarge {
-		t.Fatalf("over 12 MB on the chat route: %d", code)
+	if code, _ := chatDo(srv, "ana", "POST", "/api/v1/chats/"+id+"/messages", `{"content":"`+strings.Repeat("a", 12<<20)+`"}`); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over 12 MB on the message route: %d", code)
 	}
 	if code, _ := chatDo(srv, "ana", "POST", "/api/v1/chats", `{"title":"`+strings.Repeat("a", 2<<20)+`"}`); code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("over 1 MB on another route: %d", code)
 	}
-	if code, _ := chatDo(srv, "ana", "PATCH", "/api/v1/chats/"+created.Chat.ID, `{"title":"`+strings.Repeat("a", 2<<20)+`"}`); code != http.StatusRequestEntityTooLarge {
+	if code, _ := chatDo(srv, "ana", "PATCH", "/api/v1/chats/"+id, `{"title":"`+strings.Repeat("a", 2<<20)+`"}`); code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("over 1 MB on the same path with another method: %d", code)
+	}
+
+	pdf := append([]byte("%PDF-1.7\n"), make([]byte, 20<<20-9)...)
+	if code, body := chatUpload(srv, "ana", id, "max.pdf", pdf); code != http.StatusCreated {
+		t.Fatalf("a 20 MB PDF must pass the upload limit: %d %s", code, body[:min(len(body), 200)])
+	}
+	if code, _ := chatUpload(srv, "ana", id, "huge.pdf", append(pdf, make([]byte, 2<<20)...)); code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("over 21 MB on the upload route: %d", code)
+	}
+	if code, body := chatUpload(srv, "ana", id, "p.pdf", append(pdf, 'x')); code != http.StatusBadRequest || !strings.Contains(body, "p.pdf is over 20 MB.") {
+		t.Fatalf("20 MB + 1: %d %s", code, body[:min(len(body), 200)])
 	}
 }
 
-func TestChatSendImageOverHTTP(t *testing.T) {
+func TestChatFilesOverHTTP(t *testing.T) {
 	srv := bootChat(t)
-	_, body := chatDo(srv, "ana", "POST", "/api/v1/chats", `{"model":"mock/mock-local"}`)
-	var created struct{ Chat model.Chat }
-	_ = json.Unmarshal([]byte(body), &created)
-	url := "/api/v1/chats/" + created.Chat.ID + "/messages"
-	png := base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n0123"))
+	mk := func(as string) string {
+		_, body := chatDo(srv, as, "POST", "/api/v1/chats", `{"model":"mock/mock-local"}`)
+		var c struct{ Chat model.Chat }
+		_ = json.Unmarshal([]byte(body), &c)
+		return c.Chat.ID
+	}
+	id, bobChat := mk("ana"), mk("bob")
+	png := []byte("\x89PNG\r\n\x1a\n0123")
 
-	code, body := chatDo(srv, "ana", "POST", url, `{"content":"look","files":[{"name":"s.png","encoding":"base64","content":"`+png+`"}]}`)
-	if code != 200 || !strings.Contains(body, `"kind":"image"`) || !strings.Contains(body, `"size":12`) {
-		t.Fatalf("image send: %d %s", code, body)
+	code, body := chatUpload(srv, "ana", id, "naïve shot.png", png)
+	var up model.ChatFileRec
+	_ = json.Unmarshal([]byte(body), &up)
+	if code != http.StatusCreated || up.Kind != "image" || up.MediaType != "image/png" || up.Size != 12 || up.Name != "naïve shot.png" ||
+		!strings.Contains(body, `"media_type":"image/png"`) || strings.Contains(body, "chat_id") {
+		t.Fatalf("upload: %d %s", code, body)
 	}
-	code, body = chatDo(srv, "ana", "POST", url, `{"content":"x","files":[{"name":"a.zip","content":"PK\u0003\u0004\u0000"}]}`)
-	if code != http.StatusBadRequest || !strings.Contains(body, "a.zip looks binary; only text files can be attached") {
-		t.Fatalf("zip: %d %s", code, body)
+	if code, body := chatUpload(srv, "ana", id, "a.docx", []byte("PK\x03\x04")); code != http.StatusBadRequest || !strings.Contains(body, "VALIDATION_FAILED") {
+		t.Fatalf("bad type: %d %s", code, body)
 	}
-	code, body = chatDo(srv, "ana", "POST", url, `{"content":"x","files":[{"name":"a.png","encoding":"base64","content":"AAAA"}]}`)
-	if code != http.StatusBadRequest || !strings.Contains(body, "a.png is not a supported image (PNG, JPEG, GIF or WebP).") {
-		t.Fatalf("not an image: %d %s", code, body)
+	if code, _ := chatUpload(srv, "vic", id, "a.png", png); code != http.StatusForbidden {
+		t.Fatalf("viewer upload: %d", code)
+	}
+
+	url := "/api/v1/chats/" + id + "/files/" + up.ID
+	rec := chatGet(srv, "ana", url)
+	h := rec.Header()
+	if rec.Code != 200 || !bytes.Equal(rec.Body.Bytes(), png) || h.Get("Content-Type") != "image/png" || h.Get("X-Content-Type-Options") != "nosniff" ||
+		h.Get("Content-Security-Policy") != "sandbox" || h.Get("Cache-Control") != "private, max-age=3600" ||
+		h.Get("Content-Disposition") != "inline; filename*=UTF-8''na%C3%AFve%20shot.png" {
+		t.Fatalf("get: %d %v", rec.Code, h)
+	}
+	_, pdfBody := chatUpload(srv, "ana", id, "r.pdf", []byte("%PDF-1.4"))
+	var pdf struct{ ID string }
+	_ = json.Unmarshal([]byte(pdfBody), &pdf)
+	if p := chatGet(srv, "ana", "/api/v1/chats/"+id+"/files/"+pdf.ID); p.Header().Get("Content-Type") != "application/pdf" || p.Header().Get("Content-Security-Policy") != "" {
+		t.Fatalf("pdf headers: %v", p.Header())
+	}
+
+	for label, u := range map[string]string{"other user's chat": url, "own chat, foreign file": "/api/v1/chats/" + bobChat + "/files/" + up.ID} {
+		if rec := chatGet(srv, "bob", u); rec.Code != http.StatusNotFound {
+			t.Errorf("get %s: %d", label, rec.Code)
+		}
+		if code, _ := chatDo(srv, "bob", "DELETE", u, ""); code != http.StatusNotFound {
+			t.Errorf("delete %s: %d", label, code)
+		}
+	}
+	if code, _ := chatUpload(srv, "bob", id, "a.png", png); code != http.StatusNotFound {
+		t.Errorf("upload into another's chat: %d", code)
+	}
+	if code, _ := chatDo(srv, "bob", "POST", "/api/v1/chats/"+bobChat+"/messages", `{"content":"x","file_ids":["`+up.ID+`"]}`); code != http.StatusBadRequest {
+		t.Errorf("send with a foreign file id: %d", code)
+	}
+
+	if code, body := chatDo(srv, "ana", "POST", "/api/v1/chats/"+id+"/messages", `{"content":"look","file_ids":["`+up.ID+`"]}`); code != 200 || !strings.Contains(body, `"kind":"image"`) || !strings.Contains(body, `"file_id":"`+up.ID+`"`) {
+		t.Fatalf("send: %d %s", code, body)
+	}
+	if code, _ := chatDo(srv, "ana", "DELETE", url, ""); code != http.StatusConflict {
+		t.Fatalf("delete attached: %d", code)
+	}
+	if code, _ := chatDo(srv, "ana", "DELETE", "/api/v1/chats/"+id+"/files/"+pdf.ID, ""); code != http.StatusNoContent {
+		t.Fatalf("delete free: %d", code)
+	}
+	if rec := chatGet(srv, "ana", "/api/v1/chats/"+id+"/files/"+pdf.ID); rec.Code != http.StatusNotFound {
+		t.Fatalf("get deleted: %d", rec.Code)
 	}
 }
 

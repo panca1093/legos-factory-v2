@@ -2,7 +2,6 @@ package usecase
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -149,7 +148,7 @@ func newChatRig(t *testing.T, h Harness) *chatRig {
 			"d1": {Doc: model.KBDoc{ID: "d1", Title: "Money rules"}, Body: "Money is integer rupiah."},
 		}},
 		Settings: &store.SettingsRepo{DB: db},
-		Usage:    usage, Harness: h, Dir: filepath.Join(t.TempDir(), "chat"),
+		Usage:    usage, Harness: h, Dir: filepath.Join(t.TempDir(), "chat"), DataDir: t.TempDir(),
 		Models: func(context.Context) ([]model.ModelInfo, error) {
 			return []model.ModelInfo{
 				{ProviderID: "anthropic", ModelID: "opus", Name: "Opus", Harness: "fake"},
@@ -365,25 +364,15 @@ func TestChatRejectsConcurrentSend(t *testing.T) {
 	<-done
 }
 
-func TestChatAttachmentLimits(t *testing.T) {
+func TestChatSendValidation(t *testing.T) {
 	ctx := context.Background()
 	h := &chatPlain{reply: "ok"}
 	r := newChatRig(t, h)
 	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
-	big := strings.Repeat("a", maxChatFile+1)
-	many := make([]ChatFile, maxChatFiles+1)
-	for i := range many {
-		many[i] = ChatFile{Name: "f.txt", Content: "x"}
-	}
-	chunk := strings.Repeat("b", maxChatFile)
 	cases := map[string]ChatSend{
 		"empty message": {Content: "  "},
-		"binary":        {Content: "q", Files: []ChatFile{{Name: "a.bin", Content: "ab\x00cd"}}},
-		"invalid utf8":  {Content: "q", Files: []ChatFile{{Name: "a.bin", Content: "\xff\xfe"}}},
-		"too large":     {Content: "q", Files: []ChatFile{{Name: "big.txt", Content: big}}},
-		"too many":      {Content: "q", Files: many},
-		"total":         {Content: "q", Files: []ChatFile{{Name: "1", Content: chunk}, {Name: "2", Content: chunk}, {Name: "3", Content: chunk}, {Name: "4", Content: chunk}}},
-		"no name":       {Content: "q", Files: []ChatFile{{Name: "", Content: "x"}}},
+		"too many":      {Content: "q", FileIDs: make([]string, maxChatMessageFiles+1)},
+		"unknown id":    {Content: "q", FileIDs: []string{"cf_0000000000000000"}},
 		"long quote":    {Content: "q", KB: &ChatKBRef{ID: "d1", Quote: strings.Repeat("q", maxChatQuote+1)}},
 	}
 	for name, in := range cases {
@@ -394,22 +383,6 @@ func TestChatAttachmentLimits(t *testing.T) {
 	}
 	if msgs, _ := r.chat.Messages(ctx, r.ana, ch.ID); len(msgs) != 0 || len(h.starts) != 0 {
 		t.Fatalf("rejected sends must store and run nothing: %d msgs, %d runs", len(msgs), len(h.starts))
-	}
-
-	evs, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "summarise", Files: []ChatFile{{Name: "dir/notes.txt", Content: "line one\nline two"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := h.starts[0].Prompt
-	if !strings.Contains(p, "Attached file notes.txt") || !strings.Contains(p, "line two") || !strings.HasSuffix(p, "summarise") {
-		t.Fatalf("prompt: %q", p)
-	}
-	att := evs[0].Message.Attachments
-	if len(att) != 1 || att[0].Kind != "file" || att[0].Name != "notes.txt" || att[0].Size != 17 {
-		t.Fatalf("attachment meta: %+v", att)
-	}
-	if strings.Contains(fmt.Sprint(att), "line two") {
-		t.Fatal("file content must not be stored")
 	}
 }
 
@@ -539,159 +512,6 @@ func TestChatUnavailableWithoutHarness(t *testing.T) {
 }
 
 var pngBytes = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR-test-image")
-
-func b64(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
-
-func TestChatImageDetection(t *testing.T) {
-	webp := append(append([]byte("RIFF\x00\x00\x00\x00"), "WEBP"...), 'x')
-	cases := []struct {
-		name string
-		data []byte
-		want string
-	}{
-		{"png", pngBytes, "image/png"},
-		{"jpeg", []byte{0xFF, 0xD8, 0xFF, 0xE0, 1}, "image/jpeg"},
-		{"gif87", []byte("GIF87a.."), "image/gif"},
-		{"gif89", []byte("GIF89a.."), "image/gif"},
-		{"webp", webp, "image/webp"},
-		{"riff but wav", append(append([]byte("RIFF\x00\x00\x00\x00"), "WAVE"...), 'x'), ""},
-		{"text", []byte("hello"), ""},
-	}
-	ctx := context.Background()
-	h := &chatPlain{reply: "ok"}
-	r := newChatRig(t, h)
-	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
-	for _, c := range cases {
-		// a mislabelled extension must not matter: the signature decides
-		_, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: []ChatFile{{Name: "pic.txt", Content: b64(c.data), Encoding: "base64"}}})
-		if c.want == "" {
-			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "pic.txt is not a supported image (PNG, JPEG, GIF or WebP).") {
-				t.Errorf("%s: err=%v", c.name, err)
-			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("%s: %v", c.name, err)
-			continue
-		}
-		if got := h.starts[len(h.starts)-1].Images; len(got) != 1 || got[0].MediaType != c.want || string(got[0].Data) != string(c.data) {
-			t.Errorf("%s: images %+v", c.name, got)
-		}
-	}
-
-	n := len(h.starts)
-	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: []ChatFile{{Name: "x.png", Content: "plain text"}}}); err != nil {
-		t.Errorf("unencoded stays text: %v", err)
-	}
-	if len(h.starts) != n+1 || len(h.starts[n].Images) != 0 || !strings.Contains(h.starts[n].Prompt, "Attached file x.png") {
-		t.Fatalf("unencoded file must stay text: %+v", h.starts[n:])
-	}
-	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: []ChatFile{{Name: "x.png", Content: "!!!", Encoding: "base64"}}}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "x.png") {
-		t.Errorf("malformed base64 should name the file: %v", err)
-	}
-}
-
-func TestChatImageAttachment(t *testing.T) {
-	ctx := context.Background()
-	h := &chatKeeper{chatPlain: &chatPlain{reply: "ok"}}
-	r := newChatRig(t, h)
-	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
-	in := ChatSend{Content: "what is this?", Files: []ChatFile{
-		{Name: "dir/shot.png", Content: b64(pngBytes), Encoding: "base64"},
-		{Name: "n.txt", Content: "note"},
-	}}
-	check := func(label string, reqs []model.AgentRequest) {
-		t.Helper()
-		last := reqs[len(reqs)-1]
-		if len(last.Images) != 1 || last.Images[0].MediaType != "image/png" || string(last.Images[0].Data) != string(pngBytes) {
-			t.Fatalf("%s: images %+v", label, last.Images)
-		}
-		if strings.Contains(last.Prompt, b64(pngBytes)) || !strings.Contains(last.Prompt, "Attached file n.txt") {
-			t.Fatalf("%s: prompt %q", label, last.Prompt)
-		}
-	}
-
-	evs, err := r.send(t, r.ana, ch.ID, in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	check("new session", h.starts)
-	att := evs[0].Message.Attachments
-	if len(att) != 2 || att[0] != (model.ChatAttachment{Kind: "image", Name: "shot.png", Size: len(pngBytes)}) || att[1].Kind != "file" {
-		t.Fatalf("attachments: %+v", att)
-	}
-
-	if _, err := r.send(t, r.ana, ch.ID, in); err != nil {
-		t.Fatal(err)
-	}
-	check("continue", h.conts)
-
-	h.gone = true
-	if _, err := r.send(t, r.ana, ch.ID, in); err != nil {
-		t.Fatal(err)
-	}
-	check("lost-session fallback", h.starts)
-	p := h.starts[len(h.starts)-1].Prompt
-	if !strings.Contains(p, "(attached image: shot.png)") || strings.Contains(p, b64(pngBytes)) {
-		t.Fatalf("history replay shows the name only: %q", p)
-	}
-
-	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "plain"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := h.starts[len(h.starts)-1].Images; len(got) != 0 {
-		t.Fatalf("turn without images carries none: %+v", got)
-	}
-	msgs, _ := r.chat.Messages(ctx, r.ana, ch.ID)
-	if strings.Contains(fmt.Sprint(msgs), b64(pngBytes)) {
-		t.Fatal("image bytes must not be stored")
-	}
-}
-
-func TestChatZipRejected(t *testing.T) {
-	r := newChatRig(t, &chatPlain{reply: "ok"})
-	ch, _ := r.chat.Create(context.Background(), r.ana, "", "", "")
-	_, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: []ChatFile{{Name: "a.zip", Content: "PK\x03\x04\x00\x00"}}})
-	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "a.zip looks binary; only text files can be attached") {
-		t.Fatalf("zip: %v", err)
-	}
-}
-
-func TestChatImageSizeCaps(t *testing.T) {
-	ctx := context.Background()
-	h := &chatPlain{reply: "ok"}
-	r := newChatRig(t, h)
-	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
-	pad := func(n int) string { // valid base64 of a PNG, padded to n characters
-		raw := append(append([]byte{}, pngBytes...), make([]byte, (n/4)*3)...)
-		return b64(raw)[:n]
-	}
-	img := func(name string, n int) ChatFile { return ChatFile{Name: name, Content: pad(n), Encoding: "base64"} }
-
-	_, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: []ChatFile{img("big.png", 5242881)}})
-	if !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), "big.png is over 3.75 MB.") {
-		t.Fatalf("over cap: %v", err)
-	}
-	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: []ChatFile{img("ok.png", 5242880)}}); err != nil {
-		t.Fatalf("at cap: %v", err)
-	}
-	_, err = r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: []ChatFile{img("1.png", 5242880), img("2.png", 5242880), img("3.png", 4)}})
-	if !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), "Images can total 7.5 MB at most.") {
-		t.Fatalf("total: %v", err)
-	}
-	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: []ChatFile{img("1.png", 5242880), img("2.png", 5242880)}}); err != nil {
-		t.Fatalf("total at cap: %v", err)
-	}
-
-	big := strings.Repeat("a", maxChatFile)
-	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: []ChatFile{img("1.png", 5242880), img("2.png", 5242880), {Name: "1", Content: big}, {Name: "2", Content: big}, {Name: "3", Content: big}}}); err != nil {
-		t.Fatalf("images and text count against separate caps: %v", err)
-	}
-	many := []ChatFile{img("1.png", 16), img("2.png", 16), img("3.png", 16), {Name: "a", Content: "x"}, {Name: "b", Content: "x"}, {Name: "c", Content: "x"}}
-	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: many}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "at most 5 files") {
-		t.Fatalf("count includes images: %v", err)
-	}
-}
 
 type repoCall struct {
 	project string

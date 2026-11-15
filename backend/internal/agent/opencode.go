@@ -129,6 +129,21 @@ func NewOpenCodeHarness(client *OpenCodeClient) *OpenCodeHarness {
 func (h *OpenCodeHarness) Name() string { return "opencode" }
 
 func (h *OpenCodeHarness) Start(ctx context.Context, req model.AgentRequest) (model.AgentSession, error) {
+	text := req.Prompt
+	var files []map[string]string
+	for _, a := range req.Attachments {
+		switch {
+		case strings.HasPrefix(a.MediaType, "image/"):
+			files = append(files, map[string]string{
+				"name": fmt.Sprintf("image-%d", len(files)+1),
+				"uri":  "data:" + a.MediaType + ";base64," + base64.StdEncoding.EncodeToString(a.Data),
+			})
+		case a.MediaType == "application/pdf":
+			return nil, fmt.Errorf("%w: This agent cannot read PDF files.", model.ErrPermanent)
+		default:
+			text = fmt.Sprintf("Attached file %s:\n<file>\n%s\n</file>\n\n", a.Name, a.Data) + text
+		}
+	}
 	var created struct {
 		Data struct {
 			ID string `json:"id"`
@@ -146,17 +161,10 @@ func (h *OpenCodeHarness) Start(ctx context.Context, req model.AgentRequest) (mo
 	h.mu.Unlock()
 
 	body := map[string]any{
-		"text":  req.Prompt,
+		"text":  text,
 		"model": map[string]string{"providerID": req.ProviderID, "modelID": req.ModelID},
 	}
-	if len(req.Images) > 0 {
-		files := make([]map[string]string, 0, len(req.Images))
-		for i, im := range req.Images {
-			files = append(files, map[string]string{
-				"name": fmt.Sprintf("image-%d", i+1),
-				"uri":  "data:" + im.MediaType + ";base64," + base64.StdEncoding.EncodeToString(im.Data),
-			})
-		}
+	if len(files) > 0 {
 		body["files"] = files
 	}
 	payload, err := json.Marshal(body)

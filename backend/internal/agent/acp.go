@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -259,17 +260,18 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 	h.mu.Lock()
 	h.runs[run.sessionID] = run
 	h.mu.Unlock()
-	return h.launch(run, req.Prompt, req.Images)
+	return h.launch(run, req.Prompt, req.Attachments)
 }
 
 // launch sends text on run's session, which is already registered in h.runs,
 // and starts collecting the reply.
-func (h *ACPHarness) launch(run *acpRun, text string, images []model.AgentImage) (model.AgentSession, error) {
-	// sent before returning, so a Cancel right after Start always follows the prompt
-	wait, err := run.conn.begin("session/prompt", map[string]any{
-		"sessionId": run.sessionID,
-		"prompt":    promptBlocks(text, images),
-	})
+func (h *ACPHarness) launch(run *acpRun, text string, atts []model.AgentAttachment) (model.AgentSession, error) {
+	blocks, err := promptBlocks(text, atts, run.conn.embedded)
+	var wait func(context.Context) (json.RawMessage, error)
+	if err == nil {
+		// sent before returning, so a Cancel right after Start always follows the prompt
+		wait, err = run.conn.begin("session/prompt", map[string]any{"sessionId": run.sessionID, "prompt": blocks})
+	}
 	if err != nil {
 		run.conn.close()
 		h.forgetRun(run)
@@ -279,12 +281,26 @@ func (h *ACPHarness) launch(run *acpRun, text string, images []model.AgentImage)
 	return &sessionHandle{id: run.sessionID}, nil
 }
 
-func promptBlocks(text string, images []model.AgentImage) []any {
-	blocks := make([]any, 0, len(images)+1)
-	for _, im := range images {
-		blocks = append(blocks, map[string]any{"type": "image", "mimeType": im.MediaType, "data": base64.StdEncoding.EncodeToString(im.Data)})
+// promptBlocks puts the attachments before the text. PDF and text go as embedded resources when the
+// agent accepts them; otherwise text is inlined and a PDF is refused.
+func promptBlocks(text string, atts []model.AgentAttachment, embedded bool) ([]any, error) {
+	blocks := make([]any, 0, len(atts)+1)
+	for _, a := range atts {
+		b64 := base64.StdEncoding.EncodeToString(a.Data)
+		switch {
+		case strings.HasPrefix(a.MediaType, "image/"):
+			blocks = append(blocks, map[string]any{"type": "image", "mimeType": a.MediaType, "data": b64})
+		case embedded:
+			blocks = append(blocks, map[string]any{"type": "resource", "resource": map[string]any{
+				"uri": "file:///attachments/" + url.PathEscape(a.Name), "mimeType": a.MediaType, "blob": b64,
+			}})
+		case a.MediaType == "application/pdf":
+			return nil, fmt.Errorf("%w: This agent cannot read PDF files.", model.ErrPermanent)
+		default:
+			blocks = append(blocks, map[string]any{"type": "text", "text": fmt.Sprintf("Attached file %s:\n<file>\n%s\n</file>", a.Name, a.Data)})
+		}
 	}
-	return append(blocks, map[string]any{"type": "text", "text": text})
+	return append(blocks, map[string]any{"type": "text", "text": text}), nil
 }
 
 // Continue sends another prompt into a session kept open by a Keep run. The
@@ -319,7 +335,7 @@ func (h *ACPHarness) Continue(_ context.Context, sessionID string, req model.Age
 	conn.onStep, conn.onText, conn.onPerm = req.OnStep, req.OnText, req.OnPermission
 	run.costBase = conn.costAttr
 	conn.mu.Unlock()
-	return h.launch(run, req.Prompt, req.Images)
+	return h.launch(run, req.Prompt, req.Attachments)
 }
 
 // Close ends a kept session; a prompt still running in it is the last one.
@@ -469,6 +485,11 @@ func (h *ACPHarness) spawn(config, dir string) (*acpConn, error) {
 		return nil, err
 	}
 	var init struct {
+		Capabilities struct {
+			PromptCapabilities struct {
+				EmbeddedContext bool `json:"embeddedContext"`
+			} `json:"promptCapabilities"`
+		} `json:"agentCapabilities"`
 		Meta struct {
 			Steering struct {
 				Supported bool `json:"supported"`
@@ -477,6 +498,7 @@ func (h *ACPHarness) spawn(config, dir string) (*acpConn, error) {
 	}
 	_ = json.Unmarshal(raw, &init)
 	c.steering = init.Meta.Steering.Supported
+	c.embedded = init.Capabilities.PromptCapabilities.EmbeddedContext
 	return c, nil
 }
 
@@ -587,6 +609,7 @@ type acpConn struct {
 	closed  atomic.Bool
 
 	steering bool // the agent accepts _session/steering
+	embedded bool // the agent accepts embedded resource blocks in a prompt
 
 	role      model.AgentRole
 	repo      bool            // a chat that may read its workspace, fixed for the session's lifetime

@@ -84,8 +84,11 @@ func TestChatRecordsTurnUsageAndCountsMCPCalls(t *testing.T) {
 	r := repoRigWith(t, h)
 	r.chat.MCP = &fakeSelector{sel: model.MCPSelection{Servers: testSelection.Servers, Allow: testSelection.Allow, Bytes: 4_321}}
 	ch, _ := r.chat.Create(ctx, r.ana, "", "p1", "")
-	files := []ChatFile{{Name: "n.txt", Content: "abcd"}}
-	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", Files: files}); err != nil {
+	f, err := r.chat.Upload(ctx, r.ana, ch.ID, "n.txt", strings.NewReader("abcd"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q", FileIDs: []string{f.ID}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "again"}); err != nil {
@@ -363,7 +366,7 @@ func TestContextWindowTable(t *testing.T) {
 func TestCountCallsIgnoresNonMCPTools(t *testing.T) {
 	var ti turnInfo
 	ti.countCalls([]model.AgentTool{{Name: "Read File"}, {Name: "mcp__x"}, {Name: "mcp____y"}, {Name: "mcp__a__b__c"}})
-	if len(ti.calls) != 1 || ti.calls["a/b__c"] != 1 || strings.Contains(ti.usage("m", model.AgentResult{}, nil).Model, "x") {
+	if len(ti.calls) != 1 || ti.calls["a/b__c"] != 1 || strings.Contains(ti.usage("m", model.AgentResult{}).Model, "x") {
 		t.Fatalf("calls: %+v", ti.calls)
 	}
 }

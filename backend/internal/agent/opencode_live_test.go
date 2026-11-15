@@ -107,11 +107,11 @@ func TestLiveOpenCodeImage(t *testing.T) {
 
 	h := NewOpenCodeHarness(c)
 	ses, err := h.Start(ctx, model.AgentRequest{
-		Role:       model.AgentBuilder,
-		Prompt:     "What single color fills the attached image? Answer with one lowercase word.",
-		ProviderID: models[0].ProviderID,
-		ModelID:    models[0].ModelID,
-		Images:     []model.AgentImage{{MediaType: "image/png", Data: buf.Bytes()}},
+		Role:        model.AgentBuilder,
+		Prompt:      "What single color fills the attached image? Answer with one lowercase word.",
+		ProviderID:  models[0].ProviderID,
+		ModelID:     models[0].ModelID,
+		Attachments: []model.AgentAttachment{{Name: "live.png", MediaType: "image/png", Data: buf.Bytes()}},
 	})
 	if err != nil {
 		t.Fatalf("start: %v", err)
