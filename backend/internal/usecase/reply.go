@@ -316,20 +316,28 @@ func (r *reviewReply) text() string {
 // convergeGap is one difference between the change and the contract. The id is
 // assigned by the factory: the model reuses "G1" every round.
 type convergeGap struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Layer    string `json:"layer"`
-	Cites    string `json:"cites"`
-	Evidence string `json:"evidence"`
-	Fix      string `json:"fix"`
+	ID       string   `json:"id"`
+	Type     string   `json:"type"`
+	Layer    string   `json:"layer"`
+	Cites    string   `json:"cites"`
+	Evidence string   `json:"evidence"`
+	Files    []string `json:"files,omitempty"`
+	Fix      string   `json:"fix"`
 }
 
 const maxConvergeGaps = 10
 
+// unverifiedCriterion is a criterion whose only shortfall is that no recorded check proves it.
+type unverifiedCriterion struct {
+	Criterion string `json:"criterion"`
+	Reason    string `json:"reason"`
+}
+
 // convergeReply is the Architect's comparison of the change with the contract.
 type convergeReply struct {
-	Gaps      []convergeGap `json:"gaps"`
-	Converged bool          `json:"converged"`
+	Gaps       []convergeGap         `json:"gaps"`
+	Unverified []unverifiedCriterion `json:"unverified,omitempty"`
+	Converged  bool                  `json:"converged"`
 }
 
 func (r *convergeReply) validate() error {
@@ -352,8 +360,29 @@ func (r *convergeReply) validate() error {
 		if g.Evidence == "" {
 			return fmt.Errorf("gaps[%d] needs evidence (file:line or a test name)", i)
 		}
+		g.Files = trimmedNonEmpty(g.Files)
+		if g.Layer == "code" && len(g.Files) == 0 {
+			return fmt.Errorf("gaps[%d] is a code gap with no files: name the files or areas the fix changes. If the criterion only lacks a check that proves it, list it in unverified instead", i)
+		}
+	}
+	for i := range r.Unverified {
+		u := &r.Unverified[i]
+		u.Criterion, u.Reason = strings.ToLower(strings.TrimSpace(u.Criterion)), strings.TrimSpace(u.Reason)
+		if !criterionRef.MatchString(u.Criterion) {
+			return fmt.Errorf("unverified[%d].criterion must be a criterion id such as c3", i)
+		}
 	}
 	return nil
+}
+
+func trimmedNonEmpty(in []string) []string {
+	var out []string
+	for _, s := range in {
+		if s = strings.TrimSpace(s); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // openQuestion is a real unknown the Foreman cannot settle from the request or the repository.

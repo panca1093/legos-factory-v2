@@ -689,3 +689,19 @@ func TestPlanGateStateCarriesHumanClarificationsOnly(t *testing.T) {
 		t.Fatal("open_questions must count human clarifications as deciding")
 	}
 }
+
+func TestUnverifiedCriteriaAreNotAsked(t *testing.T) {
+	in := ConvergeGateInput{Criteria: testCriteria, Unverified: []string{"c2"}}
+	_, qs := convergeGateState(in)
+	if _, ok := qs["met_c2"]; ok || len(qs) != 1 {
+		t.Fatalf("no met_ question for an unverified criterion: %v", qs)
+	}
+	out := decideConvergeGate(in, qs, map[string]float64{"met_c1": 0.9}, nil, false, false, 0, true)
+	if out.Outcome != GateConverged {
+		t.Fatalf("an unverified criterion neither appends nor escalates: %+v", out)
+	}
+	out = decideConvergeGate(in, qs, map[string]float64{"met_c1": 0.05}, nil, false, false, 0, true)
+	if out.Outcome != GateAppend || len(out.Unmet) != 1 || out.Unmet[0] != "c1" {
+		t.Fatalf("other criteria are still judged: %+v", out)
+	}
+}

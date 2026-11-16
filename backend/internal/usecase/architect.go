@@ -75,7 +75,13 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 		return err
 	}
 	var plan planReply
-	prompt := planPrompt(wo, notes, facts, prev)
+	pw := *wo
+	if p, err := f.profile(ctx, wo); err == nil {
+		if b, err := json.Marshal(p); err == nil {
+			pw.CheckProfile = string(b)
+		}
+	}
+	prompt := planPrompt(&pw, notes, facts, prev)
 	prompt += f.priorKnowledgePrompt(ctx, prior) + kbText
 	extra := map[string]string{"clarification_answer": wo.ClarifAnswer, "clarification_log": clarificationLog(wo)}
 	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, prompt, extra, "", &plan, runOpts{Audit: audit})

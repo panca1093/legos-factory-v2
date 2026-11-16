@@ -139,6 +139,15 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 			open = append(open, clip("- gap: "+safeLine(g.Type+" "+g.Cites+": "+g.Fix), 100))
 		}
 	}
+	if r := f.currentArchitectReport(wo); r != nil {
+		for i, u := range r.Unverified {
+			if i == summaryMaxItems {
+				open = append(open, more(len(r.Unverified)))
+				break
+			}
+			open = append(open, clip("- Not verified by the factory: "+safeLine(u.Criterion+" — "+u.Reason), 100))
+		}
+	}
 	if len(open) == 0 {
 		open = []string{"none"}
 	}

@@ -26,6 +26,7 @@ The spec and the plan are what the team builds from. Plan, don't build: no code.
 - Write each rule as Given / When / Then, testable by one automated test.
 - Any example number in the Acceptance table is computed from the rules: show the arithmetic, or take it from the work order. Never invent inputs whose result you did not work out (a clamp test whose "negative" input yields 6.41 is a wrong test).
 - An assumption the work order asks for goes in Decisions with its reason.
+- The prompt says which checks the factory will run. A criterion that needs infrastructure none of them provides (database, cache, object storage) gets Kind "check" with how a reviewer confirms it, never "test". With no checks at all, use "check" unless an existing test the Builders can run proves it.
 - A business outcome users see (score, money, limit) that the work order and brief do not state: CLARIFY. Never assume it.
 
 ## Size tasks by flow

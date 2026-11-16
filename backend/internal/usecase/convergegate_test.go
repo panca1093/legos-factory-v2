@@ -382,7 +382,7 @@ func inspectRig(t *testing.T, h Harness) *rig {
 
 func TestConvergeRunsAlongsideTheSpecialistsAndIsStored(t *testing.T) {
 	h := &barrierHarness{both: make(chan struct{})}
-	h.converge = `{"gaps":[{"id":"G1","type":"missing","layer":"code","cites":"c1","evidence":"round.go:1","fix":"f1"},{"id":"G1","type":"partial","layer":"contract","cites":"spec §2","evidence":"t","fix":"f2"}],"converged":false}`
+	h.converge = `{"gaps":[{"id":"G1","type":"missing","layer":"code","cites":"c1","evidence":"round.go:1","files":["round.go"],"fix":"f1"},{"id":"G1","type":"partial","layer":"contract","cites":"spec §2","evidence":"t","fix":"f2"}],"converged":false}`
 	r := inspectRig(t, h)
 	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
 		t.Fatal(err)
@@ -423,7 +423,7 @@ func TestConvergeRunsAlongsideTheSpecialistsAndIsStored(t *testing.T) {
 }
 
 func TestConvergeRoundFollowsTheAppendCount(t *testing.T) {
-	h := &replyHarness{converge: `{"gaps":[{"type":"missing","layer":"code","cites":"c1","evidence":"e","fix":"f"}],"converged":false}`}
+	h := &replyHarness{converge: `{"gaps":[{"type":"missing","layer":"code","cites":"c1","evidence":"e","files":["a.go"],"fix":"f"}],"converged":false}`}
 	r := inspectRig(t, h)
 	r.markAppends(t, 1)
 	if err := r.f.handleInspect(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
@@ -738,5 +738,31 @@ func TestLostEnqueueAfterAContractAmendmentIsRecoveredOnRetry(t *testing.T) {
 	wo := r.evaluate(t)
 	if n, _ := r.f.convergeAppends(ctx, r.wo.ID); n != 1 || strings.Count(wo.Spec, "Amendment:") != 1 || r.q.enqueued[len(r.q.enqueued)-1] != "inspect:" {
 		t.Fatalf("appends %d spec %q enqueued %v", n, wo.Spec, r.q.enqueued)
+	}
+}
+
+func TestUnverifiedCriterionDoesNotAppendOrEscalate(t *testing.T) {
+	j := &fakeJudge{}
+	r := convergeRig(t, j, `{"revision":0,"round":1,"gaps":[],"unverified":[{"criterion":"c1","reason":"needs postgres"}],"converged":true}`)
+	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview {
+		t.Fatalf("state %s", wo.State)
+	}
+	if ev := eventByKind(t, r, "converge_gate"); ev.Payload["outcome"] != GateConverged {
+		t.Fatalf("gate event: %+v", ev.Payload)
+	}
+	if len(j.calls) != 0 {
+		t.Fatalf("nothing is left to ask Jev: %v", j.calls[0].qs)
+	}
+}
+
+func TestCriterionInGapsAndUnverifiedStaysAGap(t *testing.T) {
+	j := &fakeJudge{over: map[string]float64{"gap_valid_C1-G1": 0.9}}
+	r := convergeRig(t, j, `{"revision":0,"round":1,"gaps":[`+codeGapJSON+`],"unverified":[{"criterion":"c1","reason":"x"}],"converged":false}`)
+	r.builtPlan(t)
+	if wo := r.evaluate(t); wo.State != model.StateImplementing {
+		t.Fatalf("a real gap still appends: %s", wo.State)
+	}
+	if _, ok := j.calls[0].qs["met_c1"]; !ok {
+		t.Fatal("the cited criterion is judged as before")
 	}
 }

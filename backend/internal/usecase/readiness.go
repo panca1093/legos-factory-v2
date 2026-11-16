@@ -108,6 +108,9 @@ func (f *Factory) convergeGate(ctx context.Context, wo *model.WorkOrder) (handle
 		Criteria: criteria, Spec: wo.Spec, Tasks: gateTasks(tasks), Diff: diff, Checks: gateChecks,
 		OpenFindings: open, Gaps: append(slices.Clone(report.Gaps), citedFindingGaps(findings, criteria)...),
 	}
+	for _, u := range keepUnverified(report.Unverified, in.Gaps) {
+		in.Unverified = append(in.Unverified, u.Criterion)
+	}
 	state, qs := convergeGateState(in)
 	var res JudgeResult
 	var over bool
@@ -218,7 +221,11 @@ func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in Conve
 		key := "Close gap " + g.ID + ":"
 		switch g.Layer {
 		case "code":
-			addTask(key, key+" "+truncateText(g.Fix, 60), objective, evidencePaths(g.Evidence))
+			scope := g.Files
+			if len(scope) == 0 {
+				scope = evidencePaths(g.Evidence)
+			}
+			addTask(key, key+" "+truncateText(g.Fix, 60), objective, scope)
 		case "contract":
 			contract = append(contract, g)
 		default:

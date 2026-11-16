@@ -160,6 +160,7 @@ The spec is under %d words, with these sections in order:
 ## Interface contract — what callers or users see: names, inputs, outputs, errors. No code.
 ## Out of scope — what this work must not do.
 ## Acceptance — a table with the columns "AC | Verification | Kind". Every acceptance criterion has a row. Kind is "test" (a named automated test) or "check" (how a reviewer confirms it from the diff and the check output).
+%s
 The spec says what and why. No file paths, line numbers or code in it.
 
 Each task objective is under %d words. Cite spec sections ("Behaviour rule 2") instead of restating them. "scope" lists the files or areas the task may touch; file paths belong here, not in the spec.
@@ -174,7 +175,21 @@ Rules:
 - If the behaviour is unclear and the objective, the brief and the clarifications do not settle it, use decision CLARIFY and ask — never guess or invent requirements. Choices about how, inside your role, are yours: decide and put them in the Decisions table.
 - "deps" lists ids of tasks that must complete first; the graph must be acyclic and tasks must cover the objective.
 - role is "builder" for implementation tasks.
-- Optionally add "code_facts": up to 10 strings "path:line — claim" for things you verified in the code (one line, under 200 characters each). They are kept apart from the spec.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts, specWords, taskWords)
+- Optionally add "code_facts": up to 10 strings "path:line — claim" for things you verified in the code (one line, under 200 characters each). They are kept apart from the spec.`, wo.Title, wo.Objective, wo.Acceptance, extra, facts, specWords, planChecksSection(wo.CheckProfile), taskWords)
+}
+
+// planChecksSection tells the Architect which checks the factory will run, so it does not promise a test no check can run.
+func planChecksSection(profileJSON string) string {
+	var names []string
+	if p, err := model.ParseProfile(profileJSON, ""); err == nil && profileJSON != "" {
+		for _, c := range p.Checks {
+			names = append(names, c.Name+" ("+c.Command+")")
+		}
+	}
+	if len(names) == 0 {
+		return `The factory will run no checks on this repository. Mark a criterion Kind "check", with how a reviewer confirms it, unless an existing automated test the Builders can run in the workspace proves it.`
+	}
+	return "The factory will run only these checks: " + strings.Join(names, "; ") + `. A criterion needing infrastructure none of them provides (database, cache, object storage) has Kind "check" with how a reviewer confirms it, not "test".`
 }
 
 func previousTasks(woID string, tasks []model.Task) string {
@@ -304,11 +319,16 @@ A gap is a difference between the change and the contract:
   wrong or ambiguous (the spec is amended), "requirement" when the requirement itself is wrong or undecided (the Foreman decides).
 - cites: the acceptance criterion ("c3") or spec section ("spec §2") the gap is measured against. Cite a criterion only when it is unmet.
 - evidence: "file:line" or the test name that shows the gap. A gap without evidence is not a gap.
+- files: for a "code" gap, the files or areas a Builder must change. No change to name, no code gap.
 - fix: one or two sentences on what must change.
+A criterion whose only shortfall is that no recorded check proves it (it needs a database, no check covers it) is not a gap:
+list it in "unverified". Never propose a task whose only work is running commands or recording output. A note that a command
+ran does not replace a check.
 At most %d gaps, the most important first. Set "converged" to true when no gap needs work.
 
 Respond with ONLY a JSON object:
-{"gaps":[{"type":"missing|partial|contradicts|unrequested","layer":"code|contract|requirement","cites":"c3 | spec §2","evidence":"file:line or test name","fix":"..."}],
+{"gaps":[{"type":"missing|partial|contradicts|unrequested","layer":"code|contract|requirement","cites":"c3 | spec §2","evidence":"file:line or test name","files":["path or area"],"fix":"..."}],
+ "unverified":[{"criterion":"c14","reason":"..."}],
  "converged":true|false}`,
 		wo.Title, criteriaSection(splitCriteria(wo.Acceptance)), wo.Spec, scopedTaskList(tasks), builderNotes, checks, diffSection(diff), maxConvergeGaps)
 }
