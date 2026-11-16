@@ -4,6 +4,7 @@ import {
   api,
   ApiError,
   type Connection,
+  type ConnectionProvider,
   type Finding,
   type IssueDraft,
   type ModelInfo,
@@ -39,6 +40,7 @@ export const useFactory = defineStore("factory", {
     usage: null as UsageSummary | null,
     models: [] as ModelInfo[],
     connections: [] as Connection[],
+    providers: [] as ConnectionProvider[],
     credentialsConfigured: true,
     detail: null as WODetail | null,
     events: [] as WOEvent[],
@@ -142,13 +144,15 @@ export const useFactory = defineStore("factory", {
     },
     async refreshConnections() {
       const epoch = this.workspaceEpoch;
-      const res = await api.get<{
-        connections: Connection[];
-        credentials_configured: boolean;
-      }>("/api/v1/connections");
+      const res = await api.get<{ providers: ConnectionProvider[] }>(
+        "/api/v1/connections",
+      );
       if (epoch !== this.workspaceEpoch) return;
-      this.connections = res.connections ?? [];
-      this.credentialsConfigured = res.credentials_configured;
+      this.providers = (res.providers ?? []).map((p) => ({
+        ...p,
+        accounts: p.accounts ?? [],
+      }));
+      this.connections = this.providers.flatMap((p) => p.accounts);
     },
     async createConnection(input: {
       provider: string;
@@ -183,14 +187,6 @@ export const useFactory = defineStore("factory", {
       const res = await api.put<Project>(
         `/api/v1/projects/${id}/binding`,
         binding,
-      );
-      this.projects = this.projects.map((p) => (p.id === id ? res : p));
-      return res;
-    },
-    async setContractTests(id: string, contract_tests: "off" | "on") {
-      const res = await api.put<Project>(
-        `/api/v1/projects/${id}/contract-tests`,
-        { contract_tests },
       );
       this.projects = this.projects.map((p) => (p.id === id ? res : p));
       return res;
@@ -384,7 +380,15 @@ export const useFactory = defineStore("factory", {
       return api.patch<Settings>("/api/v1/settings", patch);
     },
     async loadRuntime(): Promise<RuntimeInfo> {
-      return api.get<RuntimeInfo>("/api/v1/settings/runtime");
+      const rt = await api.get<RuntimeInfo>("/api/v1/settings/runtime");
+      this.credentialsConfigured = rt.credentials_configured;
+      return rt;
+    },
+    async loadModels(agent: string): Promise<ModelInfo[]> {
+      const res = await api.get<{ models: ModelInfo[] }>(
+        `/api/v1/models?agent=${encodeURIComponent(agent)}`,
+      );
+      return res.models ?? [];
     },
     async loadSettings(): Promise<Settings> {
       return api.get<Settings>("/api/v1/settings");

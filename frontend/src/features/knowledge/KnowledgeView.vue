@@ -308,8 +308,7 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
           >
             <Layers v-if="b.key === NB_ALL" class="icon" />
             <BookOpen v-else class="icon" />
-            <span>{{ b.label }}</span
-            ><span
+            <span>{{ b.label }}</span><span
               v-if="drafts(b.key)"
               class="n draft"
               :aria-label="`${drafts(b.key)} drafts`"
@@ -340,8 +339,9 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
               @click="toggleFolder(sec.key, sec.open)"
             >
               <ChevronRight class="icon" />
-              <span>{{ sec.label }}</span
-              ><span class="n">{{ sec.docs.length }}</span>
+              <span>{{ sec.label }}</span><span class="n">{{
+                sec.docs.length
+              }}</span>
             </button>
             <div
               v-show="sec.open"

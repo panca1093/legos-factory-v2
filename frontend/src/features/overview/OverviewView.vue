@@ -45,9 +45,7 @@ const running = computed(() => factory.workOrders.filter(isRunning));
 const inMaking = computed(() =>
   factory.workOrders.filter((w) => isTodo(w) || isRunning(w)),
 );
-const shipped = computed(
-  () => factory.workOrders.filter(isShipped).length,
-);
+const shipped = computed(() => factory.workOrders.filter(isShipped).length);
 const mtd = computed(() => factory.usage?.month_to_date);
 const activity = computed(() => factory.usage?.activity ?? []);
 const heat = computed(() => heatCells(activity.value, mode.value));
@@ -144,7 +142,7 @@ onMounted(() => {
       <div class="value">{{ shipped }}</div>
       <div class="note">pull requests opened</div></RouterLink
     >
-    <RouterLink class="lg-card lg-stat" to="/settings#budget"
+    <RouterLink class="lg-card lg-stat" to="/settings#agents"
       ><div class="label"><Gauge class="icon" />This month</div>
       <div class="value">
         {{ mtd ? money(mtd.cost_micros) : "—" }}

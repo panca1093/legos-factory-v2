@@ -68,8 +68,9 @@ function jump(i: number) {
           :title="f.path"
           @click="jump(i)"
         >
-          <span class="fn">{{ f.path.split("/").pop() }}</span
-          ><span class="fx-add">+{{ f.add }}</span
+          <span class="fn">{{ f.path.split("/").pop() }}</span><span
+            class="fx-add"
+            >+{{ f.add }}</span
           ><span class="fx-del">−{{ f.del }}</span>
         </button>
       </nav>

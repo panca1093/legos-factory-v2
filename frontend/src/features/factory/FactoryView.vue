@@ -187,8 +187,8 @@ onMounted(load);
             <div class="fx-explain" @click.stop>
               <b>Five stages</b>
               <p class="small muted">
-                Brief → Plan → Build → Review → Ship. Ship is done when the
-                pull request is open.
+                Brief → Plan → Build → Review → Ship. Ship is done when the pull
+                request is open.
               </p>
               <b>Who is acting</b>
               <ul>

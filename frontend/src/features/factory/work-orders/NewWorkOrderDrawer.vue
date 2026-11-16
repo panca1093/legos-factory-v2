@@ -5,7 +5,7 @@ import AppDialog from "../../../components/ui/AppDialog.vue";
 import BrickBot from "../../../components/agents/BrickBot.vue";
 import { useFactory } from "../../../stores/factory";
 import { useSession } from "../../../stores/session";
-import type { Settings } from "../../../types/api";
+import type { ModelInfo, Settings } from "../../../types/api";
 const props = defineProps<{
   open: boolean;
   projectID?: string;
@@ -107,10 +107,16 @@ watch(
     if (props.sourceChatID) emit("edit", { title, objective, acceptance });
   },
 );
+const roleModels = reactive<Record<string, ModelInfo[]>>({});
+const modelsFor = (role: string) => roleModels[role] ?? factory.models;
 onMounted(async () => {
   try {
     await factory.refreshModels();
     config.value = await factory.loadSettings();
+    for (const role of ["builder", "inspector"] as const)
+      roleModels[role] = await factory.loadModels(
+        config.value.role_agents?.[role] || "claude",
+      );
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   }
@@ -300,15 +306,14 @@ async function create() {
             role === "builder"
               ? "Implementation model"
               : "Independent review model"
-          }}</label
-          ><select :id="`wo-${role}`" v-model="form[`${role}_model`]">
+          }}</label><select :id="`wo-${role}`" v-model="form[`${role}_model`]">
             <option value="">
               Workspace default{{
                 config?.[`${role}_model`] ? " · " + config[`${role}_model`] : ""
               }}
             </option>
             <option
-              v-for="m in factory.models"
+              v-for="m in modelsFor(role)"
               :key="`${m.provider_id}/${m.model_id}`"
               :value="`${m.provider_id}/${m.model_id}`"
             >
@@ -355,7 +360,7 @@ async function create() {
             <strong style="text-transform: capitalize">{{ role }}</strong>
             <p>
               {{
-                factory.models.find(
+                modelsFor(role).find(
                   (m) =>
                     `${m.provider_id}/${m.model_id}` === form[`${role}_model`],
                 )?.name ||
@@ -372,8 +377,9 @@ async function create() {
           ><span>cost estimate · not provided by backend</span>
         </div>
         <div>
-          <b style="font-size: 17px">{{ project?.language || "Detected" }}</b
-          ><span>profile · PR decisions always stay human</span>
+          <b style="font-size: 17px">{{
+            project?.language || "Detected"
+          }}</b><span>profile · PR decisions always stay human</span>
         </div>
       </div>
       <div class="notice">

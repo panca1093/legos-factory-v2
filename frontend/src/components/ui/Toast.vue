@@ -13,8 +13,7 @@ const { toasts, dismiss, pause, resume } = useToast();
       @focusin="pause(t.id)"
       @focusout="resume(t.id)"
     >
-      <span>{{ t.message }}</span
-      ><button
+      <span>{{ t.message }}</span><button
         v-if="t.undo"
         type="button"
         @click="

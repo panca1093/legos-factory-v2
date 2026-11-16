@@ -51,8 +51,7 @@ const shipNote: Record<string, string> = {
       <div class="fx-pr-head">
         <span v-if="ship" class="fx-pill" :class="ship.tone">{{
           ship.label
-        }}</span
-        ><span v-else class="fx-pill">Not at Ship yet</span>
+        }}</span><span v-else class="fx-pill">Not at Ship yet</span>
         <a
           v-if="prUrl"
           class="fx-link"
@@ -144,8 +143,9 @@ const shipNote: Record<string, string> = {
         :open="builders.length === 1"
       >
         <summary>
-          <span class="fx-pill">{{ r.harness }}</span
-          ><strong class="small">{{ r.task_id || "Remediation run" }}</strong
+          <span class="fx-pill">{{ r.harness }}</span><strong class="small">{{
+            r.task_id || "Remediation run"
+          }}</strong
           ><span class="fx-pill">{{ r.state }}</span>
         </summary>
         <pre class="output">{{

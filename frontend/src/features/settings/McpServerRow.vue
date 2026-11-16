@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from "vue";
+import { MoreHorizontal } from "lucide-vue-next";
+import Popover from "../../components/ui/Popover.vue";
 import { api, MCP_ROLES, type McpServer } from "../../types/api";
 
 const props = defineProps<{ server: McpServer; canManage: boolean }>();
@@ -17,6 +19,7 @@ const base = computed(() => `/api/v1/mcp-servers/${props.server.id}`);
 const unattendedRole = computed(() =>
   props.server.roles.some((r) => r !== "chat"),
 );
+const menu = ref(false);
 const discovered = computed(() => !!props.server.discovered_at);
 const enabledCount = computed(
   () => props.server.tools.filter((t) => t.enabled).length,
@@ -59,6 +62,29 @@ const expiry = computed(() =>
     ? new Date(props.server.expires_at).toLocaleString()
     : "",
 );
+const expiringSoon = computed(
+  () =>
+    !!props.server.expires_at &&
+    new Date(props.server.expires_at).getTime() < Date.now() + 48 * 3600e3,
+);
+const needsSignIn = computed(
+  () =>
+    props.server.auth === "oauth" &&
+    (props.server.status === "needs_sign_in" ||
+      !props.server.signed_in ||
+      expiringSoon.value),
+);
+const attention = computed(
+  () => needsSignIn.value || !!props.server.last_error,
+);
+const statusText = computed(() => {
+  const sv = props.server;
+  if (sv.status === "disabled") return "Disabled";
+  if (sv.status === "needs_sign_in") return "Sign-in needed";
+  if (needsSignIn.value && sv.signed_in) return "Sign-in expiring";
+  if (!discovered.value) return "Not discovered";
+  return `${enabledCount.value} of ${sv.tools.length} tools on`;
+});
 const discover = () => run(() => api.post(`${base.value}/discover`));
 const toggleStatus = () =>
   run(() =>
@@ -147,32 +173,15 @@ function whyLocked(t: McpServer["tools"][number]) {
       </p>
     </div>
     <div class="connection-meta">
-      <span class="pill">Shared</span>
-      <span
-        class="pill"
-        :class="
-          server.status === 'disabled'
-            ? 'red'
-            : discovered && server.status === 'active'
-              ? 'green'
-              : 'orange'
-        "
-        >{{
-          server.status === "disabled"
-            ? "Disabled"
-            : server.status === "needs_sign_in"
-              ? "Sign-in needed"
-              : discovered
-                ? `${enabledCount} of ${server.tools.length} tools on`
-                : "Not discovered"
-        }}</span
-      >
+      <span class="status" :class="{ bad: attention }" data-test="mcp-status">{{
+        statusText
+      }}</span>
       <span v-if="server.approx_tokens" class="pill" data-test="mcp-tokens"
         >~{{ server.approx_tokens }} tokens</span
       >
       <template v-if="canManage">
         <button
-          v-if="isOAuth"
+          v-if="needsSignIn"
           class="btn small primary"
           data-test="mcp-sign-in"
           :disabled="busy"
@@ -180,21 +189,53 @@ function whyLocked(t: McpServer["tools"][number]) {
         >
           {{ server.signed_in ? "Sign in again" : "Sign in" }}
         </button>
-        <button class="btn small" :disabled="busy" @click="discover">
-          {{ discovered ? "Discover again" : "Discover" }}
+        <button
+          v-else-if="!discovered"
+          class="btn small primary"
+          :disabled="busy"
+          @click="discover"
+        >
+          Discover
         </button>
-        <button class="btn small" :disabled="busy" @click="open = !open">
-          {{ open ? "Hide tools" : "Tools and roles" }}
-        </button>
-        <button class="btn small" :disabled="busy" @click="toggleStatus">
-          {{ server.status === "disabled" ? "Enable" : "Disable" }}
-        </button>
-        <button class="btn small" :disabled="busy" @click="startEdit">
-          Rename or rotate
-        </button>
-        <button class="btn small" :disabled="busy" @click="remove">
-          Remove
-        </button>
+        <Popover v-model:open="menu">
+          <template #trigger="{ toggle, open: isOpen }">
+            <button
+              class="btn small icon-only"
+              type="button"
+              :aria-label="`More for ${server.name}`"
+              aria-haspopup="menu"
+              :aria-expanded="isOpen"
+              @click="toggle"
+            >
+              <MoreHorizontal class="icon" aria-hidden="true" />
+            </button>
+          </template>
+          <button
+            type="button"
+            role="menuitem"
+            :disabled="busy"
+            @click="discover"
+          >
+            Test and discover again
+          </button>
+          <button type="button" role="menuitem" @click="open = !open">
+            {{ open ? "Hide tools and roles" : "Tools and roles" }}
+          </button>
+          <button type="button" role="menuitem" @click="startEdit">
+            Rename or rotate
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            :disabled="busy"
+            @click="toggleStatus"
+          >
+            {{ server.status === "disabled" ? "Turn on" : "Turn off" }}
+          </button>
+          <button type="button" role="menuitem" class="danger" @click="remove">
+            Remove
+          </button>
+        </Popover>
       </template>
       <button v-else class="btn small" @click="open = !open">
         {{ open ? "Hide tools" : "Tools and roles" }}
