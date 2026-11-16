@@ -1,9 +1,10 @@
 ---
 type: Playbook
 title: How the Foreman writes the intake brief
-description: Read the code before asking, map the landscape without prescribing a design, and ask the human everything in one batch.
+description: Read the code before asking, map the landscape without prescribing a design, and ask the human only what blocks.
 status: stable
 role: foreman
+specialty: intake
 generated:
   by: legos-factory/defaults
   at: 2026-11-16T00:00:00Z
@@ -33,7 +34,7 @@ The brief gives the Architect a grounded map. It does not design the solution.
 
 ## Ask once, ask well
 
-- Collect every human question in one batch, not one per round.
+- Ask only questions that block the work; merge related points into one question and put the most important first. State everything else as an assumption.
 - Each question says why it matters and offers options with a recommended default.
 - Do not ask about naming, layout or choices that are the team's to make; state the assumption instead.
 

@@ -32,3 +32,19 @@ func TestPlanScopeRules(t *testing.T) {
 		}
 	}
 }
+
+func TestPlanScopeReportsEveryViolation(t *testing.T) {
+	err := checkScopes([]planTask{
+		{ID: "a", Scope: []string{"1", "2", "3", "4", "5", "6"}},
+		{ID: "b", Scope: []string{"x.go"}}, {ID: "c", Scope: []string{"x.go"}},
+		{ID: "d", Scope: []string{"y.go"}}, {ID: "e", Scope: []string{"y.go"}},
+	})
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{`task "a" has 6`, `tasks "b" and "c"`, `tasks "d" and "e"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error lacks %q: %v", want, err)
+		}
+	}
+}

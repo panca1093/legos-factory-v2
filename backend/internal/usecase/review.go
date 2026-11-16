@@ -121,38 +121,41 @@ func payloadRevision(payload map[string]any) int {
 
 // mergeFindings is the analysis after a scoped re-review: the previous
 // findings minus the criticals the Foreman marked resolved, plus new ones,
-// criticals first and capped. A critical without a status stays unresolved.
+// criticals first, then this round's findings, then earlier ones, capped. A critical without a status stays unresolved.
 func mergeFindings(prev []reviewFinding, r reviewReply) []reviewFinding {
 	resolved := map[string]bool{}
 	for _, s := range r.Resolved {
 		resolved[s.ID] = s.Status == "resolved"
 	}
-	var crit, rest []reviewFinding
-	for _, f := range append(append([]reviewFinding{}, prev...), r.Findings...) {
+	var crit, fresh, old []reviewFinding
+	for i, f := range append(append([]reviewFinding{}, prev...), r.Findings...) {
 		switch {
 		case f.Severity == "critical" && resolved[f.ID]:
 		case f.Severity == "critical":
 			crit = append(crit, f)
+		case i >= len(prev):
+			fresh = append(fresh, f)
 		default:
-			rest = append(rest, f)
+			old = append(old, f)
 		}
 	}
-	return append(crit, rest...)[:min(maxReviewFindings, len(crit)+len(rest))]
+	return append(append(crit, fresh...), old...)[:min(maxReviewFindings, len(crit)+len(fresh)+len(old))]
 }
 
 const amendmentsHeader = "Amendments from plan review:"
 
 // settleRequirementFindings handles the Foreman's own findings. A new
-// requirement-layer critical or high finding amends the brief with its fix, or asks the human
-// (returns asked) when it carries a question that is neither answered nor over
-// the human-question cap; the Architect then revises through the gate.
+// requirement-layer critical finding amends the brief with its fix; a critical
+// or high one asks the human (returns asked) when it carries a question that is
+// neither answered nor over the human-question cap, a critical's question first.
+// A high with only a fix stays a Builder note: nothing re-plans after an amendment.
 func (f *Factory) settleRequirementFindings(ctx context.Context, wo *model.WorkOrder, findings, prev []reviewFinding) (asked bool, err error) {
 	seen := map[string]bool{}
 	for _, p := range prev {
 		seen[p.ID] = true
 	}
 	var amends []string
-	question := ""
+	question, questionCritical := "", false
 	for _, fd := range blockingFindings(findings) {
 		if fd.Layer != "requirement" || seen[fd.ID] {
 			continue
@@ -166,12 +169,12 @@ func (f *Factory) settleRequirementFindings(ctx context.Context, wo *model.WorkO
 		case humanAnswers(wo) >= maxHumanQuestions:
 			amends = append(amends, "Unanswered, default taken: "+q)
 		default: // a question for the human: its fix waits for the answer
-			if question == "" {
-				question = q
+			if question == "" || (fd.Severity == "critical" && !questionCritical) {
+				question, questionCritical = q, fd.Severity == "critical"
 			}
 			continue
 		}
-		if fix := strings.TrimSpace(fd.Fix); fix != "" {
+		if fix := strings.TrimSpace(fd.Fix); fix != "" && fd.Severity == "critical" {
 			amends = append(amends, fix)
 		}
 	}
@@ -337,14 +340,15 @@ func (f *Factory) setBuilderNotes(ctx context.Context, woID, source string, note
 
 func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []model.Task, findings []reviewFinding, coverage []reviewCoverage) error {
 	in := PlanGateInput{
-		Request:       wo.Title + "\n\n" + wo.Objective,
-		Criteria:      splitCriteria(wo.Acceptance),
-		Brief:         wo.Brief,
-		Spec:          wo.Spec,
-		Tasks:         gateTasks(tasks),
-		Findings:      findings,
-		Coverage:      coverage,
-		PlanRevisions: wo.PlanRevisions,
+		Request:        wo.Title + "\n\n" + wo.Objective,
+		Criteria:       splitCriteria(wo.Acceptance),
+		Brief:          wo.Brief,
+		Clarifications: planClarifications(wo.Clarifications),
+		Spec:           wo.Spec,
+		Tasks:          gateTasks(tasks),
+		Findings:       findings,
+		Coverage:       coverage,
+		PlanRevisions:  wo.PlanRevisions,
 	}
 	state, qs := planGateState(in)
 	res, over, jerr := f.askJudge(ctx, state, qs)
@@ -384,6 +388,16 @@ func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []mod
 		f.event(wo.ID, "factory", "plan_escalated", msg, map[string]any{"reason": out.Note, "row": out.Row, "findings": blockingFindings(findings)})
 		return nil
 	}
+}
+
+func planClarifications(all []model.Clarification) []model.Clarification {
+	var out []model.Clarification
+	for _, c := range all {
+		if c.By != builderNotesBy {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // gateTasks numbers the plan t1..tn for Jev; stored task ids carry the work order id.

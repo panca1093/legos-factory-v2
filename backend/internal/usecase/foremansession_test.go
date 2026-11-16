@@ -320,11 +320,17 @@ func TestAnswerIsStoredAndLeftToAFreshPlanJob(t *testing.T) {
 	}
 }
 
-func TestFailedPlanJobClosesTheForemanSession(t *testing.T) {
+func TestInvalidPlanReplyEscalatesAndClosesTheForemanSession(t *testing.T) {
 	h := &sessHarness{architect: []string{`not json`}}
 	r := sessionRig(t, h)
-	if err := r.f.handlePlan(context.Background(), model.Job{WOID: r.wo.ID}); err == nil {
-		t.Fatal("an unusable Architect reply must fail the job")
+	if err := r.f.handlePlan(context.Background(), model.Job{WOID: r.wo.ID}); err != nil {
+		t.Fatalf("an unusable Architect reply escalates instead of failing the job: %v", err)
+	}
+	if wo := r.reload(t); wo.State != model.StateArchitectReview || wo.PlanReview != "approved" {
+		t.Fatalf("state %s plan_review %q", wo.State, wo.PlanReview)
+	}
+	if esc := eventByKind(t, r, "plan_escalated"); !strings.Contains(esc.Message, "Architect plan failed") {
+		t.Fatalf("escalation: %s", esc.Message)
 	}
 	if len(h.closed) != 1 || h.closed[0] != "s1" {
 		t.Fatalf("a failed job must close the parked session: %v", h.closed)

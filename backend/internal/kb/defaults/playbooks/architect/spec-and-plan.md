@@ -4,6 +4,7 @@ title: How the Architect writes the spec and the plan
 description: Ground the spec in the brief, derive every rule and task, size tasks by flow, and ask instead of assuming a business outcome.
 status: stable
 role: architect
+specialty: plan
 generated:
   by: legos-factory/defaults
   at: 2026-11-16T00:00:00Z

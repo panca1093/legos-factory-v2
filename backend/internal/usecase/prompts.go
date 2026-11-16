@@ -223,13 +223,15 @@ func foremanReviewPrompt(wo *model.WorkOrder, tasks []model.Task, prev []reviewF
 or reject: a separate gate decides from your findings. Report at most 10 findings. Severity:
 - critical: a defect that stops the Builder from building the right thing. It MUST cite the contract
   ("c2", "spec: decisions 3", "brief: constraint 1"); a critical finding without a citation is invalid.
-- high: a contract defect the Architect should fix, or a requirement gap. Contract highs go back to the Architect.
+- high: a contract defect the Architect should fix, or a requirement gap. Contract highs are listed for the Architect when the gate sends the plan back; otherwise they become Builder notes. A defect that would make the Builder build the wrong thing must be critical, with a citation.
 - low: worth knowing, does not block. These go to the Builder as notes.
 Layer: "contract" when the spec or plan is incomplete or wrong (the Architect fixes it); "requirement"
 when the brief itself is wrong or silent (you fix it). For a requirement finding put the brief change in "fix",
-or put the question in "question" when only a human can decide it. When the brief is silent on a business
-outcome (a value users see, such as a score, an amount of money or a limit), you MUST fill "question" with
-the question, its options and your recommended answer; never leave it as a note.
+or put the question in "question" when only a human can decide it. When the request, the brief (outside its
+Assumptions) and the human clarifications are silent on a business outcome (money or pricing, a score or
+grade, a quota, eligibility; not a technical cap such as a truncation length, retry count, page size or
+timeout), you MUST fill "question" with the question, its options and your recommended answer; a Decisions
+row or a brief assumption does not settle it, and it is never left as a note.
 Also state, for every acceptance criterion, how the spec's AC -> verification table verifies it: "test", "check" or "missing".`
 	finding := `{"severity":"critical|high|low","layer":"contract|requirement","cites":"c2","issue":"...","fix":"...","question":"only for a requirement finding that needs a human"}`
 	shape := `{"findings":[` + finding + `],

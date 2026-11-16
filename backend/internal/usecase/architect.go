@@ -62,7 +62,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 			fmt.Sprintf("%d prior project document(s) provided to the Architect", len(prior)), map[string]any{"refs": priorRefs})
 	}
 
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "", woQuery(wo), f.workspaceDir(wo.ID), wo.KBBaseSHA)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "plan", woQuery(wo), f.workspaceDir(wo.ID), wo.KBBaseSHA)
 	if ids, ok := audit["kb_docs"].([]string); ok {
 		for _, d := range prior {
 			ids = append(ids, d.ID)
@@ -79,6 +79,10 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 	prompt += f.priorKnowledgePrompt(ctx, prior) + kbText
 	extra := map[string]string{"clarification_answer": wo.ClarifAnswer, "clarification_log": clarificationLog(wo)}
 	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, prompt, extra, "", &plan, runOpts{Audit: audit})
+	if errors.Is(err, errReplyInvalid) {
+		f.closePlanning(wo.ID)
+		return f.escalatePlan(ctx, wo, err)
+	}
 	if err != nil {
 		return err
 	}
@@ -237,7 +241,7 @@ func unresolved(qs []openQuestion) []string {
 // it parks the order for a human, one question at a time; the answer re-enters here and updates the brief.
 func (f *Factory) intake(ctx context.Context, wo *model.WorkOrder, facts string) error {
 	f.event(wo.ID, "foreman", "intake_started", "Foreman briefing the Architect", nil)
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo), f.workspaceDir(wo.ID), wo.KBBaseSHA)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "intake", woQuery(wo), f.workspaceDir(wo.ID), wo.KBBaseSHA)
 	var r intakeReply
 	prompt := intakePrompt(wo, facts) + kbText
 	extra := map[string]string{"stage": "intake"}
@@ -379,6 +383,22 @@ func (f *Factory) toReview(ctx context.Context, wo *model.WorkOrder) error {
 		}
 	}
 	return f.step(ctx, wo, model.StatePlanGeneration, model.StateArchitectReview, "factory", "Plan drafted; architect review")
+}
+
+// escalatePlan hands the order to the human when the Architect's reply stays invalid after the retry; the human revises (or approves the earlier plan, if any).
+func (f *Factory) escalatePlan(ctx context.Context, wo *model.WorkOrder, cause error) error {
+	if f.cancelled(ctx, wo.ID) {
+		return nil
+	}
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "approved"}); err != nil {
+		return err
+	}
+	if err := f.toReview(ctx, wo); err != nil {
+		return err
+	}
+	reason := "Architect plan failed: " + cause.Error()
+	f.event(wo.ID, "factory", "plan_escalated", "The plan needs a human decision: "+reason, map[string]any{"reason": reason, "row": 1})
+	return nil
 }
 
 func taskList(tasks []model.Task) string {

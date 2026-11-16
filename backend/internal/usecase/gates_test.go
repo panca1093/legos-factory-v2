@@ -3,6 +3,7 @@ package usecase
 import (
 	"encoding/json"
 	"errors"
+	"legos-factory/backend/internal/model"
 	"reflect"
 	"strings"
 	"testing"
@@ -670,5 +671,21 @@ func TestPlanOpenQuestionsRubricAcceptsRecordedAssumptions(t *testing.T) {
 	}
 	if strings.Contains(q.Criteria.True, "assumed or unknown") {
 		t.Fatalf("a recorded assumption must not count as open: %s", q.Criteria.True)
+	}
+}
+
+func TestPlanGateStateCarriesHumanClarificationsOnly(t *testing.T) {
+	all := []model.Clarification{
+		{Question: "Round up?", Answer: "yes", By: "human"},
+		{Question: "Note from plan review", Answer: "name it", By: builderNotesBy},
+	}
+	in := PlanGateInput{Request: "r", Criteria: testCriteria, Clarifications: planClarifications(all)}
+	state, qs := planGateState(in)
+	got, _ := state["clarifications"].([]model.Clarification)
+	if len(got) != 1 || got[0].By != "human" {
+		t.Fatalf("clarifications: %+v", state["clarifications"])
+	}
+	if !strings.Contains(qs["open_questions"].Criteria.True, "human clarification") {
+		t.Fatal("open_questions must count human clarifications as deciding")
 	}
 }

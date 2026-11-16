@@ -549,7 +549,7 @@ func TestMergeFindingsKeepsCriticalsAndCapsAtTen(t *testing.T) {
 		Findings: []reviewFinding{{ID: "n1", Severity: "critical"}, {ID: "n2", Severity: "high"}},
 		Resolved: []findingStatus{{ID: "c2", Status: "resolved"}},
 	})
-	if len(got) != maxReviewFindings || got[0].ID != "c1" || got[1].ID != "n1" {
+	if len(got) != maxReviewFindings || got[0].ID != "c1" || got[1].ID != "n1" || got[2].ID != "n2" {
 		t.Fatalf("got %+v", got)
 	}
 	for _, f := range got {
@@ -647,11 +647,15 @@ func TestHighRequirementFindingWithAQuestionAsksTheHuman(t *testing.T) {
 	}
 }
 
-func TestHighRequirementFindingWithAFixAmendsTheBrief(t *testing.T) {
-	review := strings.Replace(highRequirementQ, `"fix":"","question":"What does an empty attempt score? Options: 0 or 22.56. Recommended: 0."`, `"fix":"an empty attempt scores 0"`, 1)
-	r := harnessRig(t, &sessHarness{answer: answerJSON, review: review}, &fakeJudge{})
-	wo := r.review(t)
-	if !strings.Contains(wo.Brief, "Amendments from plan review:\n- an empty attempt scores 0") {
+func TestRequirementFindingWithAFixAmendsTheBriefOnlyWhenCritical(t *testing.T) {
+	high := strings.Replace(highRequirementQ, `"fix":"","question":"What does an empty attempt score? Options: 0 or 22.56. Recommended: 0."`, `"fix":"an empty attempt scores 0"`, 1)
+	r := harnessRig(t, &sessHarness{answer: answerJSON, review: high}, &fakeJudge{})
+	if wo := r.review(t); strings.Contains(wo.Brief, "Amendments from plan review") {
+		t.Fatalf("a high with only a fix stays a Builder note: %q", wo.Brief)
+	}
+	crit := strings.Replace(high, `"severity":"high"`, `"severity":"critical"`, 1)
+	r = harnessRig(t, &sessHarness{answer: answerJSON, review: crit}, &fakeJudge{})
+	if wo := r.review(t); !strings.Contains(wo.Brief, "Amendments from plan review:\n- an empty attempt scores 0") {
 		t.Fatalf("brief %q", wo.Brief)
 	}
 }

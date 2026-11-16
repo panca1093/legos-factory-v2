@@ -156,11 +156,12 @@ func checkScopes(tasks []planTask) error {
 		}
 		return fmt.Sprintf("t%d", i+1)
 	}
+	var problems []string
 	byID := map[string]int{}
 	for i := range tasks {
 		byID[ref(i)] = i
 		if n := len(tasks[i].Scope); n > maxTaskScope {
-			return fmt.Errorf("task %q has %d scope entries (max %d); split it into smaller flow slices", ref(i), n, maxTaskScope)
+			problems = append(problems, fmt.Sprintf("task %q has %d scope entries (max %d); split it into smaller flow slices", ref(i), n, maxTaskScope))
 		}
 	}
 	ordered := func(from, to int) bool {
@@ -188,14 +189,19 @@ func checkScopes(tasks []planTask) error {
 			if ordered(i, j) || ordered(j, i) {
 				continue
 			}
+		overlap:
 			for _, a := range tasks[i].Scope {
 				for _, b := range tasks[j].Scope {
 					if scopesOverlap(a, b) {
-						return fmt.Errorf("tasks %q and %q both touch %q (and %q) without depending on each other; add a dep between them or make their scopes disjoint", ref(i), ref(j), a, b)
+						problems = append(problems, fmt.Sprintf("tasks %q and %q both touch %q (and %q) without depending on each other; add a dep between them or make their scopes disjoint", ref(i), ref(j), a, b))
+						break overlap
 					}
 				}
 			}
 		}
+	}
+	if len(problems) > 0 {
+		return errors.New(strings.Join(problems, "; "))
 	}
 	return nil
 }

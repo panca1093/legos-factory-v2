@@ -81,13 +81,14 @@ type PlanTask struct {
 }
 
 type PlanGateInput struct {
-	Request       string // request title and objective
-	Criteria      []Criterion
-	Brief, Spec   string
-	Tasks         []PlanTask
-	Findings      []reviewFinding // the Foreman's analysis: unresolved criticals plus high and low notes
-	Coverage      []reviewCoverage
-	PlanRevisions int
+	Request        string // request title and objective
+	Criteria       []Criterion
+	Brief, Spec    string
+	Clarifications []model.Clarification // answers from the human or the Foreman; plan-review builder notes are excluded
+	Tasks          []PlanTask
+	Findings       []reviewFinding // the Foreman's analysis: unresolved criticals plus high and low notes
+	Coverage       []reviewCoverage
+	PlanRevisions  int
 }
 
 type FileDiff = model.FileDiff
@@ -230,7 +231,7 @@ func yn(t, f string) *NoulCriteria { return &NoulCriteria{True: t, False: f} }
 // when the answer is yes; "it is unclear whether <phrase>" when unsettled.
 var planPhrases = map[string]string{
 	"scope_creep":            "the plan includes work the request does not ask for",
-	"open_questions":         "the spec still contains an open question, or guesses a behaviour or business outcome that neither the request nor the brief states",
+	"open_questions":         "the spec still contains an open question, or guesses a behaviour or business outcome that the request, the brief or a human clarification does not state",
 	"touches_schema":         "a task changes a database schema or migration",
 	"touches_authentication": "a task changes authentication",
 	"touches_authorization":  "a task changes authorization or permission checks",
@@ -248,6 +249,7 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 		"request":             in.Request,
 		"acceptance_criteria": orderedCriteria(in.Criteria),
 		"brief":               in.Brief,
+		"clarifications":      nonNilSlice(in.Clarifications),
 		"spec":                in.Spec,
 		"plan":                orderedTasks(in.Tasks),
 		"analysis":            map[string]any{"findings": nonNilSlice(in.Findings), "coverage": nonNilSlice(in.Coverage)},
@@ -316,8 +318,8 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 	qs["open_questions"] = Noul{
 		Instructions: "Does spec still contain an open question, or leave a behaviour or business outcome undecided that the Architect would have to guess?",
 		Criteria: yn(
-			"spec lists an unanswered question, leaves a behaviour undecided that a Builder would have to guess, or assumes a business outcome (a value users see, such as a score, an amount of money or a limit) that neither request nor brief states.",
-			"spec lists no unanswered question and decides every behaviour it relies on. An assumption that request or brief asks for, or that spec records with its reason (Decisions table, brief Assumptions), counts as decided."),
+			"spec lists an unanswered question, leaves a behaviour undecided that a Builder would have to guess, or assumes a business outcome (money or pricing, a score or grade, a quota, eligibility) that neither request, brief (outside its Assumptions section) nor a human clarification states. A Decisions row or a brief assumption does not settle such an outcome.",
+			"spec lists no unanswered question and decides every behaviour it relies on. A business outcome counts as decided only when request, brief (outside Assumptions) or a human clarification states it. Any other assumption that spec records with its reason (Decisions table, brief Assumptions) counts as decided, as do technical caps such as truncation lengths, retry counts, page sizes and timeouts."),
 	}
 	return state, qs
 }
