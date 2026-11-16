@@ -137,7 +137,7 @@ const defaults: Record<string, boolean> = {
   project: true,
   context: true,
   mcp: false,
-  convo: true,
+  task: true,
 };
 export function loadOpen(): Record<string, boolean> {
   try {

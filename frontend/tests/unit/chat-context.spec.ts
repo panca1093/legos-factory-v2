@@ -101,7 +101,6 @@ beforeEach(() => {
   handlers = {
     "GET /api/v1/projects": () => ({ projects }),
     "GET /api/v1/work-orders": () => ({ work_orders: workOrders }),
-    "GET /api/v1/chats/c1/related-knowledge": () => ({ docs: [] }),
   };
   stubFetch();
   useChats().chats = [chat];
@@ -116,7 +115,7 @@ describe("chat context panel", () => {
     const { w } = await mountPanel();
     expect(w.find('[aria-label="Chat title"]').exists()).toBe(false);
     expect(w.find('[aria-label="Model"]').exists()).toBe(false);
-    expect(w.text()).toContain("Usage");
+    expect(w.text()).toContain("Turn this chat into a work order");
     w.unmount();
   });
 
@@ -244,34 +243,18 @@ describe("chat context panel", () => {
     w.unmount();
   });
 
-  it("hides related knowledge when empty and renders rows when present", async () => {
-    let { w } = await mountPanel();
+  it("shows no related knowledge, attachment list or usage block", async () => {
+    const { w } = await mountPanel();
     expect(w.text()).not.toContain("Related knowledge");
-    w.unmount();
-    handlers["GET /api/v1/chats/c1/related-knowledge"] = () => ({
-      docs: [
-        {
-          id: "factory:p1:a/b.md",
-          title: "Retry playbook",
-          kind: "Playbook",
-          snippet: "s",
-        },
-      ],
-    });
-    ({ w } = await mountPanel());
-    expect(w.text()).toContain("Related knowledge");
-    const a = w.find('a[aria-label="Open Retry playbook in knowledge"]');
-    expect(a.text()).toContain("Playbook");
-    expect(decodeURIComponent(a.attributes("href")!)).toBe(
-      "/knowledge?doc=factory:p1:a/b.md",
-    );
+    expect(w.text()).not.toContain("From this conversation");
+    expect(w.text()).not.toContain("Tokens in / out");
+    expect(calls.some((c) => c.url.endsWith("related-knowledge"))).toBe(false);
     w.unmount();
   });
 
-  it("refreshes related knowledge after a turn completes", async () => {
+  it("refreshes the session after a turn completes", async () => {
     const { w } = await mountPanel();
-    const count = () =>
-      calls.filter((c) => c.url.endsWith("related-knowledge")).length;
+    const count = () => calls.filter((c) => c.url.endsWith("/session")).length;
     const before = count();
     await w.setProps({ busy: true });
     await w.setProps({ busy: false });
@@ -329,14 +312,14 @@ describe("title frame", () => {
 describe("chat context panel races and roles", () => {
   const chatB: Chat = { ...chat, id: "c2", title: "Other", project_id: "p1" };
 
-  it("loads related knowledge and work orders only while open", async () => {
+  it("loads the session and work orders only while open", async () => {
     const { w } = await mountPanel({ active: false });
     expect(calls.map((c) => c.url)).toEqual([]);
     await w.setProps({ active: true });
     await flushPromises();
     expect(calls.map((c) => c.url)).toEqual(
       expect.arrayContaining([
-        "/api/v1/chats/c1/related-knowledge",
+        "/api/v1/chats/c1/session",
         "/api/v1/work-orders",
       ]),
     );
@@ -348,41 +331,7 @@ describe("chat context panel races and roles", () => {
     calls.length = 0;
     await w.setProps({ chat: chatB, busy: false });
     await flushPromises();
-    expect(
-      calls.filter((c) => c.url.endsWith("/related-knowledge")),
-    ).toHaveLength(1);
-    w.unmount();
-  });
-
-  it("ignores a stale related-knowledge result after switching chats", async () => {
-    let release: (v: unknown) => void = () => {};
-    handlers["GET /api/v1/chats/c1/related-knowledge"] = () => ({ docs: [] });
-    const { w } = await mountPanel();
-    const real = globalThis.fetch;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        if (url === "/api/v1/chats/c1/related-knowledge")
-          await new Promise((r) => (release = r));
-        if (url === "/api/v1/chats/c1/related-knowledge")
-          return {
-            ok: true,
-            status: 200,
-            text: async () =>
-              JSON.stringify({
-                docs: [{ id: "old", title: "Stale doc", kind: "Note" }],
-              }),
-          };
-        return real(url, init);
-      }),
-    );
-    await w.setProps({ busy: true });
-    await w.setProps({ busy: false });
-    await w.setProps({ chat: chatB });
-    await flushPromises();
-    release(null);
-    await flushPromises();
-    expect(w.text()).not.toContain("Stale doc");
+    expect(calls.filter((c) => c.url.endsWith("/session"))).toHaveLength(1);
     w.unmount();
   });
 
