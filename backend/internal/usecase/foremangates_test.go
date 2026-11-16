@@ -197,8 +197,18 @@ func TestPlanGateRevisionsAreCountedAndBounded(t *testing.T) {
 	if err := r.f.RevisePlan(ctx, r.wo.ID, "split it differently"); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.reload(t); got.PlanRevisions != 0 || got.State != model.StatePlanning {
+	got := r.reload(t)
+	if got.PlanRevisions != 0 || got.State != model.StatePlanning {
 		t.Fatalf("a human revision resets the counter: %d %s", got.PlanRevisions, got.State)
+	}
+	if n := len(got.Clarifications); n == 0 || got.Clarifications[n-1].Answer != "split it differently" || got.Clarifications[n-1].By != revisionRequestBy {
+		t.Fatalf("the revision note must reach the clarification log the Foreman and the gate read: %+v", got.Clarifications)
+	}
+	if humanAnswers(got) != 0 {
+		t.Fatalf("a revision note is not a human answer: %d", humanAnswers(got))
+	}
+	if !strings.Contains(clarification(got), "split it differently") || len(planClarifications(got.Clarifications)) == 0 {
+		t.Fatal("the revision note must show in prompts and in the plan gate state")
 	}
 	if ev := r.events(t, "plan_revision_human"); len(ev) != 1 || ev[0].Actor != "human" || ev[0].Message != "split it differently" {
 		t.Fatalf("a human plan revision must leave its own event: %+v", ev)
