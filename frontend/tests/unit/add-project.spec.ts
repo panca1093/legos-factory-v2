@@ -19,6 +19,7 @@ const repo = (over: Partial<LocalInspect> = {}): LocalInspect => ({
   name: "app",
   is_git: true,
   github_repo: "acme/app",
+  remote_url: "git@github.com:acme/app.git",
   default_branch: "main",
   language: "Go",
   repos: [],
@@ -209,8 +210,17 @@ it("warns with a copyable fix when gh is not signed in", async () => {
 });
 it("says local only when the repo has no remote", async () => {
   const w = await render();
-  await browse(repo({ github_repo: "" }));
+  await browse(repo({ github_repo: "", remote_url: "" }));
   expect(body()).toContain("Local only — no remote, pull requests are off");
+  w.unmount();
+});
+it("names a non-GitHub remote instead of calling it local only", async () => {
+  const w = await render();
+  const remote_url = "git@bitbucket.org:acme/app.git";
+  await browse(repo({ github_repo: "", remote_url }));
+  expect(body()).toContain(remote_url);
+  expect(body()).toContain("is not on GitHub, so pull requests are off");
+  expect(body()).not.toContain("no remote");
   w.unmount();
 });
 it("clones then lands on the confirm step", async () => {
@@ -237,7 +247,14 @@ it("creates a new project via init", async () => {
   await set("#ap-new-name", "fresh");
   await set("#ap-new-parent", "/code");
   routes["/api/v1/local/init"] = () =>
-    json(repo({ name: "fresh", path: "/code/fresh", github_repo: "" }));
+    json(
+      repo({
+        name: "fresh",
+        path: "/code/fresh",
+        github_repo: "",
+        remote_url: "",
+      }),
+    );
   await click("Create");
   expect(body()).toContain("/code/fresh");
   expect(body()).toContain("Local only");

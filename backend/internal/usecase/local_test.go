@@ -181,6 +181,21 @@ func TestInspect(t *testing.T) {
 	}
 }
 
+func TestInspectNonGitHubRemoteAndGoWork(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "mono")
+	gitInit(t, repo)
+	if err := os.WriteFile(filepath.Join(repo, "go.work"), []byte("go 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origin := "git@bitbucket.org:acme/mono.git"
+	l := &Local{Host: &realGit{fakeHost{repos: map[string]string{repo: origin}}}}
+
+	r, err := l.Inspect(context.Background(), repo)
+	if err != nil || r.RemoteURL != origin || r.GitHubRepo != "" || r.Language != "go" {
+		t.Fatalf("got %+v err=%v", r, err)
+	}
+}
+
 func TestInspectExpandsTilde(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

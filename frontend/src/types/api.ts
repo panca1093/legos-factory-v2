@@ -28,6 +28,7 @@ export interface LocalInspect {
   name: string;
   is_git: boolean;
   github_repo: string;
+  remote_url: string;
   default_branch: string;
   language: string;
   repos: LocalInspect[];

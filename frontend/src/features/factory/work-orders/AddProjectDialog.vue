@@ -663,7 +663,9 @@ function close() {
               <FolderGit2 class="icon" />
               <span>{{ r.name }}</span>
               <span v-if="used(r.path)" class="ap-dup">Already added</span>
-              <span v-else>{{ r.github_repo || "Local only" }}</span>
+              <span v-else>{{
+                r.github_repo || (r.remote_url ? "Not GitHub" : "Local only")
+              }}</span>
             </label>
           </div>
         </template>
@@ -700,6 +702,10 @@ function close() {
               >Publishing
               <b>{{ form.remote_repo.trim() || "the remote" }}</b> via
               connection {{ connectionName }}</template
+            >
+            <template v-else-if="!needsGh && kind === 'repo' && info.remote_url"
+              >Remote <span class="mono">{{ info.remote_url }}</span> is not on
+              GitHub, so pull requests are off</template
             >
             <template v-else-if="!needsGh"
               >Local only — no remote, pull requests are off</template

@@ -133,7 +133,8 @@ func (l *Local) Inspect(ctx context.Context, path string) (*model.LocalRepo, err
 func (l *Local) describe(ctx context.Context, dir string) model.LocalRepo {
 	r := model.LocalRepo{Path: dir, Name: filepath.Base(dir), Repos: []model.LocalRepo{}, Language: guessLanguage(dir)}
 	if r.IsGit = l.Host.IsGitRepo(dir); r.IsGit {
-		r.GitHubRepo = ParseGitHubRepo(l.Host.OriginURL(ctx, dir))
+		r.RemoteURL = l.Host.OriginURL(ctx, dir)
+		r.GitHubRepo = ParseGitHubRepo(r.RemoteURL)
 		r.DefaultBranch = l.Host.DefaultBranch(ctx, dir)
 	}
 	return r
@@ -142,6 +143,9 @@ func (l *Local) describe(ctx context.Context, dir string) model.LocalRepo {
 func guessLanguage(dir string) string {
 	if lang := detectProfile(dir).Language; lang != "" {
 		return lang
+	}
+	if _, err := os.Stat(filepath.Join(dir, "go.work")); err == nil {
+		return "go"
 	}
 	for _, m := range []string{"pyproject.toml", "requirements.txt"} {
 		if _, err := os.Stat(filepath.Join(dir, m)); err == nil {

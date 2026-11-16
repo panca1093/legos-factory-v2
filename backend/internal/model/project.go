@@ -31,6 +31,7 @@ type LocalRepo struct {
 	Name          string      `json:"name"`
 	IsGit         bool        `json:"is_git"`
 	GitHubRepo    string      `json:"github_repo"`
+	RemoteURL     string      `json:"remote_url"`
 	DefaultBranch string      `json:"default_branch"`
 	Language      string      `json:"language"`
 	Repos         []LocalRepo `json:"repos"`
