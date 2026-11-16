@@ -15,9 +15,13 @@ import SearchField from "../../components/ui/SearchField.vue";
 import { useToast } from "../../composables/useToast";
 import { money } from "../../composables/presentation";
 import { useSession } from "../../stores/session";
-import { useChats } from "../../stores/chats";
+import { useChats, type ChatMessage } from "../../stores/chats";
 import { useFactory } from "../../stores/factory";
-import { ApiError, type ChatPermissionDecision } from "../../types/api";
+import {
+  ApiError,
+  type ChatPermission,
+  type ChatPermissionDecision,
+} from "../../types/api";
 import ChatComposer from "./ChatComposer.vue";
 import AttachmentChip from "./AttachmentChip.vue";
 import ChatContextPanel from "./ChatContextPanel.vue";
@@ -100,6 +104,11 @@ const fail = (e: unknown) =>
         ? e.message
         : String(e),
   );
+const isOpenPerm = (p: ChatPermission) =>
+  p.state === "pending" || p.state === "answering";
+const openPerms = (m: ChatMessage) => (m.permissions ?? []).filter(isOpenPerm);
+const decidedPerms = (m: ChatMessage) =>
+  (m.permissions ?? []).filter((p) => !isOpenPerm(p));
 const answerPermission = (reqId: string, d: ChatPermissionDecision) =>
   store.answerPermission(chatId.value, reqId, d).catch(fail);
 function closeCtx() {
@@ -376,6 +385,17 @@ onMounted(async () => {
               ></span
             >
             <div class="bubble">
+              <div
+                v-if="decidedPerms(m).length"
+                class="ch-activity"
+                data-test="permission-activity"
+              >
+                <ChatPermissionCard
+                  v-for="p in decidedPerms(m)"
+                  :key="p.id"
+                  :permission="p"
+                />
+              </div>
               <p v-if="m.role === 'user'" class="plain">{{ m.content }}</p>
               <div
                 v-else-if="m.content"
@@ -397,7 +417,7 @@ onMounted(async () => {
                 {{ stepLine(m.step) }}
               </p>
               <ChatPermissionCard
-                v-for="p in m.permissions"
+                v-for="p in openPerms(m)"
                 :key="p.id"
                 :permission="p"
                 @answer="(d) => answerPermission(p.id, d)"

@@ -301,7 +301,7 @@ func (c *Chat) sessionMCP(ctx context.Context, admin bool, calls map[string]map[
 		for _, t := range r.Tools {
 			if t.Enabled && !t.Unusable {
 				s.ToolsEnabled++
-				writes = writes || !t.ReadOnly
+				writes = writes || !toolReadOnly(r.Tools, t)
 			}
 		}
 		s.Offered = r.Status == model.MCPActive && slices.Contains(r.Roles, string(model.AgentChat)) && s.ToolsEnabled > 0

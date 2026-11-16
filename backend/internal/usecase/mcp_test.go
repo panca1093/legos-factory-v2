@@ -235,6 +235,28 @@ func TestMCPSelectionGivesCheckedRolesAllEnabledToolsAndChatAsks(t *testing.T) {
 	}
 }
 
+func TestMCPSelectionTreatsGatewayLookupToolsAsReadOnly(t *testing.T) {
+	ctx := context.Background()
+	r := newMCPRig(t)
+	r.tools = []model.MCPTool{{Name: "search_tools"}, {Name: "get_tool_schema"}, {Name: "execute_tools"}}
+	gw := r.discovered(t, "gw", "chat")
+	r.tools = []model.MCPTool{{Name: "list_tools"}, {Name: "write"}}
+	other := r.discovered(t, "other", "chat")
+	for _, v := range []model.MCPServerView{gw, other} {
+		var tg []model.MCPToolToggle
+		for _, x := range v.Tools {
+			tg = append(tg, model.MCPToolToggle{Name: x.Name, Enabled: true})
+		}
+		if _, err := r.m.SetTools(ctx, v.ID, tg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sel, _ := r.m.Selection(ctx, model.AgentChat)
+	if !slices.Equal(sel.Ask, []string{"mcp__gw__execute_tools", "mcp__other__list_tools", "mcp__other__write"}) {
+		t.Fatalf("ask = %v", sel.Ask)
+	}
+}
+
 func TestMCPSelectionPerRole(t *testing.T) {
 	r := newMCPRig(t)
 	ctx := context.Background()
