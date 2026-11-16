@@ -119,7 +119,7 @@ func (s *Server) handleChatRelatedKnowledge(c echo.Context) error {
 }
 
 func (s *Server) handleChatModels(c echo.Context) error {
-	list, err := s.Chat.ModelList(c.Request().Context())
+	list, err := s.Chat.ModelList(usecase.WithChatUser(c.Request().Context(), currentUser(c).ID))
 	if err != nil {
 		return errorJSON(c, http.StatusBadGateway, "MODELS_UNAVAILABLE", err.Error())
 	}

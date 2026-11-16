@@ -83,6 +83,8 @@ type Chat struct {
 	MCP      MCPSelector // nil: chats get no MCP servers
 	// Harness is nil when no harness can run chats read-only.
 	Harness Harness
+	// Runner, when set, picks the harness and account environment for a user's turn (the chat role's agent); Harness is then the fallback for background calls.
+	Runner func(ctx context.Context, userID string) (h Harness, env, args []string, err error)
 	// Models lists what the harness can run; Default is the "provider/model" auto resolves to.
 	Models  func(ctx context.Context) ([]model.ModelInfo, error)
 	Default func(ctx context.Context) string
@@ -109,8 +111,7 @@ type Chat struct {
 	allowAll map[string]map[string]struct{} // chat id → mcp__server__tool the user allowed for the rest of the chat
 
 	lmu    sync.Mutex // the model-list cache, never held while fetching
-	listed []model.ModelInfo
-	listAt time.Time
+	listed map[string]listedModels // by chat owner: each user's account offers its own models
 }
 
 // chatPerm is a writing tool call waiting for the user; answer has room for the one decision.
@@ -120,7 +121,10 @@ type chatPerm struct {
 }
 
 // chatSession is a kept harness session; sha is set when it reads the project checkout at that commit; mcp fingerprints the MCP selection it started with.
-type chatSession struct{ id, projectID, sha, mcp string }
+type chatSession struct {
+	id, projectID, sha, mcp string
+	h                       Harness // the harness holding the session
+}
 
 type ChatModel struct {
 	ID         string `json:"id"` // "provider/model"; empty is auto
@@ -165,6 +169,7 @@ type ChatEvent struct {
 }
 
 func (c *Chat) Create(ctx context.Context, u *model.User, title, projectID, modelRef string) (*model.Chat, error) {
+	ctx = WithChatUser(ctx, u.ID)
 	if projectID != "" {
 		if err := c.Projects.Authorize(ctx, u, projectID); err != nil {
 			return nil, err
@@ -211,6 +216,7 @@ func (c *Chat) Get(ctx context.Context, u *model.User, id string) (*model.Chat, 
 
 // Update renames a chat, changes its model and/or its project ("" clears it); nil leaves a field alone.
 func (c *Chat) Update(ctx context.Context, u *model.User, id string, title, modelRef, projectID *string) (*model.Chat, error) {
+	ctx = WithChatUser(ctx, u.ID)
 	if _, err := c.own(ctx, u, id); err != nil {
 		return nil, err
 	}
@@ -407,10 +413,11 @@ func (c *Chat) allowedModels(ctx context.Context) map[string]bool {
 }
 
 func (c *Chat) listModels(ctx context.Context) ([]model.ModelInfo, error) {
+	user := ChatUser(ctx)
 	c.lmu.Lock()
-	if c.listed != nil && time.Since(c.listAt) < modelListTTL {
+	if l, ok := c.listed[user]; ok && time.Since(l.at) < modelListTTL {
 		defer c.lmu.Unlock()
-		return c.listed, nil
+		return l.models, nil
 	}
 	c.lmu.Unlock()
 	infos, err := c.Models(ctx)
@@ -418,7 +425,10 @@ func (c *Chat) listModels(ctx context.Context) ([]model.ModelInfo, error) {
 		return nil, err
 	}
 	c.lmu.Lock()
-	c.listed, c.listAt = infos, time.Now()
+	if c.listed == nil {
+		c.listed = map[string]listedModels{}
+	}
+	c.listed[user] = listedModels{models: infos, at: time.Now()}
 	c.lmu.Unlock()
 	return infos, nil
 }
@@ -481,7 +491,11 @@ func (c *Chat) forget(id string) {
 	s, ok := c.ses[id]
 	delete(c.ses, id)
 	c.mu.Unlock()
-	if sh, can := c.Harness.(SessionHarness); ok && can {
+	h := s.h
+	if h == nil {
+		h = c.Harness
+	}
+	if sh, can := h.(SessionHarness); ok && can {
 		sh.Close(s.id)
 	}
 }
@@ -492,6 +506,7 @@ func (c *Chat) forget(id string) {
 // "error" event. The turn runs to completion even if the caller goes away, and
 // emit is never called after the terminal event.
 func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, emit func(ChatEvent)) error {
+	ctx = WithChatUser(ctx, u.ID)
 	if _, err := c.own(ctx, u, id); err != nil {
 		return err
 	}
@@ -720,10 +735,23 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 	req.OnPermission = func(hctx context.Context, p model.PermissionRequest) bool {
 		return c.askUser(hctx, ctx, gone, ch.ID, p, announced, emit)
 	}
-	sh, canKeep := c.Harness.(SessionHarness)
+	h, env, args := c.Harness, []string(nil), []string(nil)
+	if c.Runner != nil {
+		var err error
+		if h, env, args, err = c.Runner(ctx, ch.UserID); err != nil {
+			return model.AgentResult{}, info, err
+		}
+	}
+	req.Env, req.Args = env, args
+	sh, canKeep := h.(SessionHarness)
 	var sel model.MCPSelection
-	if c.MCP != nil {
+	if c.MCP != nil && harnessTakesMCP(h) {
 		sel, _ = c.MCP.Selection(ctx, model.AgentChat)
+		if c.Settings != nil {
+			if st, err := c.Settings.Get(ctx); err == nil && st.ChatReadOnly() {
+				sel = readOnlySelection(sel)
+			}
+		}
 	}
 	mcp := mcpFingerprint(model.AgentRequest{MCP: sel.Servers, MCPAllow: sel.Allow, MCPDeny: sel.Deny, MCPAsk: sel.Ask})
 	if len(sel.Servers) > 0 {
@@ -735,7 +763,7 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		c.mu.Lock()
 		kept, ok := c.ses[ch.ID]
 		c.mu.Unlock()
-		if ok && (kept.projectID != c.readableProject(ch) || kept.mcp != mcp) {
+		if ok && (kept.projectID != c.readableProject(ch) || kept.mcp != mcp || kept.h != h) {
 			c.forget(ch.ID)
 			c.mu.Lock()
 			delete(c.allowAll, ch.ID)
@@ -786,12 +814,12 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		req.Keep = keep
 		info.newSession, info.promptBytes, info.factsBytes = true, len(req.Prompt), len(seed)
 		var err error
-		if ses, err = c.Harness.Start(ctx, req); err != nil {
+		if ses, err = h.Start(ctx, req); err != nil {
 			return model.AgentResult{}, info, err
 		}
 	}
 	announced()
-	res, err := c.Harness.Result(ctx, ses.ID())
+	res, err := h.Result(ctx, ses.ID())
 	if err != nil {
 		c.forget(ch.ID)
 		return res, info, err
@@ -801,7 +829,7 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		if c.ses == nil {
 			c.ses = map[string]chatSession{}
 		}
-		c.ses[ch.ID] = chatSession{id: ses.ID(), projectID: cur.projectID, sha: cur.sha, mcp: mcp}
+		c.ses[ch.ID] = chatSession{id: ses.ID(), projectID: cur.projectID, sha: cur.sha, mcp: mcp, h: h}
 		c.mu.Unlock()
 	}
 	return res, info, nil
@@ -957,4 +985,49 @@ func truncateBytes(s string, n int) string {
 		n--
 	}
 	return s[:n]
+}
+
+// readOnlySelection removes the tools that need a human's approval, which are the ones that change something.
+func readOnlySelection(sel model.MCPSelection) model.MCPSelection {
+	if len(sel.Ask) == 0 {
+		return sel
+	}
+	ask := map[string]bool{}
+	for _, n := range sel.Ask {
+		ask[n] = true
+	}
+	out := sel
+	out.Allow = nil
+	for _, n := range sel.Allow {
+		if !ask[n] {
+			out.Allow = append(out.Allow, n)
+		}
+	}
+	out.Deny = append(append([]string{}, sel.Deny...), sel.Ask...)
+	out.Ask = nil
+	return out
+}
+
+type listedModels struct {
+	models []model.ModelInfo
+	at     time.Time
+}
+
+type chatUserKey struct{}
+
+// WithChatUser marks ctx with the chat owner, so model lists and defaults come from that user's agent account.
+func WithChatUser(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, chatUserKey{}, userID)
+}
+
+// ChatUser is the chat owner WithChatUser put on ctx, or "".
+func ChatUser(ctx context.Context) string {
+	id, _ := ctx.Value(chatUserKey{}).(string)
+	return id
+}
+
+// harnessTakesMCP is false for a harness that starts no MCP servers (codex, opencode), so a run on it records no MCP use.
+func harnessTakesMCP(h Harness) bool {
+	m, ok := h.(interface{ SupportsMCP() bool })
+	return !ok || m.SupportsMCP()
 }

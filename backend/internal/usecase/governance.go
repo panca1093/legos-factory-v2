@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"slices"
 	"strings"
 
 	"legos-factory/backend/internal/model"
@@ -22,6 +23,8 @@ func ResolveModel(role model.AgentRole, wo *model.WorkOrder, s *model.Settings, 
 		chain = []string{wo.InspectorModel, s.InspectorModel}
 	case model.AgentForeman:
 		chain = []string{wo.ForemanModel, s.ForemanModel}
+	case model.AgentChat:
+		chain = []string{s.ChatModel, s.ArchitectModel}
 	default: // architect, cataloger
 		chain = []string{wo.ArchitectModel, s.ArchitectModel}
 	}
@@ -32,6 +35,19 @@ func ResolveModel(role model.AgentRole, wo *model.WorkOrder, s *model.Settings, 
 		}
 	}
 	return ""
+}
+
+// ResolveAgentModel is ResolveModel held to the role's agent: a ref the agent's catalog lacks (a model of another
+// agent, or one it no longer offers) gives way to the catalog's first model. An empty catalog trusts the stored ref.
+func ResolveAgentModel(role model.AgentRole, wo *model.WorkOrder, s *model.Settings, catalog []string) string {
+	if wo == nil {
+		wo = &model.WorkOrder{}
+	}
+	ref := ResolveModel(role, wo, s, nil)
+	if len(catalog) == 0 || slices.Contains(catalog, ref) {
+		return ref
+	}
+	return catalog[0]
 }
 
 // SplitModelRef splits "provider/model" into its parts.

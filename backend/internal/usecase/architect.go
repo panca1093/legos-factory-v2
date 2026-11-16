@@ -75,14 +75,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 		return err
 	}
 	var plan planReply
-	contractTests, err := f.contractTestsOn(ctx, wo)
-	if err != nil {
-		return err
-	}
 	prompt := planPrompt(wo, notes, facts, prev)
-	if contractTests {
-		prompt += contractTestsPlanRule
-	}
 	prompt += f.priorKnowledgePrompt(ctx, prior) + kbText
 	extra := map[string]string{"clarification_answer": wo.ClarifAnswer, "clarification_log": clarificationLog(wo)}
 	_, runID, err := f.runStructured(ctx, wo, model.AgentArchitect, prompt, extra, "", &plan, runOpts{Audit: audit})
@@ -136,11 +129,6 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 			ID: idMap[ref], WOID: wo.ID, Seq: i, Title: t.Title, Objective: t.Objective,
 			Role: role, Deps: deps, Scope: t.Scope,
 		})
-	}
-	if contractTests {
-		if err := requireContractTask(wo.ID, tasks); err != nil {
-			return fmt.Errorf("%w: %v", model.ErrPermanent, err)
-		}
 	}
 	if err := model.ValidateDAG(tasks); err != nil {
 		return fmt.Errorf("%w: %v", model.ErrPermanent, err)

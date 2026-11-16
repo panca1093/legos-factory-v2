@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 
 	"github.com/google/uuid"
 
@@ -48,7 +49,11 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 	}
 	// governance snapshot: later default changes do not alter this order
 	var foreman, architect string
+	var roleAgents map[string]string
 	if s, err := w.Settings.Get(ctx); err == nil {
+		if len(s.RoleAgents) > 0 {
+			roleAgents = maps.Clone(s.RoleAgents)
+		}
 		foreman, architect = s.ForemanModel, s.ArchitectModel
 		if w.ResolveDefault != nil {
 			foreman, architect = w.ResolveDefault(model.AgentForeman, s), w.ResolveDefault(model.AgentArchitect, s)
@@ -67,6 +72,7 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 		SourceChatID:   req.SourceChatID,
 		ForemanModel:   foreman,
 		ArchitectModel: architect,
+		RoleAgents:     roleAgents,
 		CreatedBy:      u.ID,
 	}
 	var auth *model.GitAuth

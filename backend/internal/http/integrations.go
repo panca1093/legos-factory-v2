@@ -33,11 +33,11 @@ func integrationError(c echo.Context, err error) error {
 }
 
 func (s *Server) handleListConnections(c echo.Context) error {
-	conns, err := s.Integrations.List(c.Request().Context(), currentUser(c))
+	groups, err := s.Integrations.Grouped(c.Request().Context(), currentUser(c))
 	if err != nil {
 		return integrationError(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]any{"connections": conns, "credentials_configured": s.Integrations.Secrets != nil})
+	return c.JSON(http.StatusOK, map[string]any{"providers": groups})
 }
 
 func (s *Server) handleCreateConnection(c echo.Context) error {

@@ -202,7 +202,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		f.event(wo.ID, "inspector", "changed_files_unavailable", err.Error(), nil)
 	}
 	builderNotes := f.builderNotesSection(ctx, wo)
-	if only, _ := job.Payload["converge_only"].(bool); only && f.Judge != nil {
+	if only, _ := job.Payload["converge_only"].(bool); only && f.judge() != nil {
 		// the contract changed, not the diff: the specialists' findings still stand
 		round, _ := job.Payload["round"].(float64)
 		err := f.converge(ctx, *wo, files, int(round), builderNotes)
@@ -227,7 +227,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	// specialists review the diff. Without Jev nothing reads the gaps.
 	var wg sync.WaitGroup
 	var archErr error
-	if f.Judge != nil {
+	if f.judge() != nil {
 		actx, cancel := context.WithCancel(ctx)
 		wg.Add(1)
 		go func() {
@@ -262,7 +262,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		var summary strings.Builder
 		specBlockers := 0
 		for _, fd := range out.Findings {
-			if f.Judge != nil && fd.Severity != model.SeverityBlocker && citesCriterion(fd.Cites, criteria) {
+			if f.judge() != nil && fd.Severity != model.SeverityBlocker && citesCriterion(fd.Cites, criteria) {
 				fd.Detail += fmt.Sprintf(" (cites %s)", strings.Join(citedCriteria(fd.Cites, criteria), ", "))
 			}
 			id := fmt.Sprintf("fnd_%d", time.Now().UnixNano())
@@ -296,7 +296,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 		f.event(wo.ID, "architect", "converge_failed", archErr.Error(), nil)
 	}
 	f.event(wo.ID, "inspector", "inspection_finished", fmt.Sprintf("%d finding(s), %d blocker(s)", total, blockers), nil)
-	if f.Judge != nil {
+	if f.judge() != nil {
 		if err := f.setBuilderNotes(ctx, wo.ID, "inspector", notes); err != nil {
 			return err
 		}
