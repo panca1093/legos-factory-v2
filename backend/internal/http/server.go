@@ -297,7 +297,6 @@ func (s *Server) routes() {
 	api.POST("/agents/:agent/accounts/:aid/activate", s.requireRole(model.RoleEngineer, s.handleActivateAgentAccount))
 	api.POST("/agents/:agent/accounts/:aid/refresh", s.handleRefreshAgentAccount)
 	api.DELETE("/agents/:agent/accounts/:aid", s.requireRole(model.RoleEngineer, s.handleDeleteAgentAccount))
-	api.PATCH("/me/preferences", s.handlePatchPreferences)
 
 	api.GET("/models", s.handleModels)
 	api.GET("/usage", s.handleUsage)

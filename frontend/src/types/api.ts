@@ -252,7 +252,6 @@ export interface AgentInfo {
 }
 export interface AgentsResponse {
   agents: AgentInfo[];
-  claude_usage_opt_in: boolean;
 }
 export interface NewAccount {
   account: AgentAccount;

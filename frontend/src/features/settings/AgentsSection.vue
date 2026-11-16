@@ -16,7 +16,6 @@ defineProps<{
 const emit = defineEmits<{ saved: [SettingsPatch] }>();
 
 const agents = ref<AgentInfo[]>([]);
-const usageOptIn = ref(false);
 const error = ref(""),
   loading = ref(true),
   help = ref(false);
@@ -29,7 +28,6 @@ async function load() {
       accounts: a.accounts ?? [],
       roles_allowed: a.roles_allowed ?? [],
     }));
-    usageOptIn.value = !!res.claude_usage_opt_in;
     error.value = "";
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -42,17 +40,6 @@ onMounted(load);
 const installed = computed(() => agents.value.filter((a) => a.installed));
 const missing = computed(() => agents.value.filter((a) => !a.installed));
 
-async function setOptIn(on: boolean) {
-  try {
-    await api.patch("/api/v1/me/preferences", { claude_usage_opt_in: on });
-    usageOptIn.value = on;
-    await load();
-    return true;
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
-    return false;
-  }
-}
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
 </script>
 <template>
@@ -79,12 +66,10 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text);
         v-for="a in installed"
         :key="a.id"
         :agent="a"
-        :usage-opt-in="usageOptIn"
         :can-write="canWrite"
         :credentials-configured="credentialsConfigured"
         @changed="load"
         @error="error = $event"
-        :set-opt-in="setOptIn"
       />
       <p v-if="!installed.length && !loading" class="help">
         No supported agent was found on this machine.
@@ -95,7 +80,7 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text);
       <summary>
         Available to install <span class="count">{{ missing.length }}</span>
       </summary>
-      <div v-for="a in missing" :key="a.id" class="agent-row">
+      <div v-for="a in missing" :key="a.id" class="agent-acct">
         <h3>{{ a.name }}</h3>
         <div v-if="a.install_hint" class="cmd">
           <code>{{ a.install_hint }}</code><button

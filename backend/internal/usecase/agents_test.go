@@ -42,6 +42,7 @@ func newAgents(t *testing.T) (*Agents, *fakeTools) {
 		"codex":  "Logged in using ChatGPT",
 	}}
 	a := NewAgents(&store.AgentAccountRepo{DB: db}, t.TempDir())
+	a.Keychain = func(context.Context, string) (string, error) { return "", errors.New("no keychain in tests") }
 	a.LookPath = func(string) (string, error) { return "/bin/x", nil }
 	a.Run = func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 		ft.runs.Add(1)
@@ -152,7 +153,7 @@ func TestParseStatus(t *testing.T) {
 		want       string
 		who, plan  string
 	}{
-		{"claude", `{"loggedIn":true,"email":"a@b.c","planTier":"max_5x","subscriptionType":"max","loginExpiresAt":"2026-11-29T02:54:14.594Z"}`, nil, "signed_in", "a@b.c", "max_5x"},
+		{"claude", `{"loggedIn":true,"email":"a@b.c","planTier":"max_5x","subscriptionType":"max","loginExpiresAt":"2026-11-29T02:54:14.594Z"}`, nil, "signed_in", "", "max_5x"},
 		{"claude", `{"loggedIn":false}`, errors.New("exit 1"), "signed_out", "", ""},
 		{"claude", `garbage`, nil, "unknown", "", ""},
 		{"claude", ``, errors.New("timeout"), "unknown", "", ""},
@@ -187,13 +188,14 @@ func TestStatusIsCachedAndEnvScopedToAccount(t *testing.T) {
 	}
 	n, _ := a.CreateAccount(ctx, u, "claude", "w")
 	acc, err := a.Refresh(ctx, u, "claude", n.Account.ID)
-	if err != nil || acc.Status != "signed_in" || acc.Who != "me@x.com" || acc.Plan != "max_5x" {
+	if err != nil || acc.Status != "signed_in" || acc.Who != "" || acc.Plan != "max_5x" {
 		t.Fatalf("%+v %v", acc, err)
 	}
 }
 
 func TestStatusTimeoutAndUninstalled(t *testing.T) {
 	a, _ := newAgents(t)
+	a.StatusTimeout = time.Second
 	a.Run = func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -211,8 +213,8 @@ func TestStatusTimeoutAndUninstalled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if time.Since(start) > 8*time.Second {
-		t.Fatal("a hung status command must be cut off at 5s")
+	if time.Since(start) > 4*time.Second {
+		t.Fatal("a hung status command must be cut off at StatusTimeout")
 	}
 	if l.Agents[0].Accounts[0].Status != "unknown" || l.Agents[1].Installed || l.Agents[1].InstallHint == "" {
 		t.Fatalf("%+v", l.Agents)
@@ -249,7 +251,7 @@ func TestParseCodexLimits(t *testing.T) {
 	}
 }
 
-func TestClaudeUsageNeedsOptInAndNeverLeaksToken(t *testing.T) {
+func TestClaudeUsageIsReadAndNeverLeaksToken(t *testing.T) {
 	a, _ := newAgents(t)
 	ctx := context.Background()
 	u := &model.User{ID: "u1"}
@@ -272,11 +274,8 @@ func TestClaudeUsageNeedsOptInAndNeverLeaksToken(t *testing.T) {
 	}
 
 	l, _ := a.List(ctx, u)
-	if hits.Load() != 0 || l.Agents[0].Accounts[0].Usage != nil {
-		t.Fatal("usage must not be fetched without opt-in")
-	}
-	if err := a.SetClaudeUsageOptIn(ctx, u, true); err != nil {
-		t.Fatal(err)
+	if hits.Load() != 1 || l.Agents[0].Accounts[0].Usage == nil {
+		t.Fatal("claude usage must be read by default")
 	}
 	acc, err := a.Refresh(ctx, u, "claude", SystemAccountID)
 	if err != nil || acc.Usage == nil || acc.Usage.Session.UsedPct != 31.5 || acc.Usage.Week.UsedPct != 7 {
@@ -324,7 +323,6 @@ func TestClaudeUsageFailuresReportUnavailable(t *testing.T) {
 		}
 		ctx := context.Background()
 		u := &model.User{ID: "u1"}
-		_ = a.SetClaudeUsageOptIn(ctx, u, true)
 		acc, _ := a.Refresh(ctx, u, "claude", SystemAccountID)
 		srv.Close()
 		if acc.Usage != nil || acc.UsageError != "unavailable" {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -45,6 +46,7 @@ func bootRevamp(t *testing.T) (*Server, *sql.DB) {
 		return []byte("Not logged in"), nil
 	}
 	srv.Agents.CodexLimits = func(context.Context, string) (usecase.CodexLimits, error) { return usecase.CodexLimits{}, nil }
+	srv.Agents.Keychain = func(context.Context, string) (string, error) { return "", errors.New("no keychain in tests") }
 	projects := &usecase.Projects{Store: &store.ProjectRepo{DB: db}, Members: &store.MemberRepo{DB: db}, Users: users}
 	srv.Projects = projects
 	srv.Integrations = &usecase.Integrations{Store: &store.ConnectionRepo{DB: db}, Projects: projects}
@@ -111,9 +113,6 @@ func TestAgentEndpointsArePerUser(t *testing.T) {
 	}
 	if code, _ := chatDo(srv, "", "GET", "/api/v1/agents", ""); code != http.StatusUnauthorized {
 		t.Fatalf("anonymous: %d", code)
-	}
-	if code, body := chatDo(srv, "eng", "PATCH", "/api/v1/me/preferences", `{"claude_usage_opt_in":true}`); code != 200 || !strings.Contains(body, "true") {
-		t.Fatalf("prefs: %d %s", code, body)
 	}
 	if code, _ := chatDo(srv, "eng", "GET", "/api/v1/models?agent=nope", ""); code != http.StatusBadRequest && code != http.StatusServiceUnavailable {
 		t.Fatalf("unknown agent models: %d", code)

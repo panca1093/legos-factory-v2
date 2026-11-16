@@ -68,7 +68,7 @@
 .settings-section .card-list > .help {
   padding: 12px 14px;
 }
-.agent-row,
+.agent-acct,
 .provider {
   display: grid;
   gap: 8px;
@@ -127,13 +127,17 @@
   line-height: 1.5;
   color: var(--ink);
 }
-.opt-in {
-  font-size: 12px;
+.agent-acct > :not(.agent-head) {
+  margin-left: 48px;
 }
 .usage {
   display: grid;
-  gap: 8px;
-  max-width: 360px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 20px;
+  max-width: 440px;
+}
+.usage > .help {
+  grid-column: 1 / -1;
 }
 .usage .lbl {
   display: flex;

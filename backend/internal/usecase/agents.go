@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -102,8 +103,6 @@ type AgentAccountStore interface {
 	Delete(ctx context.Context, userID, agent, id string) error
 	Enabled(ctx context.Context, agent string) (bool, error)
 	SetEnabled(ctx context.Context, agent string, enabled bool) error
-	ClaudeUsageOptIn(ctx context.Context, userID string) (bool, error)
-	SetClaudeUsageOptIn(ctx context.Context, userID string, on bool) error
 }
 
 // Agents is the registry of known agents and each user's accounts for them.
@@ -127,6 +126,7 @@ type Agents struct {
 	Now         func() time.Time
 
 	StatusTTL, UsageTTL time.Duration
+	StatusTimeout       time.Duration // 0 means 12s
 
 	mu     sync.Mutex
 	status map[string]cachedStatus
@@ -192,8 +192,7 @@ type AgentView struct {
 }
 
 type AgentList struct {
-	Agents           []AgentView `json:"agents"`
-	ClaudeUsageOptIn bool        `json:"claude_usage_opt_in"`
+	Agents []AgentView `json:"agents"`
 }
 
 // NewAgents wires the real PATH, command runner, Keychain and HTTP client.
@@ -210,6 +209,13 @@ func NewAgents(store AgentAccountStore, dataDir string) *Agents {
 		return out.Bytes(), err
 	}
 	a.Keychain = func(ctx context.Context, service string) (string, error) {
+		// Claude Code files its login under the OS user's account; other items with the same service (e.g. account "unknown") hold only MCP tokens.
+		if u, err := user.Current(); err == nil && u.Username != "" {
+			out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", service, "-a", u.Username, "-w").Output()
+			if err == nil {
+				return strings.TrimSpace(string(out)), nil
+			}
+		}
 		out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", service, "-w").Output()
 		return strings.TrimSpace(string(out)), err
 	}
@@ -278,18 +284,14 @@ func (a *Agents) RunEnv(ctx context.Context, id, userID string) (env, args []str
 
 // List describes every known agent with the user's accounts and their status.
 func (a *Agents) List(ctx context.Context, u *model.User) (*AgentList, error) {
-	optIn, err := a.Store.ClaudeUsageOptIn(ctx, u.ID)
-	if err != nil {
-		return nil, err
-	}
-	out := &AgentList{ClaudeUsageOptIn: optIn, Agents: make([]AgentView, len(AgentSpecs))}
+	out := &AgentList{Agents: make([]AgentView, len(AgentSpecs))}
 	errs := make([]error, len(AgentSpecs))
 	var wg sync.WaitGroup
 	for i, spec := range AgentSpecs {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			v, err := a.view(ctx, u.ID, spec, optIn, false)
+			v, err := a.view(ctx, u.ID, spec, false)
 			if err != nil {
 				errs[i] = err
 				return
@@ -304,7 +306,7 @@ func (a *Agents) List(ctx context.Context, u *model.User) (*AgentList, error) {
 	return out, nil
 }
 
-func (a *Agents) view(ctx context.Context, userID string, spec AgentSpec, optIn, fresh bool) (*AgentView, error) {
+func (a *Agents) view(ctx context.Context, userID string, spec AgentSpec, fresh bool) (*AgentView, error) {
 	on, err := a.Store.Enabled(ctx, spec.ID)
 	if err != nil {
 		return nil, err
@@ -331,14 +333,14 @@ func (a *Agents) view(ctx context.Context, userID string, spec AgentSpec, optIn,
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			v.Accounts[i] = a.accountView(ctx, spec, accs[i], v.Installed, optIn, fresh)
+			v.Accounts[i] = a.accountView(ctx, spec, accs[i], v.Installed, fresh)
 		}()
 	}
 	wg.Wait()
 	return v, nil
 }
 
-func (a *Agents) accountView(ctx context.Context, spec AgentSpec, acc model.AgentAccount, installed, optIn, fresh bool) AccountView {
+func (a *Agents) accountView(ctx context.Context, spec AgentSpec, acc model.AgentAccount, installed, fresh bool) AccountView {
 	av := AccountView{ID: acc.ID, Label: acc.Label, System: acc.ID == SystemAccountID, Active: acc.Active, Status: "unknown"}
 	av.LoginCommand, _ = spec.loginLine(a.home(acc))
 	if !installed {
@@ -358,9 +360,7 @@ func (a *Agents) accountView(ctx context.Context, spec AgentSpec, acc model.Agen
 			av.UsageError = err
 		}
 	case "claude":
-		if optIn {
-			av.Usage, av.UsageError = a.claudeUsage(ctx, acc, fresh)
-		}
+		av.Usage, av.UsageError = a.claudeUsage(ctx, acc, fresh)
 	}
 	return av
 }
@@ -391,7 +391,11 @@ func (a *Agents) accountStatus(ctx context.Context, spec AgentSpec, acc model.Ag
 	if ok && !fresh && a.now().Sub(c.at) < ttl {
 		return c.v
 	}
-	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	limit := a.StatusTimeout
+	if limit <= 0 {
+		limit = 12 * time.Second // `opencode auth list --standalone` takes ~3.5s warm, so 5s timed out on a cold start
+	}
+	rctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	var env []string
 	if h := a.home(acc); h != "" {
@@ -399,6 +403,9 @@ func (a *Agents) accountStatus(ctx context.Context, spec AgentSpec, acc model.Ag
 	}
 	out, err := a.Run(rctx, env, spec.statusCmd[0], spec.statusCmd[1:]...)
 	st := parseStatus(spec.ID, out, err)
+	if rctx.Err() != nil {
+		return st // a timeout is not an answer; don't cache it so the next load asks again
+	}
 	a.mu.Lock()
 	if a.status == nil {
 		a.status = map[string]cachedStatus{}
@@ -429,7 +436,6 @@ func parseStatus(agent string, out []byte, runErr error) accountStatus {
 		}
 		var j struct {
 			LoggedIn         *bool  `json:"loggedIn"`
-			Email            string `json:"email"`
 			SubscriptionType string `json:"subscriptionType"`
 			PlanTier         string `json:"planTier"`
 			LoginExpiresAt   string `json:"loginExpiresAt"`
@@ -440,7 +446,7 @@ func parseStatus(agent string, out []byte, runErr error) accountStatus {
 		if !*j.LoggedIn {
 			return accountStatus{Status: "signed_out"}
 		}
-		st := accountStatus{Status: "signed_in", Who: j.Email, Plan: j.PlanTier}
+		st := accountStatus{Status: "signed_in", Plan: j.PlanTier}
 		if st.Plan == "" {
 			st.Plan = j.SubscriptionType
 		}
@@ -533,7 +539,7 @@ func claudeServiceName(home string) string {
 	return "Claude Code-credentials-" + hex.EncodeToString(sum[:])[:8]
 }
 
-// claudeUsage reads the subscription windows from Anthropic's undocumented OAuth usage endpoint. It only runs for users who opted in, never
+// claudeUsage reads the subscription windows from Anthropic's undocumented OAuth usage endpoint. It never
 // refreshes the token, and reports any failure as "unavailable".
 func (a *Agents) claudeUsage(ctx context.Context, acc model.AgentAccount, fresh bool) (*AccountUsage, string) {
 	key := "claude:" + acc.ID
@@ -748,10 +754,6 @@ func (a *Agents) SetEnabled(ctx context.Context, id string, enabled bool) error 
 	return a.Store.SetEnabled(ctx, id, enabled)
 }
 
-func (a *Agents) SetClaudeUsageOptIn(ctx context.Context, u *model.User, on bool) error {
-	return a.Store.SetClaudeUsageOptIn(ctx, u.ID, on)
-}
-
 // safeDirName keeps a user id usable as a directory name.
 func safeDirName(s string) string {
 	if regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`).MatchString(s) && s != "." && s != ".." {
@@ -881,11 +883,7 @@ func (a *Agents) Refresh(ctx context.Context, u *model.User, agent, id string) (
 	if err != nil {
 		return nil, err
 	}
-	optIn, err := a.Store.ClaudeUsageOptIn(ctx, u.ID)
-	if err != nil {
-		return nil, err
-	}
-	v, err := a.view(ctx, u.ID, spec, optIn, true)
+	v, err := a.view(ctx, u.ID, spec, true)
 	if err != nil {
 		return nil, err
 	}

@@ -89,29 +89,6 @@ func (s *Server) handleDeleteAgentAccount(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-func (s *Server) handlePatchPreferences(c echo.Context) error {
-	if s.Agents == nil {
-		return s.agentsUnavailable(c)
-	}
-	var req struct {
-		ClaudeUsageOptIn *bool `json:"claude_usage_opt_in"`
-	}
-	if err := c.Bind(&req); err != nil {
-		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
-	}
-	ctx := c.Request().Context()
-	if req.ClaudeUsageOptIn != nil {
-		if err := s.Agents.SetClaudeUsageOptIn(ctx, currentUser(c), *req.ClaudeUsageOptIn); err != nil {
-			return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not save preferences")
-		}
-	}
-	on, err := s.Agents.Store.ClaudeUsageOptIn(ctx, currentUser(c).ID)
-	if err != nil {
-		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load preferences")
-	}
-	return c.JSON(http.StatusOK, map[string]bool{"claude_usage_opt_in": on})
-}
-
 func mapAgentError(c echo.Context, err error) error {
 	if errors.Is(err, model.ErrAgentAccountNotFound) || errors.Is(err, model.ErrAgentUnknown) {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", err.Error())

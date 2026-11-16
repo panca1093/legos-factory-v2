@@ -9,7 +9,7 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
-// AgentAccountRepo owns agent_accounts, agent_settings and the per-user usage opt-in.
+// AgentAccountRepo owns agent_accounts and agent_settings.
 type AgentAccountRepo struct{ DB *sql.DB }
 
 const acctCols = `id, user_id, agent, label, home_dir, active, created_at`
@@ -122,23 +122,5 @@ func (r *AgentAccountRepo) SetEnabled(ctx context.Context, agent string, enabled
 	}
 	_, err := r.DB.ExecContext(ctx, `INSERT INTO agent_settings (agent, enabled) VALUES (?,?)
 		ON CONFLICT(agent) DO UPDATE SET enabled = excluded.enabled`, agent, v)
-	return err
-}
-
-func (r *AgentAccountRepo) ClaudeUsageOptIn(ctx context.Context, userID string) (bool, error) {
-	var v int
-	err := r.DB.QueryRowContext(ctx, `SELECT claude_usage_opt_in FROM users WHERE id = ?`, userID).Scan(&v)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return v != 0, err
-}
-
-func (r *AgentAccountRepo) SetClaudeUsageOptIn(ctx context.Context, userID string, on bool) error {
-	v := 0
-	if on {
-		v = 1
-	}
-	_, err := r.DB.ExecContext(ctx, `UPDATE users SET claude_usage_opt_in = ? WHERE id = ?`, v, userID)
 	return err
 }

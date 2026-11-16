@@ -118,7 +118,7 @@ const acct = (over: object = {}) => ({
   ...over,
 });
 type Agent = { accounts: object[]; installed?: boolean };
-let agentsBody: { agents: Agent[]; claude_usage_opt_in: boolean };
+let agentsBody: { agents: Agent[] };
 let providersBody: { providers: object[] };
 let routes: Record<string, Handler>;
 let calls: { method: string; path: string; body: unknown }[];
@@ -142,7 +142,6 @@ beforeEach(() => {
   useSession().user = user;
   appSettings.role_agents = { ...baseRoleAgents };
   agentsBody = {
-    claude_usage_opt_in: false,
     agents: [
       {
         id: "claude",
@@ -337,32 +336,20 @@ it("lists agents with plan and login expiry while usage is off, with no bars", a
   w.unmount();
 });
 
-it("opt-in PATCHes preferences, then shows usage bars; usage_error shows Usage unavailable", async () => {
-  routes["PATCH /api/v1/me/preferences"] = (body) => {
-    agentsBody.claude_usage_opt_in = (
-      body as { claude_usage_opt_in: boolean }
-    ).claude_usage_opt_in;
-    agentsBody.agents[0].accounts = [
-      acct({
-        usage: {
-          session: {
-            used_pct: 58,
-            resets_at: new Date(Date.now() + 3 * 3600e3).toISOString(),
-          },
-          week: { used_pct: 91 },
+it("shows Claude usage bars by default with no toggle; usage_error shows Usage unavailable", async () => {
+  agentsBody.agents[0].accounts = [
+    acct({
+      usage: {
+        session: {
+          used_pct: 58,
+          resets_at: new Date(Date.now() + 3 * 3600e3).toISOString(),
         },
-      }),
-    ];
-    return json({ claude_usage_opt_in: true });
-  };
+        week: { used_pct: 91 },
+      },
+    }),
+  ];
   const { w } = await render();
-  await click(w, "About Claude usage");
-  expect(w.text()).toContain("not documented");
-  await w.find('input[aria-label="Show Claude usage"]').setValue(true);
-  await flushPromises();
-  expect(sent("PATCH", "/api/v1/me/preferences")[0].body).toEqual({
-    claude_usage_opt_in: true,
-  });
+  expect(w.find('input[aria-label="Show Claude usage"]').exists()).toBe(false);
   const session = w.find('[data-meter="session"]');
   expect(session.text()).toContain("58%");
   expect(session.find("[role=progressbar]").attributes("aria-valuenow")).toBe(
@@ -695,18 +682,6 @@ it("signed-out accounts use the server login_command and Sign in shows even with
   expect(codex.find('[data-test="login-steps"]').text()).toContain(
     "CODEX_HOME=/h codex login",
   );
-  w.unmount();
-});
-
-it("the usage opt-in switch resets when the PATCH fails", async () => {
-  routes["PATCH /api/v1/me/preferences"] = () =>
-    fail(500, "INTERNAL", "could not save");
-  const { w } = await render();
-  const input = w.find('input[aria-label="Show Claude usage"]');
-  await input.setValue(true);
-  await flushPromises();
-  expect((input.element as HTMLInputElement).checked).toBe(false);
-  expect(w.text()).toContain("could not save");
   w.unmount();
 });
 

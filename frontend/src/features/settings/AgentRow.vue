@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
-import { Copy, HelpCircle, MoreHorizontal } from "lucide-vue-next";
+import { Copy, MoreHorizontal } from "lucide-vue-next";
 import Popover from "../../components/ui/Popover.vue";
 import {
   api,
@@ -11,8 +11,6 @@ import {
 
 const props = defineProps<{
   agent: AgentInfo;
-  usageOptIn: boolean;
-  setOptIn: (on: boolean) => Promise<boolean>;
   canWrite: boolean;
   credentialsConfigured: boolean;
 }>();
@@ -21,8 +19,7 @@ const emit = defineEmits<{ changed: []; error: [string] }>();
 const base = computed(() => `/api/v1/agents/${props.agent.id}`);
 const active = computed(() => props.agent.accounts.find((a) => a.active));
 const busy = ref(false);
-const menu = ref(false),
-  help = ref(false);
+const menu = ref(false);
 
 const genericLogin: Record<string, string> = {
   claude: "claude auth login",
@@ -96,10 +93,6 @@ async function signedIn() {
   );
   if (ok) login.value = null;
 }
-async function onOptIn(el: HTMLInputElement) {
-  const ok = await props.setOptIn(el.checked);
-  if (!ok) el.checked = props.usageOptIn;
-}
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
 const use = (a: AgentAccount) =>
   run(() => api.post(`${base.value}/accounts/${a.id}/activate`));
@@ -145,13 +138,12 @@ const signInTarget = computed(() =>
 );
 const showBars = computed(() => {
   const a = active.value;
-  if (!a || (isClaude.value && !props.usageOptIn)) return false;
+  if (!a) return false;
   return !!(a.usage?.session || a.usage?.week || a.usage_error);
 });
-const isClaude = computed(() => props.agent.id === "claude");
 </script>
 <template>
-  <div class="agent-row" :data-agent="agent.id">
+  <div class="agent-acct" :data-agent="agent.id">
     <div class="agent-head">
       <span class="provider-logo" aria-hidden="true">{{ agent.name[0] }}</span>
       <div class="grow">
@@ -249,39 +241,6 @@ const isClaude = computed(() => props.agent.id === "claude");
         </div>
       </div>
     </template>
-
-    <div v-if="isClaude && agent.enabled" class="row opt-in">
-      <label class="row"
-        ><span class="switch"
-          ><input
-            type="checkbox"
-            aria-label="Show Claude usage"
-            :checked="usageOptIn"
-            :disabled="busy"
-            @change="
-              onOptIn($event.target as HTMLInputElement)
-            " /><span></span></span
-        >Show Claude usage</label
-      >
-      <Popover v-model:open="help">
-        <template #trigger="{ toggle: t, open }">
-          <button
-            class="btn small icon-only"
-            type="button"
-            aria-label="About Claude usage"
-            :aria-expanded="open"
-            @click="t"
-          >
-            <HelpCircle class="icon" aria-hidden="true" />
-          </button>
-        </template>
-        <p class="pop-text" role="note">
-          Reads your usage with your Claude login from an endpoint Anthropic has
-          not documented. It can stop working at any time. Off by default; only
-          you see it.
-        </p>
-      </Popover>
-    </div>
 
     <div v-if="agent.accounts.length > 1" class="accounts">
       <div
