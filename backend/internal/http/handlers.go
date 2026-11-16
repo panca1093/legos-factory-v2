@@ -337,6 +337,11 @@ func (s *Server) handleModels(c echo.Context) error {
 	if s.Models == nil {
 		return errorJSON(c, http.StatusServiceUnavailable, "MODELS_UNAVAILABLE", "no model provider configured")
 	}
+	if id := c.QueryParam("agent"); id != "" {
+		if _, ok := usecase.AgentByID(id); !ok {
+			return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "unknown agent")
+		}
+	}
 	models, err := s.Models(c)
 	if err != nil {
 		return errorJSON(c, http.StatusBadGateway, "MODELS_UNAVAILABLE", err.Error())
@@ -349,12 +354,10 @@ func (s *Server) handleUsage(c echo.Context) error {
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load usage")
 	}
-	limit, spent, reserved, available := s.Usage.BudgetStatus()
+	spent, reserved := s.Usage.BudgetStatus()
 	return c.JSON(http.StatusOK, map[string]any{
-		"usage": summary,
-		"budget": map[string]int64{
-			"limit_micros": limit, "spent_micros": spent, "reserved_micros": reserved, "available_micros": available,
-		},
+		"usage":  summary,
+		"budget": map[string]int64{"spent_micros": spent, "reserved_micros": reserved},
 	})
 }
 
@@ -380,7 +383,6 @@ func (s *Server) handleOverview(c echo.Context) error {
 	pendingJobs := s.Jobs.CountPendingOrRunning(ctx)
 	failedJobs := s.Jobs.CountFailed(ctx)
 	summary, _ := s.Usage.Summary(ctx)
-	limit, spent, reserved, available := s.Usage.BudgetStatus()
 	u := currentUser(c)
 	_ = u
 	return c.JSON(http.StatusOK, map[string]any{
@@ -393,19 +395,22 @@ func (s *Server) handleOverview(c echo.Context) error {
 			"total_work_orders":    len(wos),
 		},
 		"usage": summary,
-		"budget": map[string]int64{
-			"limit_micros": limit, "spent_micros": spent, "reserved_micros": reserved, "available_micros": available,
-		},
 		"user": currentUser(c),
 	})
 }
 
+func (s *Server) ws() *usecase.WorkspaceSettings {
+	if s.WS != nil {
+		return s.WS
+	}
+	return &usecase.WorkspaceSettings{Store: s.Settings, EnvJevKey: s.Cfg.TypeSafeKey, DefaultWorkers: s.Cfg.MaxConcurrentRuns}
+}
+
 func (s *Server) handleGetSettings(c echo.Context) error {
-	settings, err := s.Settings.Get(c.Request().Context())
+	settings, err := s.ws().Get(c.Request().Context())
 	if err != nil {
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load settings")
 	}
-	settings.JevEnabled = s.Cfg.TypeSafeKey != ""
 	return c.JSON(http.StatusOK, settings)
 }
 
@@ -414,41 +419,22 @@ func (s *Server) handlePatchSettings(c echo.Context) error {
 	if err := c.Bind(&patch); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
-	if patch.BudgetLimitMicros != nil && *patch.BudgetLimitMicros < 0 {
-		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "budget_limit_micros cannot be negative")
-	}
-	ctx := c.Request().Context()
-	if err := s.Settings.Patch(ctx, patch); err != nil {
+	out, err := s.ws().Patch(c.Request().Context(), patch)
+	switch {
+	case errors.Is(err, model.ErrSecretsUnavailable):
+		return errorJSON(c, http.StatusConflict, "SECRETS_UNAVAILABLE", err.Error())
+	case err != nil && !errors.Is(err, usecase.ErrInvalid):
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not save settings")
+	case err != nil:
+		return mapDomainError(c, err)
 	}
-	if patch.BudgetLimitMicros != nil {
-		s.Usage.SetBudgetLimit(*patch.BudgetLimitMicros)
-	}
-	out, err := s.Settings.Get(ctx)
-	if err != nil {
-		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not reload settings")
-	}
-	out.JevEnabled = s.Cfg.TypeSafeKey != ""
 	return c.JSON(http.StatusOK, out)
 }
 
 func (s *Server) handleRuntimeSettings(c echo.Context) error {
-	harness := "mock"
-	switch {
-	case s.Cfg.Harness == "acp":
-		harness = "acp"
-	case s.Cfg.OpenCodeURL != "":
-		harness = "opencode"
-	}
 	return c.JSON(http.StatusOK, map[string]any{
-		"harness":     harness,
-		"acp_command": strings.Join(s.Cfg.ACPCommand, " "),
-		"jev": map[string]any{
-			"enabled": s.Cfg.TypeSafeKey != "",
-			"model":   s.Cfg.TypeSafeModel,
-		},
 		"credentials_configured": s.Integrations != nil && s.Integrations.Secrets != nil,
-		"max_concurrent_runs":    s.Cfg.MaxConcurrentRuns,
+		"jev_key_from_env":       s.Cfg.TypeSafeKey != "",
 	})
 }
 

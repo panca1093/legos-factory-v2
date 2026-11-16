@@ -9,6 +9,9 @@ var (
 	ErrUserNotFound      = errors.New("user not found")
 	ErrKnowledgeNotFound = errors.New("knowledge record not found")
 	ErrKBDocNotFound     = errors.New("knowledge document not found")
+
+	ErrAgentAccountNotFound = errors.New("agent account not found")
+	ErrAgentUnknown         = errors.New("unknown agent")
 )
 
 var (

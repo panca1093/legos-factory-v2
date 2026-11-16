@@ -34,6 +34,7 @@ type App struct {
 	Server   *httpapi.Server
 	Sched    *scheduler.Scheduler
 	settings *store.SettingsRepo
+	warm     func() // fills the model catalog of the default agent in the background
 	log      *slog.Logger
 }
 
@@ -93,7 +94,24 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		localProjects = &usecase.Local{Host: sandbox.Host{}, GH: ghFor}
 	}
 	box := sandbox.Local{DataDir: cfg.DataDir}
-	workOrders := &usecase.WorkOrders{Store: woRepo, Projects: projects, Sandbox: box, Integrations: integrations, Settings: settingsRepo, Chats: &store.ChatRepo{DB: db}}
+
+	acpMode := cfg.Harness == "acp"
+	agents := usecase.NewAgents(&store.AgentAccountRepo{DB: db}, cfg.DataDir)
+	defaultAgent := "claude"
+	if acpMode {
+		defaultAgent = providerAgent(cfg.ACPCommand)
+		if defaultAgent == "" {
+			defaultAgent = "opencode" // a custom command stands in for the agent most setups ran before
+		}
+		agents.Commands = map[string][]string{defaultAgent: cfg.ACPCommand}
+	}
+	hs := &harnessSet{agents: agents, probe: filepath.Join(cfg.DataDir, "agent-probe")}
+	cats := &catalogs{hs: hs}
+	ws := &usecase.WorkspaceSettings{Store: settingsRepo, EnvJevKey: cfg.TypeSafeKey, DefaultAgent: defaultAgent, DefaultWorkers: cfg.MaxConcurrentRuns}
+	if secrets != nil {
+		ws.Secrets = secrets
+	}
+	workOrders := &usecase.WorkOrders{Store: woRepo, Projects: projects, Sandbox: box, Integrations: integrations, Settings: ws, Chats: &store.ChatRepo{DB: db}}
 
 	auth := &usecase.Identity{
 		Users: userRepo,
@@ -107,27 +125,58 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	mockH := agent.NewMock()
 	var realH usecase.Harness
 	var lister modelLister
-	switch {
-	case cfg.Harness == "acp":
-		acp := agent.NewACPHarness(cfg.ACPCommand, filepath.Join(cfg.DataDir, "agent-probe"))
-		realH, lister = acp, acp
-	case cfg.OpenCodeURL != "":
+	if !acpMode && cfg.OpenCodeURL != "" {
 		client := agent.NewOpenCodeClient(cfg.OpenCodeURL, cfg.OpenCodeUser, cfg.OpenCodePass)
 		realH, lister = agent.NewOpenCodeHarness(client), client
 	}
 
+	roleAgent := func(role model.AgentRole, wo *model.WorkOrder) string {
+		s, _ := ws.Get(context.Background())
+		return usecase.RoleAgent(role, wo, s, defaultAgent)
+	}
 	resolve := func(role model.AgentRole, wo *model.WorkOrder) usecase.Harness {
-		if realH != nil {
-			return realH
+		if !acpMode {
+			if realH != nil {
+				return realH
+			}
+			return mockH
 		}
-		return mockH
+		id := roleAgent(role, wo)
+		spec, ok := usecase.AgentByID(id)
+		if !ok {
+			return unavailable{id, fmt.Errorf("%w: unknown agent %q for the %s role", model.ErrPermanent, id, role)}
+		}
+		if err := agents.Ready(context.Background(), id); err != nil {
+			return unavailable{id, err}
+		}
+		if !spec.Allows(role) {
+			return unavailable{id, fmt.Errorf("%w: %s cannot run the %s role", model.ErrPermanent, spec.Name, role)}
+		}
+		h, err := hs.get(id)
+		if err != nil {
+			return unavailable{id, fmt.Errorf("%w: %v", model.ErrPermanent, err)}
+		}
+		return h
 	}
 	var modelDefaults map[string]string
 	if lister != nil {
 		modelDefaults = discoverDefaults(lister)
 	}
 
+	// catalogFor is the role agent's model list under the work order creator's account; empty when it cannot be read.
+	catalogFor := func(role model.AgentRole, wo *model.WorkOrder) []string {
+		id := roleAgent(role, wo)
+		if agents.Ready(context.Background(), id) != nil {
+			return nil
+		}
+		ms, _ := cats.list(context.Background(), agents, id, wo.CreatedBy, false)
+		return refs(ms)
+	}
 	modelFor := func(role model.AgentRole, wo *model.WorkOrder) (string, string) {
+		if acpMode {
+			s, _ := ws.Get(context.Background())
+			return usecase.SplitModelRef(usecase.ResolveAgentModel(role, wo, s, catalogFor(role, wo)))
+		}
 		if realH == nil {
 			return "mock", "mock-local"
 		}
@@ -136,9 +185,14 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	}
 
 	workOrders.ResolveDefault = func(role model.AgentRole, s *model.Settings) string {
+		if acpMode {
+			id := usecase.RoleAgent(role, nil, s, defaultAgent)
+			return usecase.ResolveAgentModel(role, &model.WorkOrder{}, s, refs(cats.peek(id, "")))
+		}
 		return usecase.ResolveModel(role, &model.WorkOrder{}, s, modelDefaults)
 	}
 
+	jv := &jev{model: cfg.TypeSafeModel}
 	factory := &usecase.Factory{
 		WO: woRepo, Runs: runRepo, Findings: findingRepo, CodeFacts: &store.CodeFactRepo{DB: db}, Quality: qualityRepo,
 		Proj:    projRepo,
@@ -148,13 +202,23 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		DataDir:     cfg.DataDir,
 		QualTimeout: 5 * time.Minute,
 		Log:         log,
+		JudgeFn:     jv.get,
 	}
-
-	if cfg.TypeSafeKey != "" {
-		factory.Judge = jevJudge{integration.NewTypeSafe(cfg.TypeSafeKey, cfg.TypeSafeModel, "")}
+	if acpMode {
+		factory.RunEnv = func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) ([]string, []string, error) {
+			return agents.RunEnv(ctx, roleAgent(role, wo), wo.CreatedBy)
+		}
 	}
 
 	sched := scheduler.New(jobRepo, log, cfg.MaxConcurrentRuns)
+	ws.OnChange = func(st *model.Settings) {
+		sched.SetWorkers(st.MaxConcurrentRuns)
+		jv.set(ws.JevKey(context.Background()))
+	}
+	if st, err := ws.Get(context.Background()); err == nil {
+		sched.SetWorkers(st.MaxConcurrentRuns)
+	}
+	jv.set(ws.JevKey(context.Background()))
 	factory.Sched = sched
 	for kind, h := range factory.Handlers() {
 		sched.Register(kind, h)
@@ -186,6 +250,8 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		}
 	}
 	srv.Usage = usageTracker
+	srv.Agents = agents
+	srv.WS = ws
 	listModels := func(ctx context.Context) ([]model.ModelInfo, error) {
 		// mock harness exposes a single scriptable pseudo-model
 		return []model.ModelInfo{{
@@ -208,40 +274,71 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			return out, nil
 		}
 	}
-	srv.Models = func(c echo.Context) ([]model.ModelInfo, error) { return listModels(c.Request().Context()) }
+	chatAgent := func() string { return roleAgent(model.AgentChat, nil) }
+	if acpMode {
+		listModels = func(ctx context.Context) ([]model.ModelInfo, error) {
+			return cats.list(ctx, agents, chatAgent(), "", false)
+		}
+		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) {
+			id := c.QueryParam("agent")
+			if id == "" {
+				id = defaultAgent
+			}
+			uid := ""
+			if u, ok := c.Get("user").(*model.User); ok {
+				uid = u.ID
+			}
+			if err := agents.Ready(c.Request().Context(), id); err != nil {
+				return nil, err
+			}
+			return cats.list(c.Request().Context(), agents, id, uid, false)
+		}
+	} else {
+		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) { return listModels(c.Request().Context()) }
+	}
 
 	// Chat needs a harness that can hold an agent read-only; the OpenCode HTTP
 	// harness cannot restrict a session, so chats are off there.
 	var chatH usecase.Harness
+	var chatRunner func(ctx context.Context, userID string) (usecase.Harness, []string, []string, error)
 	switch {
-	case cfg.Harness == "acp":
-		chatH = realH
+	case acpMode:
+		chatH, _ = hs.get(defaultAgent)
+		chatRunner = func(ctx context.Context, userID string) (usecase.Harness, []string, []string, error) {
+			h := resolve(model.AgentChat, nil)
+			env, args, err := agents.RunEnv(ctx, chatAgent(), userID)
+			return h, env, args, err
+		}
 	case realH == nil:
 		chatH = mockH
+	}
+	chatModel := func(ctx context.Context, fallbackRole model.AgentRole) string {
+		if !acpMode {
+			p, m := modelFor(fallbackRole, &model.WorkOrder{})
+			fallback := ""
+			if m != "" {
+				fallback = p + "/" + m
+			}
+			s, _ := settingsRepo.Get(ctx)
+			return usecase.ChatAuto(s, fallback)
+		}
+		s, _ := ws.Get(ctx)
+		id := chatAgent()
+		var cat []string
+		if agents.Ready(ctx, id) == nil {
+			ms, _ := cats.list(ctx, agents, id, "", false)
+			cat = refs(ms)
+		}
+		return usecase.ResolveAgentModel(model.AgentChat, &model.WorkOrder{}, s, cat)
 	}
 	srv.Chat = &usecase.Chat{
 		Store: &store.ChatRepo{DB: db}, Docs: srv.KBDocs, Related: srv.KBDocs, Projects: projects,
 		Settings: settingsRepo, Usage: usageTracker, Harness: chatH, MCP: mcpServers,
 		Runs: runRepo, MCPServers: mcpServers.Store, DataDir: cfg.DataDir,
 		Models: listModels,
-		Default: func(ctx context.Context) string {
-			p, m := modelFor(model.AgentArchitect, &model.WorkOrder{})
-			fallback := ""
-			if m != "" {
-				fallback = p + "/" + m
-			}
-			s, _ := settingsRepo.Get(ctx)
-			return usecase.ChatAuto(s, fallback)
-		},
-		RepoDefault: func(ctx context.Context) string {
-			p, m := modelFor(model.AgentBuilder, &model.WorkOrder{})
-			fallback := ""
-			if m != "" {
-				fallback = p + "/" + m
-			}
-			s, _ := settingsRepo.Get(ctx)
-			return usecase.ChatAuto(s, fallback)
-		},
+		Default:     func(ctx context.Context) string { return chatModel(ctx, model.AgentArchitect) },
+		RepoDefault: func(ctx context.Context) string { return chatModel(ctx, model.AgentBuilder) },
+		Runner:      chatRunner,
 		Dir: filepath.Join(cfg.DataDir, "chat"),
 		Repo: func(ctx context.Context, projectID string, refresh bool) (dir, sha string, err error) {
 			defer func() {
@@ -262,7 +359,12 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		RepoFacts: factory.RepoFacts,
 	}
 
-	return &App{Cfg: cfg, DBCloser: db.Close, Server: srv, Sched: sched, settings: settingsRepo, log: log}, nil
+	warm := func() {
+		if acpMode && agents.Ready(context.Background(), defaultAgent) == nil {
+			_, _ = cats.list(context.Background(), agents, defaultAgent, "", false)
+		}
+	}
+	return &App{warm: warm, Cfg: cfg, DBCloser: db.Close, Server: srv, Sched: sched, settings: settingsRepo, log: log}, nil
 }
 
 // Start launches the scheduler and prepares shutdown hooks.
@@ -281,14 +383,11 @@ func (a *App) Start(ctx context.Context) error {
 		}
 	}
 	a.Sched.Start(ctx)
+	go a.warm()
 	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {
 		return err
 	}
 	a.Server.Factory.WatchPRs(ctx)
-	// apply persisted budget limit to the tracker
-	if s, err := a.settings.Get(ctx); err == nil {
-		a.Server.Usage.SetBudgetLimit(s.BudgetLimitMicros)
-	}
 	return nil
 }
 

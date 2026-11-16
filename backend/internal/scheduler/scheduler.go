@@ -27,7 +27,7 @@ type Scheduler struct {
 	log      *slog.Logger
 	handlers map[string]Handler
 
-	workers  int
+	workers  atomic.Int64
 	pollEvery time.Duration
 
 	inflightN atomic.Int64
@@ -40,11 +40,19 @@ func New(jobs *store.JobRepo, log *slog.Logger, workers int) *Scheduler {
 	if workers < 1 {
 		workers = 1
 	}
-	return &Scheduler{
-		jobs: jobs, log: log, workers: workers,
-		handlers: map[string]Handler{},
+	s := &Scheduler{
+		jobs: jobs, log: log,
+		handlers:  map[string]Handler{},
 		pollEvery: 300 * time.Millisecond,
 	}
+	s.workers.Store(int64(workers))
+	return s
+}
+
+// SetWorkers resizes the pool at runtime. Running jobs are never stopped: a smaller
+// pool just claims nothing new until enough of them finish.
+func (s *Scheduler) SetWorkers(n int) {
+	s.workers.Store(int64(max(n, 1)))
 }
 
 func (s *Scheduler) Register(kind string, h Handler) { s.handlers[kind] = h }
@@ -131,7 +139,7 @@ func (s *Scheduler) claimAndDispatch(ctx context.Context) {
 
 func (s *Scheduler) claimOne(ctx context.Context) (model.Job, bool) {
 	// honor the worker pool bound before taking the claim lock
-	if s.inflightN.Load() >= int64(s.workers) {
+	if s.inflightN.Load() >= s.workers.Load() {
 		return model.Job{}, false
 	}
 	s.claimMu.Lock()

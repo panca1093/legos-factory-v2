@@ -83,6 +83,8 @@ type Chat struct {
 	MCP      MCPSelector // nil: chats get no MCP servers
 	// Harness is nil when no harness can run chats read-only.
 	Harness Harness
+	// Runner, when set, picks the harness and account environment for a user's turn (the chat role's agent); Harness is then the fallback for background calls.
+	Runner func(ctx context.Context, userID string) (h Harness, env, args []string, err error)
 	// Models lists what the harness can run; Default is the "provider/model" auto resolves to.
 	Models  func(ctx context.Context) ([]model.ModelInfo, error)
 	Default func(ctx context.Context) string
@@ -120,7 +122,10 @@ type chatPerm struct {
 }
 
 // chatSession is a kept harness session; sha is set when it reads the project checkout at that commit; mcp fingerprints the MCP selection it started with.
-type chatSession struct{ id, projectID, sha, mcp string }
+type chatSession struct {
+	id, projectID, sha, mcp string
+	h                       Harness // the harness holding the session
+}
 
 type ChatModel struct {
 	ID         string `json:"id"` // "provider/model"; empty is auto
@@ -481,7 +486,11 @@ func (c *Chat) forget(id string) {
 	s, ok := c.ses[id]
 	delete(c.ses, id)
 	c.mu.Unlock()
-	if sh, can := c.Harness.(SessionHarness); ok && can {
+	h := s.h
+	if h == nil {
+		h = c.Harness
+	}
+	if sh, can := h.(SessionHarness); ok && can {
 		sh.Close(s.id)
 	}
 }
@@ -720,10 +729,23 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 	req.OnPermission = func(hctx context.Context, p model.PermissionRequest) bool {
 		return c.askUser(hctx, ctx, gone, ch.ID, p, announced, emit)
 	}
-	sh, canKeep := c.Harness.(SessionHarness)
+	h, env, args := c.Harness, []string(nil), []string(nil)
+	if c.Runner != nil {
+		var err error
+		if h, env, args, err = c.Runner(ctx, ch.UserID); err != nil {
+			return model.AgentResult{}, info, err
+		}
+	}
+	req.Env, req.Args = env, args
+	sh, canKeep := h.(SessionHarness)
 	var sel model.MCPSelection
 	if c.MCP != nil {
 		sel, _ = c.MCP.Selection(ctx, model.AgentChat)
+		if c.Settings != nil {
+			if st, err := c.Settings.Get(ctx); err == nil && st.ChatReadOnly() {
+				sel = readOnlySelection(sel)
+			}
+		}
 	}
 	mcp := mcpFingerprint(model.AgentRequest{MCP: sel.Servers, MCPAllow: sel.Allow, MCPDeny: sel.Deny, MCPAsk: sel.Ask})
 	if len(sel.Servers) > 0 {
@@ -735,7 +757,7 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		c.mu.Lock()
 		kept, ok := c.ses[ch.ID]
 		c.mu.Unlock()
-		if ok && (kept.projectID != c.readableProject(ch) || kept.mcp != mcp) {
+		if ok && (kept.projectID != c.readableProject(ch) || kept.mcp != mcp || kept.h != h) {
 			c.forget(ch.ID)
 			c.mu.Lock()
 			delete(c.allowAll, ch.ID)
@@ -786,12 +808,12 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		req.Keep = keep
 		info.newSession, info.promptBytes, info.factsBytes = true, len(req.Prompt), len(seed)
 		var err error
-		if ses, err = c.Harness.Start(ctx, req); err != nil {
+		if ses, err = h.Start(ctx, req); err != nil {
 			return model.AgentResult{}, info, err
 		}
 	}
 	announced()
-	res, err := c.Harness.Result(ctx, ses.ID())
+	res, err := h.Result(ctx, ses.ID())
 	if err != nil {
 		c.forget(ch.ID)
 		return res, info, err
@@ -801,7 +823,7 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		if c.ses == nil {
 			c.ses = map[string]chatSession{}
 		}
-		c.ses[ch.ID] = chatSession{id: ses.ID(), projectID: cur.projectID, sha: cur.sha, mcp: mcp}
+		c.ses[ch.ID] = chatSession{id: ses.ID(), projectID: cur.projectID, sha: cur.sha, mcp: mcp, h: h}
 		c.mu.Unlock()
 	}
 	return res, info, nil
@@ -957,4 +979,25 @@ func truncateBytes(s string, n int) string {
 		n--
 	}
 	return s[:n]
+}
+
+// readOnlySelection removes the tools that need a human's approval, which are the ones that change something.
+func readOnlySelection(sel model.MCPSelection) model.MCPSelection {
+	if len(sel.Ask) == 0 {
+		return sel
+	}
+	ask := map[string]bool{}
+	for _, n := range sel.Ask {
+		ask[n] = true
+	}
+	out := sel
+	out.Allow = nil
+	for _, n := range sel.Allow {
+		if !ask[n] {
+			out.Allow = append(out.Allow, n)
+		}
+	}
+	out.Deny = append(append([]string{}, sel.Deny...), sel.Ask...)
+	out.Ask = nil
+	return out
 }

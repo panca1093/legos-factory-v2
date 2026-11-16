@@ -61,13 +61,19 @@ func agentProvider(command []string) string {
 		if strings.HasPrefix(filepath.Base(arg), "claude") {
 			return "claude"
 		}
+		if strings.HasPrefix(filepath.Base(arg), "codex") {
+			return "codex"
+		}
 	}
 	return filepath.Base(command[0])
 }
 
 func (h *ACPHarness) Name() string {
-	if h.Provider == "claude" {
+	switch h.Provider {
+	case "claude":
 		return "claude-acp"
+	case "codex":
+		return "codex-acp"
 	}
 	return "opencode-acp"
 }
@@ -207,14 +213,14 @@ type acpRun struct {
 
 func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.AgentSession, error) {
 	repo := req.Role == model.AgentChat && req.RepoAccess
-	conn, err := h.spawn(acpConfig(req.Role, repo), req.WorkspaceDir)
+	conn, err := h.spawnFor(acpConfig(req.Role, repo), req.WorkspaceDir, req.Env, req.Args)
 	if err != nil {
 		return nil, err
 	}
 	conn.role, conn.repo, conn.workspace, conn.onStep, conn.onText, conn.onPerm = req.Role, repo, req.WorkspaceDir, req.OnStep, req.OnText, req.OnPermission
 	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder
 	var meta map[string]any
-	var servers []model.MCPServer // OpenCode gets none: per-tool removal was only verified on claude-agent-acp
+	var servers []model.MCPServer // OpenCode and Codex get none: per-tool removal was only verified on claude-agent-acp
 	if h.Provider == "claude" {
 		servers = req.MCP
 		conn.mcpAllow = map[string]bool{}
@@ -251,6 +257,17 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 	}
 	if claudeReadOnly {
 		if err := conn.setMode(ctx, ns, "plan"); err != nil {
+			conn.close()
+			return nil, err
+		}
+	}
+	if h.Provider == "codex" {
+		// codex has no hard read-only: the mode is the floor and answerPermission refuses every request of a role that must not write
+		mode := "read-only"
+		if req.Role == model.AgentBuilder {
+			mode = "workspace-write"
+		}
+		if err := conn.setMode(ctx, ns, mode); err != nil {
 			conn.close()
 			return nil, err
 		}
@@ -416,10 +433,15 @@ func (h *ACPHarness) Cancel(_ context.Context, sessionID string) error {
 
 // Models lists the models the agent offers, from a throwaway session's model option.
 func (h *ACPHarness) Models(ctx context.Context) ([]Model, error) {
+	return h.ModelsFor(ctx, nil, nil)
+}
+
+// ModelsFor is Models under an account's environment and extra arguments.
+func (h *ACPHarness) ModelsFor(ctx context.Context, env, args []string) ([]Model, error) {
 	if err := os.MkdirAll(h.probe, 0o755); err != nil {
 		return nil, err
 	}
-	conn, err := h.spawn(acpRoleConfig(model.AgentForeman), h.probe)
+	conn, err := h.spawnFor(acpRoleConfig(model.AgentForeman), h.probe, env, args)
 	if err != nil {
 		return nil, err
 	}
@@ -454,13 +476,29 @@ func (h *ACPHarness) forgetRun(run *acpRun) {
 	h.mu.Unlock()
 }
 
-func (h *ACPHarness) spawn(config, dir string) (*acpConn, error) {
+// spawnFor starts the agent for one run: env and args come from the run's account and win over the harness's own.
+// A codex run gets a private CODEX_HOME that the connection removes when it closes.
+func (h *ACPHarness) spawnFor(config, dir string, env, args []string) (*acpConn, error) {
+	env, cleanup, err := h.runEnv(env)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := h.spawn(config, dir, env, args)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	conn.cleanup = cleanup
+	return conn, nil
+}
+
+func (h *ACPHarness) spawn(config, dir string, runEnv, runArgs []string) (*acpConn, error) {
 	if len(h.Command) == 0 {
 		return nil, fmt.Errorf("acp: no agent command configured")
 	}
-	cmd := exec.Command(h.Command[0], h.Command[1:]...)
+	cmd := exec.Command(h.Command[0], append(slices.Clone(h.Command[1:]), runArgs...)...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), "OPENCODE_DISABLE_AUTOUPDATE=1", "OPENCODE_CONFIG_CONTENT="+config), h.Env...)
+	cmd.Env = append(append(append(os.Environ(), "OPENCODE_DISABLE_AUTOUPDATE=1", "OPENCODE_CONFIG_CONTENT="+config), h.Env...), runEnv...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -469,7 +507,7 @@ func (h *ACPHarness) spawn(config, dir string) (*acpConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	c := &acpConn{cmd: cmd, w: stdin, stderr: &tailBuffer{max: 2048}, exited: make(chan struct{})}
+	c := &acpConn{cmd: cmd, w: stdin, stderr: &tailBuffer{max: 2048}, exited: make(chan struct{}), agent: h.Provider}
 	cmd.Stderr = c.stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("acp: start %s: %w", strings.Join(h.Command, " "), err)
@@ -568,6 +606,10 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 	case "end_turn":
 	case "cancelled":
 		r.err = errors.New("cancelled")
+		if r.conn.agent == "codex" && r.conn.refused.Load() > 0 {
+			// codex ends the turn on a refusal, so a read-only role that asked to run something cannot go on
+			r.err = fmt.Errorf("%w: codex ended the turn after a permission request was refused; this role is read-only on codex", model.ErrPermanent)
+		}
 		return
 	case "refusal":
 		r.err = fmt.Errorf("%w: agent stopped: refusal", model.ErrPermanent)
@@ -607,6 +649,10 @@ type acpConn struct {
 	exited  chan struct{}
 	once    sync.Once
 	closed  atomic.Bool
+
+	agent   string       // the harness provider: claude, codex or opencode
+	cleanup func()       // removes per-run files once the agent has exited
+	refused atomic.Int32 // permission requests this connection answered with a refusal
 
 	steering bool // the agent accepts _session/steering
 	embedded bool // the agent accepts embedded resource blocks in a prompt
@@ -710,7 +756,7 @@ func (c *acpConn) setModel(ctx context.Context, ns acpNewSession, ref, provider 
 // a read-only role must not run in a mode the agent would not confirm.
 func (c *acpConn) setMode(ctx context.Context, ns acpNewSession, mode string) error {
 	for _, opt := range ns.ConfigOptions {
-		if opt.Category != "mode" {
+		if opt.Category != "mode" && opt.ID != "mode" {
 			continue
 		}
 		for _, o := range opt.Options {
@@ -753,7 +799,7 @@ func (c *acpConn) begin(method string, params any) (func(context.Context) (json.
 		select {
 		case m := <-ch:
 			if m.Error != nil {
-				return nil, rpcError(method, m.Error.Message)
+				return nil, c.rpcFailure(method, m.Error.Code, m.Error.Message)
 			}
 			return m.Result, nil
 		case <-c.exited:
@@ -763,6 +809,21 @@ func (c *acpConn) begin(method string, params any) (func(context.Context) (json.
 		}
 	}, nil
 }
+
+// rpcFailure turns "Authentication required" (-32000, answered by claude at session/prompt and by codex at session/new)
+// into a permanent error that names the agent: retrying cannot sign anyone in.
+func (c *acpConn) rpcFailure(method string, code int, msg string) error {
+	if code == -32000 && strings.Contains(strings.ToLower(msg), "authentication required") {
+		name := c.agent
+		if n, ok := agentNames[c.agent]; ok {
+			name = n
+		}
+		return fmt.Errorf("%w: the %s account is not signed in (authentication required); sign it in under Settings, Agents", model.ErrPermanent, name)
+	}
+	return rpcError(method, msg)
+}
+
+var agentNames = map[string]string{"claude": "Claude", "codex": "Codex", "opencode": "OpenCode"}
 
 // rpcError keeps provider quota and invalid-request failures permanent, as a
 // quick scheduler retry cannot succeed.
@@ -819,6 +880,16 @@ func (c *acpConn) close() {
 		_ = c.w.Close()
 		if c.cmd.Process != nil {
 			_ = c.cmd.Process.Kill()
+		}
+		if c.cleanup != nil {
+			// the agent may still be writing its home; wait for it to exit first
+			go func() {
+				select {
+				case <-c.exited:
+				case <-time.After(5 * time.Second):
+				}
+				c.cleanup()
+			}()
 		}
 	})
 }
@@ -952,6 +1023,10 @@ func (c *acpConn) answerPermission(m acpMsg) {
 		} `json:"options"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	if c.agent == "codex" && c.role != model.AgentBuilder {
+		c.reply(m.ID, p.Options, false)
+		return
+	}
 	var allow bool
 	tool := p.ToolCall.Meta.ClaudeCode.ToolName
 	for _, n := range []string{p.ToolCall.Title, p.ToolCall.Name} {
@@ -1005,6 +1080,9 @@ func (c *acpConn) reply(id json.RawMessage, options []acpPermOption, allow bool)
 	}
 	if c.gone() {
 		return
+	}
+	if !allow {
+		c.refused.Add(1)
 	}
 	_ = c.write(map[string]any{"jsonrpc": "2.0", "id": id, "result": map[string]any{"outcome": outcome}})
 }

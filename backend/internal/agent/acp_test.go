@@ -92,8 +92,16 @@ func fakeAgent(scenario string) {
 			}
 			_ = json.Unmarshal(m.Params, &p)
 			cwd, sessionMeta, sessionMCP = p.Cwd, string(p.Meta), string(p.McpServers)
+			if scenario == "auth-new" {
+				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32000, "message": "Authentication required"}})
+				continue
+			}
+			modes := []any{map[string]any{"value": "build", "name": "Build"}, map[string]any{"value": "plan", "name": "Plan"}}
+			if os.Getenv("ACP_FAKE_CODEX") != "" {
+				modes = []any{map[string]any{"value": "read-only", "name": "Read only"}, map[string]any{"value": "workspace-write", "name": "Workspace write"}}
+			}
 			reply(m.ID, map[string]any{"sessionId": "fake-ses", "configOptions": []any{
-				map[string]any{"id": "mode", "category": "mode", "currentValue": "build", "options": []any{map[string]any{"value": "build", "name": "Build"}, map[string]any{"value": "plan", "name": "Plan"}}},
+				map[string]any{"id": "mode", "category": "mode", "currentValue": "build", "options": modes},
 				map[string]any{"id": "model", "category": "model", "currentValue": "opencode/free-a", "options": []any{
 					map[string]any{"value": "opencode/free-a", "name": "opencode/Free A"},
 					map[string]any{"value": "opencode-go/kimi", "name": "opencode-go/Kimi"},
@@ -191,6 +199,21 @@ func fakeAgent(scenario string) {
 				}
 				_ = json.Unmarshal(m.Params, &p)
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": string(p.Prompt)}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "auth":
+				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32000, "message": "Authentication required"}})
+			case "setcalls":
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": strings.Join(setCalls, ",")}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "codexhome":
+				home := os.Getenv("CODEX_HOME")
+				cfg, _ := os.ReadFile(filepath.Join(home, "config.toml"))
+				auth, _ := os.ReadFile(filepath.Join(home, "auth.json"))
+				if os.Getenv("ACP_FAKE_ROTATE") != "" {
+					_ = os.WriteFile(filepath.Join(home, "auth.json"), []byte("rotated"), 0o600)
+				}
+				b, _ := json.Marshal(map[string]string{"home": home, "config": string(cfg), "auth": string(auth)})
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": string(b)}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "quota":
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Go usage limit exceeded"}})

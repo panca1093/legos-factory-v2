@@ -52,7 +52,7 @@ func bootSettings(t *testing.T, cfg *model.Config) *Server {
 
 func TestPatchSettingsOnlyChangesSentKeys(t *testing.T) {
 	srv := bootSettings(t, &model.Config{})
-	if code, body := chatDo(srv, "adm", "PATCH", "/api/v1/settings", `{"builder_model":"a/b","budget_limit_micros":500}`); code != 200 {
+	if code, body := chatDo(srv, "adm", "PATCH", "/api/v1/settings", `{"builder_model":"a/b","max_concurrent_runs":5}`); code != 200 {
 		t.Fatalf("patch: %d %s", code, body)
 	}
 	code, body := chatDo(srv, "adm", "PATCH", "/api/v1/settings", `{"chat_model":"c/d"}`)
@@ -61,7 +61,7 @@ func TestPatchSettingsOnlyChangesSentKeys(t *testing.T) {
 	}
 	var got model.Settings
 	_ = json.Unmarshal([]byte(body), &got)
-	if got.BuilderModel != "a/b" || got.BudgetLimitMicros != 500 || got.ChatModel != "c/d" {
+	if got.BuilderModel != "a/b" || got.MaxConcurrentRuns != 5 || got.ChatModel != "c/d" {
 		t.Fatalf("omitted keys were touched: %s", body)
 	}
 	if code, _ := chatDo(srv, "adm", "PATCH", "/api/v1/settings", `{"builder_model":""}`); code != 200 {
@@ -69,7 +69,7 @@ func TestPatchSettingsOnlyChangesSentKeys(t *testing.T) {
 	}
 	_, body = chatDo(srv, "adm", "GET", "/api/v1/settings", "")
 	_ = json.Unmarshal([]byte(body), &got)
-	if got.BuilderModel != "" || got.BudgetLimitMicros != 500 {
+	if got.BuilderModel != "" || got.MaxConcurrentRuns != 5 {
 		t.Fatalf("after clear: %s", body)
 	}
 }
@@ -85,8 +85,12 @@ func TestSettingsWriteGuards(t *testing.T) {
 	if code, _ := chatDo(srv, "adm", "PUT", "/api/v1/settings", `{}`); code != http.StatusMethodNotAllowed && code != http.StatusNotFound {
 		t.Fatalf("PUT must be gone: %d", code)
 	}
-	if code, _ := chatDo(srv, "adm", "PATCH", "/api/v1/settings", `{"budget_limit_micros":-1}`); code != http.StatusBadRequest {
-		t.Fatalf("negative cap: %d", code)
+	for _, bad := range []string{`{"max_concurrent_runs":0}`, `{"max_concurrent_runs":17}`,
+		`{"role_agents":{"inspector":"codex"}}`, `{"role_agents":{"builder":"nope"}}`, `{"role_agents":{"janitor":"claude"}}`,
+		`{"role_permissions":{"builder":"ask"}}`, `{"role_permissions":{"chat":"write"}}`} {
+		if code, _ := chatDo(srv, "adm", "PATCH", "/api/v1/settings", bad); code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", bad, code)
+		}
 	}
 }
 
@@ -110,22 +114,47 @@ func TestRuntimeSettingsShapeAndNoSecrets(t *testing.T) {
 			t.Fatalf("secret leaked: %s", body)
 		}
 	}
-	var got struct {
-		Harness    string `json:"harness"`
-		ACPCommand string `json:"acp_command"`
-		Jev        struct {
-			Enabled bool   `json:"enabled"`
-			Model   string `json:"model"`
-		} `json:"jev"`
-		CredentialsConfigured bool `json:"credentials_configured"`
-		MaxConcurrentRuns     int  `json:"max_concurrent_runs"`
-	}
+	var got map[string]any
 	_ = json.Unmarshal([]byte(body), &got)
-	if got.Harness != "acp" || got.ACPCommand != "opencode acp" || !got.Jev.Enabled || got.Jev.Model != "jev-1.14.0" || !got.CredentialsConfigured || got.MaxConcurrentRuns != 3 {
+	if len(got) != 2 || got["credentials_configured"] != true || got["jev_key_from_env"] != true {
 		t.Fatalf("shape: %s", body)
 	}
 	if code, _ := chatDo(srv, "", "GET", "/api/v1/settings/runtime", ""); code != http.StatusUnauthorized {
 		t.Fatalf("anonymous: %d", code)
+	}
+}
+
+func TestSettingsRoleAgentsJevKeyAndDefaults(t *testing.T) {
+	srv := bootSettings(t, &model.Config{MaxConcurrentRuns: 4})
+	secrets, _ := store.NewSecretBox(make([]byte, 32))
+	srv.WS = &usecase.WorkspaceSettings{Store: srv.Settings, Secrets: secrets, DefaultAgent: "claude", DefaultWorkers: 4}
+	_, body := chatDo(srv, "adm", "GET", "/api/v1/settings", "")
+	var got model.Settings
+	_ = json.Unmarshal([]byte(body), &got)
+	if got.MaxConcurrentRuns != 4 || got.RoleAgents["inspector"] != "claude" || got.RolePermissions["chat"] != "ask" || got.JevEnabled || got.JevKeySet {
+		t.Fatalf("defaults: %s", body)
+	}
+	code, body := chatDo(srv, "adm", "PATCH", "/api/v1/settings", `{"role_agents":{"builder":"codex","chat":"opencode"},"jev_enabled":true,"jev_key":"sk-jev-secret"}`)
+	if code != 200 || strings.Contains(body, "sk-jev-secret") {
+		t.Fatalf("patch: %d %s", code, body)
+	}
+	_ = json.Unmarshal([]byte(body), &got)
+	if got.RoleAgents["builder"] != "codex" || got.RoleAgents["chat"] != "opencode" || got.RoleAgents["foreman"] != "claude" || !got.JevEnabled || !got.JevKeySet {
+		t.Fatalf("after patch: %s", body)
+	}
+	if key := srv.WS.JevKey(context.Background()); key != "sk-jev-secret" {
+		t.Fatalf("stored key not usable: %q", key)
+	}
+	// a per-field PATCH leaves the others alone, and an empty key clears it
+	chatDo(srv, "adm", "PATCH", "/api/v1/settings", `{"chat_model":"x/y"}`)
+	_, body = chatDo(srv, "adm", "GET", "/api/v1/settings", "")
+	_ = json.Unmarshal([]byte(body), &got)
+	if got.RoleAgents["builder"] != "codex" || !got.JevKeySet {
+		t.Fatalf("blanked other settings: %s", body)
+	}
+	chatDo(srv, "adm", "PATCH", "/api/v1/settings", `{"jev_key":""}`)
+	if srv.WS.JevKey(context.Background()) != "" {
+		t.Fatal("key not cleared")
 	}
 }
 

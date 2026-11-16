@@ -354,13 +354,14 @@ func gateTasks(tasks []model.Task) []PlanTask {
 // askJudge sends one Jev request. Without a Judge it returns errNoJudge, and
 // over the context limit it sends nothing and reports over.
 func (f *Factory) askJudge(ctx context.Context, state any, qs map[string]Noul) (res JudgeResult, over bool, err error) {
+	j := f.judge()
 	switch {
-	case f.Judge == nil:
+	case j == nil:
 		return res, false, errNoJudge
 	case overLimit(state, qs):
 		return res, true, nil
 	}
-	res, err = f.Judge.Ask(ctx, state, qs)
+	res, err = j.Ask(ctx, state, qs)
 	return res, false, err
 }
 

@@ -19,7 +19,7 @@ type WorkOrderRepo struct{ DB *sql.DB }
 const woCols = `id, project_id, title, objective, acceptance, state,
 	builder_model, inspector_model, clarif_question, clarif_answer, revision,
 	commit_sha, source_ref, pr_url, pr_ref, pr_merged_at, pr_closed_at, pr_track_failed_at, pr_open_failed_at, foreman_model, architect_model, plan_review, review_rounds,
-	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, brief, spec, clarif_rounds, clarif_log, plan_revisions, architect_report, created_by, created_at, updated_at, COALESCE(source_chat_id,''), intake_pending, clarif_task`
+	paused_at, pause_reason, kb_base_sha, check_profile, verify_failures, review_fixes, brief, spec, clarif_rounds, clarif_log, plan_revisions, architect_report, created_by, created_at, updated_at, COALESCE(source_chat_id,''), intake_pending, clarif_task, role_agents`
 
 func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	if wo.ID == "" {
@@ -29,11 +29,11 @@ func (r *WorkOrderRepo) Create(ctx context.Context, wo *model.WorkOrder) error {
 	wo.CreatedAt, wo.UpdatedAt = now, now
 	_, err := r.DB.ExecContext(ctx, `INSERT INTO work_orders
 		(id, project_id, title, objective, acceptance, state, builder_model, inspector_model,
-		 clarif_question, clarif_answer, revision, source_ref, foreman_model, architect_model, check_profile, created_by, created_at, updated_at, source_chat_id)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 clarif_question, clarif_answer, revision, source_ref, foreman_model, architect_model, check_profile, created_by, created_at, updated_at, source_chat_id, role_agents)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		wo.ID, wo.ProjectID, wo.Title, wo.Objective, wo.Acceptance, string(wo.State),
 		wo.BuilderModel, wo.InspectorModel, wo.ClarifQuestion, wo.ClarifAnswer, wo.Revision,
-		wo.SourceRef, wo.ForemanModel, wo.ArchitectModel, wo.CheckProfile, wo.CreatedBy, now.Unix(), now.Unix(), nullStr(wo.SourceChatID))
+		wo.SourceRef, wo.ForemanModel, wo.ArchitectModel, wo.CheckProfile, wo.CreatedBy, now.Unix(), now.Unix(), nullStr(wo.SourceChatID), roleAgentsJSON(wo.RoleAgents))
 	return err
 }
 
@@ -78,17 +78,25 @@ func (r *WorkOrderRepo) PRTracking(ctx context.Context) ([]model.WorkOrder, erro
 	return out, rows.Err()
 }
 
+func roleAgentsJSON(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
 func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	var wo model.WorkOrder
 	var state string
 	var pausedAt, mergedAt, closedAt, trackFailedAt, openFailedAt sql.NullInt64
-	var clarifLog string
+	var clarifLog, roleAgents string
 	var intakePending int
 	var createdAt, updatedAt int64
 	err := scan(&wo.ID, &wo.ProjectID, &wo.Title, &wo.Objective, &wo.Acceptance, &state,
 		&wo.BuilderModel, &wo.InspectorModel, &wo.ClarifQuestion, &wo.ClarifAnswer, &wo.Revision,
 		&wo.CommitSHA, &wo.SourceRef, &wo.PRURL, &wo.PRRef, &mergedAt, &closedAt, &trackFailedAt, &openFailedAt, &wo.ForemanModel, &wo.ArchitectModel, &wo.PlanReview,
-		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.Brief, &wo.Spec, &wo.ClarifRounds, &clarifLog, &wo.PlanRevisions, &wo.ArchitectReport, &wo.CreatedBy, &createdAt, &updatedAt, &wo.SourceChatID, &intakePending, &wo.ClarifTask)
+		&wo.ReviewRounds, &pausedAt, &wo.PauseReason, &wo.KBBaseSHA, &wo.CheckProfile, &wo.VerifyFailures, &wo.ReviewFixes, &wo.Brief, &wo.Spec, &wo.ClarifRounds, &clarifLog, &wo.PlanRevisions, &wo.ArchitectReport, &wo.CreatedBy, &createdAt, &updatedAt, &wo.SourceChatID, &intakePending, &wo.ClarifTask, &roleAgents)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrWorkOrderNotFound
 	}
@@ -97,6 +105,9 @@ func scanWO(scan rowScanner) (*model.WorkOrder, error) {
 	}
 	wo.State = model.State(state)
 	wo.IntakePending = intakePending != 0
+	if roleAgents != "" {
+		_ = json.Unmarshal([]byte(roleAgents), &wo.RoleAgents)
+	}
 	if clarifLog != "" {
 		_ = json.Unmarshal([]byte(clarifLog), &wo.Clarifications)
 	}

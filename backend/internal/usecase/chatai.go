@@ -56,27 +56,34 @@ func (c *Chat) cheapModel(ctx context.Context, ch *model.Chat) (ref string, ok b
 	return ref, ref == "" || len(allowed) == 0 || allowed[ref]
 }
 
-func (c *Chat) gen(ctx context.Context, modelRef, prompt string) (model.AgentResult, error) {
+func (c *Chat) gen(ctx context.Context, userID, modelRef, prompt string) (model.AgentResult, error) {
 	if c.Gen != nil {
 		return c.Gen(ctx, modelRef, prompt)
 	}
-	if c.Harness == nil {
+	h, env, args := c.Harness, []string(nil), []string(nil)
+	if c.Runner != nil {
+		var err error
+		if h, env, args, err = c.Runner(ctx, userID); err != nil {
+			return model.AgentResult{}, err
+		}
+	}
+	if h == nil {
 		return model.AgentResult{}, ErrChatUnavailable
 	}
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
 		return model.AgentResult{}, err
 	}
 	provider, modelID := SplitModelRef(modelRef)
-	ses, err := c.Harness.Start(ctx, model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, Prompt: prompt, OnText: func(string) {}})
+	ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: c.Dir, Prompt: prompt, OnText: func(string) {}, Env: env, Args: args})
 	if err != nil {
 		return model.AgentResult{}, err
 	}
-	return c.Harness.Result(ctx, ses.ID())
+	return h.Result(ctx, ses.ID())
 }
 
 // genRecorded is gen plus its cost in usage; the record outlives a cancelled ctx.
 func (c *Chat) genRecorded(ctx context.Context, u *model.User, modelRef, prompt string) (model.AgentResult, error) {
-	res, err := c.gen(ctx, modelRef, prompt)
+	res, err := c.gen(ctx, u.ID, modelRef, prompt)
 	if c.Usage != nil && (res.TokensIn != 0 || res.TokensOut != 0 || res.CostMicros != 0) {
 		provider, modelID := SplitModelRef(modelRef)
 		_ = c.Usage.Record(context.WithoutCancel(ctx), model.UsageRecord{

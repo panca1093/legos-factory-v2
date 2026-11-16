@@ -40,6 +40,8 @@ type Server struct {
 	Auth         *usecase.Identity
 	OIDC         *OIDCClient
 	Usage        *usecase.UsageTracker
+	Agents       *usecase.Agents
+	WS           *usecase.WorkspaceSettings
 	Models       func(ctx echo.Context) ([]model.ModelInfo, error)
 	log          *slog.Logger
 }
@@ -254,7 +256,6 @@ func (s *Server) routes() {
 	api.PUT("/mcp-servers/:id/tools", s.requireRole(model.RoleAdmin, s.handleSetMCPTools))
 	api.POST("/mcp-servers/:id/oauth/start", s.requireRole(model.RoleAdmin, s.handleMCPOAuthStart))
 	api.GET("/mcp/oauth/callback", s.requireRole(model.RoleAdmin, s.handleMCPOAuthCallback))
-	api.PUT("/projects/:id/contract-tests", s.requireRole(model.RoleEngineer, s.handleProjectContractTests))
 	api.PUT("/projects/:id/kb-scope", s.requireRole(model.RoleEngineer, s.handleProjectKBScope))
 	api.PUT("/projects/:id/binding", s.requireRole(model.RoleEngineer, s.handleBindProject))
 	api.POST("/integrations/jira/lookup", s.requireRole(model.RoleEngineer, s.handleJiraLookup))
@@ -289,6 +290,14 @@ func (s *Server) routes() {
 	api.POST("/chats/:id/work-order-draft", s.requireRole(model.RoleEngineer, s.handleChatWorkOrderDraft))
 	api.GET("/chats/:id/related-knowledge", s.handleChatRelatedKnowledge)
 	api.GET("/chat/models", s.handleChatModels)
+
+	api.GET("/agents", s.handleListAgents)
+	api.POST("/agents/:agent/enabled", s.requireRole(model.RoleAdmin, s.handleSetAgentEnabled))
+	api.POST("/agents/:agent/accounts", s.requireRole(model.RoleEngineer, s.handleCreateAgentAccount))
+	api.POST("/agents/:agent/accounts/:aid/activate", s.requireRole(model.RoleEngineer, s.handleActivateAgentAccount))
+	api.POST("/agents/:agent/accounts/:aid/refresh", s.handleRefreshAgentAccount)
+	api.DELETE("/agents/:agent/accounts/:aid", s.requireRole(model.RoleEngineer, s.handleDeleteAgentAccount))
+	api.PATCH("/me/preferences", s.handlePatchPreferences)
 
 	api.GET("/models", s.handleModels)
 	api.GET("/usage", s.handleUsage)

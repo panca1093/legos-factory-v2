@@ -55,7 +55,11 @@ type Factory struct {
 	Integrations *Integrations
 	MCP          MCPSelector // nil: agents get no MCP servers
 	Sandbox      Sandbox
-	Judge        Judge // nil when TYPESAFE_API_KEY is unset
+	Judge        Judge // a fixed judge that overrides JudgeFn; nil when none
+	// JudgeFn, when set, supplies the judge at call time so Jev follows its toggle; it returns nil when Jev is off.
+	JudgeFn func() Judge
+	// RunEnv gives the environment and extra agent arguments for a run: the account of the work order's creator. nil means none.
+	RunEnv func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) (env, args []string, err error)
 	DataDir      string
 	wsMu         sync.Map // work order id → *sync.Mutex serializing writes to its workspace: task merges, dependency setup
 	baselineMu   sync.Map // work order id → *sync.Mutex so one task records the baseline
@@ -65,6 +69,16 @@ type Factory struct {
 	QualTimeout  time.Duration
 	StallAfter   time.Duration // no new agent step for this long reports a stall; 0 = defaultStallAfter
 	Log          *slog.Logger
+}
+
+func (f *Factory) judge() Judge {
+	if f.Judge != nil {
+		return f.Judge
+	}
+	if f.JudgeFn != nil {
+		return f.JudgeFn()
+	}
+	return nil
 }
 
 const defaultStallAfter = 3 * time.Minute
@@ -207,6 +221,12 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	}
 	mcpAudit := f.applyMCP(ctx, &req)
 	h := f.Resolve(role, wo)
+	if f.RunEnv != nil {
+		var eerr error
+		if req.Env, req.Args, eerr = f.RunEnv(ctx, role, wo); eerr != nil {
+			return model.AgentResult{}, "", eerr
+		}
+	}
 	// the clock can be microsecond-grained, so parallel runs need the sequence to stay unique
 	runID := fmt.Sprintf("run_%d_%d", time.Now().UnixNano(), runSeq.Add(1))
 	if err := f.Runs.Start(ctx, runID, wo.ID, taskID, string(role), h.Name()); err != nil {

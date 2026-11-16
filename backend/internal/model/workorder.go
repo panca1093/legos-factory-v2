@@ -81,47 +81,48 @@ func AllowedTransitions(s State) []State {
 }
 
 type WorkOrder struct {
-	ID              string     `json:"id"`
-	ProjectID       string     `json:"project_id"`
-	Title           string     `json:"title"`
-	Objective       string     `json:"objective"`
-	Acceptance      string     `json:"acceptance"`
-	State           State      `json:"state"`
-	BuilderModel    string     `json:"builder_model"`
-	InspectorModel  string     `json:"inspector_model"`
-	ForemanModel    string     `json:"foreman_model,omitempty"`
-	ArchitectModel  string     `json:"architect_model,omitempty"`
-	PlanReview      string     `json:"plan_review,omitempty"` // pending|approved
-	ReviewRounds    int        `json:"review_rounds"`         // legacy: no longer written, kept for old rows
-	PausedAt        *time.Time `json:"paused_at,omitempty"`
-	PauseReason     string     `json:"pause_reason,omitempty"`
-	ClarifQuestion  string     `json:"clarif_question,omitempty"`
-	ClarifTask      string     `json:"-"` // plan task whose Builder question waits on a human; empty for a planning question
-	ClarifAnswer    string     `json:"clarif_answer,omitempty"`
-	Revision        int        `json:"revision"`
-	CommitSHA       string     `json:"commit_sha,omitempty"`
-	KBBaseSHA       string     `json:"-"`
-	CheckProfile    string     `json:"-"`
-	VerifyFailures  int        `json:"-"`
-	ReviewFixes     int        `json:"-"`
-	PlanRevisions   int        `json:"plan_revisions"`       // plan-gate revisions since the last human decision
-	ArchitectReport string     `json:"-"`                    // JSON of the latest Architect verification
-	SourceRef       string     `json:"source_ref,omitempty"` // e.g. jira:ABC-12
-	SourceChatID    string     `json:"source_chat_id,omitempty"`
-	PRURL           string     `json:"pr_url,omitempty"`
-	PRRef           string     `json:"pr_ref,omitempty"`
-	PRMergedAt      *time.Time `json:"pr_merged_at,omitempty"`
-	PRClosedAt      *time.Time `json:"pr_closed_at,omitempty"`
-	PRTrackFailedAt *time.Time `json:"pr_track_failed_at,omitempty"`
-	PROpenFailedAt  *time.Time `json:"pr_open_failed_at,omitempty"`
-	CreatedBy       string     `json:"created_by"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
+	ID              string            `json:"id"`
+	ProjectID       string            `json:"project_id"`
+	Title           string            `json:"title"`
+	Objective       string            `json:"objective"`
+	Acceptance      string            `json:"acceptance"`
+	State           State             `json:"state"`
+	BuilderModel    string            `json:"builder_model"`
+	InspectorModel  string            `json:"inspector_model"`
+	ForemanModel    string            `json:"foreman_model,omitempty"`
+	ArchitectModel  string            `json:"architect_model,omitempty"`
+	RoleAgents      map[string]string `json:"role_agents,omitempty"` // role -> agent id, snapshotted at creation
+	PlanReview      string            `json:"plan_review,omitempty"` // pending|approved
+	ReviewRounds    int               `json:"review_rounds"`         // legacy: no longer written, kept for old rows
+	PausedAt        *time.Time        `json:"paused_at,omitempty"`
+	PauseReason     string            `json:"pause_reason,omitempty"`
+	ClarifQuestion  string            `json:"clarif_question,omitempty"`
+	ClarifTask      string            `json:"-"` // plan task whose Builder question waits on a human; empty for a planning question
+	ClarifAnswer    string            `json:"clarif_answer,omitempty"`
+	Revision        int               `json:"revision"`
+	CommitSHA       string            `json:"commit_sha,omitempty"`
+	KBBaseSHA       string            `json:"-"`
+	CheckProfile    string            `json:"-"`
+	VerifyFailures  int               `json:"-"`
+	ReviewFixes     int               `json:"-"`
+	PlanRevisions   int               `json:"plan_revisions"`       // plan-gate revisions since the last human decision
+	ArchitectReport string            `json:"-"`                    // JSON of the latest Architect verification
+	SourceRef       string            `json:"source_ref,omitempty"` // e.g. jira:ABC-12
+	SourceChatID    string            `json:"source_chat_id,omitempty"`
+	PRURL           string            `json:"pr_url,omitempty"`
+	PRRef           string            `json:"pr_ref,omitempty"`
+	PRMergedAt      *time.Time        `json:"pr_merged_at,omitempty"`
+	PRClosedAt      *time.Time        `json:"pr_closed_at,omitempty"`
+	PRTrackFailedAt *time.Time        `json:"pr_track_failed_at,omitempty"`
+	PROpenFailedAt  *time.Time        `json:"pr_open_failed_at,omitempty"`
+	CreatedBy       string            `json:"created_by"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
 
 	Brief          string          `json:"brief,omitempty"` // Foreman intake brief
 	Spec           string          `json:"spec,omitempty"`  // Architect spec
 	ClarifRounds   int             `json:"clarif_rounds"`
-	IntakePending  bool            `json:"-"` // the brief waits on a human answer to an intake question
+	IntakePending  bool            `json:"-"`                        // the brief waits on a human answer to an intake question
 	Clarifications []Clarification `json:"clarifications,omitempty"` // Foreman answers to Architect questions
 }
 
