@@ -45,8 +45,86 @@
 .rail .lg-btn {
   width: 100%;
 }
-.rail .rail-search {
-  margin: 0 0 var(--space-2);
+.rail-tree .rt-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--radius-md);
+}
+.rail-tree .rt-head:hover {
+  background: var(--surface-2);
+}
+.rail-tree .rt-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 8px var(--space-2);
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.rail-tree .rt-chev {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+  transition: transform var(--dur-fast);
+}
+.rail-tree .rt-toggle[aria-expanded="true"] .rt-chev {
+  transform: rotate(90deg);
+}
+.rail-tree .rt-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.rail-tree {
+  overflow-x: hidden;
+}
+.rail-tree .rt-act {
+  flex: none;
+  width: 24px;
+  min-width: 0;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: none;
+  opacity: 0;
+}
+.rail-tree .rt-head:hover .rt-act,
+.rail-tree .rt-act:focus-visible {
+  opacity: 1;
+}
+.rail-tree .rt-items {
+  display: grid;
+  gap: 2px;
+  margin: 2px 0 6px 18px;
+  padding-left: var(--space-2);
+  border-left: 1px solid var(--line);
+}
+.rail-tree .rt-items a {
+  padding: 6px var(--space-2);
+  font-size: 13px;
+}
+.rail-tree a {
+  font-weight: 500;
+}
+.rail-tree .rt-more {
+  justify-self: start;
+  padding: 2px var(--space-2);
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 .rail .grow {
   flex: 1;
@@ -61,50 +139,242 @@
 }
 .usage-card {
   display: grid;
-  gap: 10px;
-  padding: 14px 16px;
+  gap: 2px;
+  padding: 12px 8px 8px;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface-2);
   color: var(--ink);
-  transition:
-    border-color var(--dur-fast),
-    transform var(--dur-fast) var(--ease-out);
-}
-.usage-card:hover {
-  border-color: var(--line-strong);
-  transform: translateY(-1px);
 }
 .usage-card .top {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 0 8px 4px;
   font-size: 13px;
   font-weight: 650;
 }
-.usage-card .num {
+.usage-card p.num {
+  margin: 0;
+  padding: 4px 8px;
   font-size: 12px;
   color: var(--muted);
 }
-.usage-card .num b {
-  font: 500 22px/26px var(--font-display);
+.uc-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.uc-icon:hover:not(:disabled) {
+  background: var(--surface);
   color: var(--ink);
 }
-.usage-card .num b.mtd {
-  font: 650 12px/16px var(--font-sans);
+.uc-icon .spin {
+  animation: uc-spin 0.9s linear infinite;
 }
-.usage-card .bar {
+@keyframes uc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.uc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.uc-row:hover,
+.uc-row.on {
+  background: var(--surface);
+}
+.uc-ava {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: var(--on-brand);
+  font: 600 12px/1 var(--font-display);
+}
+.uc-main {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+.uc-name {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.uc-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.uc-minis {
+  display: flex;
+  gap: 10px;
+}
+.uc-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.uc-mini b {
+  font-weight: 600;
+  color: var(--ink);
+}
+.uc-mini .bar {
+  width: 28px;
+  height: 4px;
+}
+.uc-chev {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.uc-links {
+  display: grid;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+.uc-links a {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 8px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.uc-links a:hover {
+  background: var(--surface);
+}
+.uc-links .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.usage-card .bar,
+.uc-panel .bar {
+  display: block;
   height: 6px;
   border-radius: var(--radius-full);
   background: var(--chart-3);
   overflow: hidden;
 }
-.usage-card .bar i {
+.usage-card .bar i,
+.uc-panel .bar i {
   display: block;
   height: 100%;
   background: var(--chart-1);
   border-radius: inherit;
   transition: width var(--dur-slow) var(--ease-out);
+}
+.usage-card .bar i.warn,
+.uc-panel .bar i.warn {
+  background: var(--warning);
+}
+.usage-card .bar i.high,
+.uc-panel .bar i.high {
+  background: var(--danger);
+}
+.uc-panel {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink);
+}
+.uc-panel:focus {
+  outline: none;
+}
+.uc-panel header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.uc-panel header small {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+.uc-acc {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.uc-acc strong {
+  font-size: 13px;
+}
+.uc-win {
+  display: grid;
+  gap: 4px;
+}
+.uc-wname {
+  font-size: 12px;
+  font-weight: 500;
+}
+.uc-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--muted);
+}
+.uc-err {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.uc-manage {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink);
+}
+@media (prefers-reduced-motion: reduce) {
+  .uc-icon .spin {
+    animation: none;
+  }
 }
 .scrim {
   display: none;

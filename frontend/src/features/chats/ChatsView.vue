@@ -61,6 +61,13 @@ const model = computed({
   get: () => (chat.value ? chat.value.model : draftModel.value),
   set: (id: string) => void setModel(id),
 });
+watch(
+  () => [draft.value, route.query.project] as const,
+  ([isDraft, id]) => {
+    if (isDraft && typeof id === "string") draftProject.value = id;
+  },
+  { immediate: true },
+);
 const project = computed({
   get: () => (chat.value ? (chat.value.project_id ?? "") : draftProject.value),
   set: (id: string) => {

@@ -283,3 +283,12 @@ export function publishNote(
     remote: false,
   };
 }
+
+export function resetsIn(iso?: string) {
+  if (!iso) return "";
+  const mins = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
+  if (mins <= 0) return "resets soon";
+  if (mins < 60) return `resets in ${mins}m`;
+  if (mins < 2880) return `resets in ${Math.floor(mins / 60)}h ${mins % 60}m`;
+  return `resets ${new Date(iso).toLocaleDateString(undefined, { weekday: "short" })}`;
+}

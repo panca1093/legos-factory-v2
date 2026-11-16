@@ -61,7 +61,47 @@ it("shows navigation, the prototype desktop topbar, search shortcut and theme to
   w.unmount();
   document.body.innerHTML = "";
 });
-it("shows month-to-date usage in the rail card", async () => {
+it("shows compact agent limits and opens the detail panel", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => ({
+      ok: true,
+      text: async () =>
+        JSON.stringify(
+          url.endsWith("/agents")
+            ? {
+                agents: [
+                  {
+                    id: "claude",
+                    name: "Claude",
+                    installed: true,
+                    enabled: true,
+                    accounts: [
+                      {
+                        id: "a",
+                        label: "System default",
+                        active: true,
+                        status: "signed_in",
+                        usage: {
+                          session: { used_pct: 42 },
+                          week: { used_pct: 93 },
+                        },
+                      },
+                    ],
+                  },
+                  {
+                    id: "codex",
+                    name: "Codex",
+                    installed: true,
+                    enabled: false,
+                    accounts: [],
+                  },
+                ],
+              }
+            : { projects: [], work_orders: [] },
+        ),
+    })),
+  );
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: "/:pathMatch(.*)*", component: { template: "<div />" } }],
@@ -73,23 +113,28 @@ it("shows month-to-date usage in the rail card", async () => {
   vi.spyOn(f, "refreshWorkOrders").mockResolvedValue();
   vi.spyOn(f, "refreshOverview").mockResolvedValue();
   vi.spyOn(f, "refreshUsage").mockResolvedValue();
-  f.usage = {
-    days: 365,
-    from: "",
-    to: "",
-    activity: [],
-    roles: [],
-    month_to_date: {
-      month: "2026-11",
-      tokens_in: 1200,
-      tokens_out: 300,
-      cost_micros: 2500000,
-      runs: 3,
-    },
-  };
-  const w = mount(AppShell, { global: { plugins: [router] } });
+  const w = mount(AppShell, {
+    global: { plugins: [router] },
+    attachTo: document.body,
+  });
   await flushPromises();
-  expect(w.find(".usage-card").text()).toContain("This month $2.50");
-  expect(w.find(".usage-card").text()).toContain("1.5K tokens");
+  const rows = w.findAll(".uc-row");
+  expect(rows.map((r) => r.attributes("data-agent"))).toEqual(["claude"]);
+  expect(rows[0].text()).toContain("5h");
+  expect(rows[0].text()).toContain("42%");
+  expect(rows[0].text()).toContain("93%");
+  expect(w.find(".usage-card").text()).not.toContain("$");
+  await rows[0].trigger("click");
+  const panel = document.body.querySelector(".uc-panel")!;
+  expect(panel.textContent).toContain("System default");
+  expect(
+    [...panel.querySelectorAll('[role="progressbar"]')].map((b) =>
+      b.getAttribute("aria-label"),
+    ),
+  ).toEqual(["Claude Session limit used", "Claude Weekly limit used"]);
+  expect(panel.querySelectorAll("i.high")).toHaveLength(1);
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  await flushPromises();
+  expect(document.body.querySelector(".uc-panel")).toBeNull();
   w.unmount();
 });

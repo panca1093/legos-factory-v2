@@ -22,13 +22,14 @@ import {
   PanelLeftClose,
   Plus,
   FolderPlus,
-  Laptop,
-  Gauge,
+  ChevronRight,
+  ArrowUpRight,
   LogOut,
 } from "lucide-vue-next";
 import { useSession } from "../../stores/session";
 import { useFactory } from "../../stores/factory";
 import { useChats } from "../../stores/chats";
+import type { Chat } from "../../stores/chats";
 import { chatTitle } from "../../features/chats/chatUtils";
 import AppDialog from "../../components/ui/AppDialog.vue";
 import StatusBadge from "../../components/ui/StatusBadge.vue";
@@ -39,9 +40,9 @@ import Popover from "../../components/ui/Popover.vue";
 import SearchField from "../../components/ui/SearchField.vue";
 import AddProjectDialog from "../../features/factory/work-orders/AddProjectDialog.vue";
 import Toast from "../../components/ui/Toast.vue";
+import UsageCard from "./UsageCard.vue";
 import {
   needsYou,
-  money,
   projectColor,
   publishLabel,
 } from "../../composables/presentation";
@@ -100,24 +101,57 @@ const initials = computed(
       .map((n) => n[0])
       .join("") ?? "?",
 );
-const spent = computed(() => factory.overview?.usage?.cost_micros);
-const onChats = computed(() => route.path.startsWith("/chats"));
-const railQuery = ref("");
-watch(onChats, (on) => {
-  if (!on) railQuery.value = "";
+const activeChatId = computed(
+  () => /^\/chats\/([^/?#]+)/.exec(route.path)?.[1] ?? "",
+);
+const chatGroups = computed(() => {
+  const known = new Set(factory.projects.map((p) => p.id));
+  const by = new Map<string, Chat[]>();
+  for (const c of chats.chats) {
+    const k = c.project_id && known.has(c.project_id) ? c.project_id : "";
+    by.set(k, [...(by.get(k) ?? []), c]);
+  }
+  return {
+    projects: factory.projects.map((p, i) => ({
+      id: p.id,
+      name: p.name,
+      color: projectColor(i),
+      chats: by.get(p.id) ?? [],
+    })),
+    general: by.get("") ?? [],
+  };
 });
-// On the Chats page the rail is the conversation list, so it shows every chat.
-const recentChats = computed(() => {
-  if (!onChats.value) return chats.chats.slice(0, 5);
-  const q = railQuery.value.trim().toLowerCase();
-  return q
-    ? chats.chats.filter((c) => chatTitle(c).toLowerCase().includes(q))
-    : chats.chats;
-});
-const tokens = (t: { tokens_in: number; tokens_out: number }) =>
-  new Intl.NumberFormat("en-US", { notation: "compact" }).format(
-    t.tokens_in + t.tokens_out,
-  );
+const activeGroup = computed(
+  () => chats.chats.find((c) => c.id === activeChatId.value)?.project_id ?? "",
+);
+const groupsKey = "legos-factory-rail-groups";
+const openGroups = ref<Record<string, boolean>>({});
+const moreGroups = ref<Record<string, boolean>>({});
+try {
+  openGroups.value = JSON.parse(localStorage.getItem(groupsKey) ?? "{}") ?? {};
+} catch {
+  openGroups.value = {};
+}
+const isOpen = (id: string) => openGroups.value[id] ?? activeGroup.value === id;
+function toggleGroup(id: string) {
+  openGroups.value = { ...openGroups.value, [id]: !isOpen(id) };
+  try {
+    localStorage.setItem(groupsKey, JSON.stringify(openGroups.value));
+  } catch {
+    /* Browser storage can be disabled. */
+  }
+}
+function shown(id: string, list: Chat[], limit: number) {
+  if (moreGroups.value[id] || list.length <= limit) return list;
+  const head = list.slice(0, limit);
+  const active = list.find((c) => c.id === activeChatId.value);
+  return active && !head.includes(active) ? [...head, active] : head;
+}
+const toggleMore = (id: string) =>
+  (moreGroups.value = { ...moreGroups.value, [id]: !moreGroups.value[id] });
+const newChatIn = (project: string) =>
+  router.push({ path: "/chats", query: { new: "1", project } });
+
 const attention = computed(() => needsYou(factory.workOrders));
 const results = computed(() =>
   factory.workOrders.filter((w) =>
@@ -213,62 +247,88 @@ async function logout() {
             ><FolderPlus class="icon"
           /></IconButton>
         </div>
-        <nav class="lg-nav" aria-label="Projects">
-          <RouterLink
-            v-for="(p, i) in factory.projects"
-            :key="p.id"
-            :to="{ path: '/factory', query: { project: p.id } }"
-            ><i class="dot" :style="{ '--c': projectColor(i) }"></i
-            ><span class="t">{{ p.name }}</span
-            ><span
-              class="proj-local"
-              :title="publishLabel(p)"
-              aria-hidden="true"
-              ><Laptop class="icon" /></span
-          ></RouterLink>
+        <nav class="lg-nav rail-tree grow" aria-label="Chats by project">
+          <div v-for="g in chatGroups.projects" :key="g.id" class="rt-group">
+            <div class="rt-head">
+              <button
+                type="button"
+                class="rt-toggle"
+                :aria-expanded="isOpen(g.id)"
+                @click="toggleGroup(g.id)"
+              >
+                <ChevronRight class="icon rt-chev" /><i
+                  class="dot"
+                  :style="{ '--c': g.color }"
+                ></i
+                ><span class="t">{{ g.name }}</span
+                ><span class="rt-count">{{ g.chats.length || "" }}</span>
+              </button>
+              <IconButton
+                v-if="session.canWrite"
+                class="rt-act"
+                :label="`New chat in ${g.name}`"
+                @click="newChatIn(g.id)"
+                ><Plus class="icon"
+              /></IconButton>
+              <RouterLink
+                class="rt-act lg-icon-btn"
+                :to="{ path: '/factory', query: { project: g.id } }"
+                :aria-label="`Open ${g.name} in Factory`"
+                :title="`Open in Factory`"
+                ><ArrowUpRight class="icon"
+              /></RouterLink>
+            </div>
+            <div v-if="isOpen(g.id)" class="rt-items">
+              <RouterLink
+                v-for="c in shown(g.id, g.chats, 3)"
+                :key="c.id"
+                :to="`/chats/${c.id}`"
+                active-class="active"
+                ><span class="t">{{ chatTitle(c) }}</span></RouterLink
+              >
+              <p v-if="!g.chats.length" class="empty-note">No chats yet.</p>
+              <button
+                v-if="g.chats.length > 3"
+                type="button"
+                class="rt-more"
+                @click="toggleMore(g.id)"
+              >
+                {{
+                  moreGroups[g.id]
+                    ? "Show less"
+                    : `Show ${g.chats.length - 3} more`
+                }}
+              </button>
+            </div>
+          </div>
           <p v-if="!factory.projects.length" class="empty-note">
             Projects appear here.
           </p>
-        </nav>
-        <div class="lg-nav-label">
-          {{ onChats ? "Chats" : "Recent chats" }}
-        </div>
-        <SearchField
-          v-if="onChats"
-          v-model="railQuery"
-          class="rail-search"
-          label="Search chats"
-          placeholder="Search chats…"
-        />
-        <nav
-          class="lg-nav grow"
-          :aria-label="onChats ? 'All chats' : 'Recent chats'"
-        >
+          <div class="lg-nav-label">General chats</div>
           <RouterLink
-            v-for="c in recentChats"
+            v-for="c in shown('', chatGroups.general, 5)"
             :key="c.id"
             :to="`/chats/${c.id}`"
             active-class="active"
             ><span class="t">{{ chatTitle(c) }}</span></RouterLink
           >
-          <p v-if="!recentChats.length" class="empty-note">
-            {{ railQuery && onChats ? "No matching chats." : "No chats yet." }}
+          <p v-if="!chatGroups.general.length" class="empty-note">
+            Chats without a project appear here.
           </p>
+          <button
+            v-if="chatGroups.general.length > 5"
+            type="button"
+            class="rt-more"
+            @click="toggleMore('')"
+          >
+            {{
+              moreGroups[""]
+                ? "Show less"
+                : `Show ${chatGroups.general.length - 5} more`
+            }}
+          </button>
         </nav>
-        <RouterLink to="/settings#agents" class="usage-card"
-          ><div class="top"><span>Usage</span><Gauge class="icon" /></div>
-          <div class="num">
-            <b>{{ money(spent) }}</b>
-            recorded
-          </div>
-          <div v-if="factory.usage?.month_to_date" class="num">
-            This month
-            <b class="mtd">{{
-              money(factory.usage.month_to_date.cost_micros)
-            }}</b>
-            · {{ tokens(factory.usage.month_to_date) }} tokens
-          </div></RouterLink
-        >
+        <UsageCard />
       </div>
     </aside>
     <div class="scrim" @click="setSide(false)"></div>

@@ -8,6 +8,7 @@ import {
   type AgentInfo,
   type NewAccount,
 } from "../../types/api";
+import { resetsIn } from "../../composables/presentation";
 
 const props = defineProps<{
   agent: AgentInfo;
@@ -107,14 +108,6 @@ const refresh = () =>
       await api.post(`${base.value}/accounts/${active.value.id}/refresh`);
   });
 
-function resetsIn(iso?: string) {
-  if (!iso) return "";
-  const mins = Math.round((new Date(iso).getTime() - Date.now()) / 60000);
-  if (mins <= 0) return "resets soon";
-  if (mins < 60) return `resets in ${mins}m`;
-  if (mins < 2880) return `resets in ${Math.floor(mins / 60)}h ${mins % 60}m`;
-  return `resets ${new Date(iso).toLocaleDateString(undefined, { weekday: "short" })}`;
-}
 const meters = (a: AgentAccount) =>
   [
     { key: "session", name: "Session", w: a.usage?.session },

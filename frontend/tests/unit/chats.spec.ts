@@ -15,6 +15,7 @@ import { useChats, type Chat } from "../../src/stores/chats";
 import { createRouter, createMemoryHistory } from "vue-router";
 import AppShell from "../../src/app/layouts/AppShell.vue";
 import { useSession } from "../../src/stores/session";
+import { useFactory } from "../../src/stores/factory";
 
 const frames = (...chunks: string[]) => {
   const out: ChatStreamEvent[] = [];
@@ -342,28 +343,40 @@ describe("chats store races and interrupted turns", () => {
   });
 });
 
-describe("rail recent chats", () => {
-  it("lists the latest chats and opens a draft without creating one", async () => {
-    setActivePinia(createPinia());
-    const calls: string[] = [];
-    const list = Array.from({ length: 7 }, (_, i) => ({
-      id: `c${i}`,
+describe("rail chats by project", () => {
+  const list = [
+    ...Array.from({ length: 5 }, (_, i) => ({
+      id: `p${i}`,
       user_id: "u",
-      title: `Chat ${i}`,
+      title: `Proj ${i}`,
+      model: "",
+      project_id: "prj1",
+      created_at: "",
+      updated_at: "",
+    })),
+    ...Array.from({ length: 7 }, (_, i) => ({
+      id: `g${i}`,
+      user_id: "u",
+      title: `Gen ${i}`,
       model: "",
       created_at: "",
       updated_at: "",
-    }));
+    })),
+  ];
+  async function mountRail(path: string) {
+    setActivePinia(createPinia());
+    globalThis.localStorage?.removeItem?.("legos-factory-rail-groups");
+    const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: { method?: string }) => ({
         ok: (calls.push(init?.method ?? "GET"), true),
         text: async () =>
           JSON.stringify(
-            init?.method === "POST"
-              ? { chat: { ...list[0], id: "new" } }
-              : url.endsWith("/chats")
-                ? { chats: list }
+            url.endsWith("/chats")
+              ? { chats: list }
+              : url.endsWith("/projects")
+                ? { projects: [{ id: "prj1", name: "Loan" }] }
                 : { projects: [], work_orders: [], metrics: {}, budget: {} },
           ),
       })),
@@ -374,63 +387,52 @@ describe("rail recent chats", () => {
         { path: "/:pathMatch(.*)*", component: { template: "<div />" } },
       ],
     });
-    await router.push("/factory");
+    await router.push(path);
     await router.isReady();
     useSession().user = { id: "u", name: "P", email: "p@x", role: "OWNER" };
+    const f = useFactory();
+    f.projects = [{ id: "prj1", name: "Loan" } as never];
+    vi.spyOn(f, "refreshProjects").mockResolvedValue();
     const w = mount(AppShell, { global: { plugins: [router] } });
     await flushPromises();
-    const links = w.findAll('nav[aria-label="Recent chats"] a');
-    expect(links.map((a) => a.attributes("href"))).toEqual(
-      list.slice(0, 5).map((c) => `/chats/${c.id}`),
+    return { w, router, calls };
+  }
+  const items = (w: Awaited<ReturnType<typeof mountRail>>["w"]) =>
+    w.findAll(".rt-items a").map((a) => a.text());
+  const general = (w: Awaited<ReturnType<typeof mountRail>>["w"]) =>
+    w.findAll('nav[aria-label="Chats by project"] > a').map((a) => a.text());
+
+  it("groups chats under their project and lists the rest as general", async () => {
+    const { w } = await mountRail("/factory");
+    expect(w.find(".rail-search").exists()).toBe(false);
+    expect(w.find(".rt-toggle").text()).toContain("Loan");
+    expect(w.find(".rt-toggle").text()).toContain("5");
+    expect(items(w)).toEqual([]);
+    await w.find(".rt-toggle").trigger("click");
+    expect(items(w)).toEqual(["Proj 0", "Proj 1", "Proj 2"]);
+    await w.find(".rt-items .rt-more").trigger("click");
+    expect(items(w)).toHaveLength(5);
+    expect(general(w)).toEqual(["Gen 0", "Gen 1", "Gen 2", "Gen 3", "Gen 4"]);
+    w.unmount();
+  });
+
+  it("opens the active chat's project and keeps that chat visible", async () => {
+    const { w } = await mountRail("/chats/p4");
+    expect(items(w)).toEqual(["Proj 0", "Proj 1", "Proj 2", "Proj 4"]);
+    w.unmount();
+  });
+
+  it("starts a new chat bound to a project without creating one", async () => {
+    const { w, router, calls } = await mountRail("/factory");
+    await w.find('[aria-label="New chat in Loan"]').trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.fullPath).toBe(
+      "/chats?new=1&project=prj1",
     );
     await w.find(".rail .lg-btn.primary").trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.fullPath).toBe("/chats?new=1");
     expect(calls).not.toContain("POST");
-    w.unmount();
-  });
-  it("lists every chat with search on the Chats page, where the in-page list is hidden", async () => {
-    setActivePinia(createPinia());
-    const calls: string[] = [];
-    const list = Array.from({ length: 7 }, (_, i) => ({
-      id: `c${i}`,
-      user_id: "u",
-      title: `Chat ${i}`,
-      model: "",
-      created_at: "",
-      updated_at: "",
-    }));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: { method?: string }) => ({
-        ok: (calls.push(init?.method ?? "GET"), true),
-        text: async () =>
-          JSON.stringify(
-            init?.method === "POST"
-              ? { chat: { ...list[0], id: "new" } }
-              : url.endsWith("/chats")
-                ? { chats: list }
-                : { projects: [], work_orders: [], metrics: {}, budget: {} },
-          ),
-      })),
-    );
-    const router = createRouter({
-      history: createMemoryHistory(),
-      routes: [
-        { path: "/:pathMatch(.*)*", component: { template: "<div />" } },
-      ],
-    });
-    await router.push("/chats");
-    await router.isReady();
-    useSession().user = { id: "u", name: "P", email: "p@x", role: "OWNER" };
-    const w = mount(AppShell, { global: { plugins: [router] } });
-    await flushPromises();
-    expect(w.findAll('nav[aria-label="All chats"] a')).toHaveLength(7);
-    await w.find(".rail-search input").setValue("Chat 6");
-    await flushPromises();
-    expect(
-      w.findAll('nav[aria-label="All chats"] a').map((a) => a.text()),
-    ).toEqual(["Chat 6"]);
     w.unmount();
   });
 });
