@@ -210,6 +210,13 @@ func TestPlanGateRevisionsAreCountedAndBounded(t *testing.T) {
 	if !strings.Contains(clarification(got), "split it differently") || len(planClarifications(got.Clarifications)) == 0 {
 		t.Fatal("the revision note must show in prompts and in the plan gate state")
 	}
+	// a rejected revision (the order already left ARCHITECT_REVIEW) writes nothing
+	if err := r.f.RevisePlan(ctx, r.wo.ID, "late click"); err == nil {
+		t.Fatal("a revision outside ARCHITECT_REVIEW must be rejected")
+	}
+	if after := r.reload(t); strings.Contains(clarification(after), "late click") || len(after.Clarifications) != len(got.Clarifications) {
+		t.Fatalf("a rejected revision must leave the log unchanged: %+v", after.Clarifications)
+	}
 	if ev := r.events(t, "plan_revision_human"); len(ev) != 1 || ev[0].Actor != "human" || ev[0].Message != "split it differently" {
 		t.Fatalf("a human plan revision must leave its own event: %+v", ev)
 	}

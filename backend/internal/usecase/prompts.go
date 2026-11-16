@@ -130,8 +130,8 @@ Revise the previous draft according to these notes:
 
 This is a targeted edit, not a redraft: keep every part the notes do not criticise, change only what is needed,
 address every numbered item, keep task ids stable where the task survives, and say in summary what changed.
-The Task sizing rules below still apply: split any task that breaks them even when the notes do not mention it,
-giving the new pieces new ids.
+The Task sizing rules below still apply: split any task that breaks them even when the notes do not mention it;
+one piece keeps the original id, the others get new ids, and every dep that pointed at the split task is updated.
 `, notes)
 	}
 	return fmt.Sprintf(`You are the Architect of a software engineering team.
