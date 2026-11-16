@@ -52,6 +52,67 @@ func (in *Integrations) List(ctx context.Context, u *model.User) ([]model.Connec
 	return in.Store.Visible(ctx, u.ID)
 }
 
+// ProjectRef names a project that uses a connection.
+type ProjectRef struct {
+	ProjectID string `json:"project_id"`
+	Name      string `json:"name"`
+}
+
+// ConnectionUse is a connection with the projects bound to it that the caller may see.
+type ConnectionUse struct {
+	model.Connection
+	UsedBy []ProjectRef `json:"used_by"`
+}
+
+// ProviderGroup is one provider's accounts; Group is "code" for git hosts and "work" for issue trackers.
+type ProviderGroup struct {
+	ID       string          `json:"id"`
+	Group    string          `json:"group"`
+	Accounts []ConnectionUse `json:"accounts"`
+}
+
+var providerOrder = []struct{ id, group string }{
+	{model.ProviderGitHub, "code"}, {model.ProviderGitLab, "code"}, {model.ProviderBitbucket, "code"}, {model.ProviderJira, "work"},
+}
+
+// Grouped lists the caller's connections per provider, every provider present even with no accounts.
+func (in *Integrations) Grouped(ctx context.Context, u *model.User) ([]ProviderGroup, error) {
+	conns, err := in.List(ctx, u)
+	if err != nil {
+		return nil, err
+	}
+	used := map[string][]ProjectRef{}
+	if in.Projects != nil {
+		projects, err := in.Projects.List(ctx, u)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range projects {
+			if p.GitConnection != "" {
+				used[p.GitConnection] = append(used[p.GitConnection], ProjectRef{ProjectID: p.ID, Name: p.Name})
+			}
+		}
+	}
+	out := make([]ProviderGroup, len(providerOrder))
+	idx := map[string]int{}
+	for i, p := range providerOrder {
+		out[i] = ProviderGroup{ID: p.id, Group: p.group, Accounts: []ConnectionUse{}}
+		idx[p.id] = i
+	}
+	for _, c := range conns {
+		i, ok := idx[c.Provider]
+		if !ok {
+			continue
+		}
+		refs := used[c.ID]
+		if refs == nil {
+			refs = []ProjectRef{}
+		}
+		out[i].Accounts = append(out[i].Accounts, ConnectionUse{Connection: c, UsedBy: refs})
+	}
+	return out, nil
+}
+
 func (in *Integrations) Create(ctx context.Context, u *model.User, req model.CreateConnectionRequest) (*model.Connection, error) {
 	if in.Secrets == nil {
 		return nil, model.ErrSecretsUnavailable
