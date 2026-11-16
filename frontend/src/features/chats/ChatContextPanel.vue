@@ -8,22 +8,12 @@ import {
   watch,
 } from "vue";
 import { RouterLink, useRouter } from "vue-router";
-import {
-  ArrowRight,
-  ClipboardList,
-  GitBranch,
-  Plus,
-  Trash2,
-} from "lucide-vue-next";
+import { ArrowRight, ClipboardList, Plus, Trash2 } from "lucide-vue-next";
 import Button from "../../components/ui/Button.vue";
 import Popover from "../../components/ui/Popover.vue";
 import NewWorkOrderDrawer from "../factory/work-orders/NewWorkOrderDrawer.vue";
 import { useToast } from "../../composables/useToast";
-import {
-  money,
-  orderStatus,
-  publishLabel,
-} from "../../composables/presentation";
+import { money, orderStatus } from "../../composables/presentation";
 import { useChats, type ChatMessage, type Chat } from "../../stores/chats";
 import type { WorkOrderDraft } from "../../stores/chats";
 import { useFactory } from "../../stores/factory";
@@ -56,6 +46,8 @@ const store = useChats(),
   router = useRouter(),
   { toast } = useToast();
 const helpProject = ref(false),
+  changing = ref(false),
+  allWorktrees = ref(false),
   confirmDelete = ref(false),
   drafting = ref(false),
   draftError = ref(""),
@@ -101,6 +93,7 @@ async function setProject(e: Event) {
   const el = e.target as HTMLSelectElement;
   try {
     await store.update(props.chat.id, { project_id: el.value });
+    changing.value = false;
   } catch (err) {
     el.value = props.chat.project_id ?? "";
     toast(reason(err));
@@ -202,6 +195,20 @@ const sp = computed(() => info.value?.project ?? null);
 const projectSummary = computed(() =>
   props.chat.project_id ? "Bound" : "Not bound",
 );
+const WT_LIMIT = 3;
+const isMine = (w: { branch: string }) =>
+  !!sp.value?.local && w.branch === sp.value.local.branch;
+const shownWorktrees = computed(() => {
+  const list = sp.value?.worktrees ?? [];
+  return allWorktrees.value ? list : list.slice(0, WT_LIMIT);
+});
+function wtPath(path: string) {
+  const root = sp.value?.local?.path;
+  if (root && path === root) return "your folder";
+  return root && path.startsWith(root + "/")
+    ? path.slice(root.length + 1)
+    : path;
+}
 const crewColor = (role: string) =>
   ["foreman", "architect", "builder", "inspector", "cataloger"].includes(role)
     ? `var(--crew-${role})`
@@ -230,6 +237,8 @@ watch(
 watch(
   () => [props.chat.id, props.chat.project_id] as const,
   ([id, pid], [wasId, wasPid]) => {
+    changing.value = false;
+    if (id !== wasId) allWorktrees.value = false;
     if (id !== wasId || pid === wasPid) return;
     if (info.value) info.value = { ...info.value, project: null };
     if (props.active) void loadInfo();
@@ -254,7 +263,27 @@ onBeforeUnmount(() => {
       :open="open.project"
       @toggle="toggle('project')"
     >
-      <div class="rail-row">
+      <div v-if="project && !changing" class="proj-head">
+        <span class="proj-ico" aria-hidden="true">{{
+          project.name.slice(0, 1).toUpperCase()
+        }}</span>
+        <div class="proj-id">
+          <strong>{{ project.name }}</strong>
+          <span v-if="sp?.local" class="mono" :title="sp.local.path">{{
+            sp.local.path
+          }}</span>
+        </div>
+        <button
+          type="button"
+          class="proj-change"
+          data-test="change-project"
+          :disabled="!session.canWrite || busy || drafting"
+          @click="changing = true"
+        >
+          Change
+        </button>
+      </div>
+      <div v-else class="rail-row">
         <label class="rail-lbl" for="ctx-project-select">Project</label>
         <Popover v-model:open="helpProject">
           <template #trigger="{ toggle: pop }"
@@ -275,8 +304,17 @@ onBeforeUnmount(() => {
             the history is carried over.
           </p>
         </Popover>
+        <button
+          v-if="changing"
+          type="button"
+          class="rail-more"
+          @click="changing = false"
+        >
+          Cancel
+        </button>
       </div>
       <select
+        v-if="!project || changing"
         id="ctx-project-select"
         class="lg-field"
         :value="chat.project_id ?? ''"
@@ -288,18 +326,11 @@ onBeforeUnmount(() => {
           {{ p.name }}
         </option>
       </select>
-      <p v-if="project" class="ctx-publish" data-test="publish-info">
-        <GitBranch v-if="project.github_repo" class="icon" />
-        <span>{{ project.github_repo || publishLabel(project) }}</span>
-      </p>
       <p v-if="!chat.project_id" class="ctx-note">
         Not bound. This chat answers from the model, files you attach and MCP
         tools. It cannot read any repository.
       </p>
       <template v-if="sp">
-        <p v-if="sp.local" class="mono rail-path" :title="sp.local.path">
-          {{ sp.local.path }}
-        </p>
         <dl
           v-if="sp.local || sp.checkout"
           class="rail-kv rail-box"
@@ -307,16 +338,14 @@ onBeforeUnmount(() => {
         >
           <template v-if="sp.local">
             <dt>Your folder</dt>
-            <dd class="mono">
+            <dd class="mono" :title="sp.local.branch">
               {{ sp.local.branch || "detached" }} ·
               {{ sp.local.dirty ? `${sp.local.dirty} modified` : "clean" }}
             </dd>
           </template>
           <template v-if="sp.checkout">
             <dt>Chat reads</dt>
-            <dd class="mono">
-              factory checkout @ {{ shortSha(sp.checkout.sha) }}
-            </dd>
+            <dd class="mono">checkout @ {{ shortSha(sp.checkout.sha) }}</dd>
             <template v-if="sp.local">
               <dt>Behind your folder</dt>
               <dd>
@@ -333,27 +362,28 @@ onBeforeUnmount(() => {
           <h5>
             Worktrees <span>{{ sp.worktrees.length }}</span>
           </h5>
-          <ul class="rail-list" aria-label="Worktrees">
+          <ul class="wt-list" aria-label="Worktrees">
             <li
-              v-for="w in sp.worktrees"
+              v-for="w in shownWorktrees"
               :key="w.path"
-              class="rail-dot"
-              :style="{
-                '--dot':
-                  sp.local && w.branch === sp.local.branch
-                    ? 'var(--success)'
-                    : 'var(--chart-3)',
-              }"
+              :class="{ mine: isMine(w) }"
             >
-              <span class="mono rail-name">{{ w.branch || "detached" }}</span>
-              <span
-                v-if="sp.local && w.branch === sp.local.branch"
-                class="rail-pill"
-                >Your folder</span
-              >
-              <small class="mono" :title="w.path">{{ w.path }}</small>
+              <span class="wt-dot" aria-hidden="true"></span>
+              <span class="mono wt-branch">{{ w.branch || "detached" }}</span>
+              <span v-if="isMine(w)" class="wt-state">Your folder</span>
+              <small class="mono" :title="w.path">{{ wtPath(w.path) }}</small>
             </li>
           </ul>
+          <button
+            v-if="sp.worktrees.length > WT_LIMIT"
+            type="button"
+            class="rail-more"
+            data-test="worktrees-more"
+            :aria-expanded="allWorktrees"
+            @click="allWorktrees = !allWorktrees"
+          >
+            {{ allWorktrees ? "Show less" : `Show all ${sp.worktrees.length}` }}
+          </button>
         </div>
         <div class="rail-group">
           <h5>
