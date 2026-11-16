@@ -143,7 +143,7 @@ Acceptance criteria:
 %s
 %s
 %s
-Write the contract (spec) and decompose it into the smallest set of implementation tasks.
+Write the contract (spec) and split it into implementation tasks sized as below.
 Respond with ONLY a JSON object (no prose, no code fences) matching:
 
 {"decision":"APPROVE"|"CLARIFY",
@@ -161,6 +161,12 @@ The spec is under %d words, with these sections in order:
 The spec says what and why. No file paths, line numbers or code in it.
 
 Each task objective is under %d words. Cite spec sections ("Behaviour rule 2") instead of restating them. "scope" lists the files or areas the task may touch; file paths belong here, not in the spec.
+
+Task sizing:
+- A task is one flow or behaviour slice built end to end with its own tests. Think flow, not files.
+- Standard scope is up to 3 files, never more than 5. Split anything wider.
+- Tasks whose scopes share a file or directory must be ordered through deps; keep scopes disjoint where possible so independent tasks run in parallel.
+- Every task objective ends with "Done when: <verifiable check>".
 
 Rules:
 - If the behaviour is unclear and the objective, the brief and the clarifications do not settle it, use decision CLARIFY and ask — never guess or invent requirements. Choices about how, inside your role, are yours: decide and put them in the Decisions table.
@@ -217,10 +223,15 @@ func foremanReviewPrompt(wo *model.WorkOrder, tasks []model.Task, prev []reviewF
 or reject: a separate gate decides from your findings. Report at most 10 findings. Severity:
 - critical: a defect that stops the Builder from building the right thing. It MUST cite the contract
   ("c2", "spec: decisions 3", "brief: constraint 1"); a critical finding without a citation is invalid.
-- high / low: worth knowing, does not block. These go to the Builder as notes.
+- high: a contract defect the Architect should fix, or a requirement gap. Contract highs are listed for the Architect when the gate sends the plan back; otherwise they become Builder notes. A defect that would make the Builder build the wrong thing must be critical, with a citation.
+- low: worth knowing, does not block. These go to the Builder as notes.
 Layer: "contract" when the spec or plan is incomplete or wrong (the Architect fixes it); "requirement"
 when the brief itself is wrong or silent (you fix it). For a requirement finding put the brief change in "fix",
-or put the question in "question" when only a human can decide it.
+or put the question in "question" when only a human can decide it. When the request, the brief (outside its
+Assumptions) and the human clarifications are silent on a business outcome (money or pricing, a score or
+grade, a quota, eligibility; not a technical cap such as a truncation length, retry count, page size or
+timeout), you MUST fill "question" with the question, its options and your recommended answer; a Decisions
+row or a brief assumption does not settle it, and it is never left as a note.
 Also state, for every acceptance criterion, how the spec's AC -> verification table verifies it: "test", "check" or "missing".`
 	finding := `{"severity":"critical|high|low","layer":"contract|requirement","cites":"c2","issue":"...","fix":"...","question":"only for a requirement finding that needs a human"}`
 	shape := `{"findings":[` + finding + `],

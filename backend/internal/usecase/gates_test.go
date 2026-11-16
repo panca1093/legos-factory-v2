@@ -3,6 +3,7 @@ package usecase
 import (
 	"encoding/json"
 	"errors"
+	"legos-factory/backend/internal/model"
 	"reflect"
 	"strings"
 	"testing"
@@ -56,7 +57,7 @@ func TestDecidePlanGate(t *testing.T) {
 		{"row3 not covered", planAnswers(map[string]float64{"covers_c2": 0.1}), nil, false, 0, GateRevise, 3, []string{"criterion c2 (show the cart total) is not covered"}},
 		{"row3 not verified", planAnswers(map[string]float64{"verified_c1": 0.1}), nil, false, 0, GateRevise, 3, []string{"c1 (add items to the cart) has no concrete test or check"}},
 		{"row3 critical not resolved", planAnswers(map[string]float64{"critical_resolved": 0.1}), nil, false, 0, GateRevise, 3, []string{"critical finding is not addressed", "F1 [critical, contract] c2: no error path"}},
-		{"row3 open questions", planAnswers(map[string]float64{"open_questions": 0.8}), nil, false, 1, GateRevise, 3, []string{"open question or a guessed behaviour"}},
+		{"row3 open questions", planAnswers(map[string]float64{"open_questions": 0.8}), nil, false, 1, GateRevise, 3, []string{"open question, or guesses a behaviour or business outcome"}},
 		{"row3 scope creep", planAnswers(map[string]float64{"scope_creep": 0.8}), nil, false, 0, GateRevise, 3, []string{"does not ask for"}},
 		{"row3 lists several", planAnswers(map[string]float64{"covers_c1": 0.0, "open_questions": 1}), nil, false, 0, GateRevise, 3, []string{"criterion c1 (add items to the cart) is not covered", "open question"}},
 		{"row3 includes unsettled too", planAnswers(map[string]float64{"covers_c1": 0.1, "verified_c2": 0.5}), nil, false, 0, GateRevise, 3, []string{"c1 (add items to the cart) is not covered", "it is unclear whether acceptance criterion c2"}},
@@ -657,5 +658,34 @@ func TestPlanGateSoftNotesCarryCoverageAndCitedFindings(t *testing.T) {
 	out = decidePlanGate(in, qs, answers, nil, false)
 	if !strings.Contains(out.Note, "Foreman coverage: not stated") || !strings.Contains(out.Note, settle) || strings.Contains(out.Note, "F2") {
 		t.Fatalf("no cited findings still carries the coverage and the instruction:\n%s", out.Note)
+	}
+}
+
+func TestPlanOpenQuestionsRubricAcceptsRecordedAssumptions(t *testing.T) {
+	_, qs := planGateState(PlanGateInput{Criteria: []Criterion{{ID: "c1", Text: "x"}}})
+	q := qs["open_questions"]
+	for _, want := range []string{"business outcome", "Decisions table", "brief Assumptions"} {
+		if !strings.Contains(q.Criteria.True+q.Criteria.False, want) {
+			t.Fatalf("rubric lacks %q: %+v", want, q.Criteria)
+		}
+	}
+	if strings.Contains(q.Criteria.True, "assumed or unknown") {
+		t.Fatalf("a recorded assumption must not count as open: %s", q.Criteria.True)
+	}
+}
+
+func TestPlanGateStateCarriesHumanClarificationsOnly(t *testing.T) {
+	all := []model.Clarification{
+		{Question: "Round up?", Answer: "yes", By: "human"},
+		{Question: "Note from plan review", Answer: "name it", By: builderNotesBy},
+	}
+	in := PlanGateInput{Request: "r", Criteria: testCriteria, Clarifications: planClarifications(all)}
+	state, qs := planGateState(in)
+	got, _ := state["clarifications"].([]model.Clarification)
+	if len(got) != 1 || got[0].By != "human" {
+		t.Fatalf("clarifications: %+v", state["clarifications"])
+	}
+	if !strings.Contains(qs["open_questions"].Criteria.True, "human clarification") {
+		t.Fatal("open_questions must count human clarifications as deciding")
 	}
 }

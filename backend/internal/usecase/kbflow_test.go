@@ -599,3 +599,30 @@ func TestRepoPlaybooksSurviveAnotherWorkOrdersNewerBase(t *testing.T) {
 		t.Fatalf("work order B read the wrong playbooks:\ninspector:\n%s\nforeman:\n%s", inspB, foreB)
 	}
 }
+
+func TestRunSpecificPlaybooksLoadOnlyForTheirRun(t *testing.T) {
+	r := newRig(t)
+	r.workspace(t, map[string]string{
+		"docs/foreman.md":   playbookDoc("Foreman repo rules", "foreman", "", "Never escalate naming."),
+		"docs/architect.md": playbookDoc("Architect repo rules", "architect", "", "Keep tasks small."),
+	})
+	r.f.syncRepo(context.Background(), r.wo, true)
+	const intake, plan = "How the Foreman writes the intake brief", "How the Architect writes the spec and the plan"
+	cases := []struct {
+		name, role, specialty, has, lacks string
+	}{
+		{"intake", "foreman", "intake", intake, ""},
+		{"review", "foreman", "", "Never escalate naming.", intake},
+		{"plan", "architect", "plan", plan, ""},
+		{"verify", "architect", "", "Keep tasks small.", plan},
+	}
+	for _, c := range cases {
+		text, _ := r.ctxFor(r.wo, c.role, c.specialty, "money")
+		if !strings.Contains(text, c.has) || (c.lacks != "" && strings.Contains(text, c.lacks)) {
+			t.Fatalf("%s context: want %q, must lack %q:\n%s", c.name, c.has, c.lacks, text)
+		}
+	}
+	if text, _ := r.ctxFor(r.wo, "foreman", "intake", "money"); !strings.Contains(text, "Never escalate naming.") {
+		t.Fatal("a repo playbook without specialty must load for the intake run")
+	}
+}
