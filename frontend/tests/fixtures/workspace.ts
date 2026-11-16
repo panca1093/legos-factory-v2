@@ -87,12 +87,6 @@ export const overview: Overview = {
     total_work_orders: 5,
   },
   usage: { cost_micros: 18400000, tokens_in: 12000, tokens_out: 4000 },
-  budget: {
-    limit_micros: 40000000,
-    spent_micros: 18400000,
-    reserved_micros: 0,
-    available_micros: 21600000,
-  },
 };
 export const usage: UsageSummary = {
   days: 365,
@@ -127,7 +121,6 @@ export const usage: UsageSummary = {
   },
 };
 export const settings: Settings = {
-  budget_limit_micros: 40000000,
   architect_model: "test/architect",
   builder_model: "test/builder",
   inspector_model: "test/inspector",

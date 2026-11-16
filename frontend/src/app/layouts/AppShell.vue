@@ -100,17 +100,7 @@ const initials = computed(
       .map((n) => n[0])
       .join("") ?? "?",
 );
-const budget = computed(() => factory.overview?.budget);
-const budgetPercent = computed(() =>
-  budget.value?.limit_micros
-    ? Math.min(
-        100,
-        Math.round(
-          (budget.value.spent_micros / budget.value.limit_micros) * 100,
-        ),
-      )
-    : 0,
-);
+const spent = computed(() => factory.overview?.usage?.cost_micros);
 const onChats = computed(() => route.path.startsWith("/chats"));
 const railQuery = ref("");
 watch(onChats, (on) => {
@@ -265,20 +255,11 @@ async function logout() {
             {{ railQuery && onChats ? "No matching chats." : "No chats yet." }}
           </p>
         </nav>
-        <RouterLink to="/settings#budget" class="usage-card"
-          ><div class="top">
-            <span>Workspace budget</span><Gauge class="icon" />
-          </div>
+        <RouterLink to="/settings#agents" class="usage-card"
+          ><div class="top"><span>Usage</span><Gauge class="icon" /></div>
           <div class="num">
-            <b>{{ money(budget?.spent_micros) }}</b>
-            {{
-              budget?.limit_micros
-                ? "of " + money(budget.limit_micros)
-                : "spent · no cap"
-            }}
-          </div>
-          <div v-if="budget?.limit_micros" class="bar">
-            <i :style="{ width: budgetPercent + '%' }"></i>
+            <b>{{ money(spent) }}</b>
+            recorded
           </div>
           <div v-if="factory.usage?.month_to_date" class="num">
             This month
@@ -343,8 +324,7 @@ async function logout() {
               </button>
             </template>
             <div class="head">
-              <strong>{{ session.user?.name }}</strong
-              ><small
+              <strong>{{ session.user?.name }}</strong><small
                 >{{
                   session.mode === "dev" ? "Local workspace" : "Workspace"
                 }}

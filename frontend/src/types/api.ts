@@ -20,7 +20,6 @@ export interface Project {
   github_repo?: string;
   kb_include?: string[];
   kb_exclude?: string[];
-  contract_tests?: "off" | "on";
   created_at: string;
 }
 
@@ -183,44 +182,79 @@ export interface Overview {
     total_work_orders: number;
   };
   usage: { cost_micros: number; tokens_in: number; tokens_out: number };
-  budget: {
-    limit_micros: number;
-    spent_micros: number;
-    reserved_micros: number;
-    available_micros: number;
-  };
   user: User | null;
 }
 
+export type RoleKey = "foreman" | "architect" | "builder" | "inspector" | "chat";
+export type AgentID = "claude" | "codex" | "opencode";
+
 export interface Settings {
-  budget_limit_micros: number;
   foreman_model?: string;
   architect_model: string;
   builder_model: string;
   inspector_model: string;
   chat_model?: string;
   allowed_models: string[] | null;
+  role_agents?: Partial<Record<RoleKey, string>>;
+  role_permissions?: { chat?: "ask" | "read" };
+  max_concurrent_runs?: number;
   jev_enabled?: boolean;
 }
 
 export type SettingsPatch = Partial<
   Pick<
     Settings,
-    | "budget_limit_micros"
     | "foreman_model"
     | "architect_model"
     | "builder_model"
     | "inspector_model"
     | "chat_model"
+    | "role_agents"
+    | "role_permissions"
+    | "max_concurrent_runs"
+    | "jev_enabled"
   >
->;
+> & { jev_key?: string };
 
 export interface RuntimeInfo {
-  harness: "acp" | "opencode" | "mock";
-  acp_command: string;
-  jev: { enabled: boolean; model: string };
   credentials_configured: boolean;
-  max_concurrent_runs: number;
+  jev_key_from_env: boolean;
+}
+
+export interface UsageWindow {
+  used_pct: number;
+  resets_at?: string;
+}
+export interface AgentAccount {
+  id: string;
+  label: string;
+  system: boolean;
+  active: boolean;
+  status: "signed_in" | "signed_out" | "unknown";
+  who?: string;
+  plan?: string;
+  expires_at?: string;
+  usage?: { session?: UsageWindow; week?: UsageWindow };
+  usage_error?: string;
+}
+export interface AgentInfo {
+  id: string;
+  name: string;
+  command: string;
+  installed: boolean;
+  enabled: boolean;
+  install_hint?: string;
+  roles_allowed: RoleKey[];
+  accounts: AgentAccount[];
+}
+export interface AgentsResponse {
+  agents: AgentInfo[];
+  claude_usage_opt_in: boolean;
+}
+export interface NewAccount {
+  account: AgentAccount;
+  login_command: string;
+  env_hint?: string;
 }
 
 export type ChatPermissionDecision = "allow" | "allow_all" | "deny";
@@ -366,6 +400,13 @@ export interface Connection {
   last_error?: string;
   has_credential: boolean;
   created_at: string;
+  used_by?: { project_id: string; name: string }[];
+}
+
+export interface ConnectionProvider {
+  id: Provider;
+  group: "code" | "work";
+  accounts: Connection[];
 }
 
 export interface IssueDraft {

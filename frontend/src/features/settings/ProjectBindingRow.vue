@@ -8,13 +8,11 @@ const props = defineProps<{
   repoUrl: string;
   connectionId: string;
   remoteRepo: string;
-  contractTests?: boolean;
   disabled?: boolean;
 }>();
 const emit = defineEmits<{
   "update:connectionId": [string];
   "update:remoteRepo": [string];
-  "update:contractTests": [boolean];
   commit: [];
 }>();
 const factory = useFactory();
@@ -87,20 +85,5 @@ function remoteChanged() {
       on this computer is used for GitHub repositories; otherwise work stays
       local.
     </p>
-    <label v-if="contractTests !== undefined" style="grid-column: 1 / -1">
-      <input
-        type="checkbox"
-        :data-test="`contract-tests-${idPrefix}`"
-        :checked="contractTests"
-        :disabled="disabled"
-        @change="
-          emit(
-            'update:contractTests',
-            ($event.target as HTMLInputElement).checked,
-          )
-        "
-      />
-      Contract tests: write and lock tests for the acceptance criteria
-    </label>
   </div>
 </template>
