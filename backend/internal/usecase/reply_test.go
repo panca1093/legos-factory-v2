@@ -155,6 +155,12 @@ func TestConvergeReplyFilesAndUnverified(t *testing.T) {
 	if err := decodeReply(`{"gaps":[{"type":"missing","layer":"code","evidence":"TestX","files":[" "],"fix":"f"}]}`, &v); err == nil {
 		t.Fatal("blank files count as none")
 	}
+	if err := decodeReply(`{"gaps":[{"type":"missing","layer":"code","evidence":"e","files":["n/a"," None "],"fix":"f"}]}`, &v); err == nil {
+		t.Fatal("placeholder files count as none")
+	}
+	if err := decodeReply(`{"gaps":[],"unverified":[{"criterion":"AC14 (db)","reason":"r"}]}`, &v); err != nil || v.Unverified[0].Criterion != "c14" {
+		t.Fatalf("lenient id: %v %+v", err, v.Unverified)
+	}
 	if err := decodeReply(`{"gaps":[{"type":"missing","layer":"contract","evidence":"spec","fix":"f"}]}`, &v); err != nil {
 		t.Fatalf("only code gaps need files: %v", err)
 	}

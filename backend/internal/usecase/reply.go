@@ -7,6 +7,7 @@ import (
 	"path"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -360,25 +361,27 @@ func (r *convergeReply) validate() error {
 		if g.Evidence == "" {
 			return fmt.Errorf("gaps[%d] needs evidence (file:line or a test name)", i)
 		}
-		g.Files = trimmedNonEmpty(g.Files)
+		g.Files = realFiles(g.Files)
 		if g.Layer == "code" && len(g.Files) == 0 {
-			return fmt.Errorf("gaps[%d] is a code gap with no files: name the files or areas the fix changes. If the criterion only lacks a check that proves it, list it in unverified instead", i)
+			return fmt.Errorf("gaps[%d] is a code gap with no files: name the files or areas the fix changes. Only a criterion whose code is already in the diff but that no check can prove belongs in unverified, not here", i)
 		}
 	}
 	for i := range r.Unverified {
 		u := &r.Unverified[i]
 		u.Criterion, u.Reason = strings.ToLower(strings.TrimSpace(u.Criterion)), strings.TrimSpace(u.Reason)
-		if !criterionRef.MatchString(u.Criterion) {
+		if u.Criterion = unverifiedID.FindString(u.Criterion); u.Criterion == "" {
 			return fmt.Errorf("unverified[%d].criterion must be a criterion id such as c3", i)
 		}
 	}
 	return nil
 }
 
-func trimmedNonEmpty(in []string) []string {
+var unverifiedID = regexp.MustCompile(`c\d+`)
+
+func realFiles(in []string) []string {
 	var out []string
 	for _, s := range in {
-		if s = strings.TrimSpace(s); s != "" {
+		if s = strings.TrimSpace(s); !slices.Contains([]string{"", "-", "n/a", "na", "none", "null", "nil", "tbd"}, strings.ToLower(s)) {
 			out = append(out, s)
 		}
 	}

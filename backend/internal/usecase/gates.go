@@ -349,9 +349,6 @@ func convergeGateState(in ConvergeGateInput) (map[string]any, map[string]Noul) {
 		}
 	}
 	for _, c := range in.Criteria {
-		if slices.Contains(in.Unverified, c.ID) {
-			continue
-		}
 		qs["met_"+c.ID] = Noul{
 			Instructions: fmt.Sprintf("Does diff implement the behaviour that acceptance_criteria.%s describes?", c.ID),
 			Criteria: yn(
@@ -692,7 +689,7 @@ func gapLine(g convergeGap) string {
 //	4 escalate: a met_* is unsettled
 //	5 converged
 //
-// Criteria in in.Unverified are not asked about (met_* skipped) and never reach row 3 or 4.
+// An unsettled met_* for a criterion in in.Unverified is a Builder note, not a row 4 escalation.
 // Row 3 becomes escalate when no append budget is left. An unsettled
 // gap_valid_* never appends: it goes to the Builder as a note. Only the
 // questions in asked are read; answers to other ids are ignored.
@@ -706,9 +703,7 @@ func decideConvergeGate(in ConvergeGateInput, asked map[string]Noul, answers map
 		required = append(required, "gap_valid_"+g.ID)
 	}
 	for _, c := range in.Criteria {
-		if !slices.Contains(in.Unverified, c.ID) {
-			required = append(required, "met_"+c.ID)
-		}
+		required = append(required, "met_"+c.ID)
 	}
 	if note, bad := gateFailure(len(in.Criteria) == 0, judgeErr, overLimit, missingAnswers(required, asked, answers)); bad {
 		return GateOutcome{Outcome: GateEscalate, Row: 2, Note: note}
@@ -725,14 +720,15 @@ func decideConvergeGate(in ConvergeGateInput, asked map[string]Noul, answers map
 	}
 	labels := criterionLabels(in.Criteria)
 	for _, c := range in.Criteria {
-		if slices.Contains(in.Unverified, c.ID) {
-			continue
-		}
 		switch judge(answers["met_"+c.ID]) {
 		case vNo:
 			unmet = append(unmet, c.ID)
 			hard = append(hard, fmt.Sprintf("the diff does not implement acceptance criterion %s", labels[c.ID]))
 		case vUnsettled:
+			if slices.Contains(in.Unverified, c.ID) {
+				builder = append(builder, fmt.Sprintf("it is unclear whether the diff implements acceptance criterion %s", labels[c.ID]))
+				continue
+			}
 			soft = append(soft, fmt.Sprintf("it is unclear whether the diff implements acceptance criterion %s", labels[c.ID]))
 		}
 	}

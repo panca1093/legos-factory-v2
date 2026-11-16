@@ -690,18 +690,27 @@ func TestPlanGateStateCarriesHumanClarificationsOnly(t *testing.T) {
 	}
 }
 
-func TestUnverifiedCriteriaAreNotAsked(t *testing.T) {
+func TestUnverifiedCriteriaStillAskedButNeverEscalate(t *testing.T) {
 	in := ConvergeGateInput{Criteria: testCriteria, Unverified: []string{"c2"}}
 	_, qs := convergeGateState(in)
-	if _, ok := qs["met_c2"]; ok || len(qs) != 1 {
-		t.Fatalf("no met_ question for an unverified criterion: %v", qs)
+	if _, ok := qs["met_c2"]; !ok || len(qs) != 2 {
+		t.Fatalf("met_ is asked for every criterion: %v", qs)
 	}
-	out := decideConvergeGate(in, qs, map[string]float64{"met_c1": 0.9}, nil, false, false, 0, true)
+	out := decideConvergeGate(in, qs, map[string]float64{"met_c1": 0.9, "met_c2": 0.5}, nil, false, false, 0, true)
+	if out.Outcome != GateConverged || len(out.Builder) != 1 {
+		t.Fatalf("unsettled unverified is a note: %+v", out)
+	}
+	out = decideConvergeGate(in, qs, map[string]float64{"met_c1": 0.9, "met_c2": 0.9}, nil, false, false, 0, true)
 	if out.Outcome != GateConverged {
-		t.Fatalf("an unverified criterion neither appends nor escalates: %+v", out)
+		t.Fatalf("yes converges: %+v", out)
 	}
-	out = decideConvergeGate(in, qs, map[string]float64{"met_c1": 0.05}, nil, false, false, 0, true)
-	if out.Outcome != GateAppend || len(out.Unmet) != 1 || out.Unmet[0] != "c1" {
-		t.Fatalf("other criteria are still judged: %+v", out)
+	out = decideConvergeGate(in, qs, map[string]float64{"met_c1": 0.9, "met_c2": 0.05}, nil, false, false, 0, true)
+	if out.Outcome != GateAppend || len(out.Unmet) != 1 || out.Unmet[0] != "c2" {
+		t.Fatalf("no appends: %+v", out)
+	}
+	in.Criteria = []Criterion{{"c1", "a"}, {"c2", "b"}}
+	out = decideConvergeGate(ConvergeGateInput{Criteria: in.Criteria}, qs, map[string]float64{"met_c1": 0.9, "met_c2": 0.5}, nil, false, false, 0, true)
+	if out.Outcome != GateEscalate || out.Row != 4 {
+		t.Fatalf("a verified unsettled criterion still escalates: %+v", out)
 	}
 }

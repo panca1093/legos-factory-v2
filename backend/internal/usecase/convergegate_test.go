@@ -750,8 +750,20 @@ func TestUnverifiedCriterionDoesNotAppendOrEscalate(t *testing.T) {
 	if ev := eventByKind(t, r, "converge_gate"); ev.Payload["outcome"] != GateConverged {
 		t.Fatalf("gate event: %+v", ev.Payload)
 	}
-	if len(j.calls) != 0 {
-		t.Fatalf("nothing is left to ask Jev: %v", j.calls[0].qs)
+	if len(j.calls) != 1 {
+		t.Fatalf("met_c1 is still asked: %d calls", len(j.calls))
+	}
+	if _, ok := j.calls[0].qs["met_c1"]; !ok {
+		t.Fatalf("met_c1 missing: %v", j.calls[0].qs)
+	}
+}
+
+func TestUnverifiedCriterionWithNoCodeStillAppends(t *testing.T) {
+	j := &fakeJudge{over: map[string]float64{"met_c1": 0.05}}
+	r := convergeRig(t, j, `{"revision":0,"round":1,"gaps":[],"unverified":[{"criterion":"c1","reason":"needs postgres"}],"converged":true}`)
+	r.builtPlan(t)
+	if wo := r.evaluate(t); wo.State != model.StateImplementing {
+		t.Fatalf("a criterion with no code appends even when listed unverified: %s", wo.State)
 	}
 }
 

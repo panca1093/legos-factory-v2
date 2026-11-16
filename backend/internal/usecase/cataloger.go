@@ -104,6 +104,23 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 	ver := fitLines("## Final verification", verLines, 300)
 
 	var open []string
+	if r := f.currentArchitectReport(wo); r != nil {
+		text := map[string]string{}
+		for _, cr := range splitCriteria(wo.Acceptance) {
+			text[cr.ID] = cr.Text
+		}
+		for i, u := range r.Unverified {
+			if i == summaryMaxItems {
+				open = append(open, more(len(r.Unverified)))
+				break
+			}
+			line := "- Not verified by the factory: " + u.Criterion
+			if t := safeLine(text[u.Criterion]); t != "" {
+				line += " (" + clip(t, 40) + ")"
+			}
+			open = append(open, clip(line+" — "+safeLine(u.Reason), 120))
+		}
+	}
 	if outcome != "READY" {
 		open = append(open, "- Outcome: "+outcome)
 	}
@@ -137,15 +154,6 @@ func (f *Factory) taskSummary(ctx context.Context, wo *model.WorkOrder, outcome 
 				break
 			}
 			open = append(open, clip("- gap: "+safeLine(g.Type+" "+g.Cites+": "+g.Fix), 100))
-		}
-	}
-	if r := f.currentArchitectReport(wo); r != nil {
-		for i, u := range r.Unverified {
-			if i == summaryMaxItems {
-				open = append(open, more(len(r.Unverified)))
-				break
-			}
-			open = append(open, clip("- Not verified by the factory: "+safeLine(u.Criterion+" — "+u.Reason), 100))
 		}
 	}
 	if len(open) == 0 {
