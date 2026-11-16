@@ -79,6 +79,17 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 	return f.planGate(ctx, wo, tasks, findings, r.Coverage)
 }
 
+// blockingFindings are the critical and high findings: the ones the Architect or a human has to act on.
+func blockingFindings(fs []reviewFinding) []reviewFinding {
+	var out []reviewFinding
+	for _, f := range fs {
+		if f.Severity == "critical" || f.Severity == "high" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 func criticals(fs []reviewFinding) []reviewFinding {
 	var out []reviewFinding
 	for _, f := range fs {
@@ -132,7 +143,7 @@ func mergeFindings(prev []reviewFinding, r reviewReply) []reviewFinding {
 const amendmentsHeader = "Amendments from plan review:"
 
 // settleRequirementFindings handles the Foreman's own findings. A new
-// requirement-layer critical amends the brief with its fix, or asks the human
+// requirement-layer critical or high finding amends the brief with its fix, or asks the human
 // (returns asked) when it carries a question that is neither answered nor over
 // the human-question cap; the Architect then revises through the gate.
 func (f *Factory) settleRequirementFindings(ctx context.Context, wo *model.WorkOrder, findings, prev []reviewFinding) (asked bool, err error) {
@@ -142,7 +153,7 @@ func (f *Factory) settleRequirementFindings(ctx context.Context, wo *model.WorkO
 	}
 	var amends []string
 	question := ""
-	for _, fd := range criticals(findings) {
+	for _, fd := range blockingFindings(findings) {
 		if fd.Layer != "requirement" || seen[fd.ID] {
 			continue
 		}
@@ -220,7 +231,49 @@ func (f *Factory) planRevisionNotes(ctx context.Context, wo *model.WorkOrder) st
 	if err != nil || e == nil {
 		return "Plan gate requested a revision; see the last plan_gate event in the activity trail."
 	}
-	return "Plan gate: " + e.Message
+	if strings.HasPrefix(e.Message, "Plan gate:") {
+		return e.Message
+	}
+	return "Plan gate: " + e.Message // events stored before the note carried its own header
+}
+
+// planFindingLine is one finding for the Architect or the human, cut to a readable length.
+func planFindingLine(f reviewFinding) string {
+	line := fmt.Sprintf("- %s [%s, %s, cites %s] %s Fix: %s", f.ID, f.Severity, f.Layer, strings.TrimSpace(f.Cites), strings.TrimSpace(f.Issue), strings.TrimSpace(f.Fix))
+	if q := strings.TrimSpace(f.Question); q != "" {
+		line += " Question for the human: " + q
+	}
+	return truncateText(line, 400)
+}
+
+// planReviseNote is the whole message the Architect gets for a revision: the gate's reasons plus the open contract findings.
+func planReviseNote(revision int, reasons string, findings []reviewFinding) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Plan gate: revise (revision %d of %d)\nWhy the gate asked for a revision:\n%s", revision, maxPlanRevisions, reasons)
+	var lines []string
+	for _, f := range blockingFindings(findings) {
+		if f.Layer == "contract" {
+			lines = append(lines, planFindingLine(f))
+		}
+	}
+	if len(lines) > 0 {
+		b.WriteString("\nOpen findings from the Foreman review to address (a finding the current draft already resolves needs no change):\n" + strings.Join(lines, "\n"))
+	}
+	b.WriteString("\nIf a point needs a decision only a human can make, answer with decision CLARIFY instead of guessing.")
+	return b.String()
+}
+
+// planEscalationMessage tells the human what to decide: the gate's reasons and the open critical and high findings.
+func planEscalationMessage(reason string, findings []reviewFinding) string {
+	msg := "The plan needs a human decision: " + reason
+	var lines []string
+	for _, f := range blockingFindings(findings) {
+		lines = append(lines, planFindingLine(f))
+	}
+	if len(lines) > 0 {
+		msg += "\nOpen findings from the Foreman review:\n" + strings.Join(lines, "\n")
+	}
+	return msg
 }
 
 // builderNotesBy marks the clarification entries that carry the plan review's high and low notes to the Builder.
@@ -314,8 +367,9 @@ func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []mod
 			map[string]any{"plan_revisions": revisions, "plan_review": "", "clarif_rounds": 0}); err != nil {
 			return err
 		}
-		f.event(wo.ID, "factory", "plan_revision_requested", out.Note, map[string]any{"revision": revisions})
-		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": "Plan gate: " + out.Note})
+		note := planReviseNote(revisions, out.Note, findings)
+		f.event(wo.ID, "factory", "plan_revision_requested", note, map[string]any{"revision": revisions})
+		return f.enqueuePayload(ctx, JobPlan, wo.ID, map[string]any{"notes": note})
 	default: // escalate: the order stays in ARCHITECT_REVIEW and the human approves or revises
 		if err := f.storeBuilderNotes(ctx, wo, findings, out.Builder); err != nil {
 			return err
@@ -323,11 +377,11 @@ func (f *Factory) planGate(ctx context.Context, wo *model.WorkOrder, tasks []mod
 		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"plan_review": "approved"}); err != nil {
 			return err
 		}
-		msg := "The plan needs a human decision: " + out.Note
+		msg := planEscalationMessage(out.Note, findings)
 		if errors.Is(jerr, errNoJudge) {
 			msg = "Jev is not configured; the plan needs human approval"
 		}
-		f.event(wo.ID, "factory", "plan_escalated", msg, map[string]any{"reason": out.Note, "row": out.Row})
+		f.event(wo.ID, "factory", "plan_escalated", msg, map[string]any{"reason": out.Note, "row": out.Row, "findings": blockingFindings(findings)})
 		return nil
 	}
 }

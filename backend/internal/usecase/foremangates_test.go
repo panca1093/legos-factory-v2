@@ -601,3 +601,86 @@ func TestReviewThatFailsPermanentlyEscalates(t *testing.T) {
 		t.Fatalf("escalation reason: %q", e.Message)
 	}
 }
+
+const (
+	highContract     = `{"findings":[{"id":"F1","severity":"high","layer":"contract","cites":"spec: decisions 8","issue":"empty attempt score is a guess","fix":"state the score"},{"id":"F2","severity":"low","layer":"contract","cites":"c1","issue":"naming nit","fix":"rename"},{"id":"F3","severity":"high","layer":"requirement","cites":"brief","issue":"brief silent","fix":"state it"}],"coverage":[]}`
+	highRequirementQ = `{"findings":[{"id":"F1","severity":"high","layer":"requirement","cites":"brief","issue":"an empty attempt scores 22.56","fix":"","question":"What does an empty attempt score? Options: 0 or 22.56. Recommended: 0."}],"coverage":[]}`
+)
+
+func TestPlanReviseNoteCarriesTheContractFindingsAndSurvivesARestart(t *testing.T) {
+	h := &sessHarness{answer: answerJSON, review: highContract}
+	r := harnessRig(t, h, &fakeJudge{over: map[string]float64{"open_questions": 0.9}})
+	wo := r.review(t)
+	if wo.State != model.StatePlanning {
+		t.Fatalf("state %s", wo.State)
+	}
+	notes, _ := r.q.payloads[len(r.q.payloads)-1]["notes"].(string)
+	for _, want := range []string{
+		"Plan gate: revise (revision 1 of 2)",
+		"Why the gate asked for a revision:\n1. the spec still contains an open question",
+		"R1-F1 [high, contract, cites spec: decisions 8] empty attempt score is a guess Fix: state the score",
+		"a finding the current draft already resolves needs no change",
+		"decision CLARIFY",
+	} {
+		if !strings.Contains(notes, want) {
+			t.Fatalf("note lacks %q:\n%s", want, notes)
+		}
+	}
+	for _, not := range []string{"naming nit", "brief silent"} {
+		if strings.Contains(notes, not) {
+			t.Fatalf("note must hold contract findings of critical or high severity only, found %q:\n%s", not, notes)
+		}
+	}
+	if again := r.f.planRevisionNotes(context.Background(), wo); again != notes {
+		t.Fatalf("a restart must rebuild the same note:\n%s\n---\n%s", again, notes)
+	}
+}
+
+func TestHighRequirementFindingWithAQuestionAsksTheHuman(t *testing.T) {
+	r := harnessRig(t, &sessHarness{answer: answerJSON, review: highRequirementQ}, &fakeJudge{})
+	wo := r.review(t)
+	if wo.State != model.StateWaitingForHuman || !strings.Contains(wo.ClarifQuestion, "What does an empty attempt score?") {
+		t.Fatalf("state %s question %q", wo.State, wo.ClarifQuestion)
+	}
+	if len(r.events(t, "plan_gate")) != 0 {
+		t.Fatal("the gate must wait for the human answer")
+	}
+}
+
+func TestHighRequirementFindingWithAFixAmendsTheBrief(t *testing.T) {
+	review := strings.Replace(highRequirementQ, `"fix":"","question":"What does an empty attempt score? Options: 0 or 22.56. Recommended: 0."`, `"fix":"an empty attempt scores 0"`, 1)
+	r := harnessRig(t, &sessHarness{answer: answerJSON, review: review}, &fakeJudge{})
+	wo := r.review(t)
+	if !strings.Contains(wo.Brief, "Amendments from plan review:\n- an empty attempt scores 0") {
+		t.Fatalf("brief %q", wo.Brief)
+	}
+}
+
+func TestPlanEscalationShowsTheReasonsAndTheOpenFindings(t *testing.T) {
+	r := harnessRig(t, &sessHarness{answer: answerJSON, review: highContract}, &fakeJudge{over: map[string]float64{"touches_schema": 0.9}})
+	r.review(t)
+	esc := eventByKind(t, r, "plan_escalated")
+	for _, want := range []string{
+		"The plan needs a human decision: a task changes a database schema",
+		"Open findings from the Foreman review:",
+		"- R1-F1 [high, contract, cites spec: decisions 8]",
+		"- R1-F3 [high, requirement, cites brief]",
+	} {
+		if !strings.Contains(esc.Message, want) {
+			t.Fatalf("escalation lacks %q:\n%s", want, esc.Message)
+		}
+	}
+	if strings.Contains(esc.Message, "naming nit") {
+		t.Fatalf("low findings stay with the Builder:\n%s", esc.Message)
+	}
+	if fs, ok := esc.Payload["findings"].([]any); !ok || len(fs) != 2 {
+		t.Fatalf("payload findings: %+v", esc.Payload["findings"])
+	}
+}
+
+func TestPlanFindingLineIsCutToALength(t *testing.T) {
+	line := planFindingLine(reviewFinding{ID: "R1-F1", Severity: "high", Layer: "contract", Cites: "c1", Issue: strings.Repeat("long ", 200), Fix: "x"})
+	if n := len([]rune(line)); n > 401 {
+		t.Fatalf("line has %d runes", n)
+	}
+}

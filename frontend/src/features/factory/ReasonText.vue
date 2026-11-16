@@ -11,7 +11,7 @@ const parts = computed(() =>
   props.items?.length
     ? props.items
     : props.text
-        .split(";")
+        .split(props.text.includes("\n") ? "\n" : ";")
         .map((p) => p.trim())
         .filter(Boolean),
 );

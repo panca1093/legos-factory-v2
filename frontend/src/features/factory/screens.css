@@ -617,6 +617,7 @@
 .fx-reason {
   font-size: 13px;
   line-height: 19px;
+  white-space: pre-line;
 }
 .fx-reason .clamp {
   display: -webkit-box;

@@ -230,7 +230,7 @@ func yn(t, f string) *NoulCriteria { return &NoulCriteria{True: t, False: f} }
 // when the answer is yes; "it is unclear whether <phrase>" when unsettled.
 var planPhrases = map[string]string{
 	"scope_creep":            "the plan includes work the request does not ask for",
-	"open_questions":         "the spec still contains an open question or a guessed behaviour",
+	"open_questions":         "the spec still contains an open question, or guesses a behaviour or business outcome that neither the request nor the brief states",
 	"touches_schema":         "a task changes a database schema or migration",
 	"touches_authentication": "a task changes authentication",
 	"touches_authorization":  "a task changes authorization or permission checks",
@@ -314,10 +314,10 @@ func planGateState(in PlanGateInput) (map[string]any, map[string]Noul) {
 		}
 	}
 	qs["open_questions"] = Noul{
-		Instructions: "Does spec still contain an open question or a behaviour that the Architect guessed?",
+		Instructions: "Does spec still contain an open question, or leave a behaviour or business outcome undecided that the Architect would have to guess?",
 		Criteria: yn(
-			"spec lists an unanswered question, says a behaviour is assumed or unknown, or leaves a behaviour undecided that a Builder would have to guess.",
-			"spec states every behaviour it relies on, and its open-questions list is empty or absent."),
+			"spec lists an unanswered question, leaves a behaviour undecided that a Builder would have to guess, or assumes a business outcome (a value users see, such as a score, an amount of money or a limit) that neither request nor brief states.",
+			"spec lists no unanswered question and decides every behaviour it relies on. An assumption that request or brief asks for, or that spec records with its reason (Decisions table, brief Assumptions), counts as decided."),
 	}
 	return state, qs
 }
