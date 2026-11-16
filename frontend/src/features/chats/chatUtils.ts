@@ -138,56 +138,82 @@ function emphasis(t: string) {
 }
 
 function inline(escaped: string) {
-  const links: string[] = [];
-  return escaped
-    .replace(/[\uE000\uE001]/g, "")
-    .split("`")
-    .map((part, i) => {
-      if (i % 2) return `<code>${part}</code>`;
-      const held = part.replace(LINK, (_, text: string, url: string) => {
-        links.push(
-          `<a href="${url}" target="_blank" rel="noopener noreferrer">${emphasis(text)}</a>`,
-        );
-        return `\uE000${links.length - 1}\uE001`;
-      });
-      return emphasis(held).replace(
-        /\uE000(\d+)\uE001/g,
-        (_, n: string) => links[Number(n)],
-      );
-    })
-    .join("");
+  const held: string[] = [];
+  const hold = (html: string) => `\uE000${held.push(html) - 1}\uE001`;
+  const restore = (t: string): string =>
+    t.replace(/\uE000(\d+)\uE001/g, (_, n: string) => restore(held[Number(n)]));
+  const parts = escaped.replace(/[\uE000\uE001]/g, "").split("`");
+  const text = parts
+    .map((part, i) => (i % 2 ? hold(`<code>${part}</code>`) : part))
+    .join("")
+    .replace(LINK, (_, label: string, url: string) =>
+      hold(
+        `<a href="${url}" target="_blank" rel="noopener noreferrer">${emphasis(label)}</a>`,
+      ),
+    );
+  return restore(emphasis(text));
 }
+
+interface MdList {
+  tag: "ul" | "ol";
+  start: number;
+  indent: number;
+  items: string[];
+}
+
+const listHtml = (l: MdList) =>
+  `<${l.tag}${l.tag === "ol" && l.start !== 1 ? ` start="${l.start}"` : ""}>${l.items.map((i) => `<li>${i}</li>`).join("")}</${l.tag}>`;
+
+const indentOf = (line: string) =>
+  /^[ \t]*/.exec(line)![0].replace(/\t/g, "    ").length;
 
 function blocks(text: string) {
   const out: string[] = [];
-  let list: { tag: "ul" | "ol"; items: string[] } | null = null;
+  const stack: MdList[] = [];
   let para: string[] = [];
-  const flush = () => {
+  const flushPara = () => {
     if (para.length) out.push(`<p>${para.join("<br>")}</p>`);
     para = [];
-    if (list)
-      out.push(
-        `<${list.tag}>${list.items.map((i) => `<li>${i}</li>`).join("")}</${list.tag}>`,
-      );
-    list = null;
+  };
+  const closeTop = () => {
+    const html = listHtml(stack.pop()!);
+    const parent = stack[stack.length - 1];
+    if (parent) parent.items[parent.items.length - 1] += html;
+    else out.push(html);
+  };
+  const closeLists = () => {
+    while (stack.length) closeTop();
   };
   for (const line of esc(text).split("\n")) {
-    const item = /^\s*(?:([-*])|\d+\.)\s+(.*)$/.exec(line);
+    const item = /^\s*(?:([-*])|(\d+)\.)\s+(.*)$/.exec(line);
     const head = /^#{1,6}\s+(.*)$/.exec(line);
+    const indent = indentOf(line);
     if (item) {
+      flushPara();
       const tag = item[1] ? "ul" : "ol";
-      if (para.length || (list && list.tag !== tag)) flush();
-      (list ??= { tag, items: [] }).items.push(inline(item[2]));
+      while (stack.length && stack[stack.length - 1].indent > indent)
+        closeTop();
+      const top = stack[stack.length - 1];
+      if (top && top.indent === indent && top.tag !== tag) closeTop();
+      const cur = stack[stack.length - 1];
+      if (!cur || cur.indent < indent || cur.tag !== tag)
+        stack.push({ tag, start: Number(item[2] ?? 1), indent, items: [] });
+      stack[stack.length - 1].items.push(inline(item[3]));
     } else if (head) {
-      flush();
+      flushPara();
+      closeLists();
       out.push(`<h4>${inline(head[1])}</h4>`);
-    } else if (!line.trim()) flush();
-    else {
-      if (list) flush();
+    } else if (!line.trim()) flushPara();
+    else if (stack.length && indent > 0) {
+      const top = stack[stack.length - 1];
+      top.items[top.items.length - 1] += `<br>${inline(line.trim())}`;
+    } else {
+      closeLists();
       para.push(inline(line));
     }
   }
-  flush();
+  flushPara();
+  closeLists();
   return out.join("");
 }
 

@@ -135,6 +135,26 @@ describe("markdown", () => {
   it("renders lists", () => {
     expect(renderMarkdown("- a\n- b")).toBe("<ul><li>a</li><li>b</li></ul>");
   });
+  it("bolds text that contains inline code", () => {
+    expect(renderMarkdown("**keeps the highest `ts`.** rest")).toBe(
+      "<p><strong>keeps the highest <code>ts</code>.</strong> rest</p>",
+    );
+  });
+  it("nests indented bullets and keeps ordered numbering", () => {
+    expect(renderMarkdown("4. d\n5. e\n   - x\n   - y\n6. f\n7. g")).toBe(
+      '<ol start="4"><li>d</li><li>e<ul><li>x</li><li>y</li></ul></li><li>f</li><li>g</li></ol>',
+    );
+  });
+  it("continues numbering after unindented bullets", () => {
+    expect(renderMarkdown("5. e\n- x\n6. f")).toBe(
+      '<ol start="5"><li>e</li></ol><ul><li>x</li></ul><ol start="6"><li>f</li></ol>',
+    );
+  });
+  it("keeps a loose list together and joins indented continuation lines", () => {
+    expect(renderMarkdown("1. a\n   more\n\n2. b\n\nafter")).toBe(
+      "<ol><li>a<br>more</li><li>b</li></ol><p>after</p>",
+    );
+  });
 });
 
 describe("composer", () => {
