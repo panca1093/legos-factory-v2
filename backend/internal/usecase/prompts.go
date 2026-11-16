@@ -321,7 +321,7 @@ A gap is a difference between the change and the contract:
 - evidence: "file:line" or the test name that shows the gap. A gap without evidence is not a gap.
 - files: for a "code" gap, the files or areas a Builder must change. No change to name, no code gap.
 - fix: one or two sentences on what must change.
-A criterion whose only shortfall is that no recorded check proves it (it needs a database, no check covers it) is not a gap:
+A criterion whose code is in the diff and whose only shortfall is that no recorded check proves it (it needs a database, no check covers it) is not a gap:
 list it in "unverified". Never propose a task whose only work is running commands or recording output. A note that a command
 ran does not replace a check.
 At most %d gaps, the most important first. Set "converged" to true when no gap needs work.
