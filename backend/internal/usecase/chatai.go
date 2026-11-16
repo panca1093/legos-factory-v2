@@ -141,6 +141,7 @@ func cleanTitle(s string) string {
 
 // DraftWorkOrder proposes a work order from the conversation with one model call.
 func (c *Chat) DraftWorkOrder(ctx context.Context, u *model.User, id string) (*WorkOrderDraft, error) {
+	ctx = WithChatUser(ctx, u.ID)
 	if _, err := c.own(ctx, u, id); err != nil {
 		return nil, err
 	}

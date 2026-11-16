@@ -111,8 +111,7 @@ type Chat struct {
 	allowAll map[string]map[string]struct{} // chat id → mcp__server__tool the user allowed for the rest of the chat
 
 	lmu    sync.Mutex // the model-list cache, never held while fetching
-	listed []model.ModelInfo
-	listAt time.Time
+	listed map[string]listedModels // by chat owner: each user's account offers its own models
 }
 
 // chatPerm is a writing tool call waiting for the user; answer has room for the one decision.
@@ -170,6 +169,7 @@ type ChatEvent struct {
 }
 
 func (c *Chat) Create(ctx context.Context, u *model.User, title, projectID, modelRef string) (*model.Chat, error) {
+	ctx = WithChatUser(ctx, u.ID)
 	if projectID != "" {
 		if err := c.Projects.Authorize(ctx, u, projectID); err != nil {
 			return nil, err
@@ -216,6 +216,7 @@ func (c *Chat) Get(ctx context.Context, u *model.User, id string) (*model.Chat, 
 
 // Update renames a chat, changes its model and/or its project ("" clears it); nil leaves a field alone.
 func (c *Chat) Update(ctx context.Context, u *model.User, id string, title, modelRef, projectID *string) (*model.Chat, error) {
+	ctx = WithChatUser(ctx, u.ID)
 	if _, err := c.own(ctx, u, id); err != nil {
 		return nil, err
 	}
@@ -412,10 +413,11 @@ func (c *Chat) allowedModels(ctx context.Context) map[string]bool {
 }
 
 func (c *Chat) listModels(ctx context.Context) ([]model.ModelInfo, error) {
+	user := ChatUser(ctx)
 	c.lmu.Lock()
-	if c.listed != nil && time.Since(c.listAt) < modelListTTL {
+	if l, ok := c.listed[user]; ok && time.Since(l.at) < modelListTTL {
 		defer c.lmu.Unlock()
-		return c.listed, nil
+		return l.models, nil
 	}
 	c.lmu.Unlock()
 	infos, err := c.Models(ctx)
@@ -423,7 +425,10 @@ func (c *Chat) listModels(ctx context.Context) ([]model.ModelInfo, error) {
 		return nil, err
 	}
 	c.lmu.Lock()
-	c.listed, c.listAt = infos, time.Now()
+	if c.listed == nil {
+		c.listed = map[string]listedModels{}
+	}
+	c.listed[user] = listedModels{models: infos, at: time.Now()}
 	c.lmu.Unlock()
 	return infos, nil
 }
@@ -501,6 +506,7 @@ func (c *Chat) forget(id string) {
 // "error" event. The turn runs to completion even if the caller goes away, and
 // emit is never called after the terminal event.
 func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, emit func(ChatEvent)) error {
+	ctx = WithChatUser(ctx, u.ID)
 	if _, err := c.own(ctx, u, id); err != nil {
 		return err
 	}
@@ -739,7 +745,7 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 	req.Env, req.Args = env, args
 	sh, canKeep := h.(SessionHarness)
 	var sel model.MCPSelection
-	if c.MCP != nil {
+	if c.MCP != nil && harnessTakesMCP(h) {
 		sel, _ = c.MCP.Selection(ctx, model.AgentChat)
 		if c.Settings != nil {
 			if st, err := c.Settings.Get(ctx); err == nil && st.ChatReadOnly() {
@@ -1000,4 +1006,28 @@ func readOnlySelection(sel model.MCPSelection) model.MCPSelection {
 	out.Deny = append(append([]string{}, sel.Deny...), sel.Ask...)
 	out.Ask = nil
 	return out
+}
+
+type listedModels struct {
+	models []model.ModelInfo
+	at     time.Time
+}
+
+type chatUserKey struct{}
+
+// WithChatUser marks ctx with the chat owner, so model lists and defaults come from that user's agent account.
+func WithChatUser(ctx context.Context, userID string) context.Context {
+	return context.WithValue(ctx, chatUserKey{}, userID)
+}
+
+// ChatUser is the chat owner WithChatUser put on ctx, or "".
+func ChatUser(ctx context.Context) string {
+	id, _ := ctx.Value(chatUserKey{}).(string)
+	return id
+}
+
+// harnessTakesMCP is false for a harness that starts no MCP servers (codex, opencode), so a run on it records no MCP use.
+func harnessTakesMCP(h Harness) bool {
+	m, ok := h.(interface{ SupportsMCP() bool })
+	return !ok || m.SupportsMCP()
 }

@@ -64,6 +64,9 @@ func TestResolveFailsClearlyForUnusableAgents(t *testing.T) {
 	if err := start(model.AgentInspector, &model.WorkOrder{RoleAgents: map[string]string{"inspector": "codex"}}); !errors.Is(err, model.ErrPermanent) || !strings.Contains(err.Error(), "Codex cannot run the inspector role") {
 		t.Fatalf("inspector on codex: %v", err)
 	}
+	if err := start(model.AgentArchitect, &model.WorkOrder{RoleAgents: map[string]string{"architect": "codex"}}); !errors.Is(err, model.ErrPermanent) || !strings.Contains(err.Error(), "Codex cannot run the architect role") {
+		t.Fatalf("old snapshot with codex on architect: %v", err)
+	}
 	if err := a.Server.Agents.SetEnabled(ctx, "claude", false); err != nil {
 		t.Fatal(err)
 	}

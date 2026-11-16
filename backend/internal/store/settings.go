@@ -89,7 +89,7 @@ func (r *SettingsRepo) Put(ctx context.Context, s model.Settings) error {
 	return r.upsert(ctx, writes)
 }
 
-// Patch writes only the keys p sets; the role maps merge per role.
+// Patch writes only the keys p sets; a role map replaces the stored one, so callers merge first.
 func (r *SettingsRepo) Patch(ctx context.Context, p model.SettingsPatch) error {
 	return r.PatchSealed(ctx, p, nil)
 }
@@ -120,24 +120,11 @@ func (r *SettingsRepo) PatchSealed(ctx context.Context, p model.SettingsPatch, s
 	if sealedJevKey != nil {
 		writes["jev_key"] = base64.StdEncoding.EncodeToString(sealedJevKey)
 	}
-	for key, patch := range map[string]map[string]string{"role_agents": p.RoleAgents, "role_permissions": p.RolePermissions} {
-		if len(patch) == 0 {
-			continue
+	for key, m := range map[string]map[string]string{"role_agents": p.RoleAgents, "role_permissions": p.RolePermissions} {
+		if m != nil {
+			b, _ := json.Marshal(m)
+			writes[key] = string(b)
 		}
-		cur := map[string]string{}
-		var raw string
-		switch err := tx.QueryRowContext(ctx, `SELECT value FROM settings_kv WHERE key = ?`, key).Scan(&raw); err {
-		case nil:
-			_ = json.Unmarshal([]byte(raw), &cur)
-		case sql.ErrNoRows:
-		default:
-			return err
-		}
-		for role, v := range patch {
-			cur[role] = v
-		}
-		b, _ := json.Marshal(cur)
-		writes[key] = string(b)
 	}
 	for k, v := range writes {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO settings_kv (key, value) VALUES (?,?)

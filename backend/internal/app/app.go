@@ -277,7 +277,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	chatAgent := func() string { return roleAgent(model.AgentChat, nil) }
 	if acpMode {
 		listModels = func(ctx context.Context) ([]model.ModelInfo, error) {
-			return cats.list(ctx, agents, chatAgent(), "", false)
+			return cats.list(ctx, agents, chatAgent(), usecase.ChatUser(ctx), false)
 		}
 		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) {
 			id := c.QueryParam("agent")
@@ -326,7 +326,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		id := chatAgent()
 		var cat []string
 		if agents.Ready(ctx, id) == nil {
-			ms, _ := cats.list(ctx, agents, id, "", false)
+			ms, _ := cats.list(ctx, agents, id, usecase.ChatUser(ctx), false)
 			cat = refs(ms)
 		}
 		return usecase.ResolveAgentModel(model.AgentChat, &model.WorkOrder{}, s, cat)

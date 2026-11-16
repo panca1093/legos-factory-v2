@@ -86,7 +86,7 @@ func TestSettingsWriteGuards(t *testing.T) {
 		t.Fatalf("PUT must be gone: %d", code)
 	}
 	for _, bad := range []string{`{"max_concurrent_runs":0}`, `{"max_concurrent_runs":17}`,
-		`{"role_agents":{"inspector":"codex"}}`, `{"role_agents":{"builder":"nope"}}`, `{"role_agents":{"janitor":"claude"}}`,
+		`{"role_agents":{"inspector":"codex"}}`, `{"role_agents":{"architect":"codex"}}`, `{"role_agents":{"chat":"codex"}}`, `{"role_agents":{"foreman":"codex"}}`, `{"role_agents":{"builder":"nope"}}`, `{"role_agents":{"janitor":"claude"}}`,
 		`{"role_permissions":{"builder":"ask"}}`, `{"role_permissions":{"chat":"write"}}`} {
 		if code, _ := chatDo(srv, "adm", "PATCH", "/api/v1/settings", bad); code != http.StatusBadRequest {
 			t.Fatalf("%s: %d", bad, code)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // codexConfig is the config.toml of a run's private CODEX_HOME. It names no MCP servers on purpose: codex reads
@@ -50,19 +51,31 @@ func (h *ACPHarness) runEnv(env []string) ([]string, func(), error) {
 	}
 	cleanup := func() {
 		if after, err := os.ReadFile(tmpAuth); err == nil && len(after) > 0 && !bytes.Equal(after, copied) {
-			// codex rotated the login during the run; losing it would sign the account out
-			if f, err := os.CreateTemp(src, ".auth-*"); err == nil {
-				_ = f.Chmod(0o600)
-				_, werr := f.Write(after)
-				cerr := f.Close()
-				if werr == nil && cerr == nil {
-					_ = os.Rename(f.Name(), srcAuth)
-				} else {
-					_ = os.Remove(f.Name())
-				}
-			}
+			saveRotatedLogin(src, srcAuth, copied, after)
 		}
 		_ = os.RemoveAll(tmp)
 	}
 	return append(append([]string{}, env...), "CODEX_HOME="+tmp), cleanup, nil
+}
+
+var authLocks sync.Map // account dir -> *sync.Mutex
+
+// saveRotatedLogin stores a login codex rotated during a run, unless the account's file changed since the run
+// copied it: another run of the same account saved a newer one first, and that one is kept.
+func saveRotatedLogin(src, srcAuth string, started, rotated []byte) {
+	mu, _ := authLocks.LoadOrStore(src, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+	if cur, err := os.ReadFile(srcAuth); err == nil && !bytes.Equal(cur, started) {
+		return
+	}
+	f, err := os.CreateTemp(src, ".auth-*")
+	if err != nil {
+		return
+	}
+	_ = f.Chmod(0o600)
+	_, werr := f.Write(rotated)
+	if cerr := f.Close(); werr != nil || cerr != nil || os.Rename(f.Name(), srcAuth) != nil {
+		_ = os.Remove(f.Name())
+	}
 }

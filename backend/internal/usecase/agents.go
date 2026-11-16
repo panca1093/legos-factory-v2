@@ -41,10 +41,10 @@ var AgentSpecs = []AgentSpec{
 	{ID: "claude", Name: "Claude", Command: []string{"claude-agent-acp"},
 		InstallHint: "npm install -g @agentclientprotocol/claude-agent-acp", Roles: allRoles,
 		statusCmd: []string{"claude", "auth", "status"}, loginCmd: []string{"claude", "auth", "login"}},
-	// Codex cannot hold a role read-only except by refusing every permission, and a refusal ends its turn, so it cannot run the Inspector's tests.
+	// Builder only: codex reads files without asking and has no read sandbox, so on a read-only role it could read secrets outside the workspace.
 	{ID: "codex", Name: "Codex", Command: []string{"codex-acp"},
 		InstallHint: "npm install -g @agentclientprotocol/codex-acp",
-		Roles:       []model.AgentRole{model.AgentForeman, model.AgentArchitect, model.AgentBuilder, model.AgentChat},
+		Roles:       []model.AgentRole{model.AgentBuilder},
 		statusCmd:   []string{"codex", "login", "status"}, loginCmd: []string{"codex", "login", "--device-auth"}},
 	{ID: "opencode", Name: "OpenCode", Command: []string{"opencode", "acp"},
 		InstallHint: "curl -fsSL https://opencode.ai/install | bash", Roles: allRoles,
@@ -87,13 +87,9 @@ func (s AgentSpec) accountEnv(home string) []string {
 	return nil
 }
 
-// accountArgs are extra ACP command arguments an account needs: a running OpenCode background service ignores the XDG variables without --standalone.
-func (s AgentSpec) accountArgs() []string {
-	if s.ID == "opencode" {
-		return []string{"--standalone"}
-	}
-	return nil
-}
+// accountArgs are extra ACP command arguments an account needs. None today: `opencode acp` rejects --standalone
+// (it only prints help), and the XDG variables alone isolate its auth, config and state (checked with a scratch dir).
+func (s AgentSpec) accountArgs() []string { return nil }
 
 const SystemAccountID = "system"
 
@@ -627,11 +623,33 @@ func parseClaudeUsage(r io.Reader) (*AccountUsage, error) {
 // readCodexLimits asks `codex app-server` over stdio for account/rateLimits/read, under the account's CODEX_HOME.
 // TODO: uncertain — codex app-server's protocol is experimental; the parsing is pinned to codex-cli 0.166, verify after codex upgrades
 func (a *Agents) readCodexLimits(ctx context.Context, home string) (CodexLimits, error) {
-	cmd := exec.CommandContext(ctx, "codex", "app-server")
-	cmd.Env = os.Environ()
-	if home != "" {
-		cmd.Env = append(cmd.Env, "CODEX_HOME="+home)
+	// like a run, it gets a private CODEX_HOME with a copy of the login and an empty config: the real
+	// config.toml would start the user's MCP servers
+	tmp, err := os.MkdirTemp("", "legos-codex-limits-")
+	if err != nil {
+		return CodexLimits{}, err
 	}
+	defer os.RemoveAll(tmp)
+	src := home
+	if src == "" {
+		if src = os.Getenv("CODEX_HOME"); src == "" {
+			h, herr := os.UserHomeDir()
+			if herr != nil {
+				return CodexLimits{}, herr
+			}
+			src = filepath.Join(h, ".codex")
+		}
+	}
+	if auth, rerr := os.ReadFile(filepath.Join(src, "auth.json")); rerr == nil {
+		if err := os.WriteFile(filepath.Join(tmp, "auth.json"), auth, 0o600); err != nil {
+			return CodexLimits{}, err
+		}
+	}
+	if err := os.WriteFile(filepath.Join(tmp, "config.toml"), nil, 0o600); err != nil {
+		return CodexLimits{}, err
+	}
+	cmd := exec.CommandContext(ctx, "codex", "app-server")
+	cmd.Env = append(os.Environ(), "CODEX_HOME="+tmp)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return CodexLimits{}, err

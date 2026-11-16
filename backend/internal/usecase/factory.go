@@ -219,8 +219,11 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 		Role: role, Prompt: prompt, ProviderID: provider, ModelID: modelID,
 		WorkspaceDir: dir, Context: cctx,
 	}
-	mcpAudit := f.applyMCP(ctx, &req)
 	h := f.Resolve(role, wo)
+	var mcpAudit map[string]any
+	if harnessTakesMCP(h) {
+		mcpAudit = f.applyMCP(ctx, &req)
+	}
 	if f.RunEnv != nil {
 		var eerr error
 		if req.Env, req.Args, eerr = f.RunEnv(ctx, role, wo); eerr != nil {

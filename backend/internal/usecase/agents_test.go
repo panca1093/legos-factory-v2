@@ -130,7 +130,7 @@ func TestAgentAccountEnvPerAgent(t *testing.T) {
 		}
 		_ = a.Activate(ctx, u, agent, n.Account.ID)
 		env, args, _ := a.RunEnv(ctx, agent, "u1")
-		if agent == "opencode" && (len(env) != 4 || len(args) != 1 || args[0] != "--standalone") {
+		if agent == "opencode" && (len(env) != 4 || args != nil) {
 			t.Fatalf("opencode env %v args %v", env, args)
 		}
 		if agent == "codex" && (len(env) != 1 || args != nil) {

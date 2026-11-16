@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"legos-factory/backend/internal/model"
 )
@@ -33,6 +34,23 @@ type WorkspaceSettings struct {
 	DefaultWorkers int
 	// OnChange runs after a successful PATCH with the settings now in force.
 	OnChange func(*model.Settings)
+
+	mu sync.Mutex // serializes the read-merge-write of the role maps
+}
+
+// mergeRoles is cur with the roles of patch set; nil when patch sets none, so the store leaves the key alone.
+func mergeRoles(cur, patch map[string]string) map[string]string {
+	if len(patch) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for k, v := range cur {
+		out[k] = v
+	}
+	for k, v := range patch {
+		out[k] = v
+	}
+	return out
 }
 
 func (w *WorkspaceSettings) defaultAgent() string {
@@ -129,6 +147,16 @@ func (w *WorkspaceSettings) Patch(ctx context.Context, p model.SettingsPatch) (*
 				return nil, fmt.Errorf("could not seal the Jev key")
 			}
 		}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(p.RoleAgents) > 0 || len(p.RolePermissions) > 0 {
+		cur, err := w.Store.Get(ctx)
+		if err != nil {
+			return nil, err
+		}
+		p.RoleAgents = mergeRoles(cur.RoleAgents, p.RoleAgents)
+		p.RolePermissions = mergeRoles(cur.RolePermissions, p.RolePermissions)
 	}
 	if err := w.Store.PatchSealed(ctx, p, sealed); err != nil {
 		return nil, err

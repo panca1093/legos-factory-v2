@@ -68,6 +68,9 @@ func agentProvider(command []string) string {
 	return filepath.Base(command[0])
 }
 
+// SupportsMCP reports that the harness starts MCP servers: only claude does.
+func (h *ACPHarness) SupportsMCP() bool { return h.Provider == "claude" }
+
 func (h *ACPHarness) Name() string {
 	switch h.Provider {
 	case "claude":
@@ -607,8 +610,12 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 	case "cancelled":
 		r.err = errors.New("cancelled")
 		if r.conn.agent == "codex" && r.conn.refused.Load() > 0 {
-			// codex ends the turn on a refusal, so a read-only role that asked to run something cannot go on
-			r.err = fmt.Errorf("%w: codex ended the turn after a permission request was refused; this role is read-only on codex", model.ErrPermanent)
+			// codex ends the turn on a refusal, so it cannot go on
+			why := "the request fell outside the workspace"
+			if r.conn.role != model.AgentBuilder {
+				why = "this role is read-only on codex"
+			}
+			r.err = fmt.Errorf("%w: codex ended the turn after a permission request was refused; %s", model.ErrPermanent, why)
 		}
 		return
 	case "refusal":
