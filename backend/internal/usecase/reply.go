@@ -255,7 +255,6 @@ type convergeGap struct {
 	Cites    string `json:"cites"`
 	Evidence string `json:"evidence"`
 	Fix      string `json:"fix"`
-	Restore  bool   `json:"-"` // a changed locked contract test: the Builder must restore it, so it also becomes a task
 }
 
 const maxConvergeGaps = 10

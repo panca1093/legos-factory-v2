@@ -60,11 +60,6 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 		completed["notes"] = notes
 	}
 	f.event(wo.ID, "builder", "task_completed", fmt.Sprintf("Task %s implemented", job.TaskID), completed)
-	if job.TaskID == contractTaskID(wo.ID) {
-		if proceed, err := f.contractRedProof(ctx, wo, job); err != nil || !proceed {
-			return err
-		}
-	}
 	return f.maybeAdvanceAfterImplementation(ctx, wo)
 }
 

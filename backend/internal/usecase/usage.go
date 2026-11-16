@@ -10,14 +10,12 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
-// UsageTracker records agent execution cost and enforces local budget
-// limits. Where provider pricing is unknown, cost is recorded as an
+// UsageTracker records agent execution cost. Where provider pricing is unknown, cost is recorded as an
 // estimate with source="estimated" and never presented as billed value.
 type UsageTracker struct {
 	Repo UsageStore
 
 	mu           sync.Mutex
-	limitMicros  int64
 	reserved     map[int64]int64 // reservationID -> reserved micros
 	totalRes     int64
 }
@@ -39,42 +37,17 @@ func (t *UsageTracker) Summary(ctx context.Context) (model.UsageTotals, error) {
 	return t.Repo.Totals(ctx)
 }
 
-// SetBudgetLimit sets the workspace spending cap in cost micros (0 = unset).
-func (t *UsageTracker) SetBudgetLimit(micros int64) {
-	t.mu.Lock()
-	t.limitMicros = micros
-	t.mu.Unlock()
-}
-
-// BudgetStatus reports limit, spent (recorded), reserved, and available.
-func (t *UsageTracker) BudgetStatus() (limit, spent, reserved, available int64) {
+// BudgetStatus reports what is recorded as spent and what running jobs have reserved. There is no spending cap.
+func (t *UsageTracker) BudgetStatus() (spent, reserved int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	spent = t.spentLocked()
-	limit = t.limitMicros
-	reserved = t.totalRes
-	if limit == 0 {
-		available = 1 << 62
-	} else {
-		available = limit - spent - reserved
-	}
-	return
+	return t.spentLocked(), t.totalRes
 }
 
-// Reserve tries to reserve estMicros against the remaining budget. The
-// reservation is held in memory (single-process MVP); it prevents parallel
-// jobs from independently consuming the same remaining budget.
+// Reserve holds estMicros for a running job; with no cap it always succeeds.
 func (t *UsageTracker) Reserve(estMicros int64) (release func(actual int64), ok bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	spent := t.spentLocked()
-	available := int64(1 << 62)
-	if t.limitMicros > 0 {
-		available = t.limitMicros - spent - t.totalRes
-	}
-	if estMicros > available {
-		return nil, false
-	}
 	id := time.Now().UnixNano()
 	t.reserved[id] = estMicros
 	t.totalRes += estMicros

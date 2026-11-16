@@ -35,7 +35,7 @@ func (f *Factory) handleEvaluate(ctx context.Context, job model.Job) error {
 		return nil // superseded or already evaluated
 	}
 	var escalation []string
-	if f.Judge != nil {
+	if f.judge() != nil {
 		handled, note, err := f.convergeGate(ctx, wo)
 		if err != nil || handled {
 			return err
@@ -104,20 +104,15 @@ func (f *Factory) convergeGate(ctx context.Context, wo *model.WorkOrder) (handle
 	if err != nil {
 		return false, nil, err
 	}
-	tested, changedTests, err := f.contractStatus(ctx, wo)
-	if err != nil {
-		return false, nil, err
-	}
-	report.Gaps = append(slices.Clone(report.Gaps), changedTests...)
 	in := ConvergeGateInput{
 		Criteria: criteria, Spec: wo.Spec, Tasks: gateTasks(tasks), Diff: diff, Checks: gateChecks,
-		OpenFindings: open, Gaps: append(slices.Clone(report.Gaps), citedFindingGaps(findings, criteria)...), Tested: tested,
+		OpenFindings: open, Gaps: append(slices.Clone(report.Gaps), citedFindingGaps(findings, criteria)...),
 	}
 	state, qs := convergeGateState(in)
 	var res JudgeResult
 	var over bool
 	var jerr error
-	if len(qs) > 0 { // every criterion may be met by its green contract test
+	if len(qs) > 0 {
 		res, over, jerr = f.askJudge(ctx, state, qs)
 	}
 	out := decideConvergeGate(in, qs, res.Answers, jerr, over, checksFailed, openBlockers, appends < MaxConvergeAppends)
@@ -226,9 +221,6 @@ func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in Conve
 			addTask(key, key+" "+truncateText(g.Fix, 60), objective, evidencePaths(g.Evidence))
 		case "contract":
 			contract = append(contract, g)
-			if g.Restore {
-				addTask(key, key+" "+truncateText(g.Fix, 60), objective, evidencePaths(g.Evidence))
-			}
 		default:
 			requirement = append(requirement, g)
 		}
