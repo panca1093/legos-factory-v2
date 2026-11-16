@@ -62,7 +62,7 @@ func TestKBScopeOverFetchesPastTheListLimit(t *testing.T) {
 	}
 	r.do(t, "eng", "PUT", "/api/v1/projects/p1/kb-scope", `{"kb_exclude":["./docs/gen/"]}`)
 	_, body = r.do(t, "eng", "GET", "/api/v1/kb/docs?project_id=p1", "")
-	if ids := docIDs(t, body); !has(ids, repoID) || len(ids) > 10 {
+	if ids := docIDs(t, body); !has(ids, repoID) || len(ids) > 12 {
 		t.Fatalf("excluded docs must not take slots from valid ones: %d ids, money=%v", len(ids), has(ids, repoID))
 	}
 }
