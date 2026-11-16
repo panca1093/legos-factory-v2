@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"reflect"
 	"regexp"
 	"strings"
@@ -141,7 +142,67 @@ func (p *planReply) validate() error {
 		}
 		ids[t.ID] = true
 	}
+	return checkScopes(p.Tasks)
+}
+
+const maxTaskScope = 5
+
+// checkScopes rejects tasks that are too wide, and tasks that touch the same file or directory
+// without an ordering dependency, so independent tasks can safely run in parallel.
+func checkScopes(tasks []planTask) error {
+	ref := func(i int) string {
+		if tasks[i].ID != "" {
+			return tasks[i].ID
+		}
+		return fmt.Sprintf("t%d", i+1)
+	}
+	byID := map[string]int{}
+	for i := range tasks {
+		byID[ref(i)] = i
+		if n := len(tasks[i].Scope); n > maxTaskScope {
+			return fmt.Errorf("task %q has %d scope entries (max %d); split it into smaller flow slices", ref(i), n, maxTaskScope)
+		}
+	}
+	ordered := func(from, to int) bool {
+		seen := map[int]bool{}
+		stack := []int{from}
+		for len(stack) > 0 {
+			n := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			for _, d := range tasks[n].Deps {
+				j, ok := byID[d]
+				if !ok || seen[j] {
+					continue
+				}
+				if j == to {
+					return true
+				}
+				seen[j] = true
+				stack = append(stack, j)
+			}
+		}
+		return false
+	}
+	for i := range tasks {
+		for j := i + 1; j < len(tasks); j++ {
+			if ordered(i, j) || ordered(j, i) {
+				continue
+			}
+			for _, a := range tasks[i].Scope {
+				for _, b := range tasks[j].Scope {
+					if scopesOverlap(a, b) {
+						return fmt.Errorf("tasks %q and %q both touch %q (and %q) without depending on each other; add a dep between them or make their scopes disjoint", ref(i), ref(j), a, b)
+					}
+				}
+			}
+		}
+	}
 	return nil
+}
+
+func scopesOverlap(a, b string) bool {
+	a, b = strings.Trim(path.Clean(a), "/"), strings.Trim(path.Clean(b), "/")
+	return a == b || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
 }
 
 // reviewFinding is one problem the Foreman found in the contract. Question is

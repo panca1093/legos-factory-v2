@@ -143,7 +143,7 @@ Acceptance criteria:
 %s
 %s
 %s
-Write the contract (spec) and decompose it into the smallest set of implementation tasks.
+Write the contract (spec) and split it into implementation tasks sized as below.
 Respond with ONLY a JSON object (no prose, no code fences) matching:
 
 {"decision":"APPROVE"|"CLARIFY",
@@ -161,6 +161,12 @@ The spec is under %d words, with these sections in order:
 The spec says what and why. No file paths, line numbers or code in it.
 
 Each task objective is under %d words. Cite spec sections ("Behaviour rule 2") instead of restating them. "scope" lists the files or areas the task may touch; file paths belong here, not in the spec.
+
+Task sizing:
+- A task is one flow or behaviour slice built end to end with its own tests. Think flow, not files.
+- Standard scope is up to 3 files, never more than 5. Split anything wider.
+- Tasks whose scopes share a file or directory must be ordered through deps; keep scopes disjoint where possible so independent tasks run in parallel.
+- Every task objective ends with "Done when: <verifiable check>".
 
 Rules:
 - If the behaviour is unclear and the objective, the brief and the clarifications do not settle it, use decision CLARIFY and ask — never guess or invent requirements. Choices about how, inside your role, are yours: decide and put them in the Decisions table.
