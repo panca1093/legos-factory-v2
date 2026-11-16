@@ -65,6 +65,11 @@ function hint(k: RoleKey) {
 }
 const agentOptions = (k: RoleKey) =>
   props.agents.filter((a) => a.installed || a.id === agentOf(k));
+function unsupportedNote(a: AgentInfo) {
+  return a.roles_allowed.length === 1
+    ? `${a.roles_allowed[0][0].toUpperCase()}${a.roles_allowed[0].slice(1)} only`
+    : "not supported for this role";
+}
 const supported = (a: AgentInfo, k: RoleKey) => a.roles_allowed.includes(k);
 
 let queue: Promise<unknown> = Promise.resolve();
@@ -154,7 +159,7 @@ const changePerm = (el: HTMLSelectElement) =>
                 {{ a.name
                 }}{{
                   !supported(a, r.key)
-                    ? " · not supported"
+                    ? ` · ${unsupportedNote(a)}`
                     : !a.enabled
                       ? " · off"
                       : ""

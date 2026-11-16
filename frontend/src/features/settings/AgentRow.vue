@@ -143,6 +143,11 @@ const signInTarget = computed(() =>
       ? undefined
       : props.agent.accounts.find((a) => a.status === "signed_out"),
 );
+const showBars = computed(() => {
+  const a = active.value;
+  if (!a || (isClaude.value && !props.usageOptIn)) return false;
+  return !!(a.usage?.session || a.usage?.week || a.usage_error);
+});
 const isClaude = computed(() => props.agent.id === "claude");
 </script>
 <template>
@@ -211,7 +216,7 @@ const isClaude = computed(() => props.agent.id === "claude");
     </div>
 
     <template v-if="agent.enabled && active?.status === 'signed_in'">
-      <p v-if="!(isClaude && usageOptIn)" class="help" data-test="plan-line">
+      <p v-if="!showBars" class="help" data-test="plan-line">
         {{ planLine(active) }}
       </p>
       <div v-else class="usage">

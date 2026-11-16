@@ -159,7 +159,7 @@ beforeEach(() => {
         command: "codex-acp",
         installed: true,
         enabled: true,
-        roles_allowed: ["foreman", "architect", "builder", "chat"],
+        roles_allowed: ["builder"],
         accounts: [acct({ id: "cx", who: "me@x.com", plan: "plus" })],
       },
       {
@@ -458,9 +458,11 @@ it("roles table: changing an agent reloads its models and saves the first one", 
 it("roles table: Codex is disabled for Inspector, Builder permission is locked, Chat has a choice", async () => {
   routes["PATCH /api/v1/settings"] = patchEcho;
   const { w } = await render();
-  const opt = w.find('#agent-inspector option[value="codex"]');
-  expect(opt.attributes("disabled")).toBeDefined();
-  expect(opt.text()).toContain("not supported");
+  for (const role of ["foreman", "architect", "inspector", "chat"]) {
+    const o = w.find(`#agent-${role} option[value="codex"]`);
+    expect(o.attributes("disabled"), role).toBeDefined();
+    expect(o.text()).toContain("Builder only");
+  }
   expect(
     w.find('#agent-builder option[value="codex"]').attributes("disabled"),
   ).toBeUndefined();
@@ -808,11 +810,8 @@ it("toggles tools and roles, enforcing the writing-tool rule in the UI and showi
     return json(current);
   };
   const { w } = await render();
-  await w
-    .find('[data-mcp="docs_search"]')
-    .findAll("button")
-    .find((b) => b.text() === "Tools and roles")!
-    .trigger("click");
+  await click(w, "More for docs_search");
+  await buttonByText(w, "Tools and roles").trigger("click");
 
   const writing = w.find('[data-test="mcp-tool-write_page"]');
   const unusable = w.find('[data-test="mcp-tool-bad name"]');
@@ -1006,4 +1005,43 @@ it("shows the callback result from the URL once and clears it", async () => {
   r = await render("/settings#connections");
   expect(r.w.find('[data-test="mcp-oauth-flag"]').exists()).toBe(false);
   r.w.unmount();
+});
+
+it("MCP row shows one status and one primary action, the rest in the menu", async () => {
+  routes["GET /api/v1/mcp-servers"] = () =>
+    json({ servers: [discovered(["builder"])], credentials_configured: true });
+  const { w } = await render();
+  const row = w.find('[data-mcp="docs_search"]');
+  expect(row.find('[data-test="mcp-status"]').text()).toBe("0 of 3 tools on");
+  expect(row.find(".btn.primary").exists()).toBe(false);
+  expect(row.findAll("button").map((b) => b.attributes("aria-label"))).toEqual([
+    "More for docs_search",
+  ]);
+  await click(w, "More for docs_search");
+  expect(row.findAll('[role="menuitem"]').map((b) => b.text())).toEqual([
+    "Test and discover again",
+    "Tools and roles",
+    "Rename or rotate",
+    "Turn off",
+    "Remove",
+  ]);
+  w.unmount();
+});
+
+it("shows usage bars for Codex without any opt-in, and the plan line when there is no usage", async () => {
+  agentsBody.agents[1].accounts = [
+    acct({
+      id: "cx",
+      usage: { session: { used_pct: 12 }, week: { used_pct: 40 } },
+    }),
+  ];
+  const { w } = await render();
+  const codex = w.find('[data-agent="codex"]');
+  expect(codex.find('[data-meter="session"]').text()).toContain("12%");
+  expect(codex.find('[data-meter="week"]').text()).toContain("40%");
+  expect(codex.find('[data-test="plan-line"]').exists()).toBe(false);
+  const claude = w.find('[data-agent="claude"]');
+  expect(claude.find("[data-meter]").exists()).toBe(false);
+  expect(claude.find('[data-test="plan-line"]').exists()).toBe(true);
+  w.unmount();
 });
