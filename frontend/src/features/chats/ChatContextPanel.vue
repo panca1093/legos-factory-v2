@@ -8,7 +8,13 @@ import {
   watch,
 } from "vue";
 import { RouterLink, useRouter } from "vue-router";
-import { ArrowRight, BookOpen, GitBranch, Plus, Trash2 } from "lucide-vue-next";
+import {
+  ArrowRight,
+  ClipboardList,
+  GitBranch,
+  Plus,
+  Trash2,
+} from "lucide-vue-next";
 import Button from "../../components/ui/Button.vue";
 import Popover from "../../components/ui/Popover.vue";
 import NewWorkOrderDrawer from "../factory/work-orders/NewWorkOrderDrawer.vue";
@@ -19,12 +25,10 @@ import {
   publishLabel,
 } from "../../composables/presentation";
 import { useChats, type ChatMessage, type Chat } from "../../stores/chats";
-import type { RelatedDoc, WorkOrderDraft } from "../../stores/chats";
+import type { WorkOrderDraft } from "../../stores/chats";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
 import { ApiError } from "../../types/api";
-import { chatTitle } from "./chatUtils";
-import AttachmentChip from "./AttachmentChip.vue";
 import RailSection from "./RailSection.vue";
 import {
   cacheState,
@@ -52,20 +56,17 @@ const store = useChats(),
   router = useRouter(),
   { toast } = useToast();
 const helpProject = ref(false),
-  helpKnowledge = ref(false),
   confirmDelete = ref(false),
   drafting = ref(false),
   draftError = ref(""),
   saved = ref<WorkOrderDraft | null>(null),
   drawerOpen = ref(false),
-  related = ref<RelatedDoc[]>([]),
   info = ref<SessionInfo | null>(null),
   infoLoading = ref(false),
   infoError = ref(""),
   now = ref(Date.now()),
   open = reactive(loadOpen());
 let abort: AbortController | undefined;
-let relatedSeq = 0;
 let infoSeq = 0;
 let tick: ReturnType<typeof setInterval> | undefined;
 const project = computed(() =>
@@ -89,25 +90,6 @@ const blocker = computed(() =>
 );
 const linked = computed(() =>
   factory.workOrders.filter((w) => w.source_chat_id === props.chat.id),
-);
-const attachments = computed(() => {
-  const seen = new Set<string>();
-  return props.messages
-    .flatMap((m) => m.attachments ?? [])
-    .filter((a) => {
-      const k = a.kind + (a.kind === "kb" ? a.doc_id : (a.file_id ?? a.name));
-      return !seen.has(k) && !!seen.add(k);
-    });
-});
-const usage = computed(() =>
-  props.messages.reduce(
-    (t, m) => ({
-      tokens_in: t.tokens_in + (m.usage?.tokens_in ?? 0),
-      tokens_out: t.tokens_out + (m.usage?.tokens_out ?? 0),
-      cost: t.cost + (m.usage?.cost_micros ?? 0),
-    }),
-    { tokens_in: 0, tokens_out: 0, cost: 0 },
-  ),
 );
 const reason = (e: unknown) =>
   e instanceof ApiError && e.code === "CHAT_BUSY"
@@ -157,19 +139,9 @@ function created(r: { id: string; planningError: string }) {
     query: r.planningError ? { planningError: r.planningError } : {},
   });
 }
-async function loadRelated() {
-  const seq = ++relatedSeq;
-  try {
-    const docs = await store.relatedKnowledge(props.chat.id);
-    if (seq === relatedSeq) related.value = docs;
-  } catch {
-    if (seq === relatedSeq) related.value = [];
-  }
-}
 watch(
   () => props.chat.id,
   () => {
-    related.value = [];
     info.value = null;
     infoError.value = "";
     infoSeq++;
@@ -227,13 +199,25 @@ const barLabel = computed(() =>
 );
 const offered = computed(() => info.value?.mcp.filter((m) => m.offered) ?? []);
 const sp = computed(() => info.value?.project ?? null);
-const projectSummary = computed(() => sp.value?.local?.branch ?? "");
+const projectSummary = computed(() =>
+  props.chat.project_id ? "Bound" : "Not bound",
+);
+const crewColor = (role: string) =>
+  ["foreman", "architect", "builder", "inspector", "cataloger"].includes(role)
+    ? `var(--crew-${role})`
+    : "var(--chart-2)";
+const cacheBar = computed(() => {
+  const c = ctx.value?.cache;
+  const total = c ? c.read + c.write + c.uncached : 0;
+  return c && total > 0
+    ? { read: (c.read / total) * 100, write: (c.write / total) * 100 }
+    : null;
+});
 function agentRole(r: string) {
   return r ? r[0].toUpperCase() + r.slice(1) : "Agent";
 }
 function load() {
   void loadInfo();
-  void loadRelated();
   if (!factory.projects.length) void factory.refreshProjects().catch(() => {});
   void factory.refreshWorkOrders().catch(() => {});
 }
@@ -266,6 +250,7 @@ onBeforeUnmount(() => {
       id="project"
       title="Project"
       :summary="projectSummary"
+      :tone="chat.project_id ? 'ok' : 'muted'"
       :open="open.project"
       @toggle="toggle('project')"
     >
@@ -315,7 +300,11 @@ onBeforeUnmount(() => {
         <p v-if="sp.local" class="mono rail-path" :title="sp.local.path">
           {{ sp.local.path }}
         </p>
-        <dl class="rail-kv" aria-label="Project checkout">
+        <dl
+          v-if="sp.local || sp.checkout"
+          class="rail-kv rail-box"
+          aria-label="Project checkout"
+        >
           <template v-if="sp.local">
             <dt>Your folder</dt>
             <dd class="mono">
@@ -345,7 +334,17 @@ onBeforeUnmount(() => {
             Worktrees <span>{{ sp.worktrees.length }}</span>
           </h5>
           <ul class="rail-list" aria-label="Worktrees">
-            <li v-for="w in sp.worktrees" :key="w.path">
+            <li
+              v-for="w in sp.worktrees"
+              :key="w.path"
+              class="rail-dot"
+              :style="{
+                '--dot':
+                  sp.local && w.branch === sp.local.branch
+                    ? 'var(--success)'
+                    : 'var(--chart-3)',
+              }"
+            >
               <span class="mono rail-name">{{ w.branch || "detached" }}</span>
               <span
                 v-if="sp.local && w.branch === sp.local.branch"
@@ -368,7 +367,12 @@ onBeforeUnmount(() => {
             class="rail-list"
             aria-label="Running agents"
           >
-            <li v-for="r in sp.running" :key="r.work_order_id + r.task_id">
+            <li
+              v-for="r in sp.running"
+              :key="r.work_order_id + r.task_id"
+              class="rail-dot"
+              :style="{ '--dot': crewColor(r.role) }"
+            >
               <RouterLink :to="`/factory/${r.work_order_id}`">
                 <span class="rail-name"
                   >{{ agentRole(r.role) }} · {{ r.state }}</span
@@ -401,8 +405,10 @@ onBeforeUnmount(() => {
           Could not refresh: {{ infoError }}
         </p>
         <div class="rail-top">
-          <span v-if="pct !== null" data-test="ctx-pct">{{ pct }}% used</span>
-          <span v-else data-test="ctx-pct"
+          <span v-if="pct !== null" class="rail-big" data-test="ctx-pct"
+            >{{ pct }}% used</span
+          >
+          <span v-else class="rail-big" data-test="ctx-pct"
             >{{ fmtTokens(ctx.used) }} tokens</span
           >
           <span class="mono" data-test="ctx-used">
@@ -457,6 +463,22 @@ onBeforeUnmount(() => {
               cache?.warm ? `Warm · ${cache.minutesLeft} min left` : "Cold"
             }}</span>
           </div>
+          <div v-if="cacheBar" class="rail-bar thin" aria-hidden="true">
+            <span
+              v-if="cacheBar.read > 0"
+              :style="{
+                width: `${cacheBar.read}%`,
+                background: 'var(--chart-1)',
+              }"
+            ></span>
+            <span
+              v-if="cacheBar.write > 0"
+              :style="{
+                width: `${cacheBar.write}%`,
+                background: 'var(--crew-foreman)',
+              }"
+            ></span>
+          </div>
           <dl v-if="ctx.cache" class="rail-kv">
             <dt>Read from cache</dt>
             <dd class="mono">
@@ -493,10 +515,21 @@ onBeforeUnmount(() => {
       </p>
       <template v-else-if="info">
         <ul v-if="info.mcp.length" class="rail-list" aria-label="MCP servers">
-          <li v-for="m in info.mcp" :key="m.id" class="rail-mcp">
+          <li
+            v-for="m in info.mcp"
+            :key="m.id"
+            class="rail-mcp rail-dot"
+            :class="{ off: !m.offered }"
+            :style="{
+              '--dot':
+                m.offered && m.status === 'active'
+                  ? 'var(--success)'
+                  : 'var(--chart-3)',
+            }"
+          >
             <div class="rail-top">
               <span class="mono rail-name">{{ m.name }}</span>
-              <span class="rail-pill" :class="m.offered ? 'warm' : 'cold'">{{
+              <span class="rail-pill" :class="m.offered ? 'ok' : 'muted'">{{
                 m.offered ? "Offered to chat" : "Not offered to chat"
               }}</span>
             </div>
@@ -525,118 +558,75 @@ onBeforeUnmount(() => {
       </template>
     </RailSection>
     <RailSection
-      id="convo"
-      title="From this conversation"
-      :open="open.convo"
-      @toggle="toggle('convo')"
+      id="task"
+      title="Task"
+      :summary="linked.length ? `${linked.length} from this chat` : ''"
+      :open="open.task"
+      @toggle="toggle('task')"
     >
-      <div class="ctx-card">
-        <span class="ctx-tag">Working notes</span>
-        <strong class="ctx-card-title">{{ chatTitle(chat) }}</strong>
-        <p>
-          Capture the useful parts. Review the scope before anything starts.
-        </p>
-        <Button
-          v-if="!drafting"
-          variant="primary"
-          data-test="create-wo"
-          aria-describedby="ctx-wo-note"
-          :disabled="!!blocker"
-          @click="createWorkOrder(false)"
-          ><Plus class="icon" />Create work order</Button
-        >
-        <div v-else class="ctx-busy" role="status">
+      <div class="task-card">
+        <div class="task-head">
+          <span class="task-ico" aria-hidden="true"
+            ><ClipboardList class="icon"
+          /></span>
+          <div>
+            <strong>Turn this chat into a work order</strong>
+            <p>
+              A draft is written from this conversation. You review and edit it
+              before anything runs.
+            </p>
+          </div>
+        </div>
+        <div v-if="drafting" class="task-busy" role="status">
+          <span class="task-spin" aria-hidden="true"></span>
           <span>Drafting from the conversation…</span>
-          <Button small data-test="cancel-draft" @click="cancelDraft"
+          <Button
+            small
+            variant="ghost"
+            data-test="cancel-draft"
+            @click="cancelDraft"
             >Cancel</Button
           >
         </div>
-        <p id="ctx-wo-note" class="ctx-note">
-          {{ blocker || "You review and edit the draft before it is created." }}
-        </p>
-        <Button
-          v-if="saved && !drafting"
-          small
-          variant="ghost"
-          data-test="redraft"
-          :disabled="!!blocker"
-          @click="createWorkOrder(true)"
-          >Draft again</Button
-        >
+        <div v-else class="task-actions">
+          <Button
+            variant="primary"
+            data-test="create-wo"
+            aria-describedby="ctx-wo-note"
+            :disabled="!!blocker"
+            @click="createWorkOrder(false)"
+            ><Plus class="icon" />{{
+              saved ? "Open draft" : "Create work order"
+            }}</Button
+          >
+          <Button
+            v-if="saved"
+            small
+            variant="ghost"
+            data-test="redraft"
+            :disabled="!!blocker"
+            @click="createWorkOrder(true)"
+            >Draft again</Button
+          >
+        </div>
+        <p v-if="blocker" id="ctx-wo-note" class="task-note">{{ blocker }}</p>
         <p v-if="draftError" class="ctx-error" role="alert">
           {{ draftError }}
         </p>
       </div>
       <ul
         v-if="linked.length"
-        class="ctx-list"
+        class="task-list"
         aria-label="Work orders from this chat"
       >
         <li v-for="w in linked" :key="w.id">
           <RouterLink :to="`/factory/${w.id}`"
             ><span class="t">{{ w.title }}</span
-            ><small>{{ orderStatus(w).label }}</small></RouterLink
-          >
+            ><span class="rail-pill">{{ orderStatus(w).label }}</span
+            ><ArrowRight class="icon" aria-hidden="true"
+          /></RouterLink>
         </li>
       </ul>
-      <div v-if="related.length" class="rail-group">
-        <h5>
-          Related knowledge
-          <Popover v-model:open="helpKnowledge">
-            <template #trigger="{ toggle: pop }"
-              ><button
-                type="button"
-                class="ctx-help"
-                aria-label="Why is this knowledge shown?"
-                aria-haspopup="true"
-                :aria-expanded="helpKnowledge"
-                @click="pop"
-              >
-                ?
-              </button></template
-            >
-            <p class="ctx-explain" @click.stop>
-              Notes from the knowledge base that match this conversation. They
-              update after each reply.
-            </p>
-          </Popover>
-        </h5>
-        <ul class="ctx-list">
-          <li v-for="d in related" :key="d.id">
-            <RouterLink
-              :to="{ path: '/knowledge', query: { doc: d.id } }"
-              :aria-label="`Open ${d.title} in knowledge`"
-              ><BookOpen class="icon" /><span class="ctx-doc"
-                ><span class="t">{{ d.title }}</span
-                ><small>{{ d.kind }}</small></span
-              ><ArrowRight class="icon" aria-hidden="true"
-            /></RouterLink>
-          </li>
-        </ul>
-      </div>
-      <div class="rail-group">
-        <h5>Attachments</h5>
-        <div v-if="attachments.length" class="atts">
-          <AttachmentChip
-            v-for="a in attachments"
-            :key="a.kind + (a.kind === 'kb' ? a.doc_id : (a.file_id ?? a.name))"
-            :a="a"
-            :chat-id="chat.id"
-          />
-        </div>
-        <p v-else class="empty-note">None yet.</p>
-      </div>
-      <div class="rail-group">
-        <h5>Usage</h5>
-        <dl class="ch-usage">
-          <dt>Messages</dt>
-          <dd>{{ messages.length }}</dd>
-          <dt>Tokens in / out</dt>
-          <dd>{{ usage.tokens_in }} / {{ usage.tokens_out }}</dd>
-          <dt>Cost</dt>
-          <dd>{{ money(usage.cost) }}</dd>
-        </dl>
-      </div>
     </RailSection>
     <div v-if="session.canWrite" class="danger-zone">
       <Button

@@ -61,12 +61,6 @@ export interface WorkOrderDraft {
   objective: string;
   acceptance: string;
 }
-export interface RelatedDoc {
-  id: string;
-  title: string;
-  kind: string;
-  snippet?: string;
-}
 export interface ChatModel {
   id: string;
   name: string;
@@ -107,7 +101,9 @@ export const useChats = defineStore("chats", {
       this.models = r.models ?? [];
       this.defaultModel = r.default ?? "";
     },
-    async create(body: { title?: string; model?: string } = {}) {
+    async create(
+      body: { title?: string; model?: string; project_id?: string } = {},
+    ) {
       const r = await api.post<{ chat: Chat }>("/api/v1/chats", body);
       this.chats = [r.chat, ...this.chats.filter((c) => c.id !== r.chat.id)];
       return r.chat;
@@ -124,12 +120,6 @@ export const useChats = defineStore("chats", {
         {},
         signal,
       );
-    },
-    async relatedKnowledge(id: string) {
-      const r = await api.get<{ docs?: RelatedDoc[] }>(
-        `/api/v1/chats/${id}/related-knowledge`,
-      );
-      return r.docs ?? [];
     },
     async sessionInfo(id: string) {
       const r = await api.get<SessionInfo>(`/api/v1/chats/${id}/session`);

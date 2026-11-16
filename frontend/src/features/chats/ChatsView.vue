@@ -41,6 +41,7 @@ const query = ref(""),
   listHidden = ref(false),
   ctxOpen = ref(false),
   draftModel = ref(""),
+  draftProject = ref(""),
   scroller = ref<HTMLElement>(),
   creating = ref(false),
   announce = ref(""),
@@ -59,6 +60,16 @@ const draft = computed(() => !chatId.value && !!route.query.new);
 const model = computed({
   get: () => (chat.value ? chat.value.model : draftModel.value),
   set: (id: string) => void setModel(id),
+});
+const project = computed({
+  get: () => (chat.value ? (chat.value.project_id ?? "") : draftProject.value),
+  set: (id: string) => {
+    if (!chat.value) {
+      draftProject.value = id;
+      return;
+    }
+    store.update(chat.value.id, { project_id: id }).catch(fail);
+  },
 });
 const groups = computed(() => {
   const q = query.value.trim().toLowerCase();
@@ -152,7 +163,12 @@ function ensureChat() {
     creating.value = true;
     const from = route.fullPath;
     try {
-      const id = (await store.create({ model: draftModel.value })).id;
+      const id = (
+        await store.create({
+          model: draftModel.value,
+          project_id: draftProject.value,
+        })
+      ).id;
       if (route.fullPath === from) await router.replace(`/chats/${id}`);
       return id;
     } finally {
@@ -346,19 +362,13 @@ onMounted(async () => {
             class="ch-msg"
             :class="m.role"
           >
-            <span
-              v-if="m.role === 'assistant'"
-              class="lg-avatar av"
-              aria-hidden="true"
-              >L</span
+            <span v-if="m.repo" class="ch-chip ch-repo" data-test="repo-chip"
+              ><GitCommitHorizontal class="icon" /><span class="ch-fn"
+                >Reading {{ projectName(m.repo.project_id) }} @
+                {{ m.repo.sha.slice(0, 7) }}</span
+              ></span
             >
             <div class="bubble">
-              <span v-if="m.repo" class="ch-chip ch-repo" data-test="repo-chip"
-                ><GitCommitHorizontal class="icon" /><span class="ch-fn"
-                  >Reading {{ projectName(m.repo.project_id) }} @
-                  {{ m.repo.sha.slice(0, 7) }}</span
-                ></span
-              >
               <p v-if="m.role === 'user'" class="plain">{{ m.content }}</p>
               <div
                 v-else-if="m.content"
@@ -428,7 +438,9 @@ onMounted(async () => {
         :ensure-chat="ensureChat"
         :dragging="dropping"
         v-model:model="model"
+        v-model:project="project"
         :models="store.models"
+        :projects="factory.projects"
         :busy="busy || creating"
         :readonly="!session.canWrite"
         @send="send"

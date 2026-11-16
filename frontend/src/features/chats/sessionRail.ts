@@ -72,11 +72,11 @@ export const partLabels: Record<string, string> = {
   messages: "Messages",
 };
 export const partColors: Record<string, string> = {
-  agent: "var(--chart-1)",
-  mcp: "var(--chart-2)",
-  facts: "var(--info)",
-  files: "var(--warning)",
-  messages: "var(--accent)",
+  agent: "var(--chart-2)",
+  mcp: "var(--info)",
+  facts: "var(--crew-foreman)",
+  files: "var(--crew-architect)",
+  messages: "var(--chart-1)",
 };
 
 export function fmtTokens(n: number) {
@@ -137,7 +137,7 @@ const defaults: Record<string, boolean> = {
   project: true,
   context: true,
   mcp: false,
-  convo: true,
+  task: true,
 };
 export function loadOpen(): Record<string, boolean> {
   try {

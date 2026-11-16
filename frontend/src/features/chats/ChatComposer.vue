@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   FileText,
+  FolderGit2,
   Paperclip,
   Sparkles,
   X,
@@ -29,8 +30,10 @@ const props = defineProps<{
   chatId?: string;
   ensureChat?: () => Promise<string>;
   dragging?: boolean;
+  projects?: { id: string; name: string }[];
 }>();
 const model = defineModel<string>("model", { default: "" });
+const project = defineModel<string>("project", { default: "" });
 const emit = defineEmits<{
   send: [payload: { content: string; files: ChatUpload[] }];
   error: [message: string];
@@ -38,6 +41,7 @@ const emit = defineEmits<{
 const draft = ref(""),
   files = ref<ChatUpload[]>([]),
   menuOpen = ref(false),
+  projectOpen = ref(false),
   ta = ref<HTMLTextAreaElement>(),
   picker = ref<HTMLInputElement>();
 const ctrls = new Map<string, AbortController>();
@@ -69,6 +73,13 @@ const canSend = computed(
 const modelName = computed(
   () => props.models.find((m) => m.id === model.value)?.name ?? "Auto",
 );
+const projectName = computed(
+  () => props.projects?.find((p) => p.id === project.value)?.name ?? "Project",
+);
+function pickProject(id: string) {
+  project.value = id;
+  projectOpen.value = false;
+}
 const makePreview = (f: File) =>
   typeof URL.createObjectURL === "function"
     ? URL.createObjectURL(f)
@@ -323,6 +334,32 @@ defineExpose({ restore, attach, focus: () => ta.value?.focus() });
           : fileBlock || "Enter to send · Shift+Enter for a new line"
       }}</span>
       <div class="ch-end">
+        <Popover v-if="projects" v-model:open="projectOpen" up>
+          <template #trigger="{ toggle }">
+            <Button
+              variant="ghost"
+              small
+              data-test="project-chip"
+              :aria-expanded="projectOpen"
+              :disabled="locked"
+              @click="toggle"
+              ><FolderGit2 class="icon" />{{ projectName
+              }}<ChevronDown class="icon"
+            /></Button>
+          </template>
+          <button
+            v-for="p in [{ id: '', name: 'No project' }, ...projects]"
+            :key="p.id"
+            type="button"
+            :aria-pressed="p.id === project"
+            @click="pickProject(p.id)"
+          >
+            <Check
+              class="icon"
+              :style="{ opacity: p.id === project ? 1 : 0 }"
+            />{{ p.name }}
+          </button>
+        </Popover>
         <Popover v-model:open="menuOpen" up>
           <template #trigger="{ toggle }">
             <Button
