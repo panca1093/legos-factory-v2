@@ -126,3 +126,16 @@ func TestPlanPromptFirstDraftHasNoRevisionText(t *testing.T) {
 		t.Fatalf("first draft prompt has revision text:\n%s", p)
 	}
 }
+
+func TestPlanPromptShowsTheChecksTheFactoryRuns(t *testing.T) {
+	if p := planPrompt(&model.WorkOrder{Title: "t"}, "", "", nil); !strings.Contains(p, "will run no checks") {
+		t.Fatalf("no profile must say so:\n%s", p)
+	}
+	if p := planPrompt(&model.WorkOrder{Title: "t", CheckProfile: `{"language":"go","checks":[]}`}, "", "", nil); !strings.Contains(p, "will run no checks") {
+		t.Fatal("a profile without checks must say so")
+	}
+	p := planPrompt(&model.WorkOrder{Title: "t", CheckProfile: `{"language":"go","checks":[{"name":"go-test","command":"go test ./..."}]}`}, "", "", nil)
+	if !strings.Contains(p, "go-test (go test ./...)") || !strings.Contains(p, `Kind "check"`) {
+		t.Fatalf("checks missing:\n%s", p)
+	}
+}

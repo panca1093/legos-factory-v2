@@ -138,10 +138,47 @@ func TestConvergeReplySchema(t *testing.T) {
 	if err := decodeReply(`{"gaps":[],"converged":true}`, &v); err != nil || !v.Converged {
 		t.Fatalf("an empty gap list is valid: %v", err)
 	}
-	if err := decodeReply(`{"gaps":[{"type":" Missing ","layer":"CODE","cites":" c1 ","evidence":" a.go:1 ","fix":" f "}]}`, &v); err != nil {
+	if err := decodeReply(`{"gaps":[{"type":" Missing ","layer":"CODE","cites":" c1 ","evidence":" a.go:1 ","files":[" a.go "],"fix":" f "}]}`, &v); err != nil {
 		t.Fatal(err)
 	}
 	if g := v.Gaps[0]; g.Type != "missing" || g.Layer != "code" || g.Cites != "c1" || g.Evidence != "a.go:1" || g.Fix != "f" {
 		t.Fatalf("gap must be normalised: %+v", g)
+	}
+}
+
+func TestConvergeReplyFilesAndUnverified(t *testing.T) {
+	var v convergeReply
+	err := decodeReply(`{"gaps":[{"type":"missing","layer":"code","evidence":"TestX","fix":"run it"}],"converged":false}`, &v)
+	if err == nil || !strings.Contains(err.Error(), "files") || !strings.Contains(err.Error(), "unverified") {
+		t.Fatalf("a code gap without files is rejected with an actionable error: %v", err)
+	}
+	if err := decodeReply(`{"gaps":[{"type":"missing","layer":"code","evidence":"TestX","files":[" "],"fix":"f"}]}`, &v); err == nil {
+		t.Fatal("blank files count as none")
+	}
+	if err := decodeReply(`{"gaps":[{"type":"missing","layer":"code","evidence":"e","files":["n/a"," None "],"fix":"f"}]}`, &v); err == nil {
+		t.Fatal("placeholder files count as none")
+	}
+	if err := decodeReply(`{"gaps":[],"unverified":[{"criterion":"AC14 (db)","reason":"r"}]}`, &v); err != nil || v.Unverified[0].Criterion != "c14" {
+		t.Fatalf("lenient id: %v %+v", err, v.Unverified)
+	}
+	if err := decodeReply(`{"gaps":[{"type":"missing","layer":"contract","evidence":"spec","fix":"f"}]}`, &v); err != nil {
+		t.Fatalf("only code gaps need files: %v", err)
+	}
+	if err := decodeReply(`{"gaps":[],"unverified":[{"criterion":" C14 ","reason":" needs postgres "}],"converged":true}`, &v); err != nil {
+		t.Fatal(err)
+	}
+	if u := v.Unverified[0]; u.Criterion != "c14" || u.Reason != "needs postgres" {
+		t.Fatalf("unverified must be normalised: %+v", u)
+	}
+	if err := decodeReply(`{"gaps":[],"unverified":[{"criterion":"the db one","reason":"r"}]}`, &v); err == nil {
+		t.Fatal("unverified needs a criterion id")
+	}
+}
+
+func TestKeepUnverifiedDropsCitedCriteria(t *testing.T) {
+	u := []unverifiedCriterion{{Criterion: "c1", Reason: "a"}, {Criterion: "c2", Reason: "b"}}
+	got := keepUnverified(u, []convergeGap{{Cites: "C1, spec §2"}})
+	if len(got) != 1 || got[0].Criterion != "c2" {
+		t.Fatalf("a criterion that a gap cites stays a gap: %+v", got)
 	}
 }

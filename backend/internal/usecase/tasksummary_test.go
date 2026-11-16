@@ -344,3 +344,17 @@ func TestFormerDecisionKindsAreCoveredByEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestUnverifiedCriteriaListedInSummary(t *testing.T) {
+	env := newSummaryEnv(t, nil, true)
+	ctx := context.Background()
+	wo := env.newWO(t, "wo_unv", "Unv", "obj", "pages load from postgres", model.StateBlocked)
+	raw, _ := json.Marshal(architectReport{Revision: 0, Unverified: []unverifiedCriterion{{Criterion: "c1", Reason: "needs postgres"}}})
+	if err := env.wos.UpdateFields(ctx, wo.ID, map[string]any{"architect_report": string(raw)}); err != nil {
+		t.Fatal(err)
+	}
+	env.f.completeWO(ctx, wo, "BLOCKED")
+	if body := env.summary(t, wo.ID, "BLOCKED"); !strings.Contains(body, "Not verified by the factory: c1 (") || !strings.Contains(body, "— needs postgres") {
+		t.Fatalf("unverified missing:\n%s", body)
+	}
+}

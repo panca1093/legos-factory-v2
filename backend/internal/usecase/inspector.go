@@ -380,10 +380,11 @@ func (f *Factory) retryConverge(ctx context.Context, wo *model.WorkOrder, files 
 // architectReport is the Architect's converge report for one revision; the
 // converge gate only trusts it for the revision it was made on.
 type architectReport struct {
-	Revision  int           `json:"revision"`
-	Round     int           `json:"round"`
-	Gaps      []convergeGap `json:"gaps"`
-	Converged bool          `json:"converged"`
+	Revision   int                   `json:"revision"`
+	Round      int                   `json:"round"`
+	Gaps       []convergeGap         `json:"gaps"`
+	Unverified []unverifiedCriterion `json:"unverified,omitempty"`
+	Converged  bool                  `json:"converged"`
 }
 
 // convergeAppends is how many append rounds converge has used since the last human revision request.
@@ -438,13 +439,13 @@ func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []stri
 	for i := range r.Gaps {
 		r.Gaps[i].ID = fmt.Sprintf("C%d-G%d", round, i+1)
 	}
-	report := architectReport{Revision: wo.Revision, Round: round, Gaps: r.Gaps, Converged: r.Converged}
+	report := architectReport{Revision: wo.Revision, Round: round, Gaps: r.Gaps, Unverified: keepUnverified(r.Unverified, r.Gaps), Converged: r.Converged}
 	raw, _ := json.Marshal(report)
 	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"architect_report": string(raw)}); err != nil {
 		return err
 	}
 	f.event(wo.ID, "architect", "converge_report", fmt.Sprintf("Converge round %d: %d gap(s)", round, len(report.Gaps)),
-		map[string]any{"revision": wo.Revision, "round": round, "gaps": report.Gaps, "converged": report.Converged, "run_id": runID})
+		map[string]any{"revision": wo.Revision, "round": round, "gaps": report.Gaps, "unverified": report.Unverified, "converged": report.Converged, "run_id": runID})
 	f.Catalog.Record(ctx, &wo, model.KnowledgeArchitectVerified, model.TrustAIInterpretation, "architect",
 		fmt.Sprintf("Architect converge of revision %d: %d gap(s)", wo.Revision, len(report.Gaps)), reportText(report), "run:"+runID)
 	return nil
@@ -469,6 +470,20 @@ func (f *Factory) earlierFindingTitles(ctx context.Context, woID, specialty stri
 	return titles
 }
 
+// keepUnverified drops a criterion that a gap cites: a gap always wins over an unverified claim.
+func keepUnverified(unverified []unverifiedCriterion, gaps []convergeGap) []unverifiedCriterion {
+	var out []unverifiedCriterion
+	for _, u := range unverified {
+		cited := slices.ContainsFunc(gaps, func(g convergeGap) bool {
+			return slices.Contains(criterionRef.FindAllString(strings.ToLower(g.Cites), -1), u.Criterion)
+		})
+		if !cited {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
 func reportText(r architectReport) string {
 	var b strings.Builder
 	for _, g := range r.Gaps {
@@ -476,6 +491,9 @@ func reportText(r architectReport) string {
 	}
 	if b.Len() == 0 {
 		b.WriteString("No gaps.\n")
+	}
+	for _, u := range r.Unverified {
+		fmt.Fprintf(&b, "Not verified by the factory: %s — %s\n", u.Criterion, u.Reason)
 	}
 	return b.String()
 }

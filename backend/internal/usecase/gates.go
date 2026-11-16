@@ -112,6 +112,7 @@ type ConvergeGateInput struct {
 	Checks       []GateCheck
 	OpenFindings []GateFinding
 	Gaps         []convergeGap
+	Unverified   []string
 }
 
 var criterionRef = regexp.MustCompile(`\bc\d+\b`)
@@ -688,6 +689,7 @@ func gapLine(g convergeGap) string {
 //	4 escalate: a met_* is unsettled
 //	5 converged
 //
+// An unsettled met_* for a criterion in in.Unverified is a Builder note, not a row 4 escalation.
 // Row 3 becomes escalate when no append budget is left. An unsettled
 // gap_valid_* never appends: it goes to the Builder as a note. Only the
 // questions in asked are read; answers to other ids are ignored.
@@ -723,6 +725,10 @@ func decideConvergeGate(in ConvergeGateInput, asked map[string]Noul, answers map
 			unmet = append(unmet, c.ID)
 			hard = append(hard, fmt.Sprintf("the diff does not implement acceptance criterion %s", labels[c.ID]))
 		case vUnsettled:
+			if slices.Contains(in.Unverified, c.ID) {
+				builder = append(builder, fmt.Sprintf("it is unclear whether the diff implements acceptance criterion %s", labels[c.ID]))
+				continue
+			}
 			soft = append(soft, fmt.Sprintf("it is unclear whether the diff implements acceptance criterion %s", labels[c.ID]))
 		}
 	}

@@ -136,8 +136,8 @@ func (h *MockHarness) converge(req model.AgentRequest, res model.AgentResult) (m
 	if !gap {
 		return finishJSON(res, map[string]any{"gaps": []any{}, "converged": true})
 	}
-	return finishJSON(res, map[string]any{"converged": false, "gaps": []map[string]string{{
-		"type": "missing", "layer": "code", "cites": "c1", "evidence": "greeter/greeter.go:1", "fix": "Handle the empty name.",
+	return finishJSON(res, map[string]any{"converged": false, "gaps": []map[string]any{{
+		"type": "missing", "layer": "code", "cites": "c1", "evidence": "greeter/greeter.go:1", "files": []string{"greeter/greeter.go"}, "fix": "Handle the empty name.",
 	}}})
 }
 
