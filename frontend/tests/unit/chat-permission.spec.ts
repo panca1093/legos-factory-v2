@@ -284,8 +284,23 @@ describe("permission card", () => {
       },
     });
     expect(w.find('[data-test="permission-label"]').text()).toBe(
-      "workbench_amartha · bitbucket_list_pr_commits, bitbucket_get_pr",
+      "workbench_amartha · execute_tools: bitbucket_list_pr_commits, bitbucket_get_pr",
     );
+  });
+
+  it("ignores an executions field on any other tool", () => {
+    const w = mount(ChatPermissionCard, {
+      props: {
+        permission: perm({
+          tool: "delete_page",
+          input: '{"executions":[{"tool":"search"}]}',
+        }),
+      },
+    });
+    expect(w.find('[data-test="permission-label"]').text()).toBe(
+      "docs · delete_page",
+    );
+    expect(w.attributes("aria-label")).toBe("Permission for docs delete_page");
   });
 
   it("keeps the tool name when the input has no executions", () => {

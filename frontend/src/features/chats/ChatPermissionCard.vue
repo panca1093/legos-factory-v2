@@ -19,13 +19,16 @@ const pretty = computed(() =>
     : JSON.stringify(parsed.value, null, 2),
 );
 const toolLabel = computed(() => {
+  if (props.permission.tool !== "execute_tools") return props.permission.tool;
   const ex = (parsed.value as { executions?: unknown } | undefined)?.executions;
   const names = Array.isArray(ex)
     ? ex.flatMap((e) =>
         typeof e?.tool === "string" && e.tool ? [e.tool as string] : [],
       )
     : [];
-  return names.length ? names.join(", ") : props.permission.tool;
+  return names.length
+    ? `${props.permission.tool}: ${names.join(", ")}`
+    : props.permission.tool;
 });
 const decided = computed(() =>
   ["allowed", "denied", "expired"].includes(props.permission.state),

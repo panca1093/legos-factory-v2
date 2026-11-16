@@ -415,6 +415,17 @@ func (m *MCPServers) SetTools(ctx context.Context, id string, toggles []model.MC
 	return m.view(ctx, rec), nil
 }
 
+// toolReadOnly is the server's own hint, plus the lookup tools of a gateway, which is a server that also exposes execute_tools.
+func toolReadOnly(tools []model.MCPTool, t model.MCPTool) bool {
+	if t.ReadOnly {
+		return true
+	}
+	if t.Name != "search_tools" && t.Name != "get_tool_schema" && t.Name != "list_tools" {
+		return false
+	}
+	return slices.ContainsFunc(tools, func(x model.MCPTool) bool { return x.Name == "execute_tools" })
+}
+
 // Selection is what a run in role gets: active servers offered to the role that have an enabled tool,
 // the names of those tools, and the discovered tools that stay disabled so the agent can be told to drop them.
 func (m *MCPServers) Selection(ctx context.Context, role model.AgentRole) (model.MCPSelection, error) {
@@ -434,7 +445,7 @@ func (m *MCPServers) Selection(ctx context.Context, role model.AgentRole) (model
 			if t.Enabled && !t.Unusable {
 				allow = append(allow, mcpToolName(rec.Name, t.Name))
 				bytes += t.Size
-				if !t.ReadOnly && role == model.AgentChat {
+				if !toolReadOnly(rec.Tools, t) && role == model.AgentChat {
 					ask = append(ask, mcpToolName(rec.Name, t.Name))
 				}
 			} else {
