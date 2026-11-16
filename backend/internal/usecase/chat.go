@@ -839,11 +839,13 @@ const chatMCPNote = "You may call the MCP tools you are offered; those that chan
 	"When a tool result is saved to a file because it is too large, read that file in parts: search it for the sections you need, then read those ranges. " +
 	"To review a pull request, start from its list of changed files and line counts, skip generated and vendored files (lockfiles, vendor/, generated JSON such as dashboards, snapshots), and read only the diffs that matter.\n\n"
 
-const chatPreamble = "You are an assistant in the Legos factory app, in a general conversation. You cannot run commands or change local files; answer from what you know, the context you are given and the MCP tools you are offered. " + chatMCPNote
+const chatTone = "Talk like a helpful colleague: lead with the answer, plain and short. Never mention plan mode, sandboxing or other internal mechanics; if something needs a write, offer to do it with the tools you have (the user approves in the app). Add at most one short caveat, only when it changes the conclusion, and do not end with lists of what you did not check. Suggest a next step in a sentence when useful, not a menu.\n\n"
+
+const chatPreamble = "You are an assistant in the Legos factory app, in a general conversation. You cannot run commands or change local files; answer from what you know, the context you are given and the MCP tools you are offered. " + chatMCPNote + chatTone
 
 const chatRepoUnreadable = "This chat is bound to a project, but its repository could not be read for this conversation; tell the user so before you answer.\n\n"
 
-const chatRepoPreamble = "You are an assistant in the Legos factory app, in a conversation about this project. Your working directory is a checkout of the project's repository: you may read and search it, and you should whenever a question is about the code. Cite every claim about the code as path:line. You cannot run commands or change local files; the MCP tools you are offered are the only way to act. When you describe code you have not read, say so.\n\n" + chatMCPNote
+const chatRepoPreamble = "You are an assistant in the Legos factory app, in a conversation about this project. Your working directory is a checkout of the project's repository: you may read and search it, and you should whenever a question is about the code. Cite every claim about the code as path:line. You cannot run commands or change local files; the MCP tools you are offered are the only way to act. When you describe code you have not read, say so.\n\n" + chatMCPNote + chatTone
 
 // RepoFacts is Chat.RepoFacts: the checkout's repository facts, then the project's Code Map lines.
 func (f *Factory) RepoFacts(ctx context.Context, projectID, dir string) string {

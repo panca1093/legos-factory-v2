@@ -128,6 +128,9 @@ func scanMCP(scan rowScanner) (*model.MCPServerRec, error) {
 	if err := errors.Join(json.Unmarshal([]byte(args), &s.Args), json.Unmarshal([]byte(roles), &s.Roles), json.Unmarshal([]byte(tools), &s.Tools)); err != nil {
 		return nil, err
 	}
+	for i := range s.Tools {
+		s.Tools[i].ReadOnly = s.Tools[i].ReadOnly || model.IsDiscoveryTool(s.Tools[i].Name)
+	}
 	if disc.Valid {
 		t := time.Unix(disc.Int64, 0)
 		s.DiscoveredAt = &t
