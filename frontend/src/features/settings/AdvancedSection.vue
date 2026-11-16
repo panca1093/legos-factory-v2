@@ -73,7 +73,7 @@ async function saveKey() {
     <p>Workspace limits. Only admins can change these.</p>
 
     <div class="switch-row">
-      <div>
+      <div class="grow">
         <label for="max-runs"><b>Agents working at once</b></label>
         <p class="help">
           How many agents (Builders, Inspectors, Foreman…) can work in parallel
@@ -94,16 +94,36 @@ async function saveKey() {
     </div>
 
     <div class="switch-row">
-      <div>
-        <b>Jev plan checks</b>
-        <span class="status" data-test="jev-status">{{
-          settings.jev_enabled ? "On" : "Off · every plan waits for you"
-        }}</span>
+      <div class="grow">
+        <div class="title-row">
+          <b>Jev plan checks</b>
+          <span class="pill" data-test="jev-status">{{
+            settings.jev_enabled ? "On" : "Off"
+          }}</span>
+        </div>
         <p class="help">
           Plans that pass the checks start building without your click. Off
           means every plan waits for you.
         </p>
+        <p class="help" data-test="jev-key-state">
+          {{
+            runtime?.jev_key_from_env
+              ? "Key set by the server."
+              : settings.jev_key_set
+                ? "Key saved."
+                : "No key yet. Add one to turn checks on."
+          }}
+        </p>
       </div>
+      <button
+        v-if="!runtime?.jev_key_from_env && !keyOpen"
+        class="btn small"
+        type="button"
+        :disabled="!editable"
+        @click="keyOpen = true"
+      >
+        {{ settings.jev_key_set ? "Change key" : "Add key" }}
+      </button>
       <label class="switch"
         ><input
           type="checkbox"
@@ -114,46 +134,33 @@ async function saveKey() {
       ></label>
     </div>
 
-    <div class="form-group jev-key">
-      <template v-if="runtime?.jev_key_from_env">
-        <label for="jev-key">Jev key</label>
-        <input id="jev-key" disabled placeholder="Set by the server" />
-        <p class="help">Set by the server.</p>
-      </template>
-      <template v-else-if="keyOpen">
-        <label for="jev-key">Jev key</label>
-        <input
-          id="jev-key"
-          v-model="key"
-          type="password"
-          autocomplete="new-password"
-          placeholder="Paste the key"
-          :disabled="!editable || busy"
-        />
-        <div class="row">
-          <button
-            class="btn primary small"
-            type="button"
-            :disabled="!editable || busy || !key.trim()"
-            @click="saveKey"
-          >
-            Save key
-          </button>
-          <button class="btn small" type="button" @click="cancelKey">
-            Cancel
-          </button>
-        </div>
-        <p class="help">Stored encrypted and never shown again.</p>
-      </template>
-      <button
-        v-else
-        class="btn small"
-        type="button"
-        :disabled="!editable"
-        @click="keyOpen = true"
-      >
-        Change key
-      </button>
+    <div
+      v-if="keyOpen && !runtime?.jev_key_from_env"
+      class="form-group jev-key"
+    >
+      <label for="jev-key">Jev key</label>
+      <input
+        id="jev-key"
+        v-model="key"
+        type="password"
+        autocomplete="new-password"
+        placeholder="Paste the key"
+        :disabled="!editable || busy"
+      />
+      <div class="row">
+        <button
+          class="btn primary small"
+          type="button"
+          :disabled="!editable || busy || !key.trim()"
+          @click="saveKey"
+        >
+          Save key
+        </button>
+        <button class="btn small" type="button" @click="cancelKey">
+          Cancel
+        </button>
+      </div>
+      <p class="help">Stored encrypted and never shown again.</p>
     </div>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
   </section>

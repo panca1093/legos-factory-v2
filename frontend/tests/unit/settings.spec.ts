@@ -584,7 +584,10 @@ it("Jev toggle patches jev_enabled and the key is write-only", async () => {
   });
   expect(w.find('[data-test="jev-status"]').text()).toContain("Off");
   expect(w.find("#jev-key").exists()).toBe(false);
-  await buttonByText(w, "Change key").trigger("click");
+  expect(w.find('[data-test="jev-key-state"]').text()).toBe(
+    "No key yet. Add one to turn checks on.",
+  );
+  await buttonByText(w, "Add key").trigger("click");
   expect((w.find("#jev-key").element as HTMLInputElement).type).toBe(
     "password",
   );
@@ -599,13 +602,27 @@ it("Jev toggle patches jev_enabled and the key is write-only", async () => {
   w.unmount();
 });
 
-it("Jev key field is disabled and says so when the server sets it", async () => {
+it("hides the Jev key field when the server sets the key", async () => {
   routes["GET /api/v1/settings/runtime"] = () =>
     json({ credentials_configured: true, jev_key_from_env: true });
   const { w } = await render();
-  expect(w.find("#jev-key").attributes("disabled")).toBeDefined();
-  expect(w.text()).toContain("Set by the server");
+  expect(w.find("#jev-key").exists()).toBe(false);
+  expect(w.find('[data-test="jev-key-state"]').text()).toBe(
+    "Key set by the server.",
+  );
   expect(w.text()).not.toContain("Change key");
+  expect(w.text()).not.toContain("Add key");
+  w.unmount();
+});
+
+it("offers Change key once a key is saved", async () => {
+  routes["GET /api/v1/settings"] = () =>
+    json({ ...settings, ...appSettings, jev_key_set: true });
+  const { w } = await render();
+  expect(w.find('[data-test="jev-key-state"]').text()).toBe("Key saved.");
+  expect(w.find("#jev-key").exists()).toBe(false);
+  await buttonByText(w, "Change key").trigger("click");
+  expect(w.find("#jev-key").exists()).toBe(true);
   w.unmount();
 });
 
@@ -705,10 +722,10 @@ it("Add account closes the menu and focuses the label field", async () => {
 
 it("Cancel clears the Jev key input", async () => {
   const { w } = await render();
-  await buttonByText(w, "Change key").trigger("click");
+  await buttonByText(w, "Add key").trigger("click");
   await w.find("#jev-key").setValue("abc");
   await buttonByText(w, "Cancel").trigger("click");
-  await buttonByText(w, "Change key").trigger("click");
+  await buttonByText(w, "Add key").trigger("click");
   expect((w.find("#jev-key").element as HTMLInputElement).value).toBe("");
   w.unmount();
 });

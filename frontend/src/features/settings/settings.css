@@ -252,6 +252,27 @@ input.num {
   max-width: 360px;
   padding-top: 12px;
 }
+.settings-section .switch-row > .grow {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.settings-section .switch-row .help + .help {
+  margin-top: 4px;
+}
+.settings-section .title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.settings-section .card-list > .connection {
+  padding: 14px;
+  flex-wrap: wrap;
+}
+.settings-section .card-list > .connection > .grow {
+  flex: 1 1 220px;
+  min-width: 0;
+}
 @media (max-width: 760px) {
   .settings-layout {
     grid-template-columns: minmax(0, 1fr);

@@ -200,6 +200,7 @@ export interface Settings {
   role_permissions?: { chat?: "ask" | "read" };
   max_concurrent_runs?: number;
   jev_enabled?: boolean;
+  jev_key_set?: boolean;
 }
 
 export type SettingsPatch = Partial<
