@@ -240,7 +240,7 @@ describe("session rail panel", () => {
     body = info();
     const w = await mountPanel();
     expect(w.text()).toContain("Your folder");
-    expect(w.text()).toContain("factory checkout @ 98b4039");
+    expect(w.text()).toContain("checkout @ 98b4039");
     expect(w.text()).toContain("2 commits");
     expect(w.find('[data-test="ctx-pct"]').text()).toBe("32% used");
     expect(w.text()).toContain("Agent system prompt + tools");
@@ -250,6 +250,27 @@ describe("session rail panel", () => {
       "/factory/w7",
     );
     expect(w.find('[data-test="cache-card"]').text()).toContain("Cold");
+    w.unmount();
+  });
+
+  it("caps worktrees at three with show all / show less", async () => {
+    const data = info();
+    body = data;
+    data.project!.worktrees = ["a", "b", "c", "d", "e"].map((b) => ({
+      path: `/w/p/.wt/${b}`,
+      branch: b,
+      head: "x",
+      main: false,
+    }));
+    const w = await mountPanel();
+    const items = () => w.findAll('ul[aria-label="Worktrees"] li');
+    expect(items()).toHaveLength(3);
+    expect(items()[0].text()).toContain(".wt/a");
+    const more = w.find('[data-test="worktrees-more"]');
+    expect(more.text()).toBe("Show all 5");
+    await more.trigger("click");
+    expect(items()).toHaveLength(5);
+    expect(more.text()).toBe("Show less");
     w.unmount();
   });
 
@@ -364,11 +385,11 @@ describe("session rail panel", () => {
   it("clears the old project details when the project changes", async () => {
     body = info();
     const w = await mountPanel();
-    expect(w.text()).toContain("factory checkout");
+    expect(w.text()).toContain("checkout @");
     body = "fail";
     await w.setProps({ chat: { ...chat, project_id: "" } });
     await flushPromises();
-    expect(w.text()).not.toContain("factory checkout");
+    expect(w.text()).not.toContain("checkout @");
     w.unmount();
   });
 });

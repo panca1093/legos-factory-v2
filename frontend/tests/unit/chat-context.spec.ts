@@ -119,25 +119,28 @@ describe("chat context panel", () => {
     w.unmount();
   });
 
-  it("saves the project via PATCH and shows publish info", async () => {
+  it("hides the select behind Change and saves the project via PATCH", async () => {
     handlers["PATCH /api/v1/chats/c1"] = (b) => ({
       chat: { ...chat, project_id: (b as { project_id: string }).project_id },
     });
     const { w } = await mountPanel();
-    expect(w.find('[data-test="publish-info"]').text()).toContain("acme/pay");
+    expect(w.find("select").exists()).toBe(false);
+    expect(w.text()).not.toContain("Local only");
+    await w.find('[data-test="change-project"]').trigger("click");
     await w.find("select").setValue("p2");
     await flushPromises();
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
       project_id: "p2",
     });
     await w.setProps({ chat: useChats().chats[0] });
-    expect(w.find('[data-test="publish-info"]').text()).toContain("Local only");
+    expect(w.find("select").exists()).toBe(false);
     w.unmount();
   });
 
   it("clears the project with an empty id", async () => {
     handlers["PATCH /api/v1/chats/c1"] = () => ({ chat });
     const { w } = await mountPanel();
+    await w.find('[data-test="change-project"]').trigger("click");
     await w.find("select").setValue("");
     await flushPromises();
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({
@@ -397,7 +400,9 @@ describe("chat context panel races and roles", () => {
   it("gives viewers no create button or project change", async () => {
     useSession().user = { id: "u", name: "P", email: "p@x", role: "VIEWER" };
     const { w } = await mountPanel();
-    expect(w.find("select").attributes("disabled")).toBeDefined();
+    expect(
+      w.find('[data-test="change-project"]').attributes("disabled"),
+    ).toBeDefined();
     expect(w.find('[data-test="create-wo"]').attributes("disabled")).toBe("");
     expect(w.text()).toContain("read-only");
     expect(w.text()).not.toContain("Delete chat");
