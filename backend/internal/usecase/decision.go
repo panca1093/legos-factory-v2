@@ -15,6 +15,13 @@ import (
 
 // Human decisions: plan approval/revision, clarification, PR disposition, cancel.
 
+// revisionRequestBy marks a plan revision note in the clarification log; it is not a
+// human answer, so it does not count toward the human-question cap.
+const (
+	revisionRequestBy       = "human_revision"
+	revisionRequestQuestion = "The human asked for this plan revision"
+)
+
 // ApprovePlan is the human authorization to execute a reviewed plan the gate escalated.
 func (f *Factory) ApprovePlan(ctx context.Context, woID string) error {
 	wo, err := f.WO.Get(ctx, woID)
@@ -78,10 +85,20 @@ func (f *Factory) RevisePlan(ctx context.Context, woID, notes string) error {
 	if err != nil {
 		return err
 	}
-	if err := f.WO.UpdateFields(ctx, woID, map[string]any{"plan_review": "", "clarif_rounds": 0, "plan_revisions": 0}); err != nil {
-		return err
+	fields := map[string]any{"plan_review": "", "clarif_rounds": 0, "plan_revisions": 0}
+	if strings.TrimSpace(notes) != "" {
+		// the Foreman review and the plan gate read the clarification log, not the revise payload; only the latest note stands
+		log := []model.Clarification{}
+		for _, c := range wo.Clarifications {
+			if c.By != revisionRequestBy {
+				log = append(log, c)
+			}
+		}
+		log = append(log, model.Clarification{Question: revisionRequestQuestion, Answer: strings.TrimSpace(notes), By: revisionRequestBy})
+		raw, _ := json.Marshal(log)
+		fields["clarif_log"] = string(raw)
 	}
-	if err := f.step(ctx, wo, model.StateArchitectReview, model.StatePlanning, "human", "Revision requested: "+notes); err != nil {
+	if err := f.stepWith(ctx, wo, model.StateArchitectReview, model.StatePlanning, "human", "Revision requested: "+notes, fields); err != nil {
 		return err
 	}
 	f.event(woID, "human", "plan_revision_human", notes, nil)

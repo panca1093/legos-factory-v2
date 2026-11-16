@@ -3,6 +3,8 @@ package usecase
 import (
 	"strings"
 	"testing"
+
+	"legos-factory/backend/internal/model"
 )
 
 func TestPlanScopeRules(t *testing.T) {
@@ -46,5 +48,13 @@ func TestPlanScopeReportsEveryViolation(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error lacks %q: %v", want, err)
 		}
+	}
+}
+
+func TestRevisePromptKeepsTaskSizingRules(t *testing.T) {
+	wo := &model.WorkOrder{ID: "wo_x", Title: "t", Objective: "o", Acceptance: "- a", Spec: "## Behaviour rules\n1. x"}
+	p := planPrompt(wo, "change rule 1", "", nil)
+	if !strings.Contains(p, "targeted edit") || !strings.Contains(p, "split any task that breaks them even when the notes do not mention it") {
+		t.Fatal("a revision must still apply the task sizing rules")
 	}
 }
