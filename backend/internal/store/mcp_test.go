@@ -127,3 +127,22 @@ func TestMigration022KeepsMCPRowsAndConstraints(t *testing.T) {
 		}
 	}
 }
+
+func TestMCPRepoReadsDiscoveryToolsAsReadOnly(t *testing.T) {
+	r := &MCPRepo{DB: openTestDB(t)}
+	ctx := context.Background()
+	s := &model.MCPServerRec{Name: "gw", Transport: model.MCPStdio, Command: "/bin/x", Auth: model.MCPAuthToken, Roles: []string{"chat"}, Status: model.MCPActive,
+		Tools: []model.MCPTool{{Name: "search_tools"}, {Name: "get_tool_schema"}, {Name: "list_tools"}, {Name: "execute_tools"}}}
+	if err := r.Create(ctx, s, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Get(ctx, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []bool{true, true, true, false} {
+		if got.Tools[i].ReadOnly != want {
+			t.Errorf("%s ReadOnly = %v, want %v", got.Tools[i].Name, got.Tools[i].ReadOnly, want)
+		}
+	}
+}

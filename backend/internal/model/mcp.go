@@ -45,6 +45,11 @@ type MCPTool struct {
 	UnusableReason string `json:"unusable_reason,omitempty"`
 }
 
+// IsDiscoveryTool reports gateway tools that only look things up, whether or not the server marks them read-only.
+func IsDiscoveryTool(name string) bool {
+	return name == "search_tools" || name == "get_tool_schema" || name == "list_tools"
+}
+
 // MCPServerRec is a stored server; its credentials live sealed beside it and never appear here.
 type MCPServerRec struct {
 	ID           string     `json:"id"`

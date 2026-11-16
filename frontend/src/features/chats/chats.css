@@ -318,9 +318,31 @@
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
-.ch-perm-outcome {
-  margin-top: var(--space-1);
+.ch-activity {
+  display: grid;
+  gap: 2px;
+  margin-bottom: var(--space-2);
+}
+.ch-perm-line {
   color: var(--muted);
+  font-size: 12px;
+}
+.ch-perm-line summary {
+  display: flex;
+  gap: var(--space-1);
+  align-items: baseline;
+  cursor: pointer;
+}
+.ch-perm-line pre {
+  max-height: 200px;
+  margin: var(--space-1) 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.ch-perm-line.denied,
+.ch-perm-line.expired {
+  font-style: italic;
 }
 
 .composer {

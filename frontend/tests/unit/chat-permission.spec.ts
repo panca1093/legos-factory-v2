@@ -214,11 +214,11 @@ describe("permission card", () => {
     expect(w.find('[data-test="permission-input"]').text()).toBe(
       JSON.stringify({ a: { b: 1 } }, null, 2),
     );
-    expect(w.find('[data-test="permission-allow"]').text()).toBe("Izinkan");
+    expect(w.find('[data-test="permission-allow"]').text()).toBe("Allow");
     expect(w.find('[data-test="permission-allow-all"]').text()).toBe(
-      "Izinkan semua di chat ini",
+      "Allow all in this chat",
     );
-    expect(w.find('[data-test="permission-deny"]').text()).toBe("Tolak");
+    expect(w.find('[data-test="permission-deny"]').text()).toBe("Deny");
     await w.find('[data-test="permission-allow"]').trigger("click");
     await w.find('[data-test="permission-allow-all"]').trigger("click");
     await w.find('[data-test="permission-deny"]').trigger("click");
@@ -241,11 +241,59 @@ describe("permission card", () => {
         w.find(`[data-test="permission-${b}"]`).attributes("disabled"),
       ).toBeDefined();
     await w.setProps({ permission: perm({ state: "denied" }) });
-    expect(w.find('[data-test="permission-outcome"]').text()).toBe("Denied");
+    expect(w.find(".ch-perm-mark").text()).toBe("✗");
+    expect(w.find('[data-test="permission-label"]').text()).toBe(
+      "docs · write_page",
+    );
+    expect(w.find('[data-test="permission-outcome"]').text()).toBe("denied");
     expect(w.find('[data-test="permission-allow"]').exists()).toBe(false);
     await w.setProps({ permission: perm({ state: "expired" }) });
-    expect(w.find('[data-test="permission-outcome"]').text()).toContain(
-      "Expired",
+    expect(w.find('[data-test="permission-outcome"]').text()).toBe(
+      "expired, refused",
+    );
+  });
+
+  it("collapses an allowed card to one line with the input expandable", () => {
+    const w = mount(ChatPermissionCard, {
+      props: { permission: perm({ state: "allowed" }) },
+    });
+    expect(w.find(".ch-perm-mark").text()).toBe("✓");
+    expect(w.find('[data-test="permission-label"]').text()).toBe(
+      "docs · write_page",
+    );
+    expect(w.element.tagName).toBe("DETAILS");
+    expect(w.find('[data-test="permission-input"]').exists()).toBe(true);
+    expect(w.find('[data-test="permission-allow"]').exists()).toBe(false);
+    expect(w.find('[data-test="permission-outcome"]').exists()).toBe(false);
+  });
+
+  it("shows the inner tool names of a gateway execute_tools call", () => {
+    const input = JSON.stringify({
+      executions: [
+        { tool: "bitbucket_list_pr_commits", args: { pr: 1 } },
+        { tool: "bitbucket_get_pr", args: {} },
+      ],
+    });
+    const w = mount(ChatPermissionCard, {
+      props: {
+        permission: perm({
+          server: "workbench_amartha",
+          tool: "execute_tools",
+          input,
+        }),
+      },
+    });
+    expect(w.find('[data-test="permission-label"]').text()).toBe(
+      "workbench_amartha · bitbucket_list_pr_commits, bitbucket_get_pr",
+    );
+  });
+
+  it("keeps the tool name when the input has no executions", () => {
+    const w = mount(ChatPermissionCard, {
+      props: { permission: perm({ input: "{bad" }) },
+    });
+    expect(w.find('[data-test="permission-label"]').text()).toBe(
+      "docs · write_page",
     );
   });
 });
@@ -297,5 +345,63 @@ describe("permission card in the thread", () => {
     expect(
       w.find('[data-test="permission-deny"]').attributes("disabled"),
     ).toBeDefined();
+  });
+
+  it("lists decided cards above the answer and keeps a pending card with its buttons below", async () => {
+    setActivePinia(createPinia());
+    useSession().user = { role: "OWNER" } as never;
+    const chats = useChats();
+    chats.messages.c = [
+      {
+        ...msg(-2, "assistant", "The answer."),
+        role: "assistant",
+        pending: true,
+        permissions: [
+          perm({ id: "a", state: "allowed" }),
+          perm({ id: "b", state: "denied" }),
+          perm({ id: "c" }),
+        ],
+      },
+    ] as never;
+    chats.busy.c = true;
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: "/chats/:id?", component: ChatsView }],
+    });
+    await router.push("/chats/c");
+    const json = (data: unknown) => ({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => data,
+      text: async () => JSON.stringify(data),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url.endsWith("/api/v1/chats")
+          ? json({
+              chats: [{ id: "c", title: "t", model: "", updated_at: "" }],
+            })
+          : url.endsWith("/api/v1/chat/models")
+            ? json({ models: [] })
+            : json({ messages: [], docs: [] }),
+      ),
+    );
+    const w = mount(ChatsView, { global: { plugins: [router] } });
+    await flushPromises();
+    const activity = w.find('[data-test="permission-activity"]');
+    expect(activity.findAll('[data-test="permission-card"]')).toHaveLength(2);
+    expect(activity.find('[data-test="permission-allow"]').exists()).toBe(
+      false,
+    );
+    expect(w.findAll('[data-test="permission-allow"]')).toHaveLength(1);
+    const html = w.find(".bubble").html();
+    expect(html.indexOf("permission-activity")).toBeLessThan(
+      html.indexOf("The answer."),
+    );
+    expect(html.indexOf("The answer.")).toBeLessThan(
+      html.indexOf("permission-allow"),
+    );
   });
 });
