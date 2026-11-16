@@ -1,99 +1,140 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from "vue";
-import { useFactory } from "../../stores/factory";
+import { computed, onMounted, ref } from "vue";
+import { Copy, HelpCircle, RefreshCw } from "lucide-vue-next";
+import Popover from "../../components/ui/Popover.vue";
+import { api, type AgentInfo, type AgentsResponse } from "../../types/api";
 import type { Settings, SettingsPatch } from "../../types/api";
-import BrickBot from "../../components/agents/BrickBot.vue";
+import AgentRow from "./AgentRow.vue";
+import RolesTable from "./RolesTable.vue";
 
-const props = defineProps<{ settings: Settings; editable: boolean }>();
+defineProps<{
+  settings: Settings;
+  editable: boolean;
+  canWrite: boolean;
+  credentialsConfigured: boolean;
+}>();
 const emit = defineEmits<{ saved: [SettingsPatch] }>();
-const factory = useFactory();
-const busy = reactive(new Set<Key>());
-const error = ref("");
 
-type Key = "foreman" | "architect" | "builder" | "inspector" | "chat";
-const rows: { key: Key; label: string }[] = [
-  { key: "foreman", label: "Foreman" },
-  { key: "architect", label: "Architect" },
-  { key: "builder", label: "Builder" },
-  { key: "inspector", label: "Inspector" },
-  { key: "chat", label: "Chat" },
-];
-const field = (k: Key) => `${k}_model` as const;
-const catalog = computed(() =>
-  factory.models.map((m) => ({
-    id: `${m.provider_id}/${m.model_id}`,
-    name: m.name,
-  })),
-);
-const nameOf = (ref: string) =>
-  catalog.value.find((m) => m.id === ref)?.name ?? ref;
-const firstAvailable = computed(() => catalog.value[0]?.name ?? "");
-function fallback(k: Key) {
-  if (k !== "chat") return firstAvailable.value;
-  return props.settings.architect_model
-    ? nameOf(props.settings.architect_model)
-    : firstAvailable.value;
-}
-function resolved(k: Key) {
-  return fallback(k) || "first available model";
-}
-const value = (k: Key) => props.settings[field(k)] ?? "";
+const agents = ref<AgentInfo[]>([]);
+const usageOptIn = ref(false);
+const error = ref(""),
+  loading = ref(true),
+  help = ref(false);
 
-async function change(k: Key, el: HTMLSelectElement) {
-  const previous = value(k);
-  const key = field(k);
-  busy.add(k);
-  error.value = "";
+async function load() {
   try {
-    const saved = await factory.patchSettings({ [key]: el.value });
-    emit("saved", { [key]: saved[key] });
+    const res = await api.get<AgentsResponse>("/api/v1/agents");
+    agents.value = (res.agents ?? []).map((a) => ({
+      ...a,
+      accounts: a.accounts ?? [],
+      roles_allowed: a.roles_allowed ?? [],
+    }));
+    usageOptIn.value = !!res.claude_usage_opt_in;
+    error.value = "";
   } catch (e) {
-    el.value = previous;
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
-    busy.delete(k);
+    loading.value = false;
   }
 }
+onMounted(load);
+
+const installed = computed(() => agents.value.filter((a) => a.installed));
+const missing = computed(() => agents.value.filter((a) => !a.installed));
+
+async function setOptIn(on: boolean) {
+  try {
+    await api.patch("/api/v1/me/preferences", { claude_usage_opt_in: on });
+    usageOptIn.value = on;
+    await load();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+    await load();
+  }
+}
+const copy = (text: string) => void navigator.clipboard?.writeText(text);
 </script>
 <template>
   <section id="agents" class="settings-section">
-    <h2>Agents</h2>
-    <p>
-      The model each role uses. Order of choice: work order choice → workspace
-      default → first available model. Foreman and Architect models are fixed
-      per work order when it is created; changes apply to new orders.
-    </p>
-    <div class="form-grid">
-      <div v-for="r in rows" :key="r.key" class="form-group">
-        <label :for="`set-${r.key}`" class="row"
-          ><BrickBot
-            v-if="r.key !== 'chat'"
-            :persona="r.key"
-            class="compact"
-          /><span>{{ r.label }}</span></label
-        ><select
-          :id="`set-${r.key}`"
-          :value="value(r.key)"
-          :disabled="!editable || busy.has(r.key)"
-          @change="change(r.key, $event.target as HTMLSelectElement)"
-        >
-          <option value="">Default ({{ resolved(r.key) }})</option>
-          <option
-            v-if="value(r.key) && !catalog.some((m) => m.id === value(r.key))"
-            :value="value(r.key)"
-          >
-            {{ value(r.key) }} · not currently available
-          </option>
-          <option v-for="m in catalog" :key="m.id" :value="m.id">
-            {{ m.name }}
-          </option>
-        </select>
-        <p v-if="r.key === 'chat'" class="help">
-          Used when a chat is on Auto. Left on default, it follows Architect, or
-          Builder in project chats.
+    <div class="sec-head">
+      <div>
+        <h2>Agents</h2>
+        <p>
+          Agents found on this machine and the account each one signs in with.
         </p>
       </div>
+      <button class="btn small" type="button" @click="load">
+        <RefreshCw class="icon" aria-hidden="true" /> Refresh
+      </button>
     </div>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
+    <p v-if="loading" class="help" aria-busy="true">Looking for agents…</p>
+
+    <h3 class="sub">Installed <span class="count">{{ installed.length }} detected</span></h3>
+    <div class="card-list">
+      <AgentRow
+        v-for="a in installed"
+        :key="a.id"
+        :agent="a"
+        :usage-opt-in="usageOptIn"
+        :can-write="canWrite"
+        :credentials-configured="credentialsConfigured"
+        @changed="load"
+        @error="error = $event"
+        @opt-in="setOptIn"
+      />
+      <p v-if="!installed.length && !loading" class="help">
+        No supported agent was found on this machine.
+      </p>
+    </div>
+
+    <details v-if="missing.length" class="install">
+      <summary>
+        Available to install <span class="count">{{ missing.length }}</span>
+      </summary>
+      <div v-for="a in missing" :key="a.id" class="agent-row">
+        <h3>{{ a.name }}</h3>
+        <div v-if="a.install_hint" class="cmd">
+          <code>{{ a.install_hint }}</code
+          ><button
+            class="btn small icon-only"
+            type="button"
+            :aria-label="`Copy install command for ${a.name}`"
+            @click="copy(a.install_hint!)"
+          >
+            <Copy class="icon" aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+    </details>
+
+    <h3 class="sub">
+      Roles
+      <Popover v-model:open="help">
+        <template #trigger="{ toggle, open }">
+          <button
+            class="btn small icon-only"
+            type="button"
+            aria-label="How roles pick an agent"
+            :aria-expanded="open"
+            @click="toggle"
+          >
+            <HelpCircle class="icon" aria-hidden="true" />
+          </button>
+        </template>
+        <p class="pop-text" role="note">
+          Each role runs on the agent and model you pick here. A work order can
+          override the model when it is created; Foreman and Architect keep the
+          model they started with. Permissions are fixed by role for safety,
+          except Chat.
+        </p>
+      </Popover>
+    </h3>
+    <RolesTable
+      :settings="settings"
+      :agents="agents"
+      :editable="editable"
+      @saved="emit('saved', $event)"
+    />
   </section>
 </template>

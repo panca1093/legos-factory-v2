@@ -29,31 +29,30 @@ async function fixture(page: Page, role: string = user.role) {
     else if (p.endsWith("/models")) body = { models };
     else if (p.endsWith("/settings")) body = settings;
     else if (p.endsWith("/settings/runtime"))
-      body = {
-        harness: "mock",
-        acp_command: "opencode acp",
-        jev: { enabled: false, model: "jev-1.14.0" },
-        credentials_configured: true,
-        max_concurrent_runs: 2,
-      };
+      body = { credentials_configured: true, jev_key_from_env: false };
     else if (p.endsWith("/mcp-servers"))
       body = { servers: [], credentials_configured: true };
     else if (p.endsWith("/connections"))
       body = {
-        credentials_configured: true,
-        connections: [
+        providers: [
           {
-            id: "conn-gh",
-            provider: "github",
-            name: "Atlas GitHub",
-            scope: "shared",
-            owner_id: "admin",
-            base_url: "https://api.github.com",
-            status: "active",
-            account: "factory-bot",
-            verified_at: "2026-10-24T00:00:00Z",
-            has_credential: true,
-            created_at: "2026-10-24T00:00:00Z",
+            id: "github",
+            group: "code",
+            accounts: [
+              {
+                id: "conn-gh",
+                provider: "github",
+                name: "Atlas GitHub",
+                scope: "shared",
+                owner_id: "admin",
+                base_url: "https://api.github.com",
+                status: "active",
+                account: "factory-bot",
+                verified_at: "2026-10-24T00:00:00Z",
+                has_credential: true,
+                created_at: "2026-10-24T00:00:00Z",
+              },
+            ],
           },
         ],
       };
@@ -198,13 +197,12 @@ test("browser permissions, unavailable settings, dialog keyboard handling and er
     page.getByRole("button", { name: "Approve", exact: true }),
   ).toBeDisabled();
   await page.goto("/settings");
-  await expect(page.locator("#set-architect")).toBeDisabled();
+  await expect(page.locator("#agent-architect")).toBeDisabled();
   await page.goto("/settings#connections");
-  await expect(page.getByText("Atlas GitHub")).toBeVisible();
-  await expect(page.getByText("Verified", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Test" })).toHaveCount(0);
+  await expect(page.getByText("factory-bot")).toBeVisible();
+  await expect(page.getByText("Working", { exact: true })).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Add connection" }),
+    page.getByRole("button", { name: "More for Atlas GitHub" }),
   ).toHaveCount(0);
   await page.keyboard.press("Control+k");
   await expect(page.getByRole("dialog")).toBeVisible();
@@ -250,7 +248,7 @@ test("settings initialization failure cannot overwrite saved configuration", asy
   await expect(page.getByRole("alert")).toContainText(
     "Settings temporarily unavailable",
   );
-  await expect(page.locator("#set-architect")).toBeDisabled();
+  await expect(page.locator("#agent-architect")).toBeDisabled();
   await expect(
     page.getByRole("button", { name: "Save settings", exact: true }),
   ).toBeDisabled();

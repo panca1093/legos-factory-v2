@@ -82,6 +82,44 @@ const discovered = (roles: string[]) =>
     ],
   });
 
+const baseRoleAgents = {
+  foreman: "claude",
+  architect: "claude",
+  builder: "claude",
+  inspector: "claude",
+  chat: "claude",
+};
+const appSettings: {
+  role_agents: Record<string, string>;
+  role_permissions: { chat: string };
+  max_concurrent_runs: number;
+  jev_enabled: boolean;
+} = {
+  role_agents: { ...baseRoleAgents },
+  role_permissions: { chat: "ask" },
+  max_concurrent_runs: 4,
+  jev_enabled: true,
+};
+const codexModel = {
+  provider_id: "openai",
+  model_id: "gpt-6.1-sol",
+  name: "GPT 6.1 Sol",
+  harness: "codex",
+};
+const acct = (over: object = {}) => ({
+  id: "sys",
+  label: "System default",
+  system: true,
+  active: true,
+  status: "signed_in",
+  who: "you@example.com",
+  plan: "max_5x",
+  expires_at: "2027-01-05T00:00:00Z",
+  ...over,
+});
+type Agent = { accounts: object[]; installed?: boolean };
+let agentsBody: { agents: Agent[]; claude_usage_opt_in: boolean };
+let providersBody: { providers: object[] };
 let routes: Record<string, Handler>;
 let calls: { method: string; path: string; body: unknown }[];
 let scrolled: string[];
@@ -102,26 +140,72 @@ beforeEach(() => {
     },
   ];
   useSession().user = user;
+  appSettings.role_agents = { ...baseRoleAgents };
+  agentsBody = {
+    claude_usage_opt_in: false,
+    agents: [
+      {
+        id: "claude",
+        name: "Claude",
+        command: "claude-agent-acp",
+        installed: true,
+        enabled: true,
+        roles_allowed: ["foreman", "architect", "builder", "inspector", "chat"],
+        accounts: [acct()],
+      },
+      {
+        id: "codex",
+        name: "Codex",
+        command: "codex-acp",
+        installed: true,
+        enabled: true,
+        roles_allowed: ["foreman", "architect", "builder", "chat"],
+        accounts: [acct({ id: "cx", who: "me@x.com", plan: "plus" })],
+      },
+      {
+        id: "opencode",
+        name: "OpenCode",
+        command: "opencode acp",
+        installed: false,
+        enabled: false,
+        install_hint: "npm install -g opencode-ai",
+        roles_allowed: ["foreman", "architect", "builder", "inspector", "chat"],
+        accounts: [],
+      },
+    ] as unknown as Agent[],
+  };
+  providersBody = {
+    providers: [
+      {
+        id: "github",
+        group: "code",
+        accounts: [{ ...gh, used_by: [{ project_id: "pos", name: "POS" }] }],
+      },
+      { id: "gitlab", group: "code", accounts: [] },
+      { id: "bitbucket", group: "code", accounts: [] },
+      { id: "jira", group: "work", accounts: [] },
+    ],
+  };
   calls = [];
   scrolled = [];
   Element.prototype.scrollIntoView = function (this: Element) {
     scrolled.push(this.id);
   };
   routes = {
-    "GET /api/v1/settings": () => json(structuredClone(settings)),
+    "GET /api/v1/settings": () =>
+      json(structuredClone({ ...settings, ...appSettings })),
     "GET /api/v1/settings/runtime": () =>
+      json({ credentials_configured: true, jev_key_from_env: false }),
+    "GET /api/v1/agents": () => json(structuredClone(agentsBody)),
+    "GET /api/v1/models": (_b, url) =>
       json({
-        harness: "acp",
-        acp_command: "opencode acp",
-        jev: { enabled: true, model: "jev-1.14.0" },
-        credentials_configured: true,
-        max_concurrent_runs: 3,
+        models: url.includes("agent=codex")
+          ? [codexModel, { ...codexModel, model_id: "gpt-6", name: "GPT 6" }]
+          : models,
       }),
-    "GET /api/v1/models": () => json({ models }),
     "GET /api/v1/overview": () => json(overview),
     "GET /api/v1/projects": () => json({ projects: f.projects }),
-    "GET /api/v1/connections": () =>
-      json({ connections: [gh], credentials_configured: true }),
+    "GET /api/v1/connections": () => json(structuredClone(providersBody)),
     "GET /api/v1/mcp-servers": () =>
       json({ servers: [], credentials_configured: true }),
   };
@@ -145,6 +229,12 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+async function openMcp(w: ReturnType<typeof mount>) {
+  await w
+    .findAll("button")
+    .find((b) => b.text() === "Add MCP server")!
+    .trigger("click");
+}
 async function render(url = "/settings") {
   const router = createRouter({
     history: createMemoryHistory(),
@@ -162,133 +252,359 @@ async function render(url = "/settings") {
 const sent = (method: string, path: string) =>
   calls.filter((c) => c.method === method && c.path === path);
 
-it("renders one page with four sections in order, no tabs and no global save", async () => {
-  const { w } = await render();
-  const ids = w
-    .findAll("section.settings-section")
-    .map((s) => s.attributes("id"));
-  expect(ids).toEqual(["agents", "connections", "runtime", "budget"]);
-  expect(w.find('[role="tablist"]').exists()).toBe(false);
-  expect(w.text()).not.toContain("Save settings");
-  expect(w.text()).not.toContain("Not reported");
-  expect(w.text()).not.toContain("My preferences");
-  expect(w.text()).not.toContain("Team & access");
-  expect(w.text()).not.toContain("OpenCode discovery");
-  expect(w.text()).toContain(
-    "work order choice → workspace default → first available model",
-  );
-  w.unmount();
-});
-
-it("labels each default with what it resolves to", async () => {
-  const { w } = await render();
-  const opts = w.findAll("#set-chat option").map((o) => o.text());
-  expect(opts[0]).toBe("Default (Architect model)");
-  w.unmount();
-});
-
-it("saves each model change on its own with a PATCH of one key", async () => {
-  routes["PATCH /api/v1/settings"] = (body) =>
-    json({ ...settings, ...(body as object) });
-  const { w } = await render();
-  await w.find("#set-architect").setValue("test/inspector");
+type W = ReturnType<typeof mount>;
+const click = async (w: W, label: string) => {
+  await w.find(`[aria-label="${label}"]`).trigger("click");
   await flushPromises();
-  await w.find("#set-chat").setValue("test/builder");
-  await flushPromises();
-  const patches = sent("PATCH", "/api/v1/settings").map((c) => c.body);
-  expect(patches).toEqual([
-    { architect_model: "test/inspector" },
-    { chat_model: "test/builder" },
+};
+const buttonByText = (w: { findAll: W["findAll"] }, text: string) =>
+  w.findAll("button").find((b) => b.text() === text)!;
+const patchEcho: Handler = (body) =>
+  json({ ...settings, ...appSettings, ...(body as object) });
+
+it("renders Agents, Connections and Advanced with a section nav and none of the removed UI", async () => {
+  const { w } = await render();
+  expect(
+    w.findAll("section.settings-section").map((s) => s.attributes("id")),
+  ).toEqual(["agents", "connections", "advanced"]);
+  expect(w.findAll("nav a").map((a) => a.text())).toEqual([
+    "Agents",
+    "Connections",
+    "Advanced",
   ]);
-  expect(sent("PUT", "/api/v1/settings")).toHaveLength(0);
+  const text = w.text();
+  for (const gone of [
+    "Budget",
+    "budget",
+    "Runtime",
+    "Contract tests",
+    "FACTORY_MAX_CONCURRENT_RUNS",
+  ])
+    expect(text).not.toContain(gone);
+  expect(w.find("#set-budget").exists()).toBe(false);
+  expect(w.find("[data-project-link]").exists()).toBe(false);
+  expect(w.find('[data-test="secret-banner"]').exists()).toBe(false);
   w.unmount();
 });
 
-it("shows the server error and restores the previous model when a save fails", async () => {
-  routes["PATCH /api/v1/settings"] = () =>
-    fail(500, "INTERNAL", "could not save settings");
+it("gives every checkbox and select an accessible name", async () => {
   const { w } = await render();
-  await w.find("#set-architect").setValue("test/builder");
-  await flushPromises();
-  expect(w.text()).toContain("could not save settings");
-  expect((w.find("#set-architect").element as HTMLSelectElement).value).toBe(
-    "test/architect",
+  const controls = w.findAll("input[type=checkbox], select");
+  expect(controls.length).toBeGreaterThan(5);
+  for (const el of controls) {
+    const id = el.attributes("id");
+    const named =
+      el.attributes("aria-label") ||
+      (id && w.find(`label[for="${id}"]`).exists()) ||
+      el.element.closest("label")?.textContent?.trim();
+    expect(named, el.html()).toBeTruthy();
+  }
+  w.unmount();
+});
+
+it("shows the secret-key banner only when credentials are not configured", async () => {
+  routes["GET /api/v1/settings/runtime"] = () =>
+    json({ credentials_configured: false, jev_key_from_env: false });
+  const { w } = await render();
+  expect(w.find('[data-test="secret-banner"]').text()).toContain(
+    "FACTORY_SECRET_KEY",
   );
-  w.unmount();
-});
-
-it("keeps saved values when a model and budget response arrive out of order", async () => {
-  let finishModel!: (response: Response) => void;
-  routes["PATCH /api/v1/settings"] = (body) => {
-    if ("architect_model" in (body as object))
-      return new Promise((resolve) => {
-        finishModel = resolve;
-      });
-    return json({ ...settings, ...(body as object) });
-  };
-  const { w } = await render();
-  await w.find("#set-architect").setValue("test/inspector");
-  await w.find("#set-budget").setValue("12.34");
-  await flushPromises();
-  finishModel(json({ ...settings, architect_model: "test/inspector" }));
-  await flushPromises();
-  expect((w.find("#set-architect").element as HTMLSelectElement).value).toBe(
-    "test/inspector",
-  );
-  expect((w.find("#set-budget").element as HTMLInputElement).value).toBe(
-    "12.34",
-  );
-  w.unmount();
-});
-
-it("saves the budget cap in micros when the field changes", async () => {
-  routes["PATCH /api/v1/settings"] = (body) =>
-    json({ ...settings, ...(body as object) });
-  const { w } = await render();
-  await w.find("#set-budget").setValue("12.34");
-  await w.find("#set-budget").trigger("change");
-  await flushPromises();
-  expect(sent("PATCH", "/api/v1/settings")[0].body).toEqual({
-    budget_limit_micros: 12340000,
-  });
-  w.unmount();
-});
-
-it("shows everything read-only with a note to a non-admin", async () => {
-  useSession().user = { ...user, role: "VIEWER" };
-  const { w } = await render();
-  expect(w.find('[data-test="read-only-note"]').exists()).toBe(true);
-  expect(w.find("#set-architect").attributes("disabled")).toBeDefined();
-  expect(w.find("#set-budget").attributes("disabled")).toBeDefined();
-  expect(w.find('[data-test="connection-form"]').exists()).toBe(false);
-  expect(w.find("[data-connection] button").exists()).toBe(false);
-  expect(sent("GET", "/api/v1/mcp-servers")).toHaveLength(0);
-  w.unmount();
-});
-
-it("reports the runtime read-only with where each value is set", async () => {
-  const { w } = await render();
-  const text = w.find('[data-test="runtime"]').text();
-  expect(text).toContain("ACP agent · opencode acp");
-  expect(text).toContain("FACTORY_ACP_COMMAND");
-  expect(text).toContain("On · jev-1.14.0");
-  expect(text).toContain("TYPESAFE_API_KEY");
-  expect(text).toContain("FACTORY_SECRET_KEY");
-  expect(text).toContain("FACTORY_MAX_CONCURRENT_RUNS");
-  expect(w.find('[data-test="runtime"] input').exists()).toBe(false);
   w.unmount();
 });
 
 it("lands on the matching section for old ?tab= links and hashes", async () => {
-  let r = await render("/settings?tab=usage");
-  expect(scrolled.at(-1)).toBe("budget");
-  r.w.unmount();
-  r = await render("/settings?tab=integrations");
-  expect(scrolled.at(-1)).toBe("connections");
-  r.w.unmount();
-  r = await render("/settings#runtime");
-  expect(scrolled.at(-1)).toBe("runtime");
-  r.w.unmount();
+  for (const [url, id] of [
+    ["/settings?tab=governance", "agents"],
+    ["/settings?tab=integrations", "connections"],
+    ["/settings?tab=usage", "agents"],
+    ["/settings#advanced", "advanced"],
+  ]) {
+    const r = await render(url);
+    expect(scrolled.at(-1)).toBe(id);
+    r.w.unmount();
+  }
+});
+
+it("lists agents with plan and login expiry while usage is off, with no bars", async () => {
+  const { w } = await render();
+  const claude = w.find('[data-agent="claude"]');
+  expect(claude.text()).toContain("you@example.com");
+  const plan = claude.find('[data-test="plan-line"]').text();
+  expect(plan).toContain("max_5x");
+  expect(plan).toContain("login expires");
+  expect(claude.find("[data-meter]").exists()).toBe(false);
+  expect(w.find(".install").text()).toContain("npm install -g opencode-ai");
+  w.unmount();
+});
+
+it("opt-in PATCHes preferences, then shows usage bars; usage_error shows Usage unavailable", async () => {
+  routes["PATCH /api/v1/me/preferences"] = (body) => {
+    agentsBody.claude_usage_opt_in = (
+      body as { claude_usage_opt_in: boolean }
+    ).claude_usage_opt_in;
+    agentsBody.agents[0].accounts = [
+      acct({
+        usage: {
+          session: {
+            used_pct: 58,
+            resets_at: new Date(Date.now() + 3 * 3600e3).toISOString(),
+          },
+          week: { used_pct: 91 },
+        },
+      }),
+    ];
+    return json({ claude_usage_opt_in: true });
+  };
+  const { w } = await render();
+  await click(w, "About Claude usage");
+  expect(w.text()).toContain("not documented");
+  await w.find('input[aria-label="Show Claude usage"]').setValue(true);
+  await flushPromises();
+  expect(sent("PATCH", "/api/v1/me/preferences")[0].body).toEqual({
+    claude_usage_opt_in: true,
+  });
+  const session = w.find('[data-meter="session"]');
+  expect(session.text()).toContain("58%");
+  expect(session.find("[role=progressbar]").attributes("aria-valuenow")).toBe(
+    "58",
+  );
+  expect(w.find('[data-meter="week"] i').classes()).toContain("warn");
+  expect(w.find('[data-test="usage-error"]').exists()).toBe(false);
+
+  agentsBody.agents[0].accounts = [acct({ usage_error: "unavailable" })];
+  await buttonByText(w, "Refresh").trigger("click");
+  await flushPromises();
+  expect(w.find('[data-test="usage-error"]').text()).toBe("Usage unavailable");
+  expect(w.find("[data-meter]").exists()).toBe(false);
+  w.unmount();
+});
+
+it("add-account flow: create, show the login command, copy, then refresh on I've signed in", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  routes["POST /api/v1/agents/claude/accounts"] = () =>
+    json({
+      account: acct({
+        id: "a2",
+        label: "Work",
+        system: false,
+        active: false,
+        status: "signed_out",
+      }),
+      login_command: "CLAUDE_CONFIG_DIR=/d claude auth login",
+      env_hint: "Run it in a terminal.",
+    });
+  routes["POST /api/v1/agents/claude/accounts/a2/refresh"] = () =>
+    json(acct({ id: "a2" }));
+  const { w } = await render();
+  await click(w, "More for Claude");
+  await buttonByText(w, "Add account").trigger("click");
+  await w.find("#acct-label-claude").setValue("Work");
+  await w.find('[data-test="add-account"]').trigger("submit");
+  await flushPromises();
+  expect(sent("POST", "/api/v1/agents/claude/accounts")[0].body).toEqual({
+    label: "Work",
+  });
+  expect(w.find('[data-test="login-steps"]').text()).toContain(
+    "CLAUDE_CONFIG_DIR=/d claude auth login",
+  );
+  await click(w, "Copy login command");
+  expect(writeText).toHaveBeenCalledWith(
+    "CLAUDE_CONFIG_DIR=/d claude auth login",
+  );
+  await buttonByText(w, "I've signed in").trigger("click");
+  await flushPromises();
+  expect(
+    sent("POST", "/api/v1/agents/claude/accounts/a2/refresh"),
+  ).toHaveLength(1);
+  expect(w.find('[data-test="login-steps"]').exists()).toBe(false);
+  w.unmount();
+});
+
+it("a signed-out account shows Not signed in and a Sign in action", async () => {
+  agentsBody.agents[1].accounts = [acct({ id: "cx", status: "signed_out" })];
+  const { w } = await render();
+  const codex = w.find('[data-agent="codex"]');
+  expect(codex.text()).toContain("Not signed in");
+  await buttonByText(codex, "Sign in").trigger("click");
+  expect(codex.find('[data-test="login-steps"]').text()).toContain(
+    "codex login",
+  );
+  w.unmount();
+});
+
+it("roles table: changing an agent reloads its models and saves the first one", async () => {
+  routes["PATCH /api/v1/settings"] = patchEcho;
+  const { w } = await render();
+  expect(w.findAll("#model-builder option").map((o) => o.text())).toContain(
+    "Builder model",
+  );
+  await w.find("#agent-builder").setValue("codex");
+  await flushPromises();
+  expect(sent("PATCH", "/api/v1/settings")[0].body).toEqual({
+    role_agents: { ...baseRoleAgents, builder: "codex" },
+    builder_model: "openai/gpt-6.1-sol",
+  });
+  expect(
+    calls.some((c) => c.path === "/api/v1/models" && c.method === "GET"),
+  ).toBe(true);
+  expect(w.findAll("#model-builder option").map((o) => o.text())).toEqual([
+    "GPT 6.1 Sol",
+    "GPT 6",
+  ]);
+  w.unmount();
+});
+
+it("roles table: Codex is disabled for Inspector, Builder permission is locked, Chat has a choice", async () => {
+  routes["PATCH /api/v1/settings"] = patchEcho;
+  const { w } = await render();
+  const opt = w.find('#agent-inspector option[value="codex"]');
+  expect(opt.attributes("disabled")).toBeDefined();
+  expect(opt.text()).toContain("not supported");
+  expect(
+    w.find('#agent-builder option[value="codex"]').attributes("disabled"),
+  ).toBeUndefined();
+  const builder = w.find('[data-role="builder"]');
+  expect(builder.text()).toContain("Edit its worktree");
+  expect(builder.find('select[aria-label$="permission"]').exists()).toBe(false);
+  expect(
+    w.findAll("#perm-chat option").map((o) => o.attributes("value")),
+  ).toEqual(["ask", "read"]);
+  await w.find("#perm-chat").setValue("read");
+  await flushPromises();
+  expect(sent("PATCH", "/api/v1/settings")[0].body).toEqual({
+    role_permissions: { chat: "read" },
+  });
+  w.unmount();
+});
+
+it("roles table hints in red when a role's agent is signed out or off", async () => {
+  appSettings.role_agents = {
+    ...baseRoleAgents,
+    builder: "codex",
+    chat: "opencode",
+  };
+  agentsBody.agents[1].accounts = [];
+  agentsBody.agents[2].installed = true;
+  const { w } = await render();
+  expect(w.find('[data-test="hint-builder"]').text()).toBe(
+    "Codex isn't signed in",
+  );
+  expect(w.find('[data-test="hint-chat"]').text()).toBe("OpenCode is off");
+  expect(w.find('[data-test="hint-foreman"]').exists()).toBe(false);
+  w.unmount();
+});
+
+it("shows roles and Advanced read-only to a non-admin", async () => {
+  useSession().user = { ...user, role: "VIEWER" };
+  const { w } = await render();
+  expect(w.find('[data-test="read-only-note"]').exists()).toBe(true);
+  expect(w.find("#agent-builder").attributes("disabled")).toBeDefined();
+  expect(w.find("#max-runs").attributes("disabled")).toBeDefined();
+  expect(sent("GET", "/api/v1/mcp-servers")).toHaveLength(0);
+  w.unmount();
+});
+
+it("connections are grouped by provider with accounts, used-by and inline Connect", async () => {
+  routes["POST /api/v1/connections"] = () => json({ ...gh, id: "c2" }, 201);
+  const { w } = await render();
+  const groups = w.findAll(".conn-group > h3").map((h) => h.text());
+  expect(groups[0]).toContain("Code hosting");
+  expect(groups[1]).toContain("Work tools");
+  expect(groups[2]).toContain("MCP servers");
+  const github = w.find('[data-connection="github"]');
+  expect(github.text()).toContain("used by POS");
+  expect(github.text()).toContain("Shared");
+  expect(w.find('[data-connection="jira"]').text()).toContain("Connect");
+
+  await click(w, "Connect Jira");
+  await w.find("#f-site-jira").setValue("acme.atlassian.net");
+  await w.find("#f-user-jira").setValue("me@acme.com");
+  await w.find("#f-token-jira").setValue("tok");
+  await w.find('[data-test="connect-jira"]').trigger("submit");
+  await flushPromises();
+  expect(sent("POST", "/api/v1/connections")[0].body).toEqual({
+    provider: "jira",
+    name: "Jira",
+    scope: "personal",
+    base_url: "https://acme.atlassian.net",
+    username: "me@acme.com",
+    token: "tok",
+  });
+  w.unmount();
+});
+
+it("connection menu tests, turns off and disconnects an account", async () => {
+  routes["POST /api/v1/connections/c1/test"] = () => json(gh);
+  routes["PATCH /api/v1/connections/c1"] = () => json(gh);
+  routes["DELETE /api/v1/connections/c1"] = () =>
+    new Response(null, { status: 204 });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+  const { w } = await render();
+  for (const item of ["Test connection", "Turn off", "Disconnect"]) {
+    await click(w, "More for Acme GitHub");
+    await buttonByText(w, item).trigger("click");
+    await flushPromises();
+  }
+  expect(sent("POST", "/api/v1/connections/c1/test")).toHaveLength(1);
+  expect(sent("PATCH", "/api/v1/connections/c1")[0].body).toEqual({
+    status: "disabled",
+  });
+  expect(sent("DELETE", "/api/v1/connections/c1")).toHaveLength(1);
+  w.unmount();
+});
+
+it("Advanced saves max runs (1..16) and rejects out-of-range values", async () => {
+  routes["PATCH /api/v1/settings"] = patchEcho;
+  const { w } = await render();
+  expect((w.find("#max-runs").element as HTMLInputElement).value).toBe("4");
+  await w.find("#max-runs").setValue("8");
+  await w.find("#max-runs").trigger("change");
+  await flushPromises();
+  expect(sent("PATCH", "/api/v1/settings")[0].body).toEqual({
+    max_concurrent_runs: 8,
+  });
+  await w.find("#max-runs").setValue("40");
+  await w.find("#max-runs").trigger("change");
+  await flushPromises();
+  expect(sent("PATCH", "/api/v1/settings")).toHaveLength(1);
+  expect(w.text()).toContain("from 1 to 16");
+  w.unmount();
+});
+
+it("Jev toggle patches jev_enabled and the key is write-only", async () => {
+  routes["PATCH /api/v1/settings"] = patchEcho;
+  const { w } = await render();
+  await w.find('input[aria-label="Jev plan checks"]').setValue(false);
+  await flushPromises();
+  expect(sent("PATCH", "/api/v1/settings")[0].body).toEqual({
+    jev_enabled: false,
+  });
+  expect(w.find('[data-test="jev-status"]').text()).toContain("Off");
+  expect(w.find("#jev-key").exists()).toBe(false);
+  await buttonByText(w, "Change key").trigger("click");
+  expect((w.find("#jev-key").element as HTMLInputElement).type).toBe(
+    "password",
+  );
+  await w.find("#jev-key").setValue("sk-secret");
+  await buttonByText(w, "Save key").trigger("click");
+  await flushPromises();
+  expect(sent("PATCH", "/api/v1/settings")[1].body).toEqual({
+    jev_key: "sk-secret",
+  });
+  expect(w.html()).not.toContain("sk-secret");
+  expect(w.find("#jev-key").exists()).toBe(false);
+  w.unmount();
+});
+
+it("Jev key field is disabled and says so when the server sets it", async () => {
+  routes["GET /api/v1/settings/runtime"] = () =>
+    json({ credentials_configured: true, jev_key_from_env: true });
+  const { w } = await render();
+  expect(w.find("#jev-key").attributes("disabled")).toBeDefined();
+  expect(w.text()).toContain("Set by the server");
+  expect(w.text()).not.toContain("Change key");
+  w.unmount();
 });
 
 it("adds an MCP server with a secret and shows a server validation error", async () => {
@@ -299,7 +615,7 @@ it("adds an MCP server with a secret and shows a server validation error", async
       "name must be 1-40 characters of a-z and 0-9",
     );
   const { w } = await render();
-  await w.find("#conn-provider").setValue("mcp");
+  await openMcp(w);
   await w.find("#mcp-transport").setValue("http");
   await w.find("#conn-name").setValue("Bad Name");
   await w.find("#mcp-url").setValue(" https://mcp.example.com/mcp ");
@@ -339,7 +655,7 @@ it("adds a stdio MCP server, then discovers it and lists the tools", async () =>
     return json(current[0]);
   };
   const { w } = await render();
-  await w.find("#conn-provider").setValue("mcp");
+  await openMcp(w);
   await w.find("#conn-name").setValue("docs_search");
   await w.find("#mcp-command").setValue("/bin/srv");
   await w.find("#mcp-args").setValue("--serve\n--quiet");
@@ -446,38 +762,9 @@ it("shows a failed discovery's last_error on the server", async () => {
   w.unmount();
 });
 
-it("binds a project from its row in Connections and toggles contract tests", async () => {
-  routes["PUT /api/v1/projects/pos/binding"] = (body) =>
-    json({ ...useFactory().projects[0], ...(body as object) });
-  routes["PUT /api/v1/projects/pos/contract-tests"] = (body) =>
-    json({ ...useFactory().projects[0], ...(body as object) });
-  const { w } = await render();
-  const row = w.find('[data-project-link="pos"]');
-  expect(row.text()).not.toContain("work orders cannot start");
-  await row.find("select").setValue("c1");
-  await flushPromises();
-  expect(
-    (row.find("input[placeholder='owner/repo']").element as HTMLInputElement)
-      .value,
-  ).toBe("acme/pos");
-  expect(sent("PUT", "/api/v1/projects/pos/binding")[0].body).toEqual({
-    git_connection_id: "c1",
-    remote_repo: "acme/pos",
-  });
-  await row.find('[data-test="contract-tests-proj-pos"]').setValue(true);
-  await flushPromises();
-  expect(sent("PUT", "/api/v1/projects/pos/contract-tests")[0].body).toEqual({
-    contract_tests: "on",
-  });
-  w.unmount();
-});
-
-it("uses the same project row and wording in the Add project dialog", async () => {
+it("Add project dialog still binds a connection and offers no contract tests", async () => {
   const f = useFactory();
   f.connections = [gh];
-  const { w } = await render();
-  const settingsHelp = w.find('[data-project-link="pos"] .help').text();
-  w.unmount();
   const d = mount(AddProjectDialog, {
     props: { open: true },
     attachTo: document.body,
@@ -485,8 +772,8 @@ it("uses the same project row and wording in the Add project dialog", async () =
   await flushPromises();
   const dialogText = document.body.textContent ?? "";
   expect(document.querySelector("#prj-conn")).toBeTruthy();
-  expect(dialogText).toContain(settingsHelp.slice(0, 60));
-  expect(dialogText).not.toContain("work orders cannot start");
+  expect(dialogText).not.toContain("Contract tests");
+  expect(document.querySelector('[data-test^="contract-tests"]')).toBeNull();
   d.unmount();
 });
 
@@ -502,7 +789,7 @@ const oauthServer = (over: Partial<McpServer> = {}) =>
 it("offers None, Token and OAuth for http servers and sends the OAuth fields", async () => {
   routes["POST /api/v1/mcp-servers"] = () => json(oauthServer(), 201);
   const { w } = await render();
-  await w.find("#conn-provider").setValue("mcp");
+  await openMcp(w);
   expect(w.find("#mcp-auth").exists()).toBe(false);
   await w.find("#mcp-transport").setValue("http");
   const options = w.findAll("#mcp-auth option").map((o) => o.text());
