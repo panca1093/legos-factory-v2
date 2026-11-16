@@ -40,12 +40,14 @@ defineExpose({ expand });
           class="icon"
         />
       </button>
-      <span class="path">{{ file.path }}</span
-      ><span v-if="file.status && file.status !== 'modified'" class="fx-code">{{
-        file.status === "renamed" && file.oldPath
-          ? "renamed from " + file.oldPath
-          : file.status
-      }}</span
+      <span class="path">{{ file.path }}</span><span
+        v-if="file.status && file.status !== 'modified'"
+        class="fx-code"
+        >{{
+          file.status === "renamed" && file.oldPath
+            ? "renamed from " + file.oldPath
+            : file.status
+        }}</span
       ><span v-if="file.lockfile" class="fx-code">lockfile</span
       ><span v-if="file.note" class="fx-code">{{ file.note }}</span
       ><span class="fx-add">+{{ file.add }}</span
@@ -61,8 +63,9 @@ defineExpose({ expand });
         <div class="fx-hh">{{ h.header }}</div>
         <template v-if="mode === 'unified'">
           <div v-for="(l, li) in h.lines" :key="li" class="fx-dl" :class="l.t">
-            <span class="ln">{{ l.o ?? "" }}</span
-            ><span class="ln">{{ l.n ?? "" }}</span
+            <span class="ln">{{ l.o ?? "" }}</span><span class="ln">{{
+              l.n ?? ""
+            }}</span
             ><code
               ><i class="sg">{{ sign[l.t] }}</i
               >{{ l.s }}</code
@@ -71,8 +74,8 @@ defineExpose({ expand });
         </template>
         <template v-else>
           <div v-for="(row, ri) in split[hi]" :key="ri" class="fx-sl">
-            <span class="ln">{{ row[0]?.o ?? "" }}</span
-            ><code :class="row[0]?.t ?? 'empty'"
+            <span class="ln">{{ row[0]?.o ?? "" }}</span><code
+              :class="row[0]?.t ?? 'empty'"
               ><i v-if="row[0]" class="sg">{{ sign[row[0].t] }}</i
               >{{ row[0]?.s }}</code
             ><span class="ln">{{ row[1]?.n ?? "" }}</span

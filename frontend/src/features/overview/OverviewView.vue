@@ -45,9 +45,7 @@ const running = computed(() => factory.workOrders.filter(isRunning));
 const inMaking = computed(() =>
   factory.workOrders.filter((w) => isTodo(w) || isRunning(w)),
 );
-const shipped = computed(
-  () => factory.workOrders.filter(isShipped).length,
-);
+const shipped = computed(() => factory.workOrders.filter(isShipped).length);
 const mtd = computed(() => factory.usage?.month_to_date);
 const activity = computed(() => factory.usage?.activity ?? []);
 const heat = computed(() => heatCells(activity.value, mode.value));

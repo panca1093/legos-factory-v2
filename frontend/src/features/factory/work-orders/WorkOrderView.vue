@@ -464,8 +464,7 @@ function download() {
             : modal === "approve"
               ? "Decision note (optional)"
               : "Decision or requested change"
-        }}</label
-        ><textarea
+        }}</label><textarea
           id="decision-notes"
           v-model="notes"
           rows="4"

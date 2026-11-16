@@ -607,6 +607,110 @@ it("Jev key field is disabled and says so when the server sets it", async () => 
   w.unmount();
 });
 
+it("overlapping role agent changes are serialized and neither is lost", async () => {
+  const bodies: unknown[] = [];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let saved = { ...baseRoleAgents };
+  routes["PATCH /api/v1/settings"] = async (body) => {
+    bodies.push(body);
+    if (bodies.length === 1) await gate;
+    saved = { ...saved, ...(body as { role_agents: object }).role_agents };
+    return json({ ...settings, ...appSettings, role_agents: saved });
+  };
+  const { w } = await render();
+  await w.find("#agent-builder").setValue("codex");
+  await w.find("#agent-chat").setValue("codex");
+  await flushPromises();
+  expect(bodies).toHaveLength(1);
+  release();
+  await flushPromises();
+  expect(bodies).toHaveLength(2);
+  expect((bodies[1] as { role_agents: object }).role_agents).toEqual({
+    ...baseRoleAgents,
+    builder: "codex",
+    chat: "codex",
+  });
+  w.unmount();
+});
+
+it("a failed model load aborts the agent change, reverts the select and retries next time", async () => {
+  routes["PATCH /api/v1/settings"] = patchEcho;
+  let failing = true;
+  routes["GET /api/v1/models"] = (_b, url) =>
+    url.includes("agent=codex")
+      ? failing
+        ? fail(500, "INTERNAL", "models unavailable")
+        : json({ models: [codexModel] })
+      : json({ models });
+  const { w } = await render();
+  await w.find("#agent-builder").setValue("codex");
+  await flushPromises();
+  expect(sent("PATCH", "/api/v1/settings")).toHaveLength(0);
+  expect((w.find("#agent-builder").element as HTMLSelectElement).value).toBe(
+    "claude",
+  );
+  expect(w.text()).toContain("models unavailable");
+  failing = false;
+  await w.find("#agent-builder").setValue("codex");
+  await flushPromises();
+  expect(sent("PATCH", "/api/v1/settings")[0].body).toMatchObject({
+    builder_model: "openai/gpt-6.1-sol",
+  });
+  w.unmount();
+});
+
+it("signed-out accounts use the server login_command and Sign in shows even with no active account", async () => {
+  agentsBody.agents[1].accounts = [
+    acct({
+      id: "cx",
+      active: false,
+      status: "signed_out",
+      system: false,
+      login_command: "CODEX_HOME=/h codex login",
+    }),
+  ];
+  const { w } = await render();
+  const codex = w.find('[data-agent="codex"]');
+  await buttonByText(codex, "Sign in").trigger("click");
+  expect(codex.find('[data-test="login-steps"]').text()).toContain(
+    "CODEX_HOME=/h codex login",
+  );
+  w.unmount();
+});
+
+it("the usage opt-in switch resets when the PATCH fails", async () => {
+  routes["PATCH /api/v1/me/preferences"] = () =>
+    fail(500, "INTERNAL", "could not save");
+  const { w } = await render();
+  const input = w.find('input[aria-label="Show Claude usage"]');
+  await input.setValue(true);
+  await flushPromises();
+  expect((input.element as HTMLInputElement).checked).toBe(false);
+  expect(w.text()).toContain("could not save");
+  w.unmount();
+});
+
+it("Add account closes the menu and focuses the label field", async () => {
+  const { w } = await render();
+  await click(w, "More for Claude");
+  await buttonByText(w, "Add account").trigger("click");
+  await flushPromises();
+  expect(w.find('[role="menuitem"]').exists()).toBe(false);
+  expect(document.activeElement?.id).toBe("acct-label-claude");
+  w.unmount();
+});
+
+it("Cancel clears the Jev key input", async () => {
+  const { w } = await render();
+  await buttonByText(w, "Change key").trigger("click");
+  await w.find("#jev-key").setValue("abc");
+  await buttonByText(w, "Cancel").trigger("click");
+  await buttonByText(w, "Change key").trigger("click");
+  expect((w.find("#jev-key").element as HTMLInputElement).value).toBe("");
+  w.unmount();
+});
+
 it("adds an MCP server with a secret and shows a server validation error", async () => {
   routes["POST /api/v1/mcp-servers"] = () =>
     fail(

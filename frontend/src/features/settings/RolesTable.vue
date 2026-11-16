@@ -26,7 +26,9 @@ const roles: { key: RoleKey; label: string; fixed?: string }[] = [
   { key: "chat", label: "Chat" },
 ];
 const modelField = (k: RoleKey) => `${k}_model` as const;
-const agentOf = (k: RoleKey) => props.settings.role_agents?.[k] || "claude";
+const pending = reactive<Partial<Record<RoleKey, string>>>({});
+const agentOf = (k: RoleKey) =>
+  pending[k] || props.settings.role_agents?.[k] || "claude";
 const modelOf = (k: RoleKey) => props.settings[modelField(k)] ?? "";
 const refOf = (m: ModelInfo) => `${m.provider_id}/${m.model_id}`;
 const chatPerm = () => props.settings.role_permissions?.chat ?? "ask";
@@ -36,16 +38,18 @@ const busy = reactive(new Set<RoleKey>());
 const error = ref("");
 async function ensureModels(agent: string) {
   if (byAgent[agent]) return byAgent[agent];
-  try {
-    byAgent[agent] = await factory.loadModels(agent);
-  } catch (e) {
-    byAgent[agent] = [];
-    error.value = e instanceof Error ? e.message : String(e);
-  }
-  return byAgent[agent];
+  const models = await factory.loadModels(agent);
+  if (models.length) byAgent[agent] = models;
+  return models;
 }
 const load = () =>
-  Promise.all([...new Set(roles.map((r) => agentOf(r.key)))].map(ensureModels));
+  Promise.all(
+    [...new Set(roles.map((r) => agentOf(r.key)))].map((a) =>
+      ensureModels(a).catch((e) => {
+        error.value = e instanceof Error ? e.message : String(e);
+      }),
+    ),
+  );
 onMounted(load);
 watch(() => props.settings.role_agents, load);
 
@@ -63,30 +67,49 @@ const agentOptions = (k: RoleKey) =>
   props.agents.filter((a) => a.installed || a.id === agentOf(k));
 const supported = (a: AgentInfo, k: RoleKey) => a.roles_allowed.includes(k);
 
-async function save(k: RoleKey, patch: SettingsPatch, el: HTMLSelectElement) {
+let queue: Promise<unknown> = Promise.resolve();
+function save(k: RoleKey, patch: SettingsPatch, el: HTMLSelectElement) {
+  busy.add(k);
+  const run = async () => {
+    error.value = "";
+    try {
+      const saved = await factory.patchSettings(patch);
+      emit("saved", {
+        role_agents: saved.role_agents,
+        role_permissions: saved.role_permissions,
+        [modelField(k)]: saved[modelField(k)],
+      });
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : String(e);
+      el.value = el.dataset.prev ?? "";
+    } finally {
+      delete pending[k];
+      busy.delete(k);
+    }
+  };
+  queue = queue.then(run, run);
+  return queue;
+}
+async function changeAgent(k: RoleKey, el: HTMLSelectElement) {
+  const agent = el.value;
   busy.add(k);
   error.value = "";
+  let models: ModelInfo[] = [];
   try {
-    const saved = await factory.patchSettings(patch);
-    emit("saved", {
-      role_agents: saved.role_agents,
-      role_permissions: saved.role_permissions,
-      [modelField(k)]: saved[modelField(k)],
-    });
+    models = await ensureModels(agent);
+    if (!models.length) throw new Error(`No models found for ${agent}.`);
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
     el.value = el.dataset.prev ?? "";
-  } finally {
     busy.delete(k);
+    return;
   }
-}
-async function changeAgent(k: RoleKey, el: HTMLSelectElement) {
-  const models = await ensureModels(el.value);
+  pending[k] = agent;
   await save(
     k,
     {
-      role_agents: { ...props.settings.role_agents, [k]: el.value },
-      [modelField(k)]: models[0] ? refOf(models[0]) : "",
+      role_agents: { ...props.settings.role_agents, ...pending },
+      [modelField(k)]: refOf(models[0]),
     },
     el,
   );
@@ -124,7 +147,8 @@ const changePerm = (el: HTMLSelectElement) =>
                 :key="a.id"
                 :value="a.id"
                 :disabled="
-                  a.id !== agentOf(r.key) && (!a.enabled || !supported(a, r.key))
+                  a.id !== agentOf(r.key) &&
+                  (!a.enabled || !supported(a, r.key))
                 "
               >
                 {{ a.name

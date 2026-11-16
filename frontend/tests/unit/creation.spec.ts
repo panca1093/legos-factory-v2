@@ -69,6 +69,35 @@ it("retains the created order identity when planning fails and never submits twi
   ]);
   w.unmount();
 });
+it("lists only each role's agent models for the overrides", async () => {
+  const f = useFactory();
+  vi.spyOn(f, "loadSettings").mockResolvedValue({
+    ...settings,
+    role_agents: { builder: "codex", inspector: "claude" },
+  });
+  const load = vi.spyOn(f, "loadModels").mockImplementation(async (agent) =>
+    agent === "codex"
+      ? [
+          {
+            provider_id: "openai",
+            model_id: "gpt",
+            name: "GPT",
+            harness: "codex",
+          },
+        ]
+      : models.slice(0, 1),
+  );
+  const w = render();
+  await flushPromises();
+  await intent(w);
+  await w.find('[data-test="drawer-next"]').trigger("click");
+  expect(load).toHaveBeenCalledWith("codex");
+  const names = (id: string) => w.findAll(`${id} option`).map((o) => o.text());
+  expect(names("#wo-builder").slice(1)).toEqual(["GPT · codex"]);
+  expect(names("#wo-inspector")).toHaveLength(2);
+  expect(names("#wo-inspector").join()).not.toContain("GPT");
+  w.unmount();
+});
 it("does not offer creation to a viewer", async () => {
   useSession().user = { ...user, role: "VIEWER" };
   const w = render();

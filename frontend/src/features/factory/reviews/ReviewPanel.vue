@@ -115,8 +115,7 @@ function dispose(f: Finding, action: FindingAction) {
           <span
             class="fx-pill"
             :class="f.severity === 'blocker' ? 'red' : 'orange'"
-            >{{ f.severity }}</span
-          ><span v-if="f.specialty" class="fx-pill">{{
+            >{{ f.severity }}</span><span v-if="f.specialty" class="fx-pill">{{
             f.specialty.replace("_", "/")
           }}</span
           ><strong class="small grow">{{ f.title }}</strong
@@ -216,8 +215,7 @@ function dispose(f: Finding, action: FindingAction) {
         <span
           class="pill"
           :class="selected.outcome === 'PASS' ? 'green' : 'red'"
-          >{{ selected.outcome }}</span
-        ><span class="small"
+          >{{ selected.outcome }}</span><span class="small"
           >Revision {{ selected.revision }} · Exit code:
           {{ selected.exit_code }}</span
         >

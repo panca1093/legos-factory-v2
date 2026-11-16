@@ -185,7 +185,8 @@ export interface Overview {
   user: User | null;
 }
 
-export type RoleKey = "foreman" | "architect" | "builder" | "inspector" | "chat";
+export type RoleKey =
+  "foreman" | "architect" | "builder" | "inspector" | "chat";
 export type AgentID = "claude" | "codex" | "opencode";
 
 export interface Settings {
@@ -236,6 +237,7 @@ export interface AgentAccount {
   expires_at?: string;
   usage?: { session?: UsageWindow; week?: UsageWindow };
   usage_error?: string;
+  login_command?: string;
 }
 export interface AgentInfo {
   id: string;

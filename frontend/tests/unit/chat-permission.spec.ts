@@ -42,18 +42,23 @@ describe("permission events in the store", () => {
       [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string, init?: { method?: string; body?: string }): Promise<unknown> => {
-        calls.push({ url, init });
-        if (url.endsWith("/messages")) return { ok: true, body };
-        if (url.includes("/permissions/"))
-          return {
-            ok: true,
-            status: 204,
-            headers: new Headers(),
-            text: async () => "",
-          };
-        return { ok: true, text: async () => '{"chats":[]}' };
-      }),
+      vi.fn(
+        async (
+          url: string,
+          init?: { method?: string; body?: string },
+        ): Promise<unknown> => {
+          calls.push({ url, init });
+          if (url.endsWith("/messages")) return { ok: true, body };
+          if (url.includes("/permissions/"))
+            return {
+              ok: true,
+              status: 204,
+              headers: new Headers(),
+              text: async () => "",
+            };
+          return { ok: true, text: async () => '{"chats":[]}' };
+        },
+      ),
     );
     const s = useChats();
     const sent = s.send("c", { content: "edit it" });
@@ -123,11 +128,17 @@ describe("permission events in the store", () => {
       text: async () => JSON.stringify({ error: { code: "X", message: "no" } }),
     });
     seed();
-    vi.stubGlobal("fetch", vi.fn(async () => reply(404)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => reply(404)),
+    );
     await expect(s.answerPermission("c", "perm_1", "deny")).rejects.toThrow();
     expect(s.messages.c[0].permissions![0].state).toBe("expired");
     seed();
-    vi.stubGlobal("fetch", vi.fn(async () => reply(500)));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => reply(500)),
+    );
     await expect(s.answerPermission("c", "perm_1", "deny")).rejects.toThrow();
     expect(s.messages.c[0].permissions![0].state).toBe("pending");
   });
@@ -155,7 +166,9 @@ describe("permission cards when the turn ends", () => {
                   start(c) {
                     c.enqueue(
                       enc.encode(
-                        frame("user_message", { message: msg(1, "user", "go") }) +
+                        frame("user_message", {
+                          message: msg(1, "user", "go"),
+                        }) +
                           frame("permission", {
                             id: "p1",
                             server: "docs",

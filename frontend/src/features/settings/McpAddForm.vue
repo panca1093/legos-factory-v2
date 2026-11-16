@@ -65,7 +65,11 @@ async function create() {
 }
 </script>
 <template>
-  <form class="inline-form form-grid" data-test="connection-form" @submit.prevent="create">
+  <form
+    class="inline-form form-grid"
+    data-test="connection-form"
+    @submit.prevent="create"
+  >
     <div class="form-group">
       <label for="conn-name">Name</label
       ><input
@@ -124,9 +128,8 @@ async function create() {
         <option value="oauth">OAuth sign-in</option>
       </select>
       <p v-if="mcp.auth === 'oauth'" class="help">
-        After adding the server, use Sign in to authorize it with its
-        provider. The access token is stored encrypted and refreshed
-        automatically.
+        After adding the server, use Sign in to authorize it with its provider.
+        The access token is stored encrypted and refreshed automatically.
       </p>
     </div>
     <details
@@ -136,14 +139,10 @@ async function create() {
       <summary>Advanced</summary>
       <div class="form-group">
         <label for="mcp-client-id">Client ID</label
-        ><input
-          id="mcp-client-id"
-          v-model="mcp.clientId"
-          autocomplete="off"
-        />
+        ><input id="mcp-client-id" v-model="mcp.clientId" autocomplete="off" />
         <p class="help">
-          Leave empty to register automatically. Needed when the provider
-          does not allow that.
+          Leave empty to register automatically. Needed when the provider does
+          not allow that.
         </p>
       </div>
       <div class="form-group">
@@ -191,9 +190,7 @@ async function create() {
       >
         Add secret
       </button>
-      <p class="help">
-        {{ secretHelp }} Stored encrypted, never shown again.
-      </p>
+      <p class="help">{{ secretHelp }} Stored encrypted, never shown again.</p>
     </div>
     <div class="row" style="grid-column: 1 / -1">
       <button class="btn primary small" type="submit" :disabled="busy">

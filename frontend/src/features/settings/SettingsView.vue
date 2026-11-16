@@ -70,9 +70,12 @@ watch(target, scrollToTarget);
 
 function merge(patch: Partial<Settings>) {
   for (const [k, v] of Object.entries(patch))
-    if (v !== undefined) (config.value as unknown as Record<string, unknown>)[k] = v;
+    if (v !== undefined)
+      (config.value as unknown as Record<string, unknown>)[k] = v;
 }
-const credentialsOK = computed(() => runtime.value?.credentials_configured ?? true);
+const credentialsOK = computed(
+  () => runtime.value?.credentials_configured ?? true,
+);
 </script>
 <template>
   <div class="page-heading">
@@ -104,7 +107,11 @@ const credentialsOK = computed(() => runtime.value?.credentials_configured ?? tr
         <div v-if="error" class="error-state" role="alert">
           {{ error }}<button class="btn small" @click="load">Try again</button>
         </div>
-        <p v-if="runtime && !credentialsOK" class="notice" data-test="secret-banner">
+        <p
+          v-if="runtime && !credentialsOK"
+          class="notice"
+          data-test="secret-banner"
+        >
           <TriangleAlert class="icon" aria-hidden="true" />
           <span
             ><b>Credentials can't be saved.</b> Set

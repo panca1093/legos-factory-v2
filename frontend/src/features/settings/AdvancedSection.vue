@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from "vue";
 import { useFactory } from "../../stores/factory";
-import type {
-  RuntimeInfo,
-  Settings,
-  SettingsPatch,
-} from "../../types/api";
+import type { RuntimeInfo, Settings, SettingsPatch } from "../../types/api";
 
 const props = defineProps<{
   settings: Settings;
@@ -58,6 +54,10 @@ function saveRuns() {
 }
 async function toggleJev(el: HTMLInputElement) {
   if (!(await save({ jev_enabled: el.checked }))) el.checked = !el.checked;
+}
+function cancelKey() {
+  key.value = "";
+  keyOpen.value = false;
 }
 async function saveKey() {
   if (!key.value.trim()) return;
@@ -139,7 +139,7 @@ async function saveKey() {
           >
             Save key
           </button>
-          <button class="btn small" type="button" @click="keyOpen = false">
+          <button class="btn small" type="button" @click="cancelKey">
             Cancel
           </button>
         </div>

@@ -370,7 +370,11 @@ describe("NowCard", () => {
     expect(
       currentIssues(order, [
         into("NEEDS_HUMAN_REVIEW"),
-        ev("converge_gate", "x", { outcome: "escalate", note: "x", issues: null }),
+        ev("converge_gate", "x", {
+          outcome: "escalate",
+          note: "x",
+          issues: null,
+        }),
       ]),
     ).toEqual([]);
   });

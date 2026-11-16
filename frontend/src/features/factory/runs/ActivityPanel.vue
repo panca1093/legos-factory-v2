@@ -133,8 +133,7 @@ const taskTitle = computed(
             <div class="row between">
               <strong class="small">{{
                 it.event.actor.charAt(0).toUpperCase() + it.event.actor.slice(1)
-              }}</strong
-              ><time :datetime="it.event.created_at">{{
+              }}</strong><time :datetime="it.event.created_at">{{
                 new Date(it.event.created_at).toLocaleString()
               }}</time>
             </div>
@@ -147,8 +146,7 @@ const taskTitle = computed(
             >
               <span class="pill" :class="gateSummary(it.event)!.tone">{{
                 gateSummary(it.event)!.outcome
-              }}</span
-              ><span class="tiny muted"
+              }}</span><span class="tiny muted"
                 >{{ gateSummary(it.event)!.gate }} · table row
                 {{ gateSummary(it.event)!.row }}</span
               ><span v-if="gateSummary(it.event)!.note" class="small">{{
@@ -192,8 +190,7 @@ const taskTitle = computed(
           <span
             class="pill"
             :class="r.state.toLowerCase() === 'failed' ? 'red' : 'purple'"
-            >{{ r.state }}</span
-          ><strong class="small">{{ r.kind }}</strong
+            >{{ r.state }}</span><strong class="small">{{ r.kind }}</strong
           ><span class="pill">{{ r.harness }}</span
           ><span class="tiny muted"
             >{{ money(r.cost_micros) }} ·

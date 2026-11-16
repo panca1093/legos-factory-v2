@@ -47,9 +47,10 @@ async function setOptIn(on: boolean) {
     await api.patch("/api/v1/me/preferences", { claude_usage_opt_in: on });
     usageOptIn.value = on;
     await load();
+    return true;
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
-    await load();
+    return false;
   }
 }
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
@@ -70,7 +71,9 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text);
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="loading" class="help" aria-busy="true">Looking for agents…</p>
 
-    <h3 class="sub">Installed <span class="count">{{ installed.length }} detected</span></h3>
+    <h3 class="sub">
+      Installed <span class="count">{{ installed.length }} detected</span>
+    </h3>
     <div class="card-list">
       <AgentRow
         v-for="a in installed"
@@ -81,7 +84,7 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text);
         :credentials-configured="credentialsConfigured"
         @changed="load"
         @error="error = $event"
-        @opt-in="setOptIn"
+        :set-opt-in="setOptIn"
       />
       <p v-if="!installed.length && !loading" class="help">
         No supported agent was found on this machine.
@@ -95,8 +98,7 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text);
       <div v-for="a in missing" :key="a.id" class="agent-row">
         <h3>{{ a.name }}</h3>
         <div v-if="a.install_hint" class="cmd">
-          <code>{{ a.install_hint }}</code
-          ><button
+          <code>{{ a.install_hint }}</code><button
             class="btn small icon-only"
             type="button"
             :aria-label="`Copy install command for ${a.name}`"

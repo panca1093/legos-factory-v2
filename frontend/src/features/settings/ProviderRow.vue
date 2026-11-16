@@ -86,8 +86,7 @@ function uniqueName() {
 }
 function baseUrl() {
   const v = form.base.trim();
-  if (id.value === "jira")
-    return /^https?:\/\//.test(v) ? v : `https://${v}`;
+  if (id.value === "jira") return /^https?:\/\//.test(v) ? v : `https://${v}`;
   return v;
 }
 async function connect() {
@@ -102,12 +101,19 @@ async function connect() {
     }),
   );
   if (ok) {
-    Object.assign(form, { token: "", base: "", username: "", scope: "personal" });
+    Object.assign(form, {
+      token: "",
+      base: "",
+      username: "",
+      scope: "personal",
+    });
     open.value = more.value = false;
   }
 }
 function disconnect(c: Connection) {
-  if (!window.confirm(`Disconnect "${c.name}"? Its stored credential is deleted.`))
+  if (
+    !window.confirm(`Disconnect "${c.name}"? Its stored credential is deleted.`)
+  )
     return;
   void run(c.id, () => factory.deleteConnection(c.id));
 }
@@ -152,7 +158,12 @@ const state = (c: Connection) =>
       </button>
     </div>
 
-    <div v-for="c in provider.accounts" :key="c.id" class="acct" :data-account="c.id">
+    <div
+      v-for="c in provider.accounts"
+      :key="c.id"
+      class="acct"
+      :data-account="c.id"
+    >
       <div class="grow">
         <b>{{ c.account || c.name }}</b>
         <span class="help">
@@ -206,7 +217,12 @@ const state = (c: Connection) =>
         >
           {{ c.status === "active" ? "Turn off" : "Turn on" }}
         </button>
-        <button type="button" role="menuitem" class="danger" @click="disconnect(c)">
+        <button
+          type="button"
+          role="menuitem"
+          class="danger"
+          @click="disconnect(c)"
+        >
           Disconnect
         </button>
       </Popover>
@@ -217,7 +233,11 @@ const state = (c: Connection) =>
       >
         <div class="form-group">
           <label :for="`conn-rename-${c.id}`">Name</label>
-          <input :id="`conn-rename-${c.id}`" v-model="edit.name" maxlength="100" />
+          <input
+            :id="`conn-rename-${c.id}`"
+            v-model="edit.name"
+            maxlength="100"
+          />
         </div>
         <div class="form-group">
           <label :for="`conn-rotate-${c.id}`">New token</label>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, nextTick, ref } from "vue";
 import { Copy, HelpCircle, MoreHorizontal } from "lucide-vue-next";
 import Popover from "../../components/ui/Popover.vue";
 import {
@@ -12,10 +12,11 @@ import {
 const props = defineProps<{
   agent: AgentInfo;
   usageOptIn: boolean;
+  setOptIn: (on: boolean) => Promise<boolean>;
   canWrite: boolean;
   credentialsConfigured: boolean;
 }>();
-const emit = defineEmits<{ changed: []; error: [string]; optIn: [boolean] }>();
+const emit = defineEmits<{ changed: []; error: [string] }>();
 
 const base = computed(() => `/api/v1/agents/${props.agent.id}`);
 const active = computed(() => props.agent.accounts.find((a) => a.active));
@@ -55,10 +56,13 @@ async function toggle(el: HTMLInputElement) {
   if (!ok) el.checked = props.agent.enabled;
 }
 
-function startAdd() {
+async function startAdd() {
+  menu.value = false;
   adding.value = true;
   login.value = null;
   label.value = "";
+  await nextTick();
+  document.getElementById(`acct-label-${props.agent.id}`)?.focus();
 }
 async function createAccount() {
   const name = label.value.trim();
@@ -77,7 +81,10 @@ function showSignIn(a: AgentAccount) {
   const known = remembered.get(a.id);
   login.value = {
     accountId: a.id,
-    command: known?.command ?? (a.system ? genericLogin[props.agent.id] : ""),
+    command:
+      known?.command ??
+      a.login_command ??
+      (a.system ? genericLogin[props.agent.id] : ""),
     env: known?.env ?? "",
   };
 }
@@ -88,6 +95,10 @@ async function signedIn() {
     api.post(`${base.value}/accounts/${l.accountId}/refresh`),
   );
   if (ok) login.value = null;
+}
+async function onOptIn(el: HTMLInputElement) {
+  const ok = await props.setOptIn(el.checked);
+  if (!ok) el.checked = props.usageOptIn;
 }
 const copy = (text: string) => void navigator.clipboard?.writeText(text);
 const use = (a: AgentAccount) =>
@@ -125,6 +136,13 @@ const planLine = (a: AgentAccount) =>
   ]
     .filter(Boolean)
     .join(" · ");
+const signInTarget = computed(() =>
+  active.value?.status === "signed_out"
+    ? active.value
+    : active.value
+      ? undefined
+      : props.agent.accounts.find((a) => a.status === "signed_out"),
+);
 const isClaude = computed(() => props.agent.id === "claude");
 </script>
 <template>
@@ -150,10 +168,10 @@ const isClaude = computed(() => props.agent.id === "claude");
         </p>
       </div>
       <button
-        v-if="agent.enabled && canWrite && active?.status === 'signed_out'"
+        v-if="agent.enabled && canWrite && signInTarget"
         class="btn primary small"
         :disabled="busy"
-        @click="showSignIn(active)"
+        @click="showSignIn(signInTarget)"
       >
         Sign in
       </button>
@@ -236,7 +254,7 @@ const isClaude = computed(() => props.agent.id === "claude");
             :checked="usageOptIn"
             :disabled="busy"
             @change="
-              emit('optIn', ($event.target as HTMLInputElement).checked)
+              onOptIn($event.target as HTMLInputElement)
             " /><span></span></span
         >Show Claude usage</label
       >
@@ -276,6 +294,15 @@ const isClaude = computed(() => props.agent.id === "claude");
             ></span
           >
         </div>
+        <button
+          v-if="canWrite && a.status === 'signed_out' && a !== signInTarget"
+          class="btn small"
+          :aria-label="`Sign in ${a.label}`"
+          :disabled="busy"
+          @click="showSignIn(a)"
+        >
+          Sign in
+        </button>
         <span v-if="a.active" class="pill green">In use</span>
         <button
           v-else-if="canWrite"
@@ -329,8 +356,7 @@ const isClaude = computed(() => props.agent.id === "claude");
           Run this in a terminal and sign in, then come back here.
         </p>
         <div class="cmd">
-          <code>{{ login.command }}</code
-          ><button
+          <code>{{ login.command }}</code><button
             class="btn small icon-only"
             type="button"
             aria-label="Copy login command"

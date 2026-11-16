@@ -1,10 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import Button from "../../components/ui/Button.vue";
-import type {
-  ChatPermission,
-  ChatPermissionDecision,
-} from "../../types/api";
+import type { ChatPermission, ChatPermissionDecision } from "../../types/api";
 
 const props = defineProps<{ permission: ChatPermission }>();
 defineEmits<{ answer: [decision: ChatPermissionDecision] }>();

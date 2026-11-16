@@ -116,7 +116,8 @@ async function mcpAdded() {
 
     <div class="conn-group">
       <h3 class="sub">
-        MCP servers <span class="count">Extra tools for agents, admin only</span>
+        MCP servers
+        <span class="count">Extra tools for agents, admin only</span>
       </h3>
       <McpAddForm
         v-if="addingMcp"
