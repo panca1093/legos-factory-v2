@@ -835,7 +835,9 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 	return res, info, nil
 }
 
-const chatMCPNote = "You may call the MCP tools you are offered; those that change something ask the user to approve each call, and a refused call means the user said no.\n\n"
+const chatMCPNote = "You may call the MCP tools you are offered; those that change something ask the user to approve each call, and a refused MCP call means the user said no. A refused file read was refused by the app, not the user. " +
+	"When a tool result is saved to a file because it is too large, read that file in parts: search it for the sections you need, then read those ranges. " +
+	"To review a pull request, start from its list of changed files and line counts, skip generated and vendored files (lockfiles, vendor/, generated JSON such as dashboards, snapshots), and read only the diffs that matter.\n\n"
 
 const chatPreamble = "You are an assistant in the Legos factory app, in a general conversation. You cannot run commands or change local files; answer from what you know, the context you are given and the MCP tools you are offered. " + chatMCPNote
 

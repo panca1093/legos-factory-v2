@@ -252,6 +252,9 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 		conn.close()
 		return nil, err
 	}
+	if h.Provider == "claude" {
+		conn.projects, conn.sessionID = filepath.Join(claudeConfigDir(conn.cmd.Env), "projects"), ns.SessionID
+	}
 	if req.ProviderID != "" || req.ModelID != "" {
 		if err := conn.setModel(ctx, ns, req.ProviderID+"/"+req.ModelID, h.Provider); err != nil {
 			conn.close()
@@ -669,6 +672,8 @@ type acpConn struct {
 	mcpAllow  map[string]bool // mcp__<server>__<tool> names the session may call, fixed at Start so Continue cannot widen it
 	mcpAsk    map[string]bool // the mcpAllow names a human decides per call, fixed at Start like mcpAllow
 	workspace string
+	projects  string // Claude Code's projects dir; <projects>/<cwd slug>/<sessionID>/tool-results is the one place outside the workspace a session may read
+	sessionID string
 	onStep    func(model.AgentStep)
 	onText    func(string)
 	onPerm    func(context.Context, model.PermissionRequest) bool // guarded by mu
@@ -1056,7 +1061,9 @@ func (c *acpConn) answerPermission(m acpMsg) {
 	} else {
 		reads := p.ToolCall.Kind == "read" || p.ToolCall.Kind == "search" || p.ToolCall.Kind == "think"
 		allow = c.role == model.AgentBuilder || (reads && (c.role != model.AgentChat || c.repo))
-		if c.role == model.AgentChat && c.repo {
+		if reads && c.readsOwnSpill(callPaths(p.ToolCall.Locations, p.ToolCall.RawInput)) {
+			allow = true
+		} else if c.role == model.AgentChat && c.repo {
 			allow = allow && c.repoPathsAllowed(p.ToolCall.Kind, p.ToolCall.Locations, p.ToolCall.RawInput)
 		} else {
 			for _, l := range p.ToolCall.Locations {
@@ -1119,18 +1126,7 @@ func (c *acpConn) askPermission(id json.RawMessage, options []acpPermOption, too
 func (c *acpConn) repoPathsAllowed(kind string, locations []struct {
 	Path string `json:"path"`
 }, input map[string]any) bool {
-	var paths []string
-	for _, l := range locations {
-		paths = append(paths, l.Path)
-	}
-	for _, k := range []string{"file_path", "filePath", "path"} {
-		if v, _ := input[k].(string); v != "" {
-			paths = append(paths, v)
-		}
-	}
-	if v, _ := input["pattern"].(string); filepath.IsAbs(v) || strings.HasPrefix(v, "~") || slices.Contains(strings.Split(filepath.ToSlash(v), "/"), "..") {
-		paths = append(paths, v)
-	}
+	paths := callPaths(locations, input)
 	if len(paths) == 0 {
 		return kind != "read"
 	}
@@ -1147,6 +1143,58 @@ func (c *acpConn) repoPathsAllowed(kind string, locations []struct {
 		}
 	}
 	return true
+}
+
+// callPaths is every path a tool call names, however it names it.
+func callPaths(locations []struct {
+	Path string `json:"path"`
+}, input map[string]any) []string {
+	var paths []string
+	for _, l := range locations {
+		paths = append(paths, l.Path)
+	}
+	for _, k := range []string{"file_path", "filePath", "path"} {
+		if v, _ := input[k].(string); v != "" {
+			paths = append(paths, v)
+		}
+	}
+	if v, _ := input["pattern"].(string); filepath.IsAbs(v) || strings.HasPrefix(v, "~") || slices.Contains(strings.Split(filepath.ToSlash(v), "/"), "..") {
+		paths = append(paths, v)
+	}
+	return paths
+}
+
+// readsOwnSpill reports whether every path is inside this session's tool-results dir, where Claude Code saves a tool result too large to return inline.
+func (c *acpConn) readsOwnSpill(paths []string) bool {
+	if c.projects == "" || c.sessionID == "" || len(paths) == 0 {
+		return false
+	}
+	projects := resolvePath(c.projects)
+	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			return false
+		}
+		rel, err := filepath.Rel(projects, resolvePath(p))
+		if err != nil {
+			return false
+		}
+		parts := strings.Split(filepath.ToSlash(rel), "/")
+		if len(parts) < 4 || parts[0] == ".." || parts[1] != c.sessionID || parts[2] != "tool-results" {
+			return false
+		}
+	}
+	return true
+}
+
+// claudeConfigDir is where Claude Code keeps its state for an agent started with env.
+func claudeConfigDir(env []string) string {
+	for i := len(env) - 1; i >= 0; i-- {
+		if v, ok := strings.CutPrefix(env[i], "CLAUDE_CONFIG_DIR="); ok && v != "" {
+			return v
+		}
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".claude")
 }
 
 // target is what a finished tool call worked on; claude-agent-acp names a read's file only as file_path or a location.

@@ -933,6 +933,39 @@ func TestACPRepoChatPermissionChecksRawInputPaths(t *testing.T) {
 	}
 }
 
+func TestACPChatMayReadOnlyItsOwnToolResults(t *testing.T) {
+	ws, home := t.TempDir(), t.TempDir()
+	own := home + "/projects/-ws/fake-ses/tool-results/mcp-x.txt"
+	other := home + "/projects/-ws/other-ses/tool-results/mcp-x.txt"
+	cases := []struct {
+		name  string
+		repo  bool
+		kind  string
+		input string
+		want  string
+	}{
+		{"repo chat reads own spill", true, "read", `{"file_path":"` + own + `"}`, "yes"},
+		{"repo chat greps own spill", true, "search", `{"pattern":"^diff","path":"` + own + `"}`, "yes"},
+		{"plain chat reads own spill", false, "read", `{"file_path":"` + own + `"}`, "yes"},
+		{"another session's spill", true, "read", `{"file_path":"` + other + `"}`, "no"},
+		{"escapes the spill dir", true, "read", `{"file_path":"` + home + `/projects/-ws/fake-ses/tool-results/../../../settings.json"}`, "no"},
+		{"session transcript beside it", true, "read", `{"file_path":"` + home + `/projects/-ws/fake-ses.jsonl"}`, "no"},
+		{"spill path but an edit", true, "edit", `{"file_path":"` + own + `"}`, "no"},
+	}
+	for _, c := range cases {
+		h := fakeHarness(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_INPUT="+c.input)
+		h.Provider = "claude"
+		res, err := runFake(t, h, model.AgentRequest{Role: model.AgentChat, WorkspaceDir: ws, Prompt: "go", RepoAccess: c.repo,
+			Env: []string{"CLAUDE_CONFIG_DIR=" + home}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Text != c.want {
+			t.Fatalf("%s: answered %q, want %q", c.name, res.Text, c.want)
+		}
+	}
+}
+
 func TestWithinResolvesSymlinks(t *testing.T) {
 	ws := t.TempDir()
 	outside := t.TempDir()
