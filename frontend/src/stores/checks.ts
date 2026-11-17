@@ -5,6 +5,7 @@ import {
   type CheckProfile,
   type CheckStep,
   type ChecksStatus,
+  type SmokeProcess,
 } from "../types/api";
 
 const POLL_MS = 2000;
@@ -26,6 +27,30 @@ export function failsOnMain(
 ): boolean {
   return dryRunOf(results, "check", step)?.outcome === "FAIL";
 }
+
+// KEY=VALUE per line, the editable form of an env or params map.
+export function mapToText(m: Record<string, string> | undefined): string {
+  return Object.entries(m ?? {})
+    .map(([k, v]) => `${k}=${v}`)
+    .join("\n");
+}
+
+export function textToMap(t: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const line of t.split("\n")) {
+    const i = line.indexOf("=");
+    const k = (i < 0 ? line : line.slice(0, i)).trim();
+    if (k) out[k] = i < 0 ? "" : line.slice(i + 1);
+  }
+  return out;
+}
+
+const newProcess = (name: string): SmokeProcess => ({
+  name,
+  command: "",
+  port_env: "PORT",
+  ready: "/",
+});
 
 export const useChecks = defineStore("checks", {
   state: () => ({
@@ -98,6 +123,51 @@ export const useChecks = defineStore("checks", {
     makeOptional(index: number) {
       const step = this.draft?.checks[index];
       if (step) step.optional = true;
+    },
+    setSmoke(on: boolean) {
+      if (!this.draft) return;
+      if (!on) this.draft.smoke = null;
+      else if (!this.draft.smoke)
+        this.draft.smoke = {
+          start: [newProcess("web")],
+          base: "web",
+          routes_from: "",
+          blocking: false,
+        };
+    },
+    addProcess() {
+      const sm = this.draft?.smoke;
+      if (!sm) return;
+      let n = sm.start.length + 1;
+      while (sm.start.some((p) => p.name === `app${n}`)) n++;
+      sm.start.push(newProcess(`app${n}`));
+    },
+    removeProcess(index: number) {
+      const sm = this.draft?.smoke;
+      if (!sm) return;
+      const [gone] = sm.start.splice(index, 1);
+      if (gone && sm.base === gone.name) sm.base = sm.start[0]?.name ?? "";
+    },
+    renameProcess(index: number, name: string) {
+      const sm = this.draft?.smoke;
+      const p = sm?.start[index];
+      if (!sm || !p) return;
+      if (sm.base === p.name) sm.base = name;
+      p.name = name;
+    },
+    setProcessEnv(index: number, text: string) {
+      const p = this.draft?.smoke?.start[index];
+      if (p) p.env = textToMap(text);
+    },
+    setParams(text: string) {
+      const sm = this.draft?.smoke;
+      if (sm) sm.params = textToMap(text);
+    },
+    setLogin(field: "path" | "user_env" | "password_env", value: string) {
+      const sm = this.draft?.smoke;
+      if (!sm) return;
+      const l = { path: "", user_env: "", password_env: "", ...sm.login, [field]: value };
+      sm.login = l.path || l.user_env || l.password_env ? l : undefined;
     },
     async approve() {
       if (!this.draft || !this.projectID) return;

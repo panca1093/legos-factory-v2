@@ -32,6 +32,25 @@ export interface CheckStep {
   per_run?: boolean;
 }
 
+export interface SmokeProcess {
+  name: string;
+  dir?: string;
+  command: string;
+  port_env: string;
+  ready: string;
+  env?: Record<string, string>;
+}
+
+export interface CheckSmoke {
+  start: SmokeProcess[];
+  base: string;
+  login?: { path: string; user_env: string; password_env: string };
+  routes_from: string;
+  blocking?: boolean;
+  params?: Record<string, string>;
+  ready_timeout_sec?: number;
+}
+
 export interface CheckProfile {
   version?: number;
   language?: string;
@@ -41,6 +60,7 @@ export interface CheckProfile {
   env?: Record<string, string>;
   setup?: CheckStep[];
   checks: CheckStep[];
+  smoke?: CheckSmoke | null;
 }
 
 export type CheckOutcome = "PASS" | "FAIL" | "UNVERIFIED";

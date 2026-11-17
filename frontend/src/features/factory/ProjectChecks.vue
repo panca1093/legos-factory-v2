@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, watch } from "vue";
-import { useChecks, dryRunOf, failsOnMain } from "../../stores/checks";
+import {
+  useChecks,
+  dryRunOf,
+  failsOnMain,
+  mapToText,
+} from "../../stores/checks";
 import { useSession } from "../../stores/session";
 import type { CheckStep } from "../../types/api";
 
@@ -32,6 +37,17 @@ const tone = (s: CheckStep, kind: "setup" | "check") => {
   const o = dryRunOf(proposal.value?.results, kind, s)?.outcome;
   return o === "PASS" ? "green" : o === "FAIL" ? "red" : "orange";
 };
+const smoke = computed(() => draft.value?.smoke ?? null);
+const warnings = computed(() => {
+  const steps = new Set([
+    ...(draft.value?.setup ?? []).map((s) => s.name),
+    ...(draft.value?.checks ?? []).map((s) => s.name),
+  ]);
+  return Object.entries(proposal.value?.notes ?? {}).filter(
+    ([k]) => !steps.has(k),
+  );
+});
+const val = (e: Event) => (e.target as HTMLInputElement).value;
 const tailOf = (s: CheckStep) =>
   dryRunOf(proposal.value?.results, "check", s)?.output_tail ?? "";
 </script>
@@ -83,6 +99,17 @@ const tailOf = (s: CheckStep) =>
     </p>
 
     <template v-if="proposal && draft">
+      <div
+        v-if="warnings.length"
+        class="notice"
+        role="status"
+        data-test="proposal-warnings"
+      >
+        <div v-for="[k, w] in warnings" :key="k">
+          <strong class="mono">{{ k }}</strong
+          >: {{ w }}
+        </div>
+      </div>
       <div class="small muted">
         Proposed from {{ proposal.base_sha.slice(0, 7) }} · {{ proposal.model }}
       </div>
@@ -167,6 +194,156 @@ const tailOf = (s: CheckStep) =>
           }}</pre>
         </div>
       </div>
+      <div class="pc-item" data-test="smoke-edit">
+        <label class="switch-row">
+          <span class="grow"
+            ><strong>Browser smoke test</strong>
+            <span class="small muted"
+              >Starts the app and opens the pages a change touches in the
+              factory's own browser.</span
+            ></span
+          >
+          <span class="switch"
+            ><input
+              type="checkbox"
+              data-test="smoke-toggle"
+              aria-label="Browser smoke test"
+              :checked="!!smoke"
+              :disabled="!session.canWrite"
+              @change="
+                checks.setSmoke(($event.target as HTMLInputElement).checked)
+              "
+            /><span></span
+          ></span>
+        </label>
+        <template v-if="smoke">
+          <p class="notice" data-test="smoke-warning">
+            Env and login values here are handed to the app and the browser:
+            use test values only (throwaway secrets, seed accounts), never real
+            credentials.
+          </p>
+          <label class="row small">
+            <input
+              v-model="smoke.blocking"
+              type="checkbox"
+              data-test="smoke-blocking"
+            />
+            Blocking: a failed smoke test sends the work back to the Builder
+          </label>
+          <div
+            v-for="(p, i) in smoke.start"
+            :key="i"
+            class="pc-item"
+            :data-test="`smoke-proc-${i}`"
+          >
+            <div class="row between wrap">
+              <input
+                :value="p.name"
+                aria-label="Process name"
+                @input="checks.renameProcess(i, val($event))"
+              />
+              <button
+                class="lg-btn small ghost"
+                data-test="smoke-remove-proc"
+                :disabled="smoke.start.length < 2"
+                @click="checks.removeProcess(i)"
+              >
+                Remove
+              </button>
+            </div>
+            <input
+              v-model="p.command"
+              class="mono"
+              :aria-label="`${p.name} command`"
+              placeholder="command"
+            />
+            <div class="row wrap">
+              <input
+                v-model="p.dir"
+                :aria-label="`${p.name} dir`"
+                placeholder="dir (repo root)"
+              />
+              <input
+                v-model="p.port_env"
+                :aria-label="`${p.name} port env`"
+                placeholder="port env, e.g. PORT"
+              />
+              <input
+                v-model="p.ready"
+                :aria-label="`${p.name} ready path`"
+                placeholder="ready path, e.g. /healthz"
+              />
+            </div>
+            <textarea
+              class="mono"
+              rows="2"
+              :value="mapToText(p.env)"
+              :aria-label="`${p.name} env`"
+              placeholder="KEY=VALUE per line; {{port.<process>}} allowed"
+              @change="checks.setProcessEnv(i, val($event))"
+            ></textarea>
+          </div>
+          <button
+            class="lg-btn small ghost"
+            data-test="smoke-add-proc"
+            @click="checks.addProcess()"
+          >
+            Add process
+          </button>
+          <label class="small"
+            >Base (the browser opens this process)
+            <select v-model="smoke.base" aria-label="Smoke base">
+              <option v-for="p in smoke.start" :key="p.name" :value="p.name">
+                {{ p.name }}
+              </option>
+            </select>
+          </label>
+          <div class="row wrap">
+            <input
+              :value="smoke.login?.path ?? ''"
+              aria-label="Login path"
+              placeholder="login path, e.g. /login"
+              @input="checks.setLogin('path', val($event))"
+            />
+            <input
+              :value="smoke.login?.user_env ?? ''"
+              aria-label="Login user env"
+              placeholder="user env name"
+              @input="checks.setLogin('user_env', val($event))"
+            />
+            <input
+              :value="smoke.login?.password_env ?? ''"
+              aria-label="Login password env"
+              placeholder="password env name"
+              @input="checks.setLogin('password_env', val($event))"
+            />
+          </div>
+          <input
+            v-model="smoke.routes_from"
+            class="mono"
+            aria-label="Routes from"
+            placeholder="pages glob, e.g. web/app/**/page.tsx"
+          />
+          <textarea
+            class="mono"
+            rows="2"
+            :value="mapToText(smoke.params)"
+            aria-label="Route params"
+            placeholder="param=value or param=sql:SELECT ... per line"
+            @change="checks.setParams(val($event))"
+          ></textarea>
+          <label class="small"
+            >Ready timeout (seconds, 0 = 90)
+            <input
+              v-model.number="smoke.ready_timeout_sec"
+              type="number"
+              min="0"
+              max="600"
+              aria-label="Ready timeout"
+            />
+          </label>
+        </template>
+      </div>
       <div v-if="services.length || env.length" class="small">
         <div v-if="services.length">
           <strong>Services</strong> from {{ draft.services?.compose }}:
@@ -209,6 +386,28 @@ const tailOf = (s: CheckStep) =>
           <div class="mono small">{{ s.command }}</div>
           <div class="small muted">
             in {{ target(s) }}<template v-if="s.source"> · {{ s.source }}</template>
+          </div>
+        </div>
+        <div v-if="approved.smoke" class="pc-item" data-test="approved-smoke">
+          <div class="row between wrap">
+            <strong>Browser smoke test</strong>
+            <span class="pill">{{
+              approved.smoke.blocking ? "blocking" : "not blocking"
+            }}</span>
+          </div>
+          <div
+            v-for="p in approved.smoke.start"
+            :key="p.name"
+            class="mono small"
+          >
+            {{ p.name }}: {{ p.command }} · {{ p.port_env }} · {{ p.ready }}
+          </div>
+          <div class="small muted">
+            opens {{ approved.smoke.base }} · pages from
+            {{ approved.smoke.routes_from }}
+            <template v-if="approved.smoke.login">
+              · login {{ approved.smoke.login.path }}</template
+            >
           </div>
         </div>
       </div>
