@@ -359,6 +359,77 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		RepoFacts: factory.RepoFacts,
 	}
 
+	srv.Checks = &usecase.CheckSuggester{
+		Projects: projects, Proj: projRepo, Store: &store.CheckProposalRepo{DB: db}, Usage: usageTracker, KB: know, Log: log,
+		DryRun: factory.DryRunChecks,
+		Checkout: func(ctx context.Context, projectID string) (dir, sha string, cleanup func(), err error) {
+			p, err := projRepo.Get(ctx, projectID)
+			if err != nil {
+				return "", "", nil, err
+			}
+			auth, err := integrations.GitAuth(ctx, p)
+			if err != nil {
+				return "", "", nil, err
+			}
+			id := "suggest-" + projectID
+			remove := func() { _ = box.Destroy(context.Background(), id) }
+			remove()
+			if dir, sha, err = box.Checkout(ctx, id, p.RepoURL, auth, false); err != nil {
+				remove()
+				return "", "", nil, err
+			}
+			return dir, sha, remove, nil
+		},
+		SourceDir: func(ctx context.Context, projectID string) (string, error) {
+			p, err := projRepo.Get(ctx, projectID)
+			if err != nil {
+				return "", err
+			}
+			if _, err := os.Stat(filepath.Join(p.RepoURL, ".git")); err == nil {
+				return p.RepoURL, nil
+			}
+			auth, err := integrations.GitAuth(ctx, p)
+			if err != nil {
+				return "", err
+			}
+			dir, _, err := box.Checkout(ctx, "chat-"+projectID, p.RepoURL, auth, false)
+			return dir, err
+		},
+		Agent: func(ctx context.Context, userID, dir, prompt string) (string, model.AgentResult, error) {
+			ctx = usecase.WithChatUser(ctx, userID)
+			h, env, args := chatH, []string(nil), []string(nil)
+			if chatRunner != nil {
+				var err error
+				if h, env, args, err = chatRunner(ctx, userID); err != nil {
+					return "", model.AgentResult{}, err
+				}
+			}
+			if h == nil {
+				return "", model.AgentResult{}, usecase.ErrCheckSuggestUnavailable
+			}
+			var ref string
+			if acpMode {
+				s, _ := ws.Get(ctx)
+				var cat []string
+				if agents.Ready(ctx, chatAgent()) == nil {
+					ms, _ := cats.list(ctx, agents, chatAgent(), userID, false)
+					cat = refs(ms)
+				}
+				ref = usecase.ResolveAgentModel(model.AgentBuilder, &model.WorkOrder{}, s, cat)
+			} else if p, m := modelFor(model.AgentBuilder, &model.WorkOrder{}); m != "" {
+				ref = p + "/" + m
+			}
+			provider, modelID := usecase.SplitModelRef(ref)
+			ses, err := h.Start(ctx, model.AgentRequest{Role: model.AgentChat, ProviderID: provider, ModelID: modelID, WorkspaceDir: dir,
+				RepoAccess: true, Prompt: prompt, OnText: func(string) {}, Env: env, Args: args})
+			if err != nil {
+				return ref, model.AgentResult{}, err
+			}
+			res, err := h.Result(ctx, ses.ID())
+			return ref, res, err
+		},
+	}
+
 	warm := func() {
 		if acpMode && agents.Ready(context.Background(), defaultAgent) == nil {
 			_, _ = cats.list(context.Background(), agents, defaultAgent, "", false)
@@ -376,6 +447,11 @@ func (a *App) Start(ctx context.Context) error {
 		return err
 	} else if n > 0 {
 		a.log.Warn("failed runs left running by a dead process", "count", n)
+	}
+	if a.Server.Checks != nil {
+		if err := a.Server.Checks.Store.FailRunning(ctx, "interrupted by restart"); err != nil {
+			return err
+		}
 	}
 	if a.Server.Chat != nil {
 		if err := a.Server.Chat.CollectFiles(ctx); err != nil {
