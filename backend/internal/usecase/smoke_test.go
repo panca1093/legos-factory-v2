@@ -416,7 +416,7 @@ func TestSmokeSQLParamQueriesTheRunDatabaseAndKeepsStackEnvOut(t *testing.T) {
 	r := newSmokeRig(t, []string{"web/app/student/tryout/[id]/page.tsx"}, smokeTree)
 	sp := stackProfile()
 	p := smokeProfile()
-	p.Services, p.Database, p.Env, p.Setup = sp.Services, sp.Database, map[string]string{"SMOKE_USER": "u", "SMOKE_PASSWORD": "p", "DATABASE_URL": "x/{{db}}"}, nil
+	p.Services, p.Database, p.Sources, p.Env, p.Setup = sp.Services, sp.Database, sp.Sources, map[string]string{"SMOKE_USER": "u", "SMOKE_PASSWORD": "p", "DATABASE_URL": "x/{{db}}"}, nil
 	p.Smoke.Params = map[string]string{"id": "sql:SELECT id FROM tryouts"}
 	writeTree(t, r.f.workspaceDir(r.wo.ID), map[string]string{"docker-compose.yml": "services: {}\n"})
 	r.f.Docker = queryDocker{d}

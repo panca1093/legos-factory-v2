@@ -2,10 +2,13 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -88,6 +91,10 @@ func (s *envSandbox) RunCheck(_ context.Context, dir string, c model.Check, _ ti
 	return model.CheckResult{Name: c.Name, Command: c.Command, Outcome: o}
 }
 
+const composeBody = "services: {}\n"
+
+var composeSHA = func() string { h := sha256.Sum256([]byte(composeBody)); return hex.EncodeToString(h[:]) }()
+
 func stackProfile() model.Profile {
 	return model.Profile{
 		Services: &model.ProfileServices{Compose: "docker-compose.yml", Names: []string{"postgres", "redis"}, Ports: map[string]int{"postgres": 5432, "redis": 6379}},
@@ -97,15 +104,16 @@ func stackProfile() model.Profile {
 			"REDIS_URL":    "redis://{{redis}}/{{redis_db}}",
 			"BUCKET":       "{{db}}",
 		},
-		Setup:  model.SetupSteps{{Name: "migrate", Dir: "api", Command: "make migrate-up", PerRun: true}},
-		Checks: []model.Check{{Name: "api test", Dir: "api", Command: "go test ./..."}, {Name: "smtp", Command: "go test -run SMTP", Optional: true}},
+		Sources: []model.ProfileSource{{Path: "docker-compose.yml", SHA256: composeSHA}},
+		Setup:   model.SetupSteps{{Name: "migrate", Dir: "api", Command: "make migrate-up", PerRun: true}},
+		Checks:  []model.Check{{Name: "api test", Dir: "api", Command: "go test ./..."}, {Name: "smtp", Command: "go test -run SMTP", Optional: true}},
 	}
 }
 
 func stackFactory(t *testing.T, d *fakeDocker, sb Sandbox) (*Factory, string) {
 	t.Helper()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return &Factory{Docker: d, Sandbox: sb, DataDir: t.TempDir()}, dir
@@ -146,7 +154,7 @@ func TestRunProfileChecksResolvesPlaceholdersAndLeases(t *testing.T) {
 	if !strings.Contains(strings.Join(d.calls, "\n"), "postgres://u:p@127.0.0.1:5432/u") {
 		t.Fatalf("admin url must use the container port inside the container: %v", d.calls)
 	}
-	s := f.stackMgr().stack("legos-prj_1")
+	s := f.stackMgr().stack("legos-ck-prj_1")
 	if s.leases != 0 || s.redis[1] {
 		t.Fatalf("lease not released: leases=%d redis1=%v", s.leases, s.redis[1])
 	}
@@ -167,11 +175,15 @@ func TestStackUpArgsAndOverrideFile(t *testing.T) {
 	if string(b) != wantYAML {
 		t.Fatalf("override:\n%s", b)
 	}
-	up := "compose -p legos-prj_1 -f " + filepath.Join(dir, "docker-compose.yml") + " -f " + override + " up -d --wait postgres redis"
+	copied := filepath.Join(f.DataDir, "stacks", "prj_1", "compose.yml")
+	if b, err := os.ReadFile(copied); err != nil || string(b) != composeBody {
+		t.Fatalf("factory-owned compose copy missing: %q %v", b, err)
+	}
+	up := "compose -p legos-ck-prj_1 --project-directory " + dir + " -f " + copied + " -f " + override + " up -d --wait postgres redis"
 	if d.count(up) != 1 {
 		t.Fatalf("up call missing, want %q in %v", up, d.calls)
 	}
-	if d.count("compose -p legos-prj_1 port postgres 5432") != 1 {
+	if d.count("compose -p legos-ck-prj_1 port postgres 5432") != 1 {
 		t.Fatalf("port discovery missing: %v", d.calls)
 	}
 }
@@ -198,7 +210,7 @@ func TestStackIsReusedWhileLeased(t *testing.T) {
 	a.release()
 	b.release()
 	b.release()
-	if s := m.stack("legos-prj_1"); s.leases != 0 {
+	if s := m.stack("legos-ck-prj_1"); s.leases != 0 {
 		t.Fatalf("leases = %d", s.leases)
 	}
 }
@@ -235,7 +247,7 @@ func TestLeaseReleasedWhenSetupFailsOrChecksFail(t *testing.T) {
 			if d.count(`DROP DATABASE IF EXISTS "run_x"`) != 2 {
 				t.Fatalf("database not dropped: %v", d.calls)
 			}
-			if s := f.stackMgr().stack("legos-prj_1"); s.leases != 0 || s.redis[1] {
+			if s := f.stackMgr().stack("legos-ck-prj_1"); s.leases != 0 || s.redis[1] {
 				t.Fatalf("lease leaked: %d %v", s.leases, s.redis[1])
 			}
 		})
@@ -254,7 +266,7 @@ func TestLeaseReleasedWhenDatabaseCreateFails(t *testing.T) {
 	if len(res) != 2 || res[0].Outcome != model.Unverified || !strings.Contains(res[0].Output, "could not create database") {
 		t.Fatalf("res = %+v", res)
 	}
-	if s := f.stackMgr().stack("legos-prj_1"); s.leases != 0 || s.redis[1] {
+	if s := f.stackMgr().stack("legos-ck-prj_1"); s.leases != 0 || s.redis[1] {
 		t.Fatalf("lease leaked: %d %v", s.leases, s.redis[1])
 	}
 }
@@ -315,7 +327,7 @@ func TestUnknownPlaceholderIsUnverified(t *testing.T) {
 	if res[0].Outcome != model.Unverified || !strings.Contains(res[0].Output, "{{rustfs}}") {
 		t.Fatalf("res = %+v", res[0])
 	}
-	if s := f.stackMgr().stack("legos-prj_1"); s.leases != 0 {
+	if s := f.stackMgr().stack("legos-ck-prj_1"); s.leases != 0 {
 		t.Fatal("lease leaked")
 	}
 }
@@ -336,7 +348,7 @@ func TestProfileWithoutStackRunsPlainly(t *testing.T) {
 
 func TestRedisIndexesAreLeasedAndWaitWhenExhausted(t *testing.T) {
 	m := newStackMgr(&fakeDocker{}, t.TempDir())
-	s := m.stack("legos-x")
+	s := m.stack("legos-ck-x")
 	var got []int
 	for i := 0; i < redisIndexes; i++ {
 		n, err := s.leaseRedis(context.Background())
@@ -397,7 +409,7 @@ func TestIdleStackGoesDownAfterTwoHoursWithoutLease(t *testing.T) {
 	}
 	now = now.Add(time.Minute)
 	m.reap(context.Background())
-	if d.count("compose -p legos-prj_1 down -v") != 1 {
+	if d.count("compose -p legos-ck-prj_1 down -v") != 1 {
 		t.Fatalf("idle stack not taken down: %v", d.calls)
 	}
 	m.reap(context.Background())
@@ -413,9 +425,23 @@ func TestIdleStackGoesDownAfterTwoHoursWithoutLease(t *testing.T) {
 }
 
 func TestOrphanedStacksStartIdleClockAtStartup(t *testing.T) {
-	ls, _ := json.Marshal([]map[string]string{{"Name": "legos-prj_9"}, {"Name": "bimbel-tryout-dev"}})
+	data := t.TempDir()
+	override := filepath.Join(data, "stacks", "prj_9", "override.yml")
+	if err := os.MkdirAll(filepath.Dir(override), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(override, []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ls, _ := json.Marshal([]map[string]string{
+		{"Name": "legos-ck-prj_9", "ConfigFiles": "/x/compose.yml," + override},
+		{"Name": "bimbel-tryout-dev", "ConfigFiles": "/y/docker-compose.yml"},
+		{"Name": "legos-factory-v2", "ConfigFiles": "/z/docker-compose.yml"},
+		{"Name": "legos-ck-x", "ConfigFiles": "/z/docker-compose.yml"},
+		{"Name": "legos-ck-gone", "ConfigFiles": filepath.Join(data, "stacks", "gone", "override.yml")},
+	})
 	d := &fakeDocker{ls: string(ls)}
-	m := newStackMgr(d, t.TempDir())
+	m := newStackMgr(d, data)
 	now := time.Date(2026, 11, 17, 10, 0, 0, 0, time.UTC)
 	m.now = func() time.Time { return now }
 	m.adoptOrphans(context.Background())
@@ -426,11 +452,13 @@ func TestOrphanedStacksStartIdleClockAtStartup(t *testing.T) {
 	}
 	now = now.Add(time.Second)
 	m.reap(context.Background())
-	if d.count("compose -p legos-prj_9 down -v") != 1 {
+	if d.count("compose -p legos-ck-prj_9 down -v") != 1 {
 		t.Fatalf("calls: %v", d.calls)
 	}
-	if d.count("-p bimbel-tryout-dev") != 0 {
-		t.Fatal("stacks the factory does not own must never be touched")
+	for _, other := range []string{"bimbel-tryout-dev", "legos-factory-v2", "legos-ck-x", "legos-ck-gone"} {
+		if d.count("-p "+other) != 0 {
+			t.Fatalf("%s is not a factory stack and must never be touched: %v", other, d.calls)
+		}
 	}
 }
 
@@ -440,7 +468,7 @@ func TestStopStackTakesDownNow(t *testing.T) {
 	if err := f.StopStack(context.Background(), "prj_1"); err != nil {
 		t.Fatal(err)
 	}
-	if d.count("compose -p legos-prj_1 down -v") != 1 {
+	if d.count("compose -p legos-ck-prj_1 down -v") != 1 {
 		t.Fatalf("calls: %v", d.calls)
 	}
 }
@@ -537,7 +565,7 @@ func TestBuilderServicesLeaseEnvAndRelease(t *testing.T) {
 	f, wo, wos := monitorFactory(t, nil)
 	f.Docker, f.Sandbox, f.DataDir = d, sb, t.TempDir()
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	prof, _ := json.Marshal(stackProfile())
@@ -565,7 +593,7 @@ func TestBuilderServicesLeaseEnvAndRelease(t *testing.T) {
 		t.Fatalf("per-run setup must run in the task dir: %+v", sb.runs[0])
 	}
 	release()
-	if d.count(`DROP DATABASE IF EXISTS "run_wo1_t1"`) != 2 || f.stackMgr().stack("legos-p1").leases != 0 {
+	if d.count(`DROP DATABASE IF EXISTS "run_wo1_t1"`) != 2 || f.stackMgr().stack("legos-ck-p1").leases != 0 {
 		t.Fatalf("not released: %v", d.calls)
 	}
 }
@@ -599,4 +627,75 @@ func TestBuilderServicesUnavailableDoesNotBlockBuilder(t *testing.T) {
 	if !saw {
 		t.Fatal("the failure must be reported")
 	}
+}
+
+func TestComposeFileMustMatchApprovedHash(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(p *model.Profile, dir string)
+	}{
+		{"builder rewrote the file", func(p *model.Profile, dir string) {
+			_ = os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("services: {evil: {}}\n"), 0o644)
+		}},
+		{"no approved hash for the path", func(p *model.Profile, dir string) { p.Sources = nil }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := &fakeDocker{}
+			f, dir := stackFactory(t, d, &envSandbox{})
+			p := stackProfile()
+			c.mutate(&p, dir)
+			_, err := f.stackMgr().acquire(context.Background(), "prj_1", "run_x", dir, p)
+			if !errors.Is(err, errComposeChanged) {
+				t.Fatalf("err = %v", err)
+			}
+			if d.count(" up ") != 0 {
+				t.Fatalf("docker must not start from an unapproved compose file: %v", d.calls)
+			}
+		})
+	}
+}
+
+func TestAcquireBringsStackBackUpAfterStopWhileLeased(t *testing.T) {
+	d := &fakeDocker{}
+	f, dir := stackFactory(t, d, &envSandbox{})
+	m := f.stackMgr()
+	p := stackProfile()
+	a, err := m.acquire(context.Background(), "prj_1", "run_a", dir, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.stop(context.Background(), "prj_1"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := m.acquire(context.Background(), "prj_1", "run_b", dir, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.count(" up -d") != 2 || len(b.hostPorts) == 0 {
+		t.Fatalf("a stopped stack with a lease held must come back up: %v ports=%v", d.calls, b.hostPorts)
+	}
+	a.release()
+	b.release()
+}
+
+func TestAcquireAndStopRaceFree(t *testing.T) {
+	d := &fakeDocker{}
+	f, dir := stackFactory(t, d, &envSandbox{})
+	m := f.stackMgr()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			l, err := m.acquire(context.Background(), "prj_1", "run_"+strconv.Itoa(i), dir, stackProfile())
+			if err != nil {
+				return
+			}
+			_ = l.values(false)
+			l.release()
+		}()
+		_ = m.stop(context.Background(), "prj_1")
+	}
+	wg.Wait()
 }

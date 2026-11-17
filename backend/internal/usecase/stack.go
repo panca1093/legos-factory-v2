@@ -6,12 +6,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,7 +25,7 @@ import (
 )
 
 const (
-	stackPrefix    = "legos-"
+	stackPrefix    = "legos-ck-"
 	stackIdleAfter = 2 * time.Hour
 	stackReapEvery = 5 * time.Minute
 	redisIndexes   = 15 // index 0 is never used
@@ -149,16 +152,17 @@ func (m *stackMgr) acquire(ctx context.Context, projectID, runName, dir string, 
 	name := stackName(projectID)
 	s := m.stack(name)
 	s.mu.Lock()
-	if s.leases == 0 {
+	if !s.up || s.leases == 0 {
 		if err := m.bringUp(ctx, name, dir, p, s); err != nil {
 			s.mu.Unlock()
 			return nil, err
 		}
 	}
 	s.leases++
+	ports := maps.Clone(s.ports)
 	s.mu.Unlock()
 
-	l := &runLease{hostPorts: s.ports, containerOf: p.Services.Ports, profile: p}
+	l := &runLease{hostPorts: ports, containerOf: p.Services.Ports, profile: p}
 	var once sync.Once
 	l.release = func() {
 		once.Do(func() { m.releaseLease(name, s, l) })
@@ -268,27 +272,58 @@ func insideDir(dir, rel string) (string, bool) {
 	return full, err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator))
 }
 
+func (m *stackMgr) stackDir(name string) string {
+	return filepath.Join(m.dataDir, "stacks", strings.TrimPrefix(name, stackPrefix))
+}
+
+var errComposeChanged = errors.New("compose file changed since the checks were approved; Suggest again")
+
+// approvedCompose copies the run's compose file into the factory-owned stack dir, only when it matches the approved hash.
+func (m *stackMgr) approvedCompose(dir, stackDir string, p model.Profile) (string, error) {
+	src, ok := insideDir(dir, p.Services.Compose)
+	if !ok || p.Services.Compose == "" {
+		return "", fmt.Errorf("compose file %q is not inside the workspace", p.Services.Compose)
+	}
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return "", fmt.Errorf("compose file %q not found in the workspace", p.Services.Compose)
+	}
+	approved := ""
+	for _, s := range p.Sources {
+		if filepath.Clean(s.Path) == filepath.Clean(p.Services.Compose) {
+			approved = s.SHA256
+		}
+	}
+	sum := sha256.Sum256(b)
+	if approved == "" || hex.EncodeToString(sum[:]) != approved {
+		return "", errComposeChanged
+	}
+	dst := filepath.Join(stackDir, "compose.yml")
+	if err := os.WriteFile(dst, b, 0o644); err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
 // bringUp runs while the project's mutex is held.
 func (m *stackMgr) bringUp(ctx context.Context, name, dir string, p model.Profile, s *projStack) error {
 	if err := m.preflight(ctx); err != nil {
 		return err
 	}
-	compose, ok := insideDir(dir, p.Services.Compose)
-	if !ok || p.Services.Compose == "" {
-		return fmt.Errorf("compose file %q is not inside the workspace", p.Services.Compose)
-	}
-	if _, err := os.Stat(compose); err != nil {
-		return fmt.Errorf("compose file %q not found in the workspace", p.Services.Compose)
-	}
-	override := filepath.Join(m.dataDir, "stacks", strings.TrimPrefix(name, stackPrefix), "override.yml")
-	if err := os.MkdirAll(filepath.Dir(override), 0o755); err != nil {
+	stackDir := m.stackDir(name)
+	if err := os.MkdirAll(stackDir, 0o755); err != nil {
 		return err
 	}
+	compose, err := m.approvedCompose(dir, stackDir, p)
+	if err != nil {
+		return err
+	}
+	override := filepath.Join(stackDir, "override.yml")
 	if err := os.WriteFile(override, []byte(overrideYAML(p.Services.Ports)), 0o644); err != nil {
 		return err
 	}
 	s.up, s.idleSince = true, m.now() // a failed up can leave containers behind; the idle reaper must see them
-	args := append([]string{"compose", "-p", name, "-f", compose, "-f", override, "up", "-d", "--wait"}, p.Services.Names...)
+	args := append([]string{"compose", "-p", name, "--project-directory", filepath.Dir(filepath.Join(dir, p.Services.Compose)), "-f", compose, "-f", override, "up", "-d", "--wait"}, p.Services.Names...)
 	if out, err := m.docker.Run(ctx, args...); err != nil {
 		return fmt.Errorf("starting the check services failed: %v: %s", err, tail(out))
 	}
@@ -445,18 +480,25 @@ func (m *stackMgr) stop(ctx context.Context, projectID string) error {
 	return nil
 }
 
-// adoptOrphans registers running legos-* compose projects left by an earlier process, starting their idle clock now.
+// adoptOrphans registers running compose projects this factory created (their config files include our override.yml), starting their idle clock now.
 func (m *stackMgr) adoptOrphans(ctx context.Context) {
 	out, err := m.docker.Run(ctx, "compose", "ls", "--format", "json")
 	if err != nil {
 		return
 	}
-	var list []struct{ Name string }
+	var list []struct{ Name, ConfigFiles string }
 	if json.Unmarshal([]byte(out), &list) != nil {
 		return
 	}
 	for _, p := range list {
 		if !strings.HasPrefix(p.Name, stackPrefix) {
+			continue
+		}
+		override := filepath.Join(m.stackDir(p.Name), "override.yml")
+		if !slices.Contains(strings.Split(p.ConfigFiles, ","), override) {
+			continue
+		}
+		if _, err := os.Stat(override); err != nil {
 			continue
 		}
 		s := m.stack(p.Name)

@@ -4,6 +4,8 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,7 +29,9 @@ func TestRealDockerStack(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(compose), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	sum := sha256.Sum256([]byte(compose))
 	p := model.Profile{
+		Sources:  []model.ProfileSource{{Path: "docker-compose.yml", SHA256: hex.EncodeToString(sum[:])}},
 		Services: &model.ProfileServices{Compose: "docker-compose.yml", Names: []string{"postgres"}, Ports: map[string]int{"postgres": 5432}},
 		Database: &model.ProfileDatabase{Service: "postgres", AdminURL: "postgres://t:t@{{postgres}}/t?sslmode=disable"},
 		Env:      map[string]string{"DATABASE_URL": "postgres://t:t@{{postgres}}/{{db}}"},
