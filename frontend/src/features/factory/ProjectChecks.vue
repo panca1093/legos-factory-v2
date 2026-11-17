@@ -37,6 +37,20 @@ const tone = (s: CheckStep, kind: "setup" | "check") => {
   const o = dryRunOf(proposal.value?.results, kind, s)?.outcome;
   return o === "PASS" ? "green" : o === "FAIL" ? "red" : "orange";
 };
+const leaseError = computed(
+  () =>
+    proposal.value?.results.find(
+      (r) =>
+        r.outcome === "UNVERIFIED" &&
+        r.output_tail.includes("check services unavailable"),
+    )?.output_tail ?? "",
+);
+const firstPerRun = computed(() =>
+  (draft.value?.setup ?? []).findIndex((s) => s.per_run),
+);
+const hasServices = computed(
+  () => !!(draft.value ?? approved.value)?.services?.names?.length,
+);
 const smoke = computed(() => draft.value?.smoke ?? null);
 const warnings = computed(() => {
   const steps = new Set([
@@ -56,16 +70,29 @@ const tailOf = (s: CheckStep) =>
   <section class="pc" data-test="project-checks" aria-label="Checks">
     <div class="row between wrap">
       <strong>Checks</strong>
-      <button
-        v-if="session.canWrite"
-        class="lg-btn small"
-        data-test="suggest-checks"
-        :disabled="checks.running || checks.busy"
-        @click="checks.suggest(projectId)"
-      >
-        {{ approved ? "Suggest again" : "Suggest checks" }}
-      </button>
+      <span v-if="session.canWrite" class="row wrap">
+        <button
+          v-if="hasServices"
+          class="lg-btn small ghost"
+          data-test="stop-services"
+          :disabled="checks.busy"
+          @click="checks.stopServices()"
+        >
+          Stop check services
+        </button>
+        <button
+          class="lg-btn small"
+          data-test="suggest-checks"
+          :disabled="checks.running || checks.busy"
+          @click="checks.suggest(projectId)"
+        >
+          {{ approved ? "Suggest again" : "Suggest checks" }}
+        </button>
+      </span>
     </div>
+    <p v-if="checks.stopped" class="small muted" role="status" data-test="services-stopped">
+      Check services stopped. They start again on the next run.
+    </p>
     <p v-if="checks.status?.stale" class="notice" data-test="checks-stale">
       Checks may be stale · a file they were derived from changed.
       <button
@@ -114,14 +141,35 @@ const tailOf = (s: CheckStep) =>
         Proposed from {{ proposal.base_sha.slice(0, 7) }} · {{ proposal.model }}
       </div>
       <div class="pc-list" data-test="proposal">
+        <p
+          v-if="leaseError && firstPerRun < 0"
+          class="notice"
+          role="status"
+          data-test="services-unavailable"
+        >
+          {{ leaseError }}
+        </p>
         <template v-for="(s, i) in draft.setup ?? []" :key="'s' + i">
-          <div v-if="!s.per_run" class="pc-item">
+          <div
+            class="pc-item"
+            :data-test="s.per_run ? `per-run-${s.name}` : `setup-${s.name}`"
+          >
+            <p
+              v-if="leaseError && i === firstPerRun"
+              class="notice"
+              role="status"
+              data-test="services-unavailable"
+            >
+              {{ leaseError }}
+            </p>
             <div class="row between wrap">
               <span
                 ><strong>{{ s.name }}</strong>
-                <span class="pill">setup</span></span
+                <span class="pill">{{
+                  s.per_run ? "per run" : "setup"
+                }}</span></span
               >
-              <span class="pill" :class="tone(s, 'setup')">{{
+              <span v-if="!s.per_run" class="pill" :class="tone(s, 'setup')">{{
                 outcomeLabel(s, "setup")
               }}</span>
             </div>
@@ -378,6 +426,19 @@ const tailOf = (s: CheckStep) =>
 
     <template v-else-if="approved">
       <div class="pc-list" data-test="approved">
+        <div
+          v-for="(s, i) in approved.setup ?? []"
+          :key="'s' + i"
+          class="pc-item"
+          :data-test="s.per_run ? `per-run-${s.name}` : `setup-${s.name}`"
+        >
+          <div class="row between wrap">
+            <strong>{{ s.name }}</strong>
+            <span class="pill">{{ s.per_run ? "per run" : "setup" }}</span>
+          </div>
+          <div class="mono small">{{ s.command }}</div>
+          <div class="small muted">in {{ target(s) }}</div>
+        </div>
         <div v-for="(s, i) in approved.checks" :key="i" class="pc-item">
           <div class="row between wrap">
             <strong>{{ s.name }}</strong>

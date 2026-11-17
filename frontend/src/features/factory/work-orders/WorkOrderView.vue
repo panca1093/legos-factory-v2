@@ -176,10 +176,14 @@ watch(
 const noChecks = computed(() =>
   factory.events.some((e) => e.kind === "verification_skipped"),
 );
+const checksFallback = computed(() =>
+  factory.events.some((e) => e.kind === "checks_fallback"),
+);
+const shouldSuggest = computed(() => noChecks.value || checksFallback.value);
 watch(
-  [noChecks, () => order.value?.project_id],
-  ([skipped, project]) => {
-    if (skipped && project) void checks.load(project);
+  [shouldSuggest, () => order.value?.project_id],
+  ([banner, project]) => {
+    if (banner && project) void checks.load(project);
   },
   { immediate: true },
 );
@@ -336,7 +340,7 @@ function download() {
       {{ route.query.planningError }}. Retry with Draft blueprint below.
     </p>
     <p
-      v-if="noChecks && session.canWrite"
+      v-if="(noChecks || checksFallback) && session.canWrite"
       class="notice row between wrap"
       data-test="checks-banner"
     >
@@ -350,6 +354,10 @@ function download() {
           }"
           >Review them</RouterLink
         ></span
+      >
+      <span v-else-if="checksFallback && !noChecks" data-test="checks-fallback"
+        >These checks were detected from the repository, not approved for this
+        project.</span
       >
       <span v-else>No checks ran for this project.</span>
       <button

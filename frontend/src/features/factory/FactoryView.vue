@@ -363,7 +363,7 @@ onMounted(load);
   <NewWorkOrderDrawer
     v-if="showNew"
     :open="showNew"
-    :project-id="projectID === 'all' ? '' : projectID"
+    :project-i-d="projectID === 'all' ? '' : projectID"
     @close="setQuery('new', 'all')"
     @created="created"
   />

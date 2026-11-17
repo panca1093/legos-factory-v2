@@ -60,6 +60,7 @@ export const useChecks = defineStore("checks", {
     draftOf: "",
     busy: false,
     error: "",
+    stopped: false,
     timer: null as ReturnType<typeof setTimeout> | null,
   }),
   getters: {
@@ -110,6 +111,7 @@ export const useChecks = defineStore("checks", {
       try {
         await api.post(`/api/v1/projects/${projectID}/checks/suggest`);
         this.error = "";
+        this.stopped = false;
       } catch (e) {
         this.error = messageOf(e);
         return;
@@ -196,6 +198,19 @@ export const useChecks = defineStore("checks", {
         this.busy = false;
       }
       await this.load(this.projectID);
+    },
+    async stopServices() {
+      if (!this.projectID) return;
+      this.busy = true;
+      try {
+        await api.post(`/api/v1/projects/${this.projectID}/checks/stop`);
+        this.error = "";
+        this.stopped = true;
+      } catch (e) {
+        this.error = messageOf(e);
+      } finally {
+        this.busy = false;
+      }
     },
     async discard() {
       if (!this.projectID) return;
