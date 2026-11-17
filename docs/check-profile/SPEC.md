@@ -94,7 +94,8 @@ New `usecase/stack.go` (one file; it touches docker only through a small port, s
       ports: !override ["127.0.0.1::5432"]
   ```
 - **Startup:** `docker compose -p … -f <repo compose> -f <override> up -d --wait <names>`. Host ports are discovered with `docker compose port <svc> <port>`.
-- **Lifetime:** the stack is left running between runs (start costs ~6 s). It is torn down with `down -v` when the project is deleted, or from a "Stop check services" action on the project.
+- **Lifetime (user decision 2026-11-17):** the stack stays up between runs (start costs ~6 s) and goes down after **2 hours with no lease**. A ticker in the factory checks every 5 minutes and runs `down -v`; the next run brings it back up. It also goes down when the project is deleted, or from a "Stop check services" action on the project.
+- **Factory restart:** on startup the factory lists compose projects named `legos-*` (`docker compose ls`). Each one starts its idle clock at startup time, so a stack orphaned by a crash still goes down.
 - **Isolation instead of a run-wide lock:** every run, whether verify, baseline or a Builder task, gets its own database, Redis index and S3 bucket (`{{db}}`). Runs can therefore overlap, including parallel Builder tasks. An in-process mutex per project only guards stack up/down and the lease table. When all 15 Redis indexes are leased, the next run waits for one.
 - **Per-run database:** created by running `CREATE DATABASE` through `database.admin_url`, and dropped after the run (also on failure, via `defer`). Without a `database` block, runs share the services as they are.
 - **Preflight:** a missing docker, or compose without `!override` support (added in the v2.24 line; exact minimum to confirm), fails the run as `UNVERIFIED` with a clear message. It never silently passes.
@@ -188,5 +189,4 @@ Optional, off until it is configured in the profile's `smoke` block. Runs after 
 
 ## Open questions
 
-1. **Stack idle teardown.** Is keeping it running forever acceptable, or should it go down after N hours idle?
-2. **Repos without compose,** where services come from CI `services:` only. Generate a compose file into `<DataDir>/stacks/`, or leave those checks optional?
+1. **Repos without compose,** where services come from CI `services:` only. Generate a compose file into `<DataDir>/stacks/`, or leave those checks optional?
