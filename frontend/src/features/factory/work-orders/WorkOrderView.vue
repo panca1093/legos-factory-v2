@@ -5,6 +5,7 @@ import { ArrowLeft, GitBranch, Trash2 } from "lucide-vue-next";
 import "../factory.css";
 import { useFactory } from "../../../stores/factory";
 import { useSession } from "../../../stores/session";
+import { useChecks } from "../../../stores/checks";
 import { subscribe } from "../../../services/events/sse";
 import AppDialog from "../../../components/ui/AppDialog.vue";
 import DeleteDialog from "./DeleteDialog.vue";
@@ -32,6 +33,7 @@ import {
   currentReason,
 } from "../runs/agentActivity";
 const factory = useFactory(),
+  checks = useChecks(),
   session = useSession(),
   route = useRoute(),
   router = useRouter();
@@ -171,7 +173,24 @@ watch(
   },
   { immediate: true },
 );
-onBeforeUnmount(() => factory.clearDetail());
+const noChecks = computed(() =>
+  factory.events.some((e) => e.kind === "verification_skipped"),
+);
+const checksFallback = computed(() =>
+  factory.events.some((e) => e.kind === "checks_fallback"),
+);
+const shouldSuggest = computed(() => noChecks.value || checksFallback.value);
+watch(
+  [shouldSuggest, () => order.value?.project_id],
+  ([banner, project]) => {
+    if (banner && project) void checks.load(project);
+  },
+  { immediate: true },
+);
+onBeforeUnmount(() => {
+  factory.clearDetail();
+  checks.stop();
+});
 async function act(fn: () => Promise<unknown>) {
   if (busy.value || !session.canWrite) return;
   busy.value = true;
@@ -319,6 +338,37 @@ function download() {
     >
       Your work order was saved, but planning could not start:
       {{ route.query.planningError }}. Retry with Draft blueprint below.
+    </p>
+    <p
+      v-if="(noChecks || checksFallback) && session.canWrite"
+      class="notice row between wrap"
+      data-test="checks-banner"
+    >
+      <span v-if="checks.running" role="status">Suggesting checks…</span>
+      <span v-else-if="checks.status?.proposal"
+        >Checks suggested.
+        <RouterLink
+          :to="{
+            path: '/factory',
+            query: { project: order.project_id, checks: '1' },
+          }"
+          >Review them</RouterLink
+        ></span
+      >
+      <span v-else-if="checksFallback && !noChecks" data-test="checks-fallback"
+        >These checks were detected from the repository, not approved for this
+        project.</span
+      >
+      <span v-else>No checks ran for this project.</span>
+      <button
+        v-if="!checks.running"
+        class="lg-btn small"
+        data-test="suggest-checks"
+        :disabled="checks.busy"
+        @click="checks.suggest(order.project_id)"
+      >
+        Suggest checks
+      </button>
     </p>
     <div v-if="actionError && !modal" class="error-state" role="alert">
       {{ actionError }}

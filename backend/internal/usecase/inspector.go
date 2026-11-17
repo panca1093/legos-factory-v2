@@ -26,6 +26,7 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
+	f.noteChecksFallback(ctx, wo)
 	f.event(wo.ID, "inspector", "verification_started",
 		fmt.Sprintf("Running %d deterministic checks (revision %d)", len(profile.Checks), wo.Revision), nil)
 	mu := f.wsLock(wo.ID)
@@ -34,17 +35,23 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 	mu.Unlock()
 	failed := ""
 	var failedResults []model.CheckResult
-	for _, c := range profile.Checks {
-		r := f.Sandbox.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
+	results, infra := f.runChecks(ctx, wo.ProjectID, fmt.Sprintf("run_%s_%d", wo.ID, wo.Revision), f.workspaceDir(wo.ID), profile)
+	checks := profile.Checks
+	if infra == nil && profile.Smoke != nil && !requiredFailed(profile.Checks, results) {
+		sc, sr := f.runSmoke(ctx, wo, profile)
+		checks, results = append(slices.Clone(checks), sc), append(results, sr)
+	}
+	for i, c := range checks {
+		r := results[i]
 		if err := f.saveCheck(ctx, wo, c, r); err != nil {
 			return err
 		}
 		f.event(wo.ID, "inspector", "check_"+strings.ToLower(string(r.Outcome)),
-			fmt.Sprintf("%s → %s", c.Name, r.Outcome), map[string]any{"command": c.Command})
-		if r.Outcome != model.Pass && failed == "" {
-			failed = c.Name
-		}
-		if r.Outcome != model.Pass {
+			fmt.Sprintf("%s → %s", c.Name, r.Outcome), map[string]any{"command": c.Command, "optional": c.Optional})
+		if infra == nil && r.Outcome != model.Pass && !c.Optional {
+			if failed == "" {
+				failed = c.Name
+			}
 			failedResults = append(failedResults, r)
 		}
 	}
@@ -76,10 +83,15 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		})
 		return err
 	}
-	if len(profile.Checks) == 0 {
-		f.event(wo.ID, "factory", "verification_skipped", "No checks detected in the repository; add .legos/checks.json to define them", nil)
-	} else {
-		f.event(wo.ID, "inspector", "verification_passed", "All deterministic checks passed", nil)
+	switch {
+	case infra != nil:
+		f.event(wo.ID, "factory", "verification_unavailable", "Check services unavailable, so the checks could not run: "+infra.Error(), nil)
+	case len(profile.Checks) == 0:
+		f.event(wo.ID, "factory", "verification_skipped", "No checks for this project yet · Suggest checks", nil)
+	case anyRequiredPassed(checks, results):
+		f.event(wo.ID, "inspector", "verification_passed", "All required checks passed", nil)
+	default:
+		f.event(wo.ID, "inspector", "verification_passed", "No required checks passed (optional only)", nil)
 	}
 	if err := f.commitVerified(ctx, wo); err != nil {
 		return err
@@ -90,6 +102,30 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		}
 	}
 	return f.enqueue(ctx, JobInspect, wo.ID, "")
+}
+
+func anyRequiredPassed(checks []model.Check, results []model.CheckResult) bool {
+	for i, c := range checks {
+		if !c.Optional && results[i].Outcome == model.Pass {
+			return true
+		}
+	}
+	return false
+}
+
+// noteChecksFallback records once per order that its checks were detected from the repository, not approved for the project.
+func (f *Factory) noteChecksFallback(ctx context.Context, wo *model.WorkOrder) {
+	proj, err := f.Proj.Get(ctx, wo.ProjectID)
+	if err != nil {
+		return
+	}
+	if q := strings.TrimSpace(proj.QualityProfile); q != "" && q != "{}" && q != "[]" {
+		return
+	}
+	if e, err := f.WO.LatestEvent(ctx, wo.ID, "checks_fallback"); err != nil || e != nil {
+		return
+	}
+	f.event(wo.ID, "factory", "checks_fallback", "No approved check profile for this project; using checks detected from the repository", nil)
 }
 
 const (
@@ -664,7 +700,7 @@ func (f *Factory) checksText(ctx context.Context, wo *model.WorkOrder) (string, 
 	failed := false
 	for _, c := range checks {
 		fmt.Fprintf(&b, "%s (%s) → %s\n", c.Name, c.Command, c.Outcome)
-		failed = failed || c.Outcome != string(model.Pass)
+		failed = failed || (c.Outcome != string(model.Pass) && !c.Optional)
 	}
 	return b.String(), failed
 }

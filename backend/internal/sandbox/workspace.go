@@ -226,8 +226,8 @@ func (Local) PushBranch(ctx context.Context, dir, branch string, auth *model.Git
 	return base, nil
 }
 
-func (Local) RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration) model.CheckResult {
-	return RunCheck(ctx, dir, check, timeout)
+func (Local) RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration, env []string) model.CheckResult {
+	return RunCheck(ctx, dir, check, timeout, env)
 }
 
 // Commit records all workspace changes as a local commit and returns its

@@ -23,6 +23,77 @@ export interface Project {
   created_at: string;
 }
 
+export interface CheckStep {
+  name: string;
+  command: string;
+  dir?: string;
+  optional?: boolean;
+  source?: string;
+  per_run?: boolean;
+}
+
+export interface SmokeProcess {
+  name: string;
+  dir?: string;
+  command: string;
+  port_env: string;
+  ready: string;
+  env?: Record<string, string>;
+}
+
+export interface CheckSmoke {
+  start: SmokeProcess[];
+  base: string;
+  login?: { path: string; user_env: string; password_env: string };
+  routes_from: string;
+  blocking?: boolean;
+  params?: Record<string, string>;
+  ready_timeout_sec?: number;
+}
+
+export interface CheckProfile {
+  version?: number;
+  language?: string;
+  sources?: { path: string; sha256: string }[];
+  services?: { compose: string; names: string[]; ports?: Record<string, number> };
+  database?: { service: string; admin_url: string };
+  env?: Record<string, string>;
+  setup?: CheckStep[];
+  checks: CheckStep[];
+  smoke?: CheckSmoke | null;
+}
+
+export type CheckOutcome = "PASS" | "FAIL" | "UNVERIFIED";
+
+export interface CheckDryRun {
+  name: string;
+  kind: "setup" | "check";
+  command: string;
+  outcome: CheckOutcome;
+  exit_code: number | null;
+  output_tail: string;
+}
+
+export interface CheckProposal {
+  profile: CheckProfile;
+  results: CheckDryRun[];
+  notes?: Record<string, string>;
+  base_sha: string;
+  model: string;
+  created_at: string;
+}
+
+export interface ChecksStatus {
+  profile: CheckProfile | null;
+  proposal: CheckProposal | null;
+  run: {
+    status: "idle" | "running" | "ready" | "failed";
+    error?: string;
+    updated_at?: string;
+  };
+  stale: boolean;
+}
+
 export interface LocalInspect {
   path: string;
   name: string;

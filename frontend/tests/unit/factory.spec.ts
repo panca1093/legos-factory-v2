@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { beforeEach, expect, it, vi } from "vitest";
 import FactoryView from "../../src/features/factory/FactoryView.vue";
+import NewWorkOrderDrawer from "../../src/features/factory/work-orders/NewWorkOrderDrawer.vue";
 import { useFactory } from "../../src/stores/factory";
 import { useSession } from "../../src/stores/session";
 import { orders, projects, user } from "../fixtures/workspace";
@@ -74,5 +75,10 @@ it("draws five stage segments per row and explains badges only behind the help p
   expect(w.text()).not.toContain("Who is acting");
   await w.find(".fx-help").trigger("click");
   expect(w.text()).toContain("Who is acting");
+  w.unmount();
+});
+it("hands the filtered project to the new work order drawer", async () => {
+  const w = await render("/factory?project=atlas&new=1");
+  expect(w.findComponent(NewWorkOrderDrawer).props("projectID")).toBe("atlas");
   w.unmount();
 });

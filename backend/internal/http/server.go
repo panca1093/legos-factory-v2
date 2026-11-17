@@ -36,6 +36,7 @@ type Server struct {
 	Catalog      *usecase.Cataloger
 	KBDocs       *usecase.KBDocs
 	Chat         *usecase.Chat
+	Checks       *usecase.CheckSuggester
 	Bus          *Bus
 	Auth         *usecase.Identity
 	OIDC         *OIDCClient
@@ -258,6 +259,11 @@ func (s *Server) routes() {
 	api.GET("/mcp/oauth/callback", s.requireRole(model.RoleAdmin, s.handleMCPOAuthCallback))
 	api.PUT("/projects/:id/kb-scope", s.requireRole(model.RoleEngineer, s.handleProjectKBScope))
 	api.PUT("/projects/:id/binding", s.requireRole(model.RoleEngineer, s.handleBindProject))
+	api.GET("/projects/:id/checks", s.handleGetChecks)
+	api.POST("/projects/:id/checks/suggest", s.requireRole(model.RoleEngineer, s.handleSuggestChecks))
+	api.PUT("/projects/:id/checks", s.requireRole(model.RoleEngineer, s.handleApproveChecks))
+	api.POST("/projects/:id/checks/stop", s.requireRole(model.RoleEngineer, s.handleStopChecks))
+	api.DELETE("/projects/:id/checks/proposal",s.requireRole(model.RoleEngineer, s.handleDiscardChecks))
 	api.POST("/integrations/jira/lookup", s.requireRole(model.RoleEngineer, s.handleJiraLookup))
 
 	api.POST("/local/pick-folder", s.local(s.handleLocalPickFolder))

@@ -40,14 +40,14 @@ func TestRepoProfile(t *testing.T) {
 			"tsconfig.json":     "{}",
 		}, model.Profile{
 			Language: "typescript",
-			Setup:    "npm ci --no-audit --no-fund",
+			Setup:    model.SetupSteps{{Name: "setup", Command: "npm ci --no-audit --no-fund"}},
 			Checks:   []model.Check{{Name: "typecheck", Command: "npm run -s typecheck"}, {Name: "test", Command: "npm test"}},
 		}},
 		{"npm without a lockfile installs", map[string]string{
 			"package.json": `{"scripts":{"test":"node --test"}}`,
 		}, model.Profile{
 			Language: "node",
-			Setup:    "npm install --no-audit --no-fund --no-package-lock",
+			Setup:    model.SetupSteps{{Name: "setup", Command: "npm install --no-audit --no-fund --no-package-lock"}},
 			Checks:   []model.Check{{Name: "test", Command: "npm test"}},
 		}},
 		{"monorepo runs every detected toolchain", map[string]string{
@@ -59,12 +59,30 @@ func TestRepoProfile(t *testing.T) {
 				{Name: "cargo-check", Command: "cargo check"}, {Name: "cargo-test", Command: "cargo test"},
 			},
 		}},
-		{"repo override wins over detection", map[string]string{
-			"go.mod":             "module x",
-			".legos/checks.json": `{"setup":"make deps","checks":[{"name":"ci","command":"make ci"}]}`,
+		{"monorepo subfolders carry their dir", map[string]string{
+			"api/go.mod":                      "module x",
+			"web/package.json":                `{"scripts":{"typecheck":"tsc","test":"vitest"}}`,
+			"web/package-lock.json":           "{}",
+			"web/tsconfig.json":               "{}",
+			"docs/package.json":               `{"scripts":{"dev":"vite"}}`,
+			"web/node_modules/x/package.json": `{"scripts":{"test":"x"}}`,
+			".hidden/go.mod":                  "module h",
+			"vendor/go.mod":                   "module v",
+			"api/deep/go.mod":                 "module d",
 		}, model.Profile{
-			Language: "go", Setup: "make deps",
-			Checks: []model.Check{{Name: "ci", Command: "make ci"}},
+			Language: "go+typescript",
+			Setup:    model.SetupSteps{{Name: "web setup", Dir: "web", Command: "npm ci --no-audit --no-fund"}},
+			Checks: []model.Check{
+				{Name: "api go-test", Dir: "api", Command: "go test ./..."}, {Name: "api go-vet", Dir: "api", Command: "go vet ./..."},
+				{Name: "web typecheck", Dir: "web", Command: "npm run -s typecheck"}, {Name: "web test", Dir: "web", Command: "npm test"},
+			},
+		}},
+		{"checks.json in the repo is ignored", map[string]string{
+			"go.mod":             "module x",
+			".legos/checks.json": `{"checks":[{"name":"ci","command":"make ci"}]}`,
+		}, model.Profile{
+			Language: "go",
+			Checks:   []model.Check{{Name: "go-test", Command: "go test ./..."}, {Name: "go-vet", Command: "go vet ./..."}},
 		}},
 		{"nothing detected", map[string]string{"README.md": "hi"}, model.Profile{}},
 	}
@@ -78,11 +96,5 @@ func TestRepoProfile(t *testing.T) {
 				t.Fatalf("got %+v\nwant %+v", got, c.want)
 			}
 		})
-	}
-}
-
-func TestRepoProfileRejectsInvalidOverride(t *testing.T) {
-	if _, err := repoProfile(writeFiles(t, map[string]string{".legos/checks.json": "{"})); err == nil {
-		t.Fatal("an unreadable override must not silently fall back to detection")
 	}
 }

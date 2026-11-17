@@ -415,7 +415,7 @@ func implementPrompt(wo *model.WorkOrder, job model.Job, tasks []model.Task) str
 	if failed, _ := job.Payload["failed_checks"].(string); reason == "fix_failed_verification" && failed != "" {
 		return fmt.Sprintf(`You are the Builder. Work order %q failed deterministic verification.
 
-Verification failed on these checks; fix the cause. Do not edit .legos/checks.json or weaken tests to make them pass.
+Verification failed on these checks; fix the cause. Do not weaken tests to make them pass.
 
 %s
 

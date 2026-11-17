@@ -71,6 +71,9 @@ func agentProvider(command []string) string {
 // SupportsMCP reports that the harness starts MCP servers: only claude does.
 func (h *ACPHarness) SupportsMCP() bool { return h.Provider == "claude" }
 
+// TakesEnv reports that a run's req.Env reaches the agent process.
+func (h *ACPHarness) TakesEnv() bool { return true }
+
 func (h *ACPHarness) Name() string {
 	switch h.Provider {
 	case "claude":

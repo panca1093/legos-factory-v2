@@ -88,7 +88,12 @@ func (f *Factory) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentBuilder), "", woQuery(wo)+" "+f.taskText(ctx, wo.ID, job.TaskID), woDir, wo.KBBaseSHA)
 	opts.Audit = audit
 	tasks, _ := f.WO.Plan(ctx, wo.ID) // without the plan the prompt just omits the task's scope
-	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, implementPrompt(wo, job, tasks)+kbText, nil, job.TaskID, opts)
+	prompt := implementPrompt(wo, job, tasks) + kbText
+	if line, release := f.builderServices(ctx, wo, job, &opts); release != nil {
+		defer release()
+		prompt += line
+	}
+	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, prompt, nil, job.TaskID, opts)
 	if err != nil {
 		return res, runID, err
 	}
@@ -476,17 +481,58 @@ func (f *Factory) profile(ctx context.Context, wo *model.WorkOrder) (model.Profi
 // runSetup installs dependencies in dir. A failure is reported, not fatal:
 // the checks or the builder will surface it with their own evidence.
 func (f *Factory) runSetup(ctx context.Context, wo *model.WorkOrder, profile model.Profile, dir, actor string) {
-	if profile.Setup == "" {
-		return
-	}
-	r := f.Sandbox.RunCheck(ctx, dir, model.Check{Name: "setup", Command: profile.Setup}, f.QualTimeout)
-	if r.Outcome != model.Pass {
+	for _, step := range profile.Setup {
+		if step.PerRun {
+			continue
+		}
+		r := f.Sandbox.RunCheck(ctx, dir, step, f.QualTimeout, nil)
+		if r.Outcome == model.Pass {
+			continue
+		}
 		out := r.Output
 		if len(out) > 2000 {
 			out = out[len(out)-2000:]
 		}
-		f.event(wo.ID, actor, "setup_failed", fmt.Sprintf("setup %q → %s", profile.Setup, r.Outcome), map[string]any{"output": out})
+		f.event(wo.ID, actor, "setup_failed", fmt.Sprintf("setup %q → %s", step.Command, r.Outcome), map[string]any{"output": out})
 	}
+}
+
+// harnessTakesEnv is false for a harness that does not hand a run's Env to the agent process.
+func harnessTakesEnv(h Harness) bool {
+	m, ok := h.(interface{ TakesEnv() bool })
+	return ok && m.TakesEnv()
+}
+
+// builderServices leases the task's own check services and sets their env on opts. It returns the prompt line naming the variables and the release func, or a nil release when the project has none.
+// A lease failure is reported and the Builder works without services: verify gives the evidence either way.
+func (f *Factory) builderServices(ctx context.Context, wo *model.WorkOrder, job model.Job, opts *runOpts) (string, func()) {
+	profile, err := f.profile(ctx, wo)
+	if err != nil || (!profile.NeedsStack() && len(profile.Env) == 0) {
+		return "", nil
+	}
+	if h := f.Resolve(model.AgentBuilder, wo); !harnessTakesEnv(h) {
+		f.event(wo.ID, "builder", "services_unavailable", "Check services are not available to the Builder: harness does not pass env", nil)
+		return "", nil
+	}
+	name := job.TaskID
+	if name == "" {
+		name = fmt.Sprintf("fix%d", wo.Revision)
+	}
+	env, release, err := f.leaseRun(ctx, wo.ProjectID, "run_"+wo.ID+"_"+name, opts.Dir, profile)
+	if err != nil {
+		f.event(wo.ID, "builder", "services_unavailable", "Check services are not available to the Builder: "+err.Error(), nil)
+		return "", nil
+	}
+	if len(env) == 0 {
+		release()
+		return "", nil
+	}
+	names := make([]string, len(env))
+	for i, kv := range env {
+		names[i], _, _ = strings.Cut(kv, "=")
+	}
+	opts.Env = env
+	return "\n\nTest services for this task are set in the environment (" + strings.Join(names, ", ") + "). They are disposable and deleted when this task ends; what you run against them is a note, not verification evidence.\n", release
 }
 
 func withConflictMarkers(dir string, files []string) []string {
@@ -524,8 +570,12 @@ func (f *Factory) recordBaseline(ctx context.Context, wo *model.WorkOrder) error
 	}
 	f.event(wo.ID, "builder", "baseline_started", "Recording baseline verification (pre-change)", nil)
 	f.runSetup(ctx, wo, profile, f.workspaceDir(wo.ID), "builder")
-	for _, c := range profile.Checks {
-		r := f.Sandbox.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
+	results, err := f.runProfileChecks(ctx, wo.ProjectID, "run_"+wo.ID+"_baseline", f.workspaceDir(wo.ID), profile)
+	if err != nil {
+		return err
+	}
+	for i, c := range profile.Checks {
+		r := results[i]
 		if err := f.saveCheck(ctx, wo, c, r); err != nil {
 			return err
 		}

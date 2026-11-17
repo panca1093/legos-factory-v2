@@ -214,7 +214,13 @@ function dispose(f: Finding, action: FindingAction) {
       <div class="row">
         <span
           class="pill"
-          :class="selected.outcome === 'PASS' ? 'green' : 'red'"
+          :class="
+            selected.outcome === 'PASS'
+              ? 'green'
+              : selected.outcome === 'FAIL'
+                ? 'red'
+                : 'orange'
+          "
           >{{ selected.outcome }}</span><span class="small"
           >Revision {{ selected.revision }} · Exit code:
           {{ selected.exit_code }}</span

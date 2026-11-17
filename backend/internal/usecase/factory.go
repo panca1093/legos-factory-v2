@@ -61,6 +61,9 @@ type Factory struct {
 	// RunEnv gives the environment and extra agent arguments for a run: the account of the work order's creator. nil means none.
 	RunEnv func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) (env, args []string, err error)
 	DataDir      string
+	Docker       DockerCLI // nil: the docker binary on PATH
+	stacks       *stackMgr
+	stackOnce    sync.Once
 	wsMu         sync.Map // work order id → *sync.Mutex serializing writes to its workspace: task merges, dependency setup
 	baselineMu   sync.Map // work order id → *sync.Mutex so one task records the baseline
 	approveMu    sync.Map // work order id → *sync.Mutex so the plan gate and a human cannot both approve
@@ -69,6 +72,10 @@ type Factory struct {
 	QualTimeout  time.Duration
 	StallAfter   time.Duration // no new agent step for this long reports a stall; 0 = defaultStallAfter
 	Log          *slog.Logger
+
+	// PlaywrightDir holds node_modules with playwright-core for the smoke run; empty: LEGOS_PLAYWRIGHT_DIR, then a frontend/ near the working directory.
+	PlaywrightDir string
+	smoke         smokeDeps
 }
 
 func (f *Factory) judge() Judge {
@@ -184,6 +191,8 @@ type runOpts struct {
 	// is prepended only when that starts a new session, restoring earlier decisions.
 	Planning bool
 	Prime    string
+
+	Env []string // added to the agent process after the account's environment
 }
 
 func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID, prompt string, extra map[string]string, taskID string, opts runOpts) (model.AgentResult, string, error) {
@@ -230,6 +239,7 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 			return model.AgentResult{}, "", eerr
 		}
 	}
+	req.Env = append(req.Env, opts.Env...)
 	// the clock can be microsecond-grained, so parallel runs need the sequence to stay unique
 	runID := fmt.Sprintf("run_%d_%d", time.Now().UnixNano(), runSeq.Add(1))
 	if err := f.Runs.Start(ctx, runID, wo.ID, taskID, string(role), h.Name()); err != nil {
@@ -485,7 +495,7 @@ func (f *Factory) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Ch
 	}
 	return f.Quality.Save(ctx, model.QualityCheck{
 		ID: fmt.Sprintf("qc_%d", time.Now().UnixNano()), WOID: wo.ID, Name: c.Name, Command: c.Command,
-		Outcome: string(r.Outcome), ExitCode: exit, Output: r.Output, Revision: int64(wo.Revision),
+		Outcome: string(r.Outcome), ExitCode: exit, Output: r.Output, Optional: c.Optional, Revision: int64(wo.Revision),
 	})
 }
 

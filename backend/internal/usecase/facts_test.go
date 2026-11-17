@@ -31,15 +31,12 @@ func TestRepoFactsListsChecksTreeAndSkipsVendorDirs(t *testing.T) {
 	}
 }
 
-func TestRepoFactsReportsProfileErrorAndCapsTree(t *testing.T) {
-	files := map[string]string{".legos/checks.json": "{not json"}
+func TestRepoFactsCapsTree(t *testing.T) {
+	files := map[string]string{}
 	for i := 0; i < factsMaxTree+20; i++ {
 		files[fmt.Sprintf("f%03d.txt", i)] = "x"
 	}
 	got := repoFacts(context.Background(), writeFiles(t, files))
-	if !strings.Contains(got, "unavailable: invalid .legos/checks.json") {
-		t.Fatalf("profile error missing:\n%s", got)
-	}
 	if !strings.Contains(got, "listing capped at 200 entries") {
 		t.Fatalf("tree must be capped:\n%s", got)
 	}

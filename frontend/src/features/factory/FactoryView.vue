@@ -19,6 +19,7 @@ import ActorBadge from "./ActorBadge.vue";
 import NewWorkOrderDrawer from "./work-orders/NewWorkOrderDrawer.vue";
 import AddProjectDialog from "./work-orders/AddProjectDialog.vue";
 import DeleteDialog from "./work-orders/DeleteDialog.vue";
+import ProjectChecks from "./ProjectChecks.vue";
 import {
   actorOf,
   isDeletable,
@@ -43,7 +44,7 @@ const factory = useFactory(),
 const search = ref(""),
   help = ref(false),
   newProject = ref(false),
-  profile = ref(false),
+  profile = ref(route.query.checks === "1"),
   menu = ref(false),
   deleting = ref(false),
   deleteBusy = ref(false),
@@ -417,10 +418,7 @@ onMounted(load);
           "Work orders use this repository and its backend quality profile."
         }}
       </p>
-      <div class="notice">
-        Checks are detected from the repository (go.mod, package.json,
-        Cargo.toml). Add .legos/checks.json to the repository to override them.
-      </div>
+      <ProjectChecks :project-id="selected.id" />
     </div></AppDialog
   >
 </template>
