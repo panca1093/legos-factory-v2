@@ -113,6 +113,11 @@ it("reports every Ship sub-state and finishes Ship when the PR is open", () => {
     expect(orderStatus(order).label).toBe(label);
   }
   expect(shipState(wo("IMPLEMENTING"))).toBeNull();
+  expect(shipState(ready({}), [], true)?.key).toBe("opening");
+  expect(shipState(ready({ pr_url: PR }), [], true)?.key).toBe("open");
+  expect(shipState(ready({ pr_open_failed_at: AT }), [], true)?.key).toBe(
+    "open_failed",
+  );
   const open = ready({ pr_url: PR });
   expect(stageStatuses(open)).toEqual(Array(5).fill("done"));
   expect(isFinished(open)).toBe(true);

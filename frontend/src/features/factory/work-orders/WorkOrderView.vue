@@ -125,9 +125,13 @@ const crewModels = computed(
       .filter(Boolean)
       .join(" · ") || "Workspace default models",
 );
-const status = computed(() => order.value && orderStatus(order.value)),
+const status = computed(
+    () => order.value && orderStatus(order.value, publish.value.remote),
+  ),
   ship = computed(() =>
-    order.value ? shipState(order.value, factory.events) : null,
+    order.value
+      ? shipState(order.value, factory.events, publish.value.remote)
+      : null,
   ),
   reason = computed(() =>
     order.value
@@ -328,6 +332,7 @@ function download() {
       :can-write="session.canWrite"
       :can-clarify="canClarify"
       :busy="busy"
+      :remote="publish.remote"
       @draft="act(() => factory.planGenerate(id))"
       @approve-plan="act(() => factory.planDecision(id, 'approve'))"
       @revise-plan="open('revise')"
