@@ -120,7 +120,7 @@ Spike (2026-11-17, compose v5.5, bimbel-tryout):
 The Builder agent gets the same resolved env while it works on a task, so it can run DB-, Redis- and S3-backed tests itself instead of waiting for verify.
 
 - **Lease:** before a Builder task starts, the factory brings the stack up, leases a database (`run_<wo>_<task>`), runs the `per_run` setup (migrations) in the task directory, and leases a Redis index. Everything is released when the run ends, including on failure or cancel.
-- **Passing the env:** the env reaches the agent process the same way the harness env does today. The task prompt gets one line listing the variable names (not values) and saying the services are disposable for this task.
+- **Passing the env:** the env is set on the agent process for that task. Not yet verified: whether the claude-acp harness accepts a per-run env, or only one env per process; check this first in phase 1. The task prompt gets one line listing the variable names (not values) and saying the services are disposable for this task.
 - **Evidence:** Builder test runs stay notes, not evidence. Readiness still counts only the factory's own verify checks. This keeps PR #75's rule: a Builder note is never a check.
 - **Cost:** stack start is paid once per project. Each task adds about 1.5 s for create db + migrate on bimbel-tryout.
 - **Not covered:** the Builder cannot change the stack (compose, ports). A task that needs a new service ends in a converge gap for the human, as today.
