@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/store"
@@ -495,6 +496,9 @@ func TestApproveStoresProfileAndFlagsStale(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(r.repo, ".github/workflows/ci.yml"), []byte("changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	r.s.StaleTTL = time.Nanosecond
+	_, _ = r.s.Status(context.Background(), u, "p1")
+	r.s.Wait()
 	if st, _ = r.s.Status(context.Background(), u, "p1"); !st.Stale {
 		t.Fatal("a changed source did not mark the profile stale")
 	}

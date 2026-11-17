@@ -361,7 +361,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 
 	srv.Checks = &usecase.CheckSuggester{
 		Projects: projects, Proj: projRepo, Store: &store.CheckProposalRepo{DB: db}, Usage: usageTracker, KB: know, Log: log,
-		DryRun: factory.DryRunChecks,
+		DryRun: factory.DryRunChecks, StopStack: factory.StopStack,
 		Checkout: func(ctx context.Context, projectID string) (dir, sha string, cleanup func(), err error) {
 			p, err := projRepo.Get(ctx, projectID)
 			if err != nil {
@@ -385,14 +385,11 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			if err != nil {
 				return "", err
 			}
-			if _, err := os.Stat(filepath.Join(p.RepoURL, ".git")); err == nil {
-				return p.RepoURL, nil
-			}
 			auth, err := integrations.GitAuth(ctx, p)
 			if err != nil {
 				return "", err
 			}
-			dir, _, err := box.Checkout(ctx, "chat-"+projectID, p.RepoURL, auth, false)
+			dir, _, err := box.Checkout(ctx, "checks-src-"+projectID, p.RepoURL, auth, true)
 			return dir, err
 		},
 		Agent: func(ctx context.Context, userID, dir, prompt string) (string, model.AgentResult, error) {

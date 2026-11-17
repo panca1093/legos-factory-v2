@@ -262,7 +262,8 @@ func (s *Server) routes() {
 	api.GET("/projects/:id/checks", s.handleGetChecks)
 	api.POST("/projects/:id/checks/suggest", s.requireRole(model.RoleEngineer, s.handleSuggestChecks))
 	api.PUT("/projects/:id/checks", s.requireRole(model.RoleEngineer, s.handleApproveChecks))
-	api.DELETE("/projects/:id/checks/proposal", s.requireRole(model.RoleEngineer, s.handleDiscardChecks))
+	api.POST("/projects/:id/checks/stop", s.requireRole(model.RoleEngineer, s.handleStopChecks))
+	api.DELETE("/projects/:id/checks/proposal",s.requireRole(model.RoleEngineer, s.handleDiscardChecks))
 	api.POST("/integrations/jira/lookup", s.requireRole(model.RoleEngineer, s.handleJiraLookup))
 
 	api.POST("/local/pick-folder", s.local(s.handleLocalPickFolder))

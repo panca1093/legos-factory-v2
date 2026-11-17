@@ -105,8 +105,34 @@ type CheckSuggester struct {
 	// DryRun runs the profile's checks in dir.
 	DryRun  func(ctx context.Context, projectID, runName, dir string, p model.Profile) ([]model.CheckResult, error)
 	Timeout time.Duration
+	// StopStack takes a project's check services down now.
+	StopStack func(ctx context.Context, projectID string) error
+	// StaleTTL is how long a stale verdict is reused before a background refresh; default 10 minutes.
+	StaleTTL time.Duration
 
-	wg sync.WaitGroup
+	wg         sync.WaitGroup
+	staleMu    sync.Mutex // guards staleCache
+	staleCache map[string]*staleEntry
+}
+
+type staleEntry struct {
+	stale      bool
+	at         time.Time
+	refreshing bool
+}
+
+// Wait blocks until background suggestions and stale refreshes finish, for shutdown.
+func (s *CheckSuggester) Wait() { s.wg.Wait() }
+
+// Stop takes the project's check services down; the next run starts them again.
+func (s *CheckSuggester) Stop(ctx context.Context, u *model.User, projectID string) error {
+	if err := s.Projects.Authorize(ctx, u, projectID); err != nil {
+		return err
+	}
+	if s.StopStack == nil {
+		return ErrCheckSuggestUnavailable
+	}
+	return s.StopStack(ctx, projectID)
 }
 
 // DryRunChecks runs a proposed profile's checks in dir for CheckSuggester.
@@ -310,19 +336,52 @@ func (s *CheckSuggester) Status(ctx context.Context, u *model.User, projectID st
 			}
 		}
 	}
-	st.Stale = s.stale(ctx, projectID, st.Profile)
+	st.Stale = s.cachedStale(projectID, st.Profile)
 	return st, nil
 }
 
-func (s *CheckSuggester) stale(ctx context.Context, projectID string, p *model.Profile) bool {
+// cachedStale answers from the last verdict and refreshes it in the background, so a GET poll never reads the repository.
+func (s *CheckSuggester) cachedStale(projectID string, p *model.Profile) bool {
 	if p == nil || len(p.Sources) == 0 || s.SourceDir == nil {
 		return false
 	}
+	ttl := s.StaleTTL
+	if ttl <= 0 {
+		ttl = 10 * time.Minute
+	}
+	s.staleMu.Lock()
+	defer s.staleMu.Unlock()
+	if s.staleCache == nil {
+		s.staleCache = map[string]*staleEntry{}
+	}
+	e := s.staleCache[projectID]
+	if e == nil {
+		e = &staleEntry{}
+		s.staleCache[projectID] = e
+	}
+	if !e.refreshing && time.Since(e.at) >= ttl {
+		e.refreshing = true
+		sources := slices.Clone(p.Sources)
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			v := s.sourcesChanged(ctx, projectID, sources)
+			s.staleMu.Lock()
+			e.stale, e.at, e.refreshing = v, time.Now(), false
+			s.staleMu.Unlock()
+		}()
+	}
+	return e.stale
+}
+
+func (s *CheckSuggester) sourcesChanged(ctx context.Context, projectID string, sources []model.ProfileSource) bool {
 	root, err := s.SourceDir(ctx, projectID)
 	if err != nil {
 		return false
 	}
-	for _, src := range p.Sources {
+	for _, src := range sources {
 		if h, err := hashFile(root, src.Path); err != nil || h != src.SHA256 {
 			return true
 		}
@@ -346,17 +405,11 @@ func (s *CheckSuggester) Approve(ctx context.Context, u *model.User, projectID s
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	paths := sourcePaths(p)
-	known := map[string]string{}
-	for _, src := range p.Sources {
-		known[src.Path] = src.SHA256
-	}
 	p.Sources = nil
 	for _, path := range paths {
-		h := known[path]
-		if h == "" {
-			if h, err = hashFile(root, path); err != nil {
-				return nil, fmt.Errorf("%w: source %s: %v", ErrInvalid, path, err)
-			}
+		h, err := hashFile(root, path)
+		if err != nil {
+			return nil, fmt.Errorf("%w: source %s: %v", ErrInvalid, path, err)
 		}
 		p.Sources = append(p.Sources, model.ProfileSource{Path: path, SHA256: h})
 	}
@@ -367,6 +420,9 @@ func (s *CheckSuggester) Approve(ctx context.Context, u *model.User, projectID s
 	if err := s.Proj.SetQualityProfile(ctx, projectID, string(b)); err != nil {
 		return nil, err
 	}
+	s.staleMu.Lock()
+	delete(s.staleCache, projectID)
+	s.staleMu.Unlock()
 	_, _ = s.Store.Delete(ctx, projectID)
 	return &p, nil
 }

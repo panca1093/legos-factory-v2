@@ -49,6 +49,14 @@ func main() {
 
 	// final cleanup
 	a.Sched.Stop()
+	if a.Server.Checks != nil {
+		done := make(chan struct{})
+		go func() { a.Server.Checks.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+		}
+	}
 	if a.DBCloser != nil {
 		_ = a.DBCloser()
 	}

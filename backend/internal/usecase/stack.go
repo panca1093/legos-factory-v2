@@ -542,6 +542,22 @@ func (f *Factory) StopStack(ctx context.Context, projectID string) error {
 	return f.stackMgr().stop(ctx, projectID)
 }
 
+// removeStack takes a deleted project's services down and drops its stack dir; a project that never started services is left alone.
+func (f *Factory) removeStack(ctx context.Context, projectID string) {
+	m := f.stackMgr()
+	dir := m.stackDir(stackName(projectID))
+	if _, err := os.Stat(dir); err != nil {
+		return
+	}
+	if err := m.stop(ctx, projectID); err != nil {
+		f.Log.Warn("check services not stopped on project delete", "project", projectID, "err", err)
+		return
+	}
+	if err := removeInside(filepath.Join(f.DataDir, "stacks"), dir); err != nil {
+		f.Log.Warn("stack dir cleanup failed", "project", projectID, "err", err)
+	}
+}
+
 // leaseRun gives one run its env: the leased services' values when the profile needs a stack, then runs the per-run setup in dir.
 // release must be called when the run ends.
 func (f *Factory) leaseRun(ctx context.Context, projectID, runName, dir string, p model.Profile) (env []string, release func(), err error) {

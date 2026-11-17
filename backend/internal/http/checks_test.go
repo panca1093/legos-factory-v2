@@ -96,6 +96,7 @@ func TestChecksAPI(t *testing.T) {
 		{"POST", "/api/v1/projects/p1/checks/suggest"},
 		{"PUT", "/api/v1/projects/p1/checks"},
 		{"DELETE", "/api/v1/projects/p1/checks/proposal"},
+		{"POST", "/api/v1/projects/p1/checks/stop"},
 	} {
 		if code, _ := chatDo(srv, "vic", c.method, c.url, `{}`); code != http.StatusForbidden {
 			t.Fatalf("viewer %s %s: %d", c.method, c.url, code)
@@ -153,6 +154,18 @@ func TestChecksBusyAndDiscard(t *testing.T) {
 	st := waitChecks(t, srv, "idle")
 	if st["proposal"] != nil {
 		t.Fatalf("proposal survived discard: %v", st)
+	}
+}
+
+func TestChecksStopTakesServicesDown(t *testing.T) {
+	srv, _ := bootChecks(t, checksReply)
+	var stopped []string
+	srv.Checks.StopStack = func(_ context.Context, id string) error { stopped = append(stopped, id); return nil }
+	if code, _ := chatDo(srv, "bob", "POST", "/api/v1/projects/p1/checks/stop", ""); code != http.StatusNotFound {
+		t.Fatalf("non-member: %d", code)
+	}
+	if code, _ := chatDo(srv, "ana", "POST", "/api/v1/projects/p1/checks/stop", ""); code != http.StatusNoContent || len(stopped) != 1 || stopped[0] != "p1" {
+		t.Fatalf("stop: %d %v", code, stopped)
 	}
 }
 

@@ -70,6 +70,16 @@ func (s *Server) handleApproveChecks(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"profile": p})
 }
 
+func (s *Server) handleStopChecks(c echo.Context) error {
+	if !s.checksReady(c) {
+		return nil
+	}
+	if err := s.Checks.Stop(c.Request().Context(), currentUser(c), c.Param("id")); err != nil {
+		return checksError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func (s *Server) handleDiscardChecks(c echo.Context) error {
 	if !s.checksReady(c) {
 		return nil
