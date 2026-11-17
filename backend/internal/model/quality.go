@@ -137,6 +137,7 @@ type QualityCheck struct {
 	Outcome   string    `json:"outcome"`
 	ExitCode  int       `json:"exit_code"`
 	Output    string    `json:"output"`
+	Optional  bool      `json:"optional,omitempty"`
 	Revision  int64     `json:"revision"`
 	CommitSHA string    `json:"commit_sha,omitempty"`
 	CreatedAt time.Time `json:"created_at"`

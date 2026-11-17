@@ -14,9 +14,18 @@ import (
 
 // RunCheck executes a single check command inside dir with a timeout.
 // The command is run via the shell, matching how developers run it locally.
-func RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration) model.CheckResult {
+// check.Dir is relative to dir and may not leave it; extraEnv is appended after the process environment.
+func RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration, extraEnv []string) model.CheckResult {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
+	}
+	if check.Dir != "" {
+		full := filepath.Join(dir, check.Dir)
+		if rel, err := filepath.Rel(dir, full); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return model.CheckResult{Name: check.Name, Command: check.Command, Outcome: model.Unverified,
+				Output: fmt.Sprintf("check dir %q is outside the workspace", check.Dir)}
+		}
+		dir = full
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -35,6 +44,7 @@ func RunCheck(ctx context.Context, dir string, check model.Check, timeout time.D
 	}
 	// test runners such as vitest and jest stay in watch mode unless CI is set
 	env = append(env, "CI=true")
+	env = append(env, extraEnv...)
 
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", check.Command)
 	cmd.Dir = dir

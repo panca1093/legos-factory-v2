@@ -11,9 +11,9 @@ import (
 type QualityRepo struct{ DB *sql.DB }
 
 func (r *QualityRepo) Save(ctx context.Context, c model.QualityCheck) error {
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO quality_checks (id, wo_id, name, command, outcome, exit_code, output, revision, commit_sha, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?)`,
-		c.ID, c.WOID, c.Name, c.Command, c.Outcome, c.ExitCode, c.Output, c.Revision, c.CommitSHA, time.Now().Unix())
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO quality_checks (id, wo_id, name, command, outcome, exit_code, output, revision, commit_sha, created_at, optional)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		c.ID, c.WOID, c.Name, c.Command, c.Outcome, c.ExitCode, c.Output, c.Revision, c.CommitSHA, time.Now().Unix(), c.Optional)
 	return err
 }
 
@@ -29,15 +29,16 @@ func (r *QualityRepo) Count(ctx context.Context, woID string) (int, error) {
 	return n, err
 }
 
+// CountForRevision counts the evidence of one revision: passing checks that are not optional.
 func (r *QualityRepo) CountForRevision(ctx context.Context, woID string, revision int) (int, error) {
 	var n int
-	err := r.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM quality_checks WHERE wo_id = ? AND revision = ?`,
+	err := r.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM quality_checks WHERE wo_id = ? AND revision = ? AND outcome = 'PASS' AND optional = 0`,
 		woID, revision).Scan(&n)
 	return n, err
 }
 
 func (r *QualityRepo) ForRevision(ctx context.Context, woID string, revision int) ([]model.QualityCheck, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT id, name, command, outcome, exit_code, output, revision, commit_sha, created_at
+	rows, err := r.DB.QueryContext(ctx, `SELECT id, name, command, outcome, exit_code, output, revision, commit_sha, created_at, optional
 		FROM quality_checks WHERE wo_id = ? AND revision = ? ORDER BY created_at, rowid`, woID, revision)
 	if err != nil {
 		return nil, err
@@ -47,7 +48,7 @@ func (r *QualityRepo) ForRevision(ctx context.Context, woID string, revision int
 	for rows.Next() {
 		c := model.QualityCheck{WOID: woID}
 		var createdAt int64
-		if err := rows.Scan(&c.ID, &c.Name, &c.Command, &c.Outcome, &c.ExitCode, &c.Output, &c.Revision, &c.CommitSHA, &createdAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Command, &c.Outcome, &c.ExitCode, &c.Output, &c.Revision, &c.CommitSHA, &createdAt, &c.Optional); err != nil {
 			return nil, err
 		}
 		c.CreatedAt = time.Unix(createdAt, 0)
@@ -57,7 +58,7 @@ func (r *QualityRepo) ForRevision(ctx context.Context, woID string, revision int
 }
 
 func (r *QualityRepo) List(ctx context.Context, woID string) ([]model.QualityCheck, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT id, name, command, outcome, exit_code, output, revision, commit_sha, created_at
+	rows, err := r.DB.QueryContext(ctx, `SELECT id, name, command, outcome, exit_code, output, revision, commit_sha, created_at, optional
 		FROM quality_checks WHERE wo_id = ? ORDER BY created_at`, woID)
 	if err != nil {
 		return nil, err
@@ -67,7 +68,7 @@ func (r *QualityRepo) List(ctx context.Context, woID string) ([]model.QualityChe
 	for rows.Next() {
 		c := model.QualityCheck{WOID: woID}
 		var createdAt int64
-		if err := rows.Scan(&c.ID, &c.Name, &c.Command, &c.Outcome, &c.ExitCode, &c.Output, &c.Revision, &c.CommitSHA, &createdAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Command, &c.Outcome, &c.ExitCode, &c.Output, &c.Revision, &c.CommitSHA, &createdAt, &c.Optional); err != nil {
 			return nil, err
 		}
 		c.CreatedAt = time.Unix(createdAt, 0)

@@ -50,7 +50,7 @@ func TestFailedVerificationLoopIsBounded(t *testing.T) {
 
 type failSandbox struct{ dirSandbox }
 
-func (failSandbox) RunCheck(context.Context, string, model.Check, time.Duration) model.CheckResult {
+func (failSandbox) RunCheck(context.Context, string, model.Check, time.Duration, []string) model.CheckResult {
 	return model.CheckResult{Outcome: model.Fail}
 }
 
@@ -119,7 +119,7 @@ type failingSandbox struct {
 	output string
 }
 
-func (s failingSandbox) RunCheck(_ context.Context, _ string, c model.Check, _ time.Duration) model.CheckResult {
+func (s failingSandbox) RunCheck(_ context.Context, _ string, c model.Check, _ time.Duration, _ []string) model.CheckResult {
 	code := 2
 	return model.CheckResult{Name: c.Name, Command: c.Command, Outcome: model.Fail, ExitCode: &code, Output: s.output}
 }
@@ -236,7 +236,7 @@ type flipSandbox struct {
 	passing *bool
 }
 
-func (s flipSandbox) RunCheck(_ context.Context, _ string, c model.Check, _ time.Duration) model.CheckResult {
+func (s flipSandbox) RunCheck(_ context.Context, _ string, c model.Check, _ time.Duration, _ []string) model.CheckResult {
 	if !*s.passing {
 		return model.CheckResult{Name: c.Name, Command: c.Command, Outcome: model.Fail}
 	}
