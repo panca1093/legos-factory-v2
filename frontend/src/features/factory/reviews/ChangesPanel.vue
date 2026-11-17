@@ -42,6 +42,8 @@ const shipNote: Record<string, string> = {
   tracking_stopped:
     "The factory can no longer read this pull request, so its merge status will not update. The reason is in Activity.",
   merged: "The pull request was merged.",
+  opening:
+    "Pushing the branch and opening the pull request. This updates when it is open.",
   local: "The decision was recorded locally. No pull request was opened.",
 };
 </script>

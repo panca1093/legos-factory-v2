@@ -21,6 +21,7 @@ const props = defineProps<{
   canWrite: boolean;
   canClarify: boolean;
   busy: boolean;
+  remote?: boolean;
 }>();
 const emit = defineEmits<{
   draft: [];
@@ -34,10 +35,13 @@ const emit = defineEmits<{
 }>();
 const paused = computed(() => !!props.order.paused_at),
   finished = computed(
-    () => isFinished(props.order) && ship.value?.key !== "open_failed",
+    () =>
+      isFinished(props.order) &&
+      ship.value?.key !== "open_failed" &&
+      ship.value?.key !== "opening",
   ),
-  status = computed(() => orderStatus(props.order)),
-  ship = computed(() => shipState(props.order, props.events)),
+  status = computed(() => orderStatus(props.order, props.remote)),
+  ship = computed(() => shipState(props.order, props.events, props.remote)),
   reason = computed(() =>
     currentReason(props.order, props.events, props.hasMore),
   ),

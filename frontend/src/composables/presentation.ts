@@ -173,10 +173,13 @@ export type ShipKey =
   | "closed"
   | "tracking_stopped"
   | "merged"
+  | "opening"
   | "local";
+// remote: the project publishes, so READY without a pr_url means the PR job has not finished yet.
 export function shipState(
   w: WorkOrder,
   events?: { kind: string }[],
+  remote = false,
 ): { key: ShipKey; label: string; tone: string } | null {
   if (w.state === "NEEDS_HUMAN_REVIEW")
     return {
@@ -198,6 +201,8 @@ export function shipState(
     return { key: "open", label: "PR open · in review", tone: "green" };
   if (openFailed(w, events))
     return { key: "open_failed", label: "PR failed to open", tone: "red" };
+  if (remote)
+    return { key: "opening", label: "Opening pull request…", tone: "orange" };
   return { key: "local", label: "Approved · no pull request", tone: "green" };
 }
 export function stateInfo(state: string): { label: string; tone: string } {
@@ -226,8 +231,11 @@ export function stateInfo(state: string): { label: string; tone: string } {
   ];
   return { label, tone };
 }
-export function orderStatus(w: WorkOrder): { label: string; tone: string } {
-  const ship = shipState(w);
+export function orderStatus(
+  w: WorkOrder,
+  remote = false,
+): { label: string; tone: string } {
+  const ship = shipState(w, undefined, remote);
   return ship && w.state === "READY" ? ship : stateInfo(w.state);
 }
 export function taskState(
