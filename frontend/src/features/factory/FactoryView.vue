@@ -418,8 +418,9 @@ onMounted(load);
         }}
       </p>
       <div class="notice">
-        Checks are detected from the repository (go.mod, package.json,
-        Cargo.toml). Add .legos/checks.json to the repository to override them.
+        Checks come from this project's quality profile. Without one, they are
+        detected from the repository (go.mod, package.json, Cargo.toml, one
+        folder deep).
       </div>
     </div></AppDialog
   >

@@ -2,7 +2,6 @@ package usecase
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -62,13 +61,6 @@ func TestCreateFreezesCheckProfileFromFreshClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []model.Check{{Name: "go-test", Command: "go test ./..."}, {Name: "go-vet", Command: "go vet ./..."}}
-	override := filepath.Join(f.workspaceDir(wo.ID), ".legos", "checks.json")
-	if err := os.MkdirAll(filepath.Dir(override), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(override, []byte(`{"checks":[{"name":"x","command":"true"}]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.Remove(filepath.Join(f.workspaceDir(wo.ID), "go.mod")); err != nil {
 		t.Fatal(err)
 	}
@@ -82,15 +74,5 @@ func TestCreateFreezesCheckProfileFromFreshClone(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Checks, want) {
 		t.Fatalf("builder-edited workspace changed the checks: %+v", got.Checks)
-	}
-}
-
-func TestCreateRejectsInvalidChecksFile(t *testing.T) {
-	_, box, _, err := createOrder(t, map[string]string{"go.mod": "module x", ".legos/checks.json": "{nope"})
-	if !errors.Is(err, ErrWorkspace) {
-		t.Fatalf("want ErrWorkspace, got %v", err)
-	}
-	if len(box.destroyed) != 1 {
-		t.Fatalf("clone not cleaned up: %v", box.destroyed)
 	}
 }

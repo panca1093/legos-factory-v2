@@ -41,7 +41,7 @@ func TestImplementPromptRendersFailedChecks(t *testing.T) {
 	p := implementPrompt(wo, model.Job{Payload: map[string]any{
 		"reason": "fix_failed_verification", "failed_checks": `Check "go test": FAIL (exit code 1)`,
 	}}, nil)
-	for _, want := range []string{"Verification failed on these checks; fix the cause.", "Do not edit .legos/checks.json", `Check "go test"`} {
+	for _, want := range []string{"Verification failed on these checks; fix the cause.", "Do not weaken tests", `Check "go test"`} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, p)
 		}
