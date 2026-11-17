@@ -187,6 +187,6 @@ Optional, off until it is configured in the profile's `smoke` block. Runs after 
 
 **Done for phases 1–2** means: on bimbel-tryout, Suggest checks proposes the CI-derived checks above, and the dry run shows `api test` failing on main. After the human approves (with the emoji test fixed or marked optional), a fresh work order runs the checks with DB, Redis and S3, and readiness reaches `READY` without a human verification step.
 
-## Open questions
+## Settled questions
 
-1. **Repos without compose,** where services come from CI `services:` only. Generate a compose file into `<DataDir>/stacks/`, or leave those checks optional?
+- **Repos without compose (user decision 2026-11-17).** When the repo has no compose file, `services` stays empty, and Suggest checks marks every check that needs a service `optional`, with the reason "needs <service>; no compose file". The factory never generates a compose file.
