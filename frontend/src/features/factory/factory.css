@@ -348,6 +348,32 @@
 .fx-sum h3 {
   margin: 0;
 }
+.pc {
+  display: grid;
+  gap: 12px;
+}
+.pc-list {
+  display: grid;
+  gap: 8px;
+}
+.pc-item {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.pc-out {
+  margin: 0;
+  max-height: 140px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--panel2);
+}
 @media (max-width: 680px) {
   .graph-toolbar {
     align-items: start;
