@@ -3,6 +3,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -15,18 +16,96 @@ const (
 	Unverified Outcome = "UNVERIFIED"
 )
 
-// Check is one configured verification command.
+// Check is one configured verification command. Dir is relative to the workspace root; Source names the repo line it was copied from.
 type Check struct {
+	Name     string `json:"name"`
+	Command  string `json:"command"`
+	Dir      string `json:"dir,omitempty"`
+	Optional bool   `json:"optional,omitempty"` // recorded, never fails verification, never counts as evidence
+	Source   string `json:"source,omitempty"`
+	PerRun   bool   `json:"per_run,omitempty"` // setup only: runs after the run's own database exists
+}
+
+// SetupSteps reads a v1 setup string or a v2 list of steps.
+type SetupSteps []Check
+
+func (s *SetupSteps) UnmarshalJSON(b []byte) error {
+	var one string
+	if err := json.Unmarshal(b, &one); err == nil {
+		*s = nil
+		if strings.TrimSpace(one) != "" {
+			*s = SetupSteps{{Name: "setup", Command: one}}
+		}
+		return nil
+	}
+	var many []Check
+	if err := json.Unmarshal(b, &many); err != nil {
+		return err
+	}
+	*s = many
+	return nil
+}
+
+// ProfileSource is a repo file the profile was derived from, hashed when the profile was approved.
+type ProfileSource struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+// ProfileServices are the compose services checks need; Ports maps each to its container port.
+type ProfileServices struct {
+	Compose string         `json:"compose"`
+	Names   []string       `json:"names"`
+	Ports   map[string]int `json:"ports"`
+}
+
+// ProfileDatabase says how to create a run's own database: AdminURL connects to an existing database on Service.
+type ProfileDatabase struct {
+	Service  string `json:"service"`
+	AdminURL string `json:"admin_url"`
+}
+
+// SmokeProcess is an app process the Playwright smoke run starts on a free port.
+type SmokeProcess struct {
 	Name    string `json:"name"`
+	Dir     string `json:"dir,omitempty"`
 	Command string `json:"command"`
+	PortEnv string `json:"port_env"`
+	Ready   string `json:"ready"`
+}
+
+// SmokeLogin signs the smoke browser in with credentials read from the resolved env.
+type SmokeLogin struct {
+	Path        string `json:"path"`
+	UserEnv     string `json:"user_env"`
+	PasswordEnv string `json:"password_env"`
+}
+
+// Smoke configures the factory-owned Playwright smoke run.
+type Smoke struct {
+	Start      []SmokeProcess `json:"start"`
+	Base       string         `json:"base"`
+	Login      *SmokeLogin    `json:"login,omitempty"`
+	RoutesFrom string         `json:"routes_from"`
+	Blocking   bool           `json:"blocking,omitempty"`
 }
 
 // Profile defines the deterministic verification commands for a project.
+// Placeholders in Env and Database.AdminURL: {{<service>}} → 127.0.0.1:<host port>, {{db}} → the run's database and bucket name, {{redis_db}} → the run's Redis index.
 type Profile struct {
-	Language string  `json:"language"`
-	Setup    string  `json:"setup,omitempty"` // installs dependencies in a fresh checkout before checks or a builder run
-	Checks   []Check `json:"checks"`
+	Version  int               `json:"version,omitempty"`
+	Language string            `json:"language"`
+	Sources  []ProfileSource   `json:"sources,omitempty"`
+	Services *ProfileServices  `json:"services,omitempty"`
+	Database *ProfileDatabase  `json:"database,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+	Setup    SetupSteps        `json:"setup,omitempty"` // installs dependencies in a fresh checkout before checks or a builder run
+	Checks   []Check           `json:"checks"`
+	Smoke    *Smoke            `json:"smoke,omitempty"`
 }
+
+// NeedsStack reports whether checks need the factory's service stack.
+func (p Profile) NeedsStack() bool { return p.Services != nil && len(p.Services.Names) > 0 }
 
 func ParseProfile(profileJSON, language string) (Profile, error) {
 	var p Profile

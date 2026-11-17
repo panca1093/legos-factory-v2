@@ -476,16 +476,19 @@ func (f *Factory) profile(ctx context.Context, wo *model.WorkOrder) (model.Profi
 // runSetup installs dependencies in dir. A failure is reported, not fatal:
 // the checks or the builder will surface it with their own evidence.
 func (f *Factory) runSetup(ctx context.Context, wo *model.WorkOrder, profile model.Profile, dir, actor string) {
-	if profile.Setup == "" {
-		return
-	}
-	r := f.Sandbox.RunCheck(ctx, dir, model.Check{Name: "setup", Command: profile.Setup}, f.QualTimeout)
-	if r.Outcome != model.Pass {
+	for _, step := range profile.Setup {
+		if step.PerRun {
+			continue
+		}
+		r := f.Sandbox.RunCheck(ctx, dir, step, f.QualTimeout)
+		if r.Outcome == model.Pass {
+			continue
+		}
 		out := r.Output
 		if len(out) > 2000 {
 			out = out[len(out)-2000:]
 		}
-		f.event(wo.ID, actor, "setup_failed", fmt.Sprintf("setup %q → %s", profile.Setup, r.Outcome), map[string]any{"output": out})
+		f.event(wo.ID, actor, "setup_failed", fmt.Sprintf("setup %q → %s", step.Command, r.Outcome), map[string]any{"output": out})
 	}
 }
 

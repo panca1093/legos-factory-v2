@@ -40,14 +40,14 @@ func TestRepoProfile(t *testing.T) {
 			"tsconfig.json":     "{}",
 		}, model.Profile{
 			Language: "typescript",
-			Setup:    "npm ci --no-audit --no-fund",
+			Setup:    model.SetupSteps{{Name: "setup", Command: "npm ci --no-audit --no-fund"}},
 			Checks:   []model.Check{{Name: "typecheck", Command: "npm run -s typecheck"}, {Name: "test", Command: "npm test"}},
 		}},
 		{"npm without a lockfile installs", map[string]string{
 			"package.json": `{"scripts":{"test":"node --test"}}`,
 		}, model.Profile{
 			Language: "node",
-			Setup:    "npm install --no-audit --no-fund --no-package-lock",
+			Setup:    model.SetupSteps{{Name: "setup", Command: "npm install --no-audit --no-fund --no-package-lock"}},
 			Checks:   []model.Check{{Name: "test", Command: "npm test"}},
 		}},
 		{"monorepo runs every detected toolchain", map[string]string{
@@ -63,7 +63,7 @@ func TestRepoProfile(t *testing.T) {
 			"go.mod":             "module x",
 			".legos/checks.json": `{"setup":"make deps","checks":[{"name":"ci","command":"make ci"}]}`,
 		}, model.Profile{
-			Language: "go", Setup: "make deps",
+			Language: "go", Setup: model.SetupSteps{{Name: "setup", Command: "make deps"}},
 			Checks: []model.Check{{Name: "ci", Command: "make ci"}},
 		}},
 		{"nothing detected", map[string]string{"README.md": "hi"}, model.Profile{}},

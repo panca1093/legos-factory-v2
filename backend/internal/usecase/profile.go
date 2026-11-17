@@ -55,9 +55,9 @@ func detectProfile(dir string) model.Profile {
 			lang = "typescript"
 		}
 		langs = append(langs, lang)
-		p.Setup = "npm install --no-audit --no-fund --no-package-lock"
+		p.Setup = model.SetupSteps{{Name: "setup", Command: "npm install --no-audit --no-fund --no-package-lock"}}
 		if exists("package-lock.json") {
-			p.Setup = "npm ci --no-audit --no-fund"
+			p.Setup = model.SetupSteps{{Name: "setup", Command: "npm ci --no-audit --no-fund"}}
 		}
 		var pkg struct {
 			Scripts map[string]string `json:"scripts"`
