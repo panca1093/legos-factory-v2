@@ -25,7 +25,6 @@ The repo already knows how it is verified: `.github/workflows/ci.yml` starts Pos
 
 - Running the repo's CI provider (GitHub Actions) locally.
 - A stack per work order.
-- Giving the Builder agent the stack env, so it can run DB tests itself. This is a later step; see Open questions.
 - Writing e2e tests for the project.
 
 ## Profile v2
@@ -52,7 +51,7 @@ Stored as JSON in `projects.quality_profile`. Profile v1 (`language`, `setup` st
   },
   "env": {
     "DATABASE_URL": "postgres://tryout:tryout@{{postgres}}/{{db}}?sslmode=disable",
-    "REDIS_URL": "redis://{{redis}}/0",
+    "REDIS_URL": "redis://{{redis}}/{{redis_db}}",
     "S3_ENDPOINT": "{{rustfs}}",
     "S3_ACCESS_KEY": "tryout",
     "S3_SECRET_KEY": "tryout123",
@@ -77,7 +76,7 @@ Stored as JSON in `projects.quality_profile`. Profile v1 (`language`, `setup` st
 
 Rules:
 
-- **Placeholders** are filled by the factory at run time and nowhere else. `{{<service>}}` becomes `127.0.0.1:<host port>`, and `{{db}}` becomes the per-run database name (`run_<wo>_<rev>`, sanitised).
+- **Placeholders** are filled by the factory at run time and nowhere else. `{{<service>}}` becomes `127.0.0.1:<host port>`, `{{db}}` becomes the run's own database name (`run_<wo>_<rev>` for verify, `run_<wo>_<task>` for a Builder task, sanitised), and `{{redis_db}}` becomes a Redis index leased to the run (1–15; index 0 is never used).
 - **`dir`** is relative to the workspace root, must stay inside it, and defaults to the root.
 - **`optional: true`**: the result is recorded and shown, but never fails verification and never counts as evidence for readiness.
 - **`per_run` setup** runs after the run database exists. Other setup runs once per workspace, as `runSetup` does today.
@@ -96,7 +95,7 @@ New `usecase/stack.go` (one file; it touches docker only through a small port, s
   ```
 - **Startup:** `docker compose -p … -f <repo compose> -f <override> up -d --wait <names>`. Host ports are discovered with `docker compose port <svc> <port>`.
 - **Lifetime:** the stack is left running between runs (start costs ~6 s). It is torn down with `down -v` when the project is deleted, or from a "Stop check services" action on the project.
-- **Lock:** an in-process mutex per project wraps up → create db → setup → checks → drop db. Baseline (`recordBaseline`) and verify (`inspector.go`) both go through it.
+- **Isolation instead of a run-wide lock:** every run, whether verify, baseline or a Builder task, gets its own database, Redis index and S3 bucket (`{{db}}`). Runs can therefore overlap, including parallel Builder tasks. An in-process mutex per project only guards stack up/down and the lease table. When all 15 Redis indexes are leased, the next run waits for one.
 - **Per-run database:** created by running `CREATE DATABASE` through `database.admin_url`, and dropped after the run (also on failure, via `defer`). Without a `database` block, runs share the services as they are.
 - **Preflight:** a missing docker, or compose without `!override` support (added in the v2.24 line; exact minimum to confirm), fails the run as `UNVERIFIED` with a clear message. It never silently passes.
 
@@ -115,6 +114,16 @@ Spike (2026-11-17, compose v5.5, bimbel-tryout):
 - `verification_skipped` message: "No checks for this project yet · Suggest checks", in place of the `.legos/checks.json` hint.
 - `repoProfile`: the override-file branch is deleted. `detectProfile` stays as the fallback, extended to one level of subfolders (`*/go.mod`, `*/package.json`) with `dir` set. The work order shows a suggestion banner when it falls back.
 - Precedence is unchanged: project profile, then `wo.CheckProfile` snapshot, then `repoProfile`.
+
+## Builder access (user decision 2026-11-17)
+
+The Builder agent gets the same resolved env while it works on a task, so it can run DB-, Redis- and S3-backed tests itself instead of waiting for verify.
+
+- **Lease:** before a Builder task starts, the factory brings the stack up, leases a database (`run_<wo>_<task>`), runs the `per_run` setup (migrations) in the task directory, and leases a Redis index. Everything is released when the run ends, including on failure or cancel.
+- **Passing the env:** the env reaches the agent process the same way the harness env does today. The task prompt gets one line listing the variable names (not values) and saying the services are disposable for this task.
+- **Evidence:** Builder test runs stay notes, not evidence. Readiness still counts only the factory's own verify checks. This keeps PR #75's rule: a Builder note is never a check.
+- **Cost:** stack start is paid once per project. Each task adds about 1.5 s for create db + migrate on bimbel-tryout.
+- **Not covered:** the Builder cannot change the stack (compose, ports). A task that needs a new service ends in a converge gap for the human, as today.
 
 ## Suggest checks
 
@@ -171,7 +180,7 @@ Optional, off until it is configured in the profile's `smoke` block. Runs after 
 
 ## Phases (one PR each, sequential)
 
-1. **Profile v2 + stack + runner.** Model, `ParseProfile`, `stack.go` with the docker port, env plumbing in `RunCheck`, per-run database, lock, optional semantics, checks.json removal, subfolder `detectProfile`, messages. Tests with a fake docker port, plus one integration test behind a `docker` build tag.
+1. **Profile v2 + stack + runner.** Model, `ParseProfile`, `stack.go` with the docker port, env plumbing in `RunCheck`, per-run database, Redis/bucket leases, optional semantics, Builder env lease, checks.json removal, subfolder `detectProfile`, messages. Tests with a fake docker port, plus one integration test behind a `docker` build tag.
 2. **Suggest checks.** Playbook, agent run, validation and dry run, API (`POST /projects/{id}/checks/suggest`, `PUT /projects/{id}/checks`), Project profile approval UI, WO suggestion banner, stale-source notice.
 3. **Playwright smoke.** Spike login and dynamic routes first, then the `smoke` block, runner and UI toggle.
 
@@ -179,6 +188,5 @@ Optional, off until it is configured in the profile's `smoke` block. Runs after 
 
 ## Open questions
 
-1. **Builder access to the stack.** Should the Builder agent get the resolved env, so it can run DB-backed tests while it works? It would cut verify round-trips, but the Builder then holds the stack lock during its run, or needs a separate run database.
-2. **Stack idle teardown.** Is keeping it running forever acceptable, or should it go down after N hours idle?
-3. **Repos without compose,** where services come from CI `services:` only. Generate a compose file into `<DataDir>/stacks/`, or leave those checks optional?
+1. **Stack idle teardown.** Is keeping it running forever acceptable, or should it go down after N hours idle?
+2. **Repos without compose,** where services come from CI `services:` only. Generate a compose file into `<DataDir>/stacks/`, or leave those checks optional?
