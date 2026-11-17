@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"legos-factory/backend/internal/model"
 )
@@ -34,5 +35,13 @@ func TestRunCheckRejectsDirOutsideWorkspace(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(root), "escaped")); err == nil {
 		t.Fatal("command ran outside the workspace")
+	}
+}
+
+func TestRunCheckTimeoutKillsTheWholeTree(t *testing.T) {
+	start := time.Now()
+	r := RunCheck(context.Background(), t.TempDir(), model.Check{Name: "slow", Command: "sleep 30 | cat"}, 500*time.Millisecond, nil)
+	if r.Outcome != model.Unverified || time.Since(start) > 10*time.Second {
+		t.Fatalf("outcome %s after %s", r.Outcome, time.Since(start))
 	}
 }
