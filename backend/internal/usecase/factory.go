@@ -72,6 +72,10 @@ type Factory struct {
 	QualTimeout  time.Duration
 	StallAfter   time.Duration // no new agent step for this long reports a stall; 0 = defaultStallAfter
 	Log          *slog.Logger
+
+	// PlaywrightDir holds node_modules with playwright-core for the smoke run; empty: LEGOS_PLAYWRIGHT_DIR, then a frontend/ near the working directory.
+	PlaywrightDir string
+	smoke         smokeDeps
 }
 
 func (f *Factory) judge() Judge {

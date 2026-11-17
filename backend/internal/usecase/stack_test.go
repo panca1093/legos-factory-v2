@@ -131,9 +131,13 @@ func TestRunProfileChecksResolvesPlaceholdersAndLeases(t *testing.T) {
 	if sb.runs[0].check.Name != "migrate" || sb.runs[0].dir != dir {
 		t.Fatalf("per-run setup ran %+v", sb.runs[0])
 	}
-	for _, r := range sb.runs {
-		if strings.Join(r.env, "|") != strings.Join(want, "|") {
-			t.Fatalf("env = %v\nwant %v", r.env, want)
+	for i, r := range sb.runs {
+		w := want
+		if i == 0 { // per-run setup also gets the stack coordinates
+			w = append(append([]string(nil), want...), "LEGOS_COMPOSE_PROJECT="+stackName("prj_1"), "LEGOS_DB=run_wo_1_2")
+		}
+		if strings.Join(r.env, "|") != strings.Join(w, "|") {
+			t.Fatalf("env = %v\nwant %v", r.env, w)
 		}
 	}
 	if d.count(`CREATE DATABASE "run_wo_1_2"`) != 1 || d.count(`DROP DATABASE IF EXISTS "run_wo_1_2"`) != 2 {
