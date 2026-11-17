@@ -384,12 +384,17 @@ func envValue(env []string, name string) string {
 	return ""
 }
 
+const smokeNoPages = "no affected pages"
+
 // runSmoke runs the profile's Playwright smoke for one verify pass and returns it as the optional (or blocking) check "smoke".
 func (f *Factory) runSmoke(ctx context.Context, wo *model.WorkOrder, p model.Profile) (model.Check, model.CheckResult) {
 	c := model.Check{Name: smokeCheckName, Command: "playwright smoke", Optional: !p.Smoke.Blocking}
 	start := time.Now()
 	r := f.smokeRun(ctx, wo, p)
 	r.Name, r.Command, r.Duration = c.Name, c.Command, time.Since(start)
+	if r.Outcome == model.Pass && r.Output == smokeNoPages {
+		c.Optional = true // nothing was opened, so the pass is not evidence even when smoke is blocking
+	}
 	return c, r
 }
 
@@ -416,7 +421,7 @@ func (f *Factory) smokeRun(ctx context.Context, wo *model.WorkOrder, p model.Pro
 	}
 	templates := affectedTemplates(dir, s.RoutesFrom, changed)
 	if len(templates) == 0 {
-		return model.CheckResult{Outcome: model.Pass, Output: "no affected pages"}
+		return model.CheckResult{Outcome: model.Pass, Output: smokeNoPages}
 	}
 	var notes []string
 	if len(templates) > maxSmokeRoutes {
@@ -552,7 +557,7 @@ func (f *Factory) smokeRun(ctx context.Context, wo *model.WorkOrder, p model.Pro
 	runner := filepath.Join(f.DataDir, "smoke", "runner.cjs")
 	specPath := filepath.Join(outDir, "spec.json")
 	raw, _ := json.Marshal(spec)
-	if err := os.WriteFile(runner, smokeRunnerJS, 0o644); err != nil {
+	if err := writeFileAtomic(runner, smokeRunnerJS, 0o644); err != nil {
 		return unverified("%v", err)
 	}
 	if err := os.WriteFile(specPath, raw, 0o600); err != nil { // holds the login credentials
@@ -570,6 +575,26 @@ func (f *Factory) smokeRun(ctx context.Context, wo *model.WorkOrder, p model.Pro
 		return unverified("unreadable browser output: %v: %s", err, tail(string(out)))
 	}
 	return summarizeSmoke(res, notes)
+}
+
+// writeFileAtomic renames a finished temp file into place so a concurrent smoke run never starts node on a half-written runner.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), perm); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func summarizeSmoke(res smokeOut, notes []string) model.CheckResult {

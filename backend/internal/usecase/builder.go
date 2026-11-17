@@ -497,11 +497,21 @@ func (f *Factory) runSetup(ctx context.Context, wo *model.WorkOrder, profile mod
 	}
 }
 
+// harnessTakesEnv is false for a harness that does not hand a run's Env to the agent process.
+func harnessTakesEnv(h Harness) bool {
+	m, ok := h.(interface{ TakesEnv() bool })
+	return ok && m.TakesEnv()
+}
+
 // builderServices leases the task's own check services and sets their env on opts. It returns the prompt line naming the variables and the release func, or a nil release when the project has none.
 // A lease failure is reported and the Builder works without services: verify gives the evidence either way.
 func (f *Factory) builderServices(ctx context.Context, wo *model.WorkOrder, job model.Job, opts *runOpts) (string, func()) {
 	profile, err := f.profile(ctx, wo)
 	if err != nil || (!profile.NeedsStack() && len(profile.Env) == 0) {
+		return "", nil
+	}
+	if h := f.Resolve(model.AgentBuilder, wo); !harnessTakesEnv(h) {
+		f.event(wo.ID, "builder", "services_unavailable", "Check services are not available to the Builder: harness does not pass env", nil)
 		return "", nil
 	}
 	name := job.TaskID

@@ -562,7 +562,7 @@ func TestBuilderServicesLeaseEnvAndRelease(t *testing.T) {
 	ctx := context.Background()
 	d := &fakeDocker{}
 	sb := &envSandbox{}
-	f, wo, wos := monitorFactory(t, nil)
+	f, wo, wos := monitorFactory(t, envHarness{})
 	f.Docker, f.Sandbox, f.DataDir = d, sb, t.TempDir()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeBody), 0o644); err != nil {
@@ -599,7 +599,7 @@ func TestBuilderServicesLeaseEnvAndRelease(t *testing.T) {
 }
 
 func TestBuilderServicesWithoutProfileServices(t *testing.T) {
-	f, wo, _ := monitorFactory(t, nil)
+	f, wo, _ := monitorFactory(t, envHarness{})
 	opts := runOpts{Dir: t.TempDir()}
 	if line, release := f.builderServices(context.Background(), wo, model.Job{TaskID: "T1"}, &opts); release != nil || line != "" || opts.Env != nil {
 		t.Fatal("a project without services must run the Builder untouched")
@@ -608,7 +608,7 @@ func TestBuilderServicesWithoutProfileServices(t *testing.T) {
 
 func TestBuilderServicesUnavailableDoesNotBlockBuilder(t *testing.T) {
 	ctx := context.Background()
-	f, wo, wos := monitorFactory(t, nil)
+	f, wo, wos := monitorFactory(t, envHarness{})
 	f.Docker, f.Sandbox, f.DataDir = &fakeDocker{missing: true}, &envSandbox{}, t.TempDir()
 	prof, _ := json.Marshal(stackProfile())
 	if err := wos.UpdateFields(ctx, wo.ID, map[string]any{"check_profile": string(prof)}); err != nil {
