@@ -511,21 +511,27 @@ func validateProfile(root string, p *model.Profile) (warnings map[string]string,
 			errs = append(errs, validateServices(root, sv)...)
 		}
 	}
+	pc := placeholderCtx{services: services, needsStack: p.NeedsStack(), hasDB: p.Database != nil}
+	if p.Services != nil {
+		pc.servicePorts = p.Services.Ports
+	}
 	if db := p.Database; db != nil {
 		if !slices.Contains(services, db.Service) {
 			bad("database.service %q is not in services.names", db.Service)
+		} else if pc.servicePorts[db.Service] == 0 {
+			bad("database.service %q needs an entry in services.ports", db.Service)
 		}
 		if strings.TrimSpace(db.AdminURL) == "" {
 			bad("database.admin_url is empty")
 		}
-		errs = append(errs, checkPlaceholders("database.admin_url", db.AdminURL, services, nil)...)
+		errs = append(errs, checkPlaceholders("database.admin_url", db.AdminURL, pc, nil)...)
 	}
 	dotenv := dotenvValues(root)
 	checkEnv := func(where, k, v string, ports []string) {
 		if !envKeyRe.MatchString(k) {
 			bad("%s key %q is not a valid variable name", where, k)
 		}
-		errs = append(errs, checkPlaceholders(where+"."+k, v, services, ports)...)
+		errs = append(errs, checkPlaceholders(where+"."+k, v, pc, ports)...)
 		plain := placeholderRe.ReplaceAllString(v, "")
 		switch {
 		case liveSecret(plain):
@@ -673,12 +679,32 @@ func validateServices(root string, sv *model.ProfileServices) []string {
 	return errs
 }
 
+// placeholderCtx is what the profile offers placeholders to resolve against.
+type placeholderCtx struct {
+	services     []string
+	servicePorts map[string]int
+	needsStack   bool
+	hasDB        bool
+}
+
 // checkPlaceholders reports placeholders v may not use; ports are the smoke processes whose {{port.<name>}} is allowed here.
-func checkPlaceholders(where, v string, services, ports []string) []string {
+func checkPlaceholders(where, v string, pc placeholderCtx, ports []string) []string {
 	var errs []string
 	for _, m := range placeholderRe.FindAllStringSubmatch(v, -1) {
 		name := m[1]
-		if slices.Contains(leasePlaceholders, name) || slices.Contains(services, name) {
+		isLease, isService := slices.Contains(leasePlaceholders, name), slices.Contains(pc.services, name)
+		switch {
+		case isLease && !pc.needsStack, isService && !pc.needsStack:
+			errs = append(errs, fmt.Sprintf("%s uses {{%s}} but the profile has no services to lease; add services or drop the placeholder", where, name))
+			continue
+		case (name == "db" || name == "bucket") && !pc.hasDB:
+			errs = append(errs, fmt.Sprintf("%s uses {{%s}} but the profile has no database block", where, name))
+			continue
+		case isService && !isLease && pc.servicePorts[name] == 0:
+			errs = append(errs, fmt.Sprintf("%s uses {{%s}} but services.ports has no entry for it", where, name))
+			continue
+		}
+		if isLease || isService {
 			continue
 		}
 		if proc, ok := strings.CutPrefix(name, "port."); ok && slices.Contains(ports, proc) {

@@ -46,7 +46,7 @@ func validProfile() model.Profile {
 	return model.Profile{
 		Version: 2, Language: "go",
 		Sources:  []model.ProfileSource{{Path: ".github/workflows/ci.yml"}},
-		Services: &model.ProfileServices{Compose: "docker-compose.yml", Names: []string{"postgres", "redis"}, Ports: map[string]int{"postgres": 5432}},
+		Services: &model.ProfileServices{Compose: "docker-compose.yml", Names: []string{"postgres", "redis"}, Ports: map[string]int{"postgres": 5432, "redis": 6379}},
 		Database: &model.ProfileDatabase{Service: "postgres", AdminURL: "postgres://u:p@{{postgres}}/postgres"},
 		Env:      map[string]string{"DATABASE_URL": "postgres://u:p@{{postgres}}/{{db}}", "REDIS_URL": "redis://{{redis}}/{{redis_db}}", "MODE": "test"},
 		Checks:   []model.Check{{Name: "api test", Dir: "api", Command: "go test ./...", Source: ".github/workflows/ci.yml:2"}},
@@ -89,6 +89,12 @@ func TestValidateProfile(t *testing.T) {
 		{"test values pass", func(p *model.Profile) { p.Env["S3_SECRET_KEY"] = "tryout123" }, ""},
 		{"no compose, no services", func(p *model.Profile) { p.Services, p.Database, p.Env = nil, nil, nil }, ""},
 		{"no compose but a service placeholder", func(p *model.Profile) { p.Services, p.Database = nil, nil }, "unknown placeholder {{postgres}}"},
+		{"service placeholder without a ports entry", func(p *model.Profile) { delete(p.Services.Ports, "redis") }, "{{redis}} but services.ports has no entry"},
+		{"database service without a ports entry", func(p *model.Profile) { delete(p.Services.Ports, "postgres") }, "needs an entry in services.ports"},
+		{"db placeholder without a database block", func(p *model.Profile) { p.Database = nil }, "{{db}} but the profile has no database block"},
+		{"bucket placeholder without a database block", func(p *model.Profile) { p.Database = nil; p.Env["B"] = "{{bucket}}" }, "{{bucket}} but the profile has no database block"},
+		{"redis_db without a stack", func(p *model.Profile) { p.Services, p.Database = nil, nil; p.Env = map[string]string{"R": "{{redis_db}}"} }, "{{redis_db}} but the profile has no services"},
+		{"db without a stack", func(p *model.Profile) { p.Services, p.Database = nil, nil; p.Env = map[string]string{"D": "{{db}}"} }, "{{db}} but the profile has no services"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
