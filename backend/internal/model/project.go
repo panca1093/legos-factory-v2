@@ -19,6 +19,15 @@ type Project struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// CheckProposalRow is the stored state of a project's check suggestion run; Proposal is JSON.
+type CheckProposalRow struct {
+	ProjectID string
+	Status    string // running | ready | failed
+	Proposal  string
+	Error     string
+	UpdatedAt time.Time
+}
+
 type ProjectKBScopeRequest struct {
 	KBInclude []string `json:"kb_include"`
 	KBExclude []string `json:"kb_exclude"`

@@ -37,6 +37,18 @@ func (r *ProjectRepo) SetLanguage(ctx context.Context, id, language string) erro
 	return err
 }
 
+// SetQualityProfile stores the approved check profile JSON.
+func (r *ProjectRepo) SetQualityProfile(ctx context.Context, id, profile string) error {
+	res, err := r.DB.ExecContext(ctx, `UPDATE projects SET quality_profile = ? WHERE id = ?`, profile, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return model.ErrProjectNotFound
+	}
+	return nil
+}
+
 // SetBinding points the project at a git connection and provider repo slug;
 // an empty connection id unbinds it.
 func (r *ProjectRepo) SetBinding(ctx context.Context, id, connectionID, remoteRepo string) error {
