@@ -218,7 +218,8 @@ func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in Conve
 			covered[c] = true
 		}
 		objective := fmt.Sprintf("%s\nEvidence: %s\nGap %s (%s) against %s.", g.Fix, g.Evidence, g.ID, g.Type, g.Cites)
-		key := "Close gap " + g.ID + ":"
+		// gap ids restart each revision, so the revision keeps an earlier revision's task from swallowing this gap
+		key := fmt.Sprintf("Close gap %s (rev %d):", g.ID, wo.Revision)
 		switch g.Layer {
 		case "code":
 			scope := g.Files
@@ -234,7 +235,7 @@ func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in Conve
 	}
 	for _, c := range in.Criteria {
 		if slices.Contains(out.Unmet, c.ID) && !covered[c.ID] {
-			key := fmt.Sprintf("Close criterion %s (C%d)", c.ID, report.Round)
+			key := fmt.Sprintf("Close criterion %s (rev %d, C%d)", c.ID, wo.Revision, report.Round)
 			addTask(key, key, fmt.Sprintf("Acceptance criterion %s is not met by the change: %s\nImplement what it requires.", c.ID, c.Text), nil)
 		}
 	}
@@ -244,7 +245,7 @@ func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in Conve
 		}
 	}
 	for _, g := range contract {
-		q := fmt.Sprintf("Converge gap %s (%s): what should the spec say?", g.ID, g.Cites)
+		q := fmt.Sprintf("Converge gap %s (rev %d, %s): what should the spec say?", g.ID, wo.Revision, g.Cites)
 		if findClarification(wo.Clarifications, q) != nil {
 			continue
 		}

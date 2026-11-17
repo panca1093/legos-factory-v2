@@ -9,7 +9,9 @@ if [ -f .env ]; then
   set +a
 fi
 
-(cd backend && go run ./cmd/factory) &
+# exec the built binary so $backend is the factory itself; killing `go run` leaves its child holding the port
+bin="${TMPDIR:-/tmp}/legos-factory-dev"
+(cd backend && go build -o "$bin" ./cmd/factory && exec "$bin") &
 backend=$!
 trap 'kill $backend 2>/dev/null' EXIT INT TERM
 
