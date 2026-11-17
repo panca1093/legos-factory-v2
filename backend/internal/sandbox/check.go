@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"legos-factory/backend/internal/model"
@@ -49,6 +50,10 @@ func RunCheck(ctx context.Context, dir string, check model.Check, timeout time.D
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", check.Command)
 	cmd.Dir = dir
 	cmd.Env = env
+	// a timeout must stop the whole tree: a surviving child keeps the output pipe open and Wait never returns
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
 	outBytes, err := cmd.CombinedOutput()
 	r := model.CheckResult{Name: check.Name, Command: check.Command, Output: string(outBytes)}
 	if ctx.Err() != nil {
