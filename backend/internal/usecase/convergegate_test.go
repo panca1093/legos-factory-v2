@@ -126,7 +126,7 @@ func TestConvergeAppendCreatesNewTasksAndBuildsOnlyThem(t *testing.T) {
 		t.Fatalf("the first task must stay as it was: %+v", plan)
 	}
 	nt := plan[1]
-	if nt.ID != r.wo.ID+"_t2" || nt.Seq != 1 || !strings.HasPrefix(nt.Title, "Close gap C1-G1:") || len(nt.Deps) != 0 ||
+	if nt.ID != r.wo.ID+"_t2" || nt.Seq != 1 || !strings.HasPrefix(nt.Title, "Close gap C1-G1 (rev 0):") || len(nt.Deps) != 0 ||
 		len(nt.Scope) != 1 || nt.Scope[0] != "round.go" || !strings.Contains(nt.Objective, "round money to integer rupiah") || !strings.Contains(nt.Objective, "round.go:12") {
 		t.Fatalf("appended task: %+v", nt)
 	}
@@ -163,7 +163,7 @@ func TestConvergeAppendForAnUnmetCriterionWithoutAGap(t *testing.T) {
 	r.builtPlan(t)
 	wo := r.evaluate(t)
 	plan, _ := r.wos.Plan(context.Background(), r.wo.ID)
-	if wo.State != model.StateImplementing || len(plan) != 2 || plan[1].Title != "Close criterion c1 (C1)" || !strings.Contains(plan[1].Objective, "no floats") {
+	if wo.State != model.StateImplementing || len(plan) != 2 || plan[1].Title != "Close criterion c1 (rev 0, C1)" || !strings.Contains(plan[1].Objective, "no floats") {
 		t.Fatalf("state %s plan %+v", wo.State, plan)
 	}
 }
@@ -178,13 +178,30 @@ func TestConvergeAppendDoesNotDuplicateATaskTheGapAlreadyCovers(t *testing.T) {
 	}
 }
 
+func TestConvergeAppendDoesNotConfuseAReusedGapIDFromAnEarlierRevision(t *testing.T) {
+	ctx := context.Background()
+	r := convergeRig(t, &fakeJudge{over: map[string]float64{"gap_valid_C1-G1": 0.9}}, strings.Replace(gapsReport(codeGapJSON), `"revision":0`, `"revision":2`, 1))
+	r.builtPlan(t)
+	if err := r.wos.AppendPlan(ctx, r.wo.ID, []model.Task{{ID: r.wo.ID + "_t2", WOID: r.wo.ID, Title: "Close gap C1-G1 (rev 1): an older gap", Objective: "o", Role: "builder"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.wos.UpdateFields(ctx, r.wo.ID, map[string]any{"revision": 2}); err != nil {
+		t.Fatal(err)
+	}
+	wo := r.evaluate(t)
+	plan, _ := r.wos.Plan(ctx, r.wo.ID)
+	if wo.State != model.StateImplementing || len(plan) != 3 || !strings.HasPrefix(plan[2].Title, "Close gap C1-G1 (rev 2):") {
+		t.Fatalf("a gap id reused by a later revision is new work: state %s plan %+v", wo.State, plan)
+	}
+}
+
 func TestConvergeContractGapAmendsTheSpec(t *testing.T) {
 	contract := `{"id":"C1-G1","type":"missing","layer":"contract","cites":"c1","evidence":"spec §2 is silent on negative amounts","fix":"Negative amounts round toward zero."}`
 	j := &fakeJudge{over: map[string]float64{"gap_valid_C1-G1": 0.9}}
 	r := convergeRig(t, j, gapsReport(contract))
 	r.builtPlan(t)
 	wo := r.evaluate(t)
-	if !strings.Contains(wo.Spec, "Amendment: Converge gap C1-G1 (c1)") || !strings.Contains(wo.Spec, "Negative amounts round toward zero.") ||
+	if !strings.Contains(wo.Spec, "Amendment: Converge gap C1-G1 (rev 0, c1)") || !strings.Contains(wo.Spec, "Negative amounts round toward zero.") ||
 		!strings.Contains(wo.Spec, "reason: converge found the contract missing: spec §2 is silent on negative amounts") {
 		t.Fatalf("the spec is amended with the reason: %q", wo.Spec)
 	}
@@ -678,7 +695,7 @@ func TestEvaluateIsIdempotentAndResumesAHalfDoneAppend(t *testing.T) {
 	}
 	// the order moved to IMPLEMENTING with a new task but the Builder job was lost
 	id := r.builtPlan(t)
-	if err := r.wos.AppendPlan(ctx, r.wo.ID, []model.Task{{ID: r.wo.ID + "_t2", WOID: r.wo.ID, Title: "Close gap C1-G1: x", Objective: "o", Role: "builder"}}); err != nil {
+	if err := r.wos.AppendPlan(ctx, r.wo.ID, []model.Task{{ID: r.wo.ID + "_t2", WOID: r.wo.ID, Title: "Close gap C1-G1 (rev 0): x", Objective: "o", Role: "builder"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := r.wos.UpdateStateAndFields(ctx, r.wo.ID, model.StateImplementing, map[string]any{"revision": 1, "commit_sha": ""}); err != nil {
