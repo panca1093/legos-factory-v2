@@ -92,7 +92,9 @@ export const useChecks = defineStore("checks", {
         this.error = "";
         const stamp = st.proposal?.created_at ?? "";
         if (stamp !== this.draftOf) {
-          this.draft = st.proposal ? structuredClone(st.proposal.profile) : null;
+          this.draft = st.proposal
+            ? structuredClone(st.proposal.profile)
+            : null;
           this.draftOf = stamp;
         }
       } catch (e) {
@@ -166,11 +168,21 @@ export const useChecks = defineStore("checks", {
     setLogin(field: "path" | "user_env" | "password_env", value: string) {
       const sm = this.draft?.smoke;
       if (!sm) return;
-      const l = { path: "", user_env: "", password_env: "", ...sm.login, [field]: value };
+      const l = {
+        path: "",
+        user_env: "",
+        password_env: "",
+        ...sm.login,
+        [field]: value,
+      };
       sm.login = l.path || l.user_env || l.password_env ? l : undefined;
     },
     async approve() {
       if (!this.draft || !this.projectID) return;
+      const smoke = this.draft.smoke;
+      // a cleared number input binds "", which the backend cannot decode as a number
+      if (smoke && typeof smoke.ready_timeout_sec !== "number")
+        delete smoke.ready_timeout_sec;
       this.busy = true;
       try {
         await api.put(`/api/v1/projects/${this.projectID}/checks`, {
