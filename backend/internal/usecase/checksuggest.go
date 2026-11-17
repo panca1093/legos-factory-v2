@@ -36,6 +36,7 @@ const (
 	suggestAttempts    = 2
 	envFileScanDepth   = 3
 	minDotenvValueSize = 4
+	maxSmokeReadySec   = 600
 )
 
 // CheckProposalStore keeps one suggestion per project.
@@ -175,6 +176,7 @@ func (s *CheckSuggester) suggest(ctx context.Context, userID, projectID string) 
 	}
 	prompt := suggestPrompt(s.playbook(ctx, projectID, dir, sha))
 	var r suggestReply
+	var warnings map[string]string
 	var ref string
 	var lastErr error
 	for range suggestAttempts {
@@ -190,7 +192,7 @@ func (s *CheckSuggester) suggest(ctx context.Context, userID, projectID string) 
 			return nil, rerr
 		}
 		if lastErr = decodeReply(res.Text, &r); lastErr == nil {
-			lastErr = validateProfile(dir, &r.Profile)
+			warnings, lastErr = validateProfile(dir, &r.Profile)
 		}
 		if lastErr == nil {
 			break
@@ -200,10 +202,20 @@ func (s *CheckSuggester) suggest(ctx context.Context, userID, projectID string) 
 		return nil, fmt.Errorf("%w: suggestion invalid after retry: %v", errReplyInvalid, lastErr)
 	}
 	p := r.Profile
+	if p.Smoke != nil {
+		p.Smoke.Blocking = false
+	}
+	notes := r.Notes
+	if len(warnings) > 0 && notes == nil {
+		notes = map[string]string{}
+	}
+	for k, w := range warnings {
+		notes[k] = w
+	}
 	if p.Sources, err = hashSources(dir, sourcePaths(p)); err != nil {
 		return nil, err
 	}
-	prop := &CheckProposal{Profile: p, Notes: r.Notes, BaseSHA: sha, Model: ref, CreatedAt: time.Now()}
+	prop := &CheckProposal{Profile: p, Notes: notes, BaseSHA: sha, Model: ref, CreatedAt: time.Now()}
 	prop.Results, err = s.dryRun(ctx, projectID, dir, p)
 	if err != nil {
 		return nil, err
@@ -330,7 +342,7 @@ func (s *CheckSuggester) Approve(ctx context.Context, u *model.User, projectID s
 	if err != nil {
 		return nil, fmt.Errorf("could not read the repository: %w", err)
 	}
-	if err := validateProfile(root, &p); err != nil {
+	if _, err := validateProfile(root, &p); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
 	paths := sourcePaths(p)
@@ -407,28 +419,37 @@ func suggestPrompt(playbook string) string {
 		`"setup":[{"name":"web deps","dir":"web","command":"npm ci"},{"name":"migrate","dir":"api","command":"make migrate-up","per_run":true}],` +
 		`"checks":[{"name":"api test","dir":"api","command":"go test ./...","source":".github/workflows/ci.yml:68"},{"name":"smtp","dir":"api","command":"go test ./internal/infra -run SMTP","optional":true,"source":"api/Makefile:12"}],` +
 		`"notes":{"smtp":"needs a mail server; not in compose"}}` + "\n\n" +
-		"Placeholders are filled by the factory: {{<service>}} is the service's host:port, {{db}} the run's own database name, {{redis_db}} its Redis index. Use no other placeholder. " +
-		"Leave services and database out when the repository has no compose file." + playbook
+		"Placeholders are filled by the factory: {{<service>}} is the service's host:port, {{db}} the run's own database name, {{bucket}} that name made bucket-safe, {{redis_db}} its Redis index. " +
+		"Only inside smoke.start[].env, {{port.<process>}} is the port the factory gives another smoke process. Use no other placeholder. " +
+		"Leave services and database out when the repository has no compose file. " +
+		"Add an optional \"smoke\" block only when the repository has a web app with a login and a dev seed; the playbook says how. Omit it otherwise." + playbook
 }
 
 // ---- validation ----
 
 var (
 	placeholderRe = regexp.MustCompile(`\{\{\s*([^{}]*?)\s*\}\}`)
+	smokeNameRe   = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 	envKeyRe      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	longTokenRe   = regexp.MustCompile(`^[A-Za-z0-9+/=_-]{32,}$`)
-	secretPrefix  = []string{"sk_live", "sk-live", "rk_live", "ghp_", "gho_", "ghs_", "github_pat_", "AKIA", "ASIA", "xoxb-", "xoxp-", "AIza", "-----BEGIN"}
+	secretPrefix  = []string{"sk_live", "sk-live", "rk_live", "ghp_", "gho_", "ghs_", "github_pat_", "AKIA", "ASIA", "xox", "AIza", "-----BEGIN"}
 	dotenvNames   = map[string]bool{".env": true, ".env.local": true, ".env.production": true, ".env.prod": true, ".env.development": true}
 )
 
-// looksLikeSecret flags known live-credential prefixes and long random-looking tokens.
-func looksLikeSecret(v string) bool {
+// liveSecret flags values that start like real credentials; these are always rejected.
+func liveSecret(v string) bool {
 	v = strings.TrimSpace(v)
 	for _, p := range secretPrefix {
 		if strings.HasPrefix(v, p) {
 			return true
 		}
 	}
+	return false
+}
+
+// looksLikeToken flags long random-looking values; a profile may legitimately carry throwaway ones (JWT_SECRET), so it only warns.
+func looksLikeToken(v string) bool {
+	v = strings.TrimSpace(v)
 	if !longTokenRe.MatchString(v) {
 		return false
 	}
@@ -441,8 +462,10 @@ func looksLikeSecret(v string) bool {
 }
 
 // validateProfile checks p against the repository at root and fixes its version; every problem is reported at once.
-func validateProfile(root string, p *model.Profile) error {
+// Warnings (keyed by where they apply) do not reject the profile.
+func validateProfile(root string, p *model.Profile) (warnings map[string]string, err error) {
 	var errs []string
+	warnings = map[string]string{}
 	bad := func(format string, a ...any) { errs = append(errs, fmt.Sprintf(format, a...)) }
 	p.Version = 2
 	if len(p.Checks) == 0 {
@@ -495,31 +518,124 @@ func validateProfile(root string, p *model.Profile) error {
 		if strings.TrimSpace(db.AdminURL) == "" {
 			bad("database.admin_url is empty")
 		}
-		errs = append(errs, checkPlaceholders("database.admin_url", db.AdminURL, services)...)
+		errs = append(errs, checkPlaceholders("database.admin_url", db.AdminURL, services, nil)...)
 	}
 	dotenv := dotenvValues(root)
-	keys := make([]string, 0, len(p.Env))
-	for k := range p.Env {
+	checkEnv := func(where, k, v string, ports []string) {
+		if !envKeyRe.MatchString(k) {
+			bad("%s key %q is not a valid variable name", where, k)
+		}
+		errs = append(errs, checkPlaceholders(where+"."+k, v, services, ports)...)
+		plain := placeholderRe.ReplaceAllString(v, "")
+		switch {
+		case liveSecret(plain):
+			bad("%s.%s looks like a live secret; use only test values from compose, CI or test config", where, k)
+		case dotenv[v]:
+			bad("%s.%s has a value read from a .env file; use only compose, CI or test config", where, k)
+		case looksLikeToken(plain):
+			warnings[where+"."+k] = "looks like a random token; fine if it is a throwaway test value, never a real secret"
+		}
+	}
+	for _, k := range sortedKeys(p.Env) {
+		checkEnv("env", k, p.Env[k], nil)
+	}
+	if sm := p.Smoke; sm != nil {
+		errs = append(errs, validateSmoke(root, p, sm, checkEnv)...)
+	}
+	if len(errs) > 0 {
+		return nil, errors.New(strings.Join(errs, "; "))
+	}
+	return warnings, nil
+}
+
+// validateSmoke checks the smoke block; checkEnv validates one env value the way the profile env is validated.
+func validateSmoke(root string, p *model.Profile, sm *model.Smoke, checkEnv func(where, k, v string, ports []string)) []string {
+	var errs []string
+	bad := func(format string, a ...any) { errs = append(errs, fmt.Sprintf(format, a...)) }
+	if len(sm.Start) == 0 {
+		bad("smoke.start is empty")
+	}
+	var names []string
+	for _, sp := range sm.Start {
+		names = append(names, sp.Name)
+	}
+	seen := map[string]bool{}
+	for i, sp := range sm.Start {
+		who := fmt.Sprintf("smoke.start[%d]", i)
+		switch {
+		case strings.TrimSpace(sp.Name) == "":
+			bad("%s has no name", who)
+		case seen[sp.Name]:
+			bad("smoke process name %q is used twice", sp.Name)
+		case !smokeNameRe.MatchString(sp.Name):
+			bad("smoke process name %q may only use letters, digits, - and _", sp.Name)
+		default:
+			who = "smoke process " + sp.Name
+		}
+		seen[sp.Name] = true
+		if strings.TrimSpace(sp.Command) == "" {
+			bad("%s has no command", who)
+		}
+		if sp.Dir != "" {
+			if full, err := safeJoin(root, sp.Dir); err != nil {
+				bad("%s dir %q: %v", who, sp.Dir, err)
+			} else if fi, err := os.Stat(full); err != nil || !fi.IsDir() {
+				bad("%s dir %q is not a directory in the repository", who, sp.Dir)
+			}
+		}
+		if !envKeyRe.MatchString(sp.PortEnv) {
+			bad("%s port_env %q is not a valid variable name", who, sp.PortEnv)
+		}
+		if !strings.HasPrefix(sp.Ready, "/") {
+			bad("%s ready %q must start with /", who, sp.Ready)
+		}
+		for _, k := range sortedKeys(sp.Env) {
+			checkEnv("smoke.start."+sp.Name+".env", k, sp.Env[k], names)
+		}
+	}
+	if !slices.Contains(names, sm.Base) {
+		bad("smoke.base %q is not a process in smoke.start", sm.Base)
+	}
+	if rf := strings.TrimSpace(sm.RoutesFrom); rf == "" {
+		bad("smoke.routes_from is empty")
+	} else if _, err := safeJoin(root, strings.TrimPrefix(filepath.ToSlash(filepath.Clean(rf)), "./")); err != nil || strings.HasPrefix(rf, "/") {
+		bad("smoke.routes_from %q must be a glob inside the repository", rf)
+	}
+	if l := sm.Login; l != nil {
+		if !strings.HasPrefix(l.Path, "/") {
+			bad("smoke.login.path %q must start with /", l.Path)
+		}
+		for label, name := range map[string]string{"user_env": l.UserEnv, "password_env": l.PasswordEnv} {
+			if _, ok := p.Env[name]; !ok {
+				bad("smoke.login.%s %q is not set in the profile env", label, name)
+			}
+		}
+	}
+	for _, k := range sortedKeys(sm.Params) {
+		v := sm.Params[k]
+		q, isSQL := strings.CutPrefix(v, "sql:")
+		switch {
+		case strings.TrimSpace(k) == "":
+			bad("smoke.params has an empty name")
+		case strings.TrimSpace(v) == "", isSQL && strings.TrimSpace(q) == "":
+			bad("smoke.params.%s is empty", k)
+		case isSQL && p.Database == nil:
+			bad("smoke.params.%s uses sql: but the profile has no database block", k)
+		}
+	}
+	if sm.ReadyTimeoutSec < 0 || sm.ReadyTimeoutSec > maxSmokeReadySec {
+		bad("smoke.ready_timeout_sec must be 0-%d", maxSmokeReadySec)
+	}
+	return errs
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	for _, k := range keys {
-		v := p.Env[k]
-		if !envKeyRe.MatchString(k) {
-			bad("env key %q is not a valid variable name", k)
-		}
-		errs = append(errs, checkPlaceholders("env."+k, v, services)...)
-		if looksLikeSecret(placeholderRe.ReplaceAllString(v, "")) {
-			bad("env.%s looks like a live secret; use only test values from compose, CI or test config", k)
-		}
-		if dotenv[v] {
-			bad("env.%s has a value read from a .env file; use only compose, CI or test config", k)
-		}
-	}
-	if len(errs) > 0 {
-		return errors.New(strings.Join(errs, "; "))
-	}
-	return nil
+	return keys
 }
 
 func validateServices(root string, sv *model.ProfileServices) []string {
@@ -557,16 +673,28 @@ func validateServices(root string, sv *model.ProfileServices) []string {
 	return errs
 }
 
-func checkPlaceholders(where, v string, services []string) []string {
+// checkPlaceholders reports placeholders v may not use; ports are the smoke processes whose {{port.<name>}} is allowed here.
+func checkPlaceholders(where, v string, services, ports []string) []string {
 	var errs []string
 	for _, m := range placeholderRe.FindAllStringSubmatch(v, -1) {
 		name := m[1]
-		if name == "db" || name == "redis_db" || slices.Contains(services, name) {
+		if slices.Contains(leasePlaceholders, name) || slices.Contains(services, name) {
 			continue
 		}
-		errs = append(errs, fmt.Sprintf("%s uses unknown placeholder {{%s}}; allowed are {{db}}, {{redis_db}} and {{<service in services.names>}}", where, name))
+		if proc, ok := strings.CutPrefix(name, "port."); ok && slices.Contains(ports, proc) {
+			continue
+		}
+		errs = append(errs, fmt.Sprintf("%s uses unknown placeholder {{%s}}; allowed are %s, {{<service in services.names>}} and, in smoke.start env only, {{port.<process in smoke.start>}}", where, name, placeholderList()))
 	}
 	return errs
+}
+
+func placeholderList() string {
+	out := make([]string, len(leasePlaceholders))
+	for i, n := range leasePlaceholders {
+		out[i] = "{{" + n + "}}"
+	}
+	return strings.Join(out, ", ")
 }
 
 // dotenvValues collects the values of committed .env files, which suggested env must not copy.

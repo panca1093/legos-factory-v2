@@ -100,6 +100,9 @@ type runLease struct {
 	containerOf map[string]int
 }
 
+// leasePlaceholders are the per-run values every lease provides, besides {{<service>}}; checksuggest validates against this list.
+var leasePlaceholders = []string{"db", "redis_db", "bucket"}
+
 func (l *runLease) values(admin bool) map[string]string {
 	v := map[string]string{"db": l.DB, "redis_db": strconv.Itoa(l.Redis), "bucket": strings.ReplaceAll(l.DB, "_", "-")}
 	for svc, port := range l.hostPorts {
@@ -123,9 +126,19 @@ func sanitizeRunName(name string) string {
 }
 
 func usesPlaceholder(p model.Profile, key string) bool {
+	has := func(v string) bool { return strings.Contains(v, "{{"+key+"}}") }
 	for _, v := range p.Env {
-		if strings.Contains(v, "{{"+key+"}}") {
+		if has(v) {
 			return true
+		}
+	}
+	if p.Smoke != nil {
+		for _, sp := range p.Smoke.Start {
+			for _, v := range sp.Env {
+				if has(v) {
+					return true
+				}
+			}
 		}
 	}
 	return false

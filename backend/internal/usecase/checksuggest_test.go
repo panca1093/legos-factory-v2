@@ -80,7 +80,10 @@ func TestValidateProfile(t *testing.T) {
 		{"admin url placeholder", func(p *model.Profile) { p.Database.AdminURL = "{{nope}}" }, "unknown placeholder {{nope}}"},
 		{"env key invalid", func(p *model.Profile) { p.Env["bad key"] = "x" }, "not a valid variable name"},
 		{"live secret prefix", func(p *model.Profile) { p.Env["STRIPE"] = "sk_live_abc" }, "live secret"},
-		{"long random token", func(p *model.Profile) { p.Env["TOKEN"] = "a1B2c3D4e5F6a1B2c3D4e5F6a1B2c3D4e5F6" }, "live secret"},
+		{"slack token prefix", func(p *model.Profile) { p.Env["SLACK"] = "xoxa-123" }, "live secret"},
+		{"long random token only warns", func(p *model.Profile) { p.Env["TOKEN"] = "a1B2c3D4e5F6a1B2c3D4e5F6a1B2c3D4e5F6" }, ""},
+		{"bucket placeholder", func(p *model.Profile) { p.Env["S3_BUCKET"] = "{{bucket}}" }, ""},
+		{"port placeholder outside smoke", func(p *model.Profile) { p.Env["X"] = "http://localhost:{{port.web}}" }, "unknown placeholder {{port.web}}"},
 		{"value from .env", func(p *model.Profile) { p.Env["PW"] = "hunter2hunter2" }, "read from a .env file"},
 		{"short .env value is ignored", func(p *model.Profile) { p.Env["S"] = "ab" }, ""},
 		{"test values pass", func(p *model.Profile) { p.Env["S3_SECRET_KEY"] = "tryout123" }, ""},
@@ -91,7 +94,7 @@ func TestValidateProfile(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := validProfile()
 			tc.edit(&p)
-			err := validateProfile(root, &p)
+			_, err := validateProfile(root, &p)
 			if tc.want == "" {
 				if err != nil {
 					t.Fatalf("valid profile rejected: %v", err)
@@ -113,27 +116,119 @@ func TestValidateProfileSymlinkEscape(t *testing.T) {
 	}
 	p := validProfile()
 	p.Checks[0].Dir = "link"
-	if err := validateProfile(root, &p); err == nil || !strings.Contains(err.Error(), "must stay inside") {
+	if _, err := validateProfile(root, &p); err == nil || !strings.Contains(err.Error(), "must stay inside") {
 		t.Fatalf("symlink out of the repo accepted: %v", err)
 	}
 }
 
-func TestLooksLikeSecret(t *testing.T) {
+func TestSecretRules(t *testing.T) {
 	for v, want := range map[string]bool{
-		"sk_live_51Habc":                           true,
-		"ghp_abcdefghijklmnopqrstuvwxyz0123456789": true,
-		"AKIAIOSFODNN7EXAMPLE":                     true,
-		"-----BEGIN PRIVATE KEY-----":              true,
-		"a1B2c3D4e5F6a1B2c3D4e5F6a1B2c3D4e5F6":     true,
-		"tryout123":                                false,
-		"postgres://tryout:tryout@:5432/db":        false,
-		"abcdefghijklmnopqrstuvwxyzabcdefghij":     false, // long but no digit: a word, not a token
-		"false":                                    false,
-		"":                                         false,
+		"sk_live_51Habc": true, "ghp_abcdefghijklmnopqrstuvwxyz0123456789": true, "github_pat_x": true,
+		"AKIAIOSFODNN7EXAMPLE": true, "-----BEGIN PRIVATE KEY-----": true, "xoxb-1": true, "xoxa-1": true,
+		"a1B2c3D4e5F6a1B2c3D4e5F6a1B2c3D4e5F6": false, "tryout123": false, "": false,
 	} {
-		if got := looksLikeSecret(v); got != want {
-			t.Errorf("looksLikeSecret(%q) = %v, want %v", v, got, want)
+		if got := liveSecret(v); got != want {
+			t.Errorf("liveSecret(%q) = %v, want %v", v, got, want)
 		}
+	}
+	for v, want := range map[string]bool{
+		"a1B2c3D4e5F6a1B2c3D4e5F6a1B2c3D4e5F6": true,
+		"tryout123":                            false,
+		"postgres://tryout:tryout@:5432/db":    false,
+		"abcdefghijklmnopqrstuvwxyzabcdefghij": false, // long but no digit: a word, not a token
+		"false":                                false,
+	} {
+		if got := looksLikeToken(v); got != want {
+			t.Errorf("looksLikeToken(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+func TestTokenLikeEnvIsAWarning(t *testing.T) {
+	p := validProfile()
+	p.Env["JWT_SECRET"] = "a1B2c3D4e5F6a1B2c3D4e5F6a1B2c3D4e5F6"
+	w, err := validateProfile(baseRepo(t), &p)
+	if err != nil || w["env.JWT_SECRET"] == "" {
+		t.Fatalf("warnings %v, err %v", w, err)
+	}
+}
+
+func validSmoke() *model.Smoke {
+	return &model.Smoke{
+		Start: []model.SmokeProcess{
+			{Name: "api", Dir: "api", Command: "go run .", PortEnv: "PORT", Ready: "/healthz", Env: map[string]string{"APP_URL": "http://localhost:{{port.web}}", "BUCKET": "{{bucket}}"}},
+			{Name: "web", Dir: "web", Command: "npm run dev", PortEnv: "PORT", Ready: "/", Env: map[string]string{"API_URL": "http://localhost:{{port.api}}"}},
+		},
+		Base: "web", Login: &model.SmokeLogin{Path: "/login", UserEnv: "SMOKE_USER", PasswordEnv: "SMOKE_PASSWORD"},
+		RoutesFrom: "web/app/**/page.tsx", Params: map[string]string{"id": "sql:SELECT id FROM t", "slug": "intro"}, ReadyTimeoutSec: 90,
+	}
+}
+
+func TestValidateSmoke(t *testing.T) {
+	root := baseRepo(t)
+	cases := []struct {
+		name string
+		edit func(p *model.Profile)
+		want string
+	}{
+		{"valid", func(*model.Profile) {}, ""},
+		{"no processes", func(p *model.Profile) { p.Smoke.Start = nil }, "smoke.start is empty"},
+		{"duplicate process", func(p *model.Profile) { p.Smoke.Start[1].Name = "api" }, "used twice"},
+		{"base unknown", func(p *model.Profile) { p.Smoke.Base = "admin" }, "smoke.base"},
+		{"dir escapes", func(p *model.Profile) { p.Smoke.Start[0].Dir = "../x" }, "must stay inside"},
+		{"dir missing", func(p *model.Profile) { p.Smoke.Start[0].Dir = "nope" }, "not a directory"},
+		{"port_env invalid", func(p *model.Profile) { p.Smoke.Start[0].PortEnv = "my port" }, "port_env"},
+		{"ready without slash", func(p *model.Profile) { p.Smoke.Start[0].Ready = "healthz" }, "must start with /"},
+		{"routes_from empty", func(p *model.Profile) { p.Smoke.RoutesFrom = " " }, "routes_from is empty"},
+		{"routes_from escapes", func(p *model.Profile) { p.Smoke.RoutesFrom = "../x/**/page.tsx" }, "routes_from"},
+		{"login env missing", func(p *model.Profile) { p.Smoke.Login.UserEnv = "NOPE" }, `user_env "NOPE"`},
+		{"login path", func(p *model.Profile) { p.Smoke.Login.Path = "login" }, "login.path"},
+		{"empty param", func(p *model.Profile) { p.Smoke.Params["id"] = " " }, "params.id is empty"},
+		{"empty sql", func(p *model.Profile) { p.Smoke.Params["id"] = "sql:" }, "params.id is empty"},
+		{"sql without database", func(p *model.Profile) { p.Database = nil; p.Env["DATABASE_URL"] = "x" }, "no database block"},
+		{"timeout too long", func(p *model.Profile) { p.Smoke.ReadyTimeoutSec = 601 }, "ready_timeout_sec"},
+		{"timeout negative", func(p *model.Profile) { p.Smoke.ReadyTimeoutSec = -1 }, "ready_timeout_sec"},
+		{"port of unknown process", func(p *model.Profile) { p.Smoke.Start[1].Env["X"] = "{{port.admin}}" }, "unknown placeholder {{port.admin}}"},
+		{"live secret in process env", func(p *model.Profile) { p.Smoke.Start[0].Env["K"] = "sk_live_abc" }, "live secret"},
+		{"dotenv value in process env", func(p *model.Profile) { p.Smoke.Start[0].Env["K"] = "hunter2hunter2" }, ".env file"},
+		{"no login is fine", func(p *model.Profile) { p.Smoke.Login = nil }, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := validProfile()
+			p.Env["SMOKE_USER"], p.Env["SMOKE_PASSWORD"] = "seed@example.test", "seedpass1"
+			p.Smoke = validSmoke()
+			tc.edit(&p)
+			_, err := validateProfile(root, &p)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("valid smoke rejected: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("got %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestLeasePlaceholdersAreResolvable(t *testing.T) {
+	vals := (&runLease{DB: "run_x", profile: model.Profile{}}).values(false)
+	for _, n := range leasePlaceholders {
+		if _, ok := vals[n]; !ok {
+			t.Errorf("placeholder {{%s}} is allowed by validation but the lease does not resolve it", n)
+		}
+	}
+	if vals["bucket"] != "run-x" {
+		t.Errorf("bucket = %q", vals["bucket"])
+	}
+}
+
+func TestSmokeEnvRedisPlaceholderLeasesAnIndex(t *testing.T) {
+	p := model.Profile{Smoke: &model.Smoke{Start: []model.SmokeProcess{{Name: "api", Env: map[string]string{"R": "redis://x/{{redis_db}}"}}}}}
+	if !usesPlaceholder(p, "redis_db") {
+		t.Fatal("a redis_db placeholder in smoke env must lease an index")
 	}
 }
 

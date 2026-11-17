@@ -28,7 +28,7 @@ The checks are what the repo already treats as passing. Copy them; do not design
 - Use the narrowest `dir` that works: the package the command runs in (`api`, `web`), not the repo root.
 - Dependency installs (`npm ci`, `go mod download`) go in `setup`, not in `checks`. Migrations go in `setup` with `per_run: true`.
 - A check that needs something this host may not have (a loopback alias, a GPU, an external network, a paid API) is `optional: true`.
-- `env` values come only from the compose file, the CI workflow or test config in the repo. Never from `.env`, never a real secret. Use placeholders only where the value depends on the run: `{{<service>}}` for a service address, `{{db}}` for the run's database, `{{redis_db}}` for its Redis index.
+- `env` values come only from the compose file, the CI workflow or test config in the repo. Never from `.env`, never a real secret. Use placeholders only where the value depends on the run: `{{<service>}}` for a service address, `{{db}}` for the run's database, `{{bucket}}` for the same name as an S3 bucket, `{{redis_db}}` for its Redis index. A secret the app refuses to start without (`JWT_SECRET`, a seal key) may be a short, clearly fake test value such as `test-only-not-a-secret`; never a real or `.env` value.
 - `services.names` must exist in the compose file; `ports` maps each to its container port. `database.admin_url` connects to the existing database on that service.
 - List every file you read to build the profile in `sources` (`path` only; hashes are added for you).
 - Do not run commands, install anything or edit files. Read and search only.
@@ -37,6 +37,17 @@ The checks are what the repo already treats as passing. Copy them; do not design
 
 Leave `services` empty and omit `database`. Every check that needs a service (database, cache, queue, object store) is `optional: true`, with the reason in `notes` under the check name: `"needs postgres; no compose file"`. Never write a compose file.
 
+## Smoke (optional)
+
+Add `smoke` only when the repo has a web app with a login and a dev seed. Otherwise omit it. Never set `blocking`.
+
+- `start`: one entry per process the app needs (API, web), commands copied from the Makefile, README or `package.json` dev script. Each has `port_env` (the env var the app reads its port from), `ready` (a health path starting with `/`, or `/`), and `env`.
+- Use `localhost`, not `127.0.0.1`: Next dev rejects 127.0.0.1 origins and cookies need one host. Give the web process the API address as `http://localhost:{{port.<api process>}}` in the env var the web code reads, and the API its CORS/app URL as `http://localhost:{{port.<web process>}}`. `{{port.<name>}}` works only in `smoke.start[].env`.
+- `base`: the process the browser opens. `routes_from`: the glob of page files (`web/app/**/page.tsx`).
+- `login`: `path` plus `user_env` and `password_env`; put the seed account's credentials from the repo's dev seed file into top-level `env` under those names. Test data only, never a real account.
+- `params`: a literal, or `sql:<query>` against the seed data (needs `database`), for each dynamic `[id]` segment.
+- Mandatory app secrets go in `env` as throwaway values, as above.
+
 ## Reply
 
-One JSON object and nothing else: a profile with `"version": 2`, `language`, `sources`, `services`, `database`, `env`, `setup`, `checks`, and an optional `notes` object mapping a check name to one line of reasoning (why it is optional, what it needs).
+One JSON object and nothing else: a profile with `"version": 2`, `language`, `sources`, `services`, `database`, `env`, `setup`, `checks`, an optional `smoke`, and an optional `notes` object mapping a check name to one line of reasoning (why it is optional, what it needs).
