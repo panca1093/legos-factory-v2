@@ -388,6 +388,7 @@ func (a *App) Start(ctx context.Context) error {
 		return err
 	}
 	a.Server.Factory.WatchPRs(ctx)
+	a.Server.Factory.WatchStacks(ctx)
 	return nil
 }
 

@@ -64,7 +64,7 @@ func monitorFactory(t *testing.T, h Harness) (*Factory, *model.WorkOrder, *store
 		t.Fatal(err)
 	}
 	f := &Factory{
-		WO: wos, Runs: &store.RunRepo{DB: db}, Bus: nopBus{}, Log: slog.Default(),
+		WO: wos, Runs: &store.RunRepo{DB: db}, Proj: &store.ProjectRepo{DB: db}, Bus: nopBus{}, Log: slog.Default(),
 		Resolve:    func(model.AgentRole, *model.WorkOrder) Harness { return h },
 		StallAfter: 60 * time.Millisecond,
 	}

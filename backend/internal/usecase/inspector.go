@@ -34,17 +34,21 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 	mu.Unlock()
 	failed := ""
 	var failedResults []model.CheckResult
-	for _, c := range profile.Checks {
-		r := f.Sandbox.RunCheck(ctx, f.workspaceDir(wo.ID), c, f.QualTimeout)
+	results, err := f.runProfileChecks(ctx, wo.ProjectID, fmt.Sprintf("run_%s_%d", wo.ID, wo.Revision), f.workspaceDir(wo.ID), profile)
+	if err != nil {
+		return err
+	}
+	for i, c := range profile.Checks {
+		r := results[i]
 		if err := f.saveCheck(ctx, wo, c, r); err != nil {
 			return err
 		}
 		f.event(wo.ID, "inspector", "check_"+strings.ToLower(string(r.Outcome)),
-			fmt.Sprintf("%s → %s", c.Name, r.Outcome), map[string]any{"command": c.Command})
-		if r.Outcome != model.Pass && failed == "" {
-			failed = c.Name
-		}
-		if r.Outcome != model.Pass {
+			fmt.Sprintf("%s → %s", c.Name, r.Outcome), map[string]any{"command": c.Command, "optional": c.Optional})
+		if r.Outcome != model.Pass && !c.Optional {
+			if failed == "" {
+				failed = c.Name
+			}
 			failedResults = append(failedResults, r)
 		}
 	}
@@ -77,7 +81,7 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		return err
 	}
 	if len(profile.Checks) == 0 {
-		f.event(wo.ID, "factory", "verification_skipped", "No checks detected in the repository; add .legos/checks.json to define them", nil)
+		f.event(wo.ID, "factory", "verification_skipped", "No checks for this project yet · Suggest checks", nil)
 	} else {
 		f.event(wo.ID, "inspector", "verification_passed", "All deterministic checks passed", nil)
 	}
@@ -664,7 +668,7 @@ func (f *Factory) checksText(ctx context.Context, wo *model.WorkOrder) (string, 
 	failed := false
 	for _, c := range checks {
 		fmt.Fprintf(&b, "%s (%s) → %s\n", c.Name, c.Command, c.Outcome)
-		failed = failed || c.Outcome != string(model.Pass)
+		failed = failed || (c.Outcome != string(model.Pass) && !c.Optional)
 	}
 	return b.String(), failed
 }
