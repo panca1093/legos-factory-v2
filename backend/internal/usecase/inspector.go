@@ -38,7 +38,12 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
-	for i, c := range profile.Checks {
+	checks := profile.Checks
+	if profile.Smoke != nil && !requiredFailed(profile.Checks, results) {
+		sc, sr := f.runSmoke(ctx, wo, profile)
+		checks, results = append(slices.Clone(checks), sc), append(results, sr)
+	}
+	for i, c := range checks {
 		r := results[i]
 		if err := f.saveCheck(ctx, wo, c, r); err != nil {
 			return err

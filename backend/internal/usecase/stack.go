@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,7 +101,7 @@ type runLease struct {
 }
 
 func (l *runLease) values(admin bool) map[string]string {
-	v := map[string]string{"db": l.DB, "redis_db": strconv.Itoa(l.Redis)}
+	v := map[string]string{"db": l.DB, "redis_db": strconv.Itoa(l.Redis), "bucket": strings.ReplaceAll(l.DB, "_", "-")}
 	for svc, port := range l.hostPorts {
 		if admin {
 			port = l.containerOf[svc]
@@ -325,6 +326,29 @@ func (m *stackMgr) psql(ctx context.Context, name string, l *runLease, sql strin
 	return nil
 }
 
+// queryValue returns the first column of the first row of sql, run against the lease's own database.
+func (m *stackMgr) queryValue(ctx context.Context, name string, l *runLease, sql string) (string, error) {
+	adminURL, err := resolvePlaceholders(l.profile.Database.AdminURL, l.values(true))
+	if err != nil {
+		return "", fmt.Errorf("database admin_url: %v", err)
+	}
+	u, err := url.Parse(adminURL)
+	if err != nil {
+		return "", fmt.Errorf("database admin_url: %v", err)
+	}
+	u.Path = "/" + l.DB
+	out, err := m.docker.Run(ctx, "compose", "-p", name, "exec", "-T", l.profile.Database.Service,
+		"psql", u.String(), "-At", "-v", "ON_ERROR_STOP=1", "-c", sql)
+	if err != nil {
+		return "", fmt.Errorf("%v: %s", err, tail(out))
+	}
+	v := strings.TrimSpace(strings.SplitN(strings.TrimSpace(out), "\n", 2)[0])
+	if v == "" {
+		return "", fmt.Errorf("the query returned no row")
+	}
+	return v, nil
+}
+
 func (m *stackMgr) createDB(ctx context.Context, name string, l *runLease) error {
 	if err := m.psql(ctx, name, l, fmt.Sprintf(`DROP DATABASE IF EXISTS "%s" WITH (FORCE)`, l.DB)); err != nil {
 		return fmt.Errorf("could not reset database %s: %v", l.DB, err)
@@ -466,28 +490,39 @@ func (f *Factory) StopStack(ctx context.Context, projectID string) error {
 // leaseRun gives one run its env: the leased services' values when the profile needs a stack, then runs the per-run setup in dir.
 // release must be called when the run ends.
 func (f *Factory) leaseRun(ctx context.Context, projectID, runName, dir string, p model.Profile) (env []string, release func(), err error) {
+	env, _, release, err = f.leaseRunL(ctx, projectID, runName, dir, p)
+	return env, release, err
+}
+
+// leaseRunL is leaseRun that also returns the lease (nil when the profile has no stack).
+// With a stack, per-run setup (not the returned env) also sees LEGOS_COMPOSE_PROJECT and LEGOS_DB, so it can reach the services without a host client.
+func (f *Factory) leaseRunL(ctx context.Context, projectID, runName, dir string, p model.Profile) (env []string, lease *runLease, release func(), err error) {
 	release = func() {}
 	vals := map[string]string{}
 	if p.NeedsStack() {
-		lease, err := f.stackMgr().acquire(ctx, projectID, runName, dir, p)
+		lease, err = f.stackMgr().acquire(ctx, projectID, runName, dir, p)
 		if err != nil {
-			return nil, release, err
+			return nil, nil, release, err
 		}
 		release, vals = lease.release, lease.values(false)
 	}
 	env, err = resolveEnv(p.Env, vals)
 	if err != nil {
 		release()
-		return nil, func() {}, err
+		return nil, nil, func() {}, err
+	}
+	setupEnv := env
+	if lease != nil {
+		setupEnv = append(append([]string(nil), env...), "LEGOS_COMPOSE_PROJECT="+stackName(projectID), "LEGOS_DB="+lease.DB)
 	}
 	for _, step := range p.Setup {
 		if !step.PerRun {
 			continue
 		}
-		if r := f.Sandbox.RunCheck(ctx, dir, step, f.QualTimeout, env); r.Outcome != model.Pass {
+		if r := f.Sandbox.RunCheck(ctx, dir, step, f.QualTimeout, setupEnv); r.Outcome != model.Pass {
 			release()
-			return nil, func() {}, fmt.Errorf("per-run setup %q %s: %s", step.Name, r.Outcome, tail(r.Output))
+			return nil, nil, func() {}, fmt.Errorf("per-run setup %q %s: %s", step.Name, r.Outcome, tail(r.Output))
 		}
 	}
-	return env, release, nil
+	return env, lease, release, nil
 }

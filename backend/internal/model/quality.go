@@ -66,12 +66,14 @@ type ProfileDatabase struct {
 }
 
 // SmokeProcess is an app process the Playwright smoke run starts on a free port.
+// Env is added to the profile env; besides the run's placeholders it may use {{port.<name>}} for another process's port.
 type SmokeProcess struct {
-	Name    string `json:"name"`
-	Dir     string `json:"dir,omitempty"`
-	Command string `json:"command"`
-	PortEnv string `json:"port_env"`
-	Ready   string `json:"ready"`
+	Name    string            `json:"name"`
+	Dir     string            `json:"dir,omitempty"`
+	Command string            `json:"command"`
+	PortEnv string            `json:"port_env"`
+	Ready   string            `json:"ready"`
+	Env     map[string]string `json:"env,omitempty"`
 }
 
 // SmokeLogin signs the smoke browser in with credentials read from the resolved env.
@@ -88,6 +90,10 @@ type Smoke struct {
 	Login      *SmokeLogin    `json:"login,omitempty"`
 	RoutesFrom string         `json:"routes_from"`
 	Blocking   bool           `json:"blocking,omitempty"`
+	// Params fills dynamic route segments ([id]): a literal, or "sql:<query>" run against the run's database (first column of the first row).
+	Params map[string]string `json:"params,omitempty"`
+	// ReadyTimeoutSec bounds how long each process may take to answer 200 on its ready path; 0 means 90.
+	ReadyTimeoutSec int `json:"ready_timeout_sec,omitempty"`
 }
 
 // Profile defines the deterministic verification commands for a project.

@@ -1,6 +1,6 @@
 # Project check profile — spec (draft v1)
 
-Status: draft · 2026-11-17 · spike for the service stack passed; Playwright smoke not spiked
+Status: draft · 2026-11-17 · service stack and Playwright smoke spiked
 
 ## Why
 
@@ -158,32 +158,43 @@ bimbel-tryout today would show `api test` as "fails on main" (the emoji assertio
 
 ## Playwright smoke (factory-owned)
 
-Optional, off until it is configured in the profile's `smoke` block. Runs after the checks, in the same stack lock.
+Optional, off until it is configured in the profile's `smoke` block. Runs in verify only, after the checks, under its own run lease (own database, Redis index, bucket). It is skipped when a required check already failed, since the Builder is sent back anyway.
 
 ```json
 "smoke": {
   "start": [
-    { "name": "api", "dir": "api", "command": "go run ./cmd/server", "port_env": "PORT", "ready": "/healthz" },
-    { "name": "web", "dir": "web", "command": "npm run dev", "port_env": "PORT", "ready": "/" }
+    { "name": "api", "dir": "api", "command": "go run ./cmd/server", "port_env": "PORT", "ready": "/healthz",
+      "env": { "CORS_ORIGINS": "http://localhost:{{port.web}}", "APP_URL": "http://localhost:{{port.web}}" } },
+    { "name": "web", "dir": "web", "command": "npm run dev", "port_env": "PORT", "ready": "/",
+      "env": { "NEXT_PUBLIC_API_URL": "http://localhost:{{port.api}}" } }
   ],
   "base": "web",
   "login": { "path": "/login", "user_env": "SMOKE_USER", "password_env": "SMOKE_PASSWORD" },
-  "routes_from": "web/app/**/page.tsx"
+  "routes_from": "web/app/**/page.tsx",
+  "params": { "id": "sql:SELECT id FROM tryouts WHERE title = 'Tryout SD Matematika'" },
+  "ready_timeout_sec": 90,
+  "blocking": false
 }
 ```
 
-- **Run:** the factory starts the listed processes on free ports, waits for `ready`, then opens the pages whose `page.tsx` (or its imports, up to 1 level) is in the diff. Each page passes when it has no HTTP 5xx, no uncaught console error and no Next error overlay. The browser is the factory's own Playwright install, so nothing goes into the project.
-- **Result:** recorded as an optional check named `smoke`, with a screenshot attached. It only becomes blocking after the human flips it in the profile.
-- **Not spiked yet:**
-  - **Login.** The seed user and its credentials come from the repo's dev seed, which is test data, but the Suggest checks run has to find it.
-  - **Dynamic routes** (`[id]`) need a real id from the seed.
-  - **Start time** of `next dev` inside the lock.
+- **Run** (`usecase/smoke.go`, runner `usecase/smoke_runner.cjs`, embedded):
+  1. Routes come from the diff (`ChangedFiles`). A page counts when its `page.tsx` changed, a `layout.*` above it changed, or it imports a changed file (one level, `@/` resolves to the parent of the `routes_from` base, relative imports too). Route groups `(x)` and slots `@x` drop out of the URL. More than 20 pages are capped with a note. No affected page: the check is recorded as PASS with "no affected pages" and nothing is started.
+  2. `[id]` segments are filled from `params`: a literal, or `sql:<query>` run against the run's own database (first column of the first row; needs the profile's `database` block). A page whose param has no value is skipped with a note; if every page is skipped the result is UNVERIFIED.
+  3. Every `start` process gets a free port up front (so `{{port.<name>}}` works in any process's `env`), then starts in order in its own process group, with the resolved profile env plus its own `env` plus `port_env`. Each must answer HTTP 200 on `127.0.0.1:<port><ready>` within `ready_timeout_sec` (default 90) or the check FAILs with the process's output tail. All process groups are killed on every exit path.
+  4. The browser opens `http://localhost:<base port>` (**localhost, not 127.0.0.1**: Next 16 dev refuses to hydrate from 127.0.0.1 unless `allowedDevOrigins` is set in the repo, and without hydration the login form submits as a plain GET). Cookie host and CORS origin must therefore also use `localhost`.
+  5. With `login`, the runner signs in once: first visible non-password input gets the user, the password input gets the password, `button[type=submit]` is clicked (up to 3 tries, since a form submitted before hydration falls back to a native GET), and it waits for the URL to leave the login path. The values come from the profile env vars named by `user_env` / `password_env`, which must hold seed test credentials.
+  6. Each page passes when it has no HTTP status >= 500 on any response, no uncaught page error, no `console.error` (browser "Failed to load resource" lines are ignored; a 5xx is caught by the response rule), no Next error overlay (`nextjs-portal` shadow root with a dialog) and no redirect back to the login page. One screenshot per page lands in `<DataDir>/smoke/<wo>/<revision>/`.
+- **Browser:** the factory's own Playwright. `playwright-core` is resolved from `Factory.PlaywrightDir`, else `LEGOS_PLAYWRIGHT_DIR`, else a `frontend/` with `node_modules/playwright-core` found above the working directory or the binary. Chrome is `LEGOS_SMOKE_CHROME`, else the system Chrome (`channel: chrome`), else Playwright's bundled Chromium (needs `npx playwright install chromium` once, in the factory, never in a project). Nothing is installed into the project; the factory writes `runner.cjs` and a short-lived `spec.json` (removed after the run, it holds the login) under its data dir.
+- **Result:** recorded as the check `smoke` with one line per page (`PASS /student (200) [screenshot …]`, `FAIL /x (200): …`). It is optional unless `blocking` is true. Outcomes: any page failing, a process not becoming ready, or the login failing is FAIL; no browser, no Playwright install, a missing credential env var, a missing param or an unavailable stack is UNVERIFIED, never PASS.
+- **Per-run setup helper:** per-run setup steps also see `LEGOS_COMPOSE_PROJECT` and `LEGOS_DB`, so a repo without a host `psql` can seed with `docker compose -p $LEGOS_COMPOSE_PROJECT exec -T postgres psql postgres://u:p@127.0.0.1:5432/$LEGOS_DB -v ON_ERROR_STOP=1 -q -f - < api/seed/dev.sql`. A `{{bucket}}` placeholder is `{{db}}` with `_` replaced by `-`, because S3 bucket names reject underscores.
+
+Spike (2026-11-17, bimbel-tryout, Chrome via Playwright 1.5x): login, dynamic route and overlay detection verified; findings are in the phase 3 report. `next dev` needed about 17 s for its first page compile, so the default ready timeout of 90 s is enough but should not be lowered.
 
 ## Phases (one PR each, sequential)
 
 1. **Profile v2 + stack + runner.** Model, `ParseProfile`, `stack.go` with the docker port, env plumbing in `RunCheck`, per-run database, Redis/bucket leases, optional semantics, Builder env lease, checks.json removal, subfolder `detectProfile`, messages. Tests with a fake docker port, plus one integration test behind a `docker` build tag.
 2. **Suggest checks.** Playbook, agent run, validation and dry run, API (`POST /projects/{id}/checks/suggest`, `PUT /projects/{id}/checks`), Project profile approval UI, WO suggestion banner, stale-source notice.
-3. **Playwright smoke.** Spike login and dynamic routes first, then the `smoke` block, runner and UI toggle.
+3. **Playwright smoke.** Spiked login and dynamic routes first, then the `smoke` block and runner (built). UI toggle goes with the Suggest checks UI.
 
 **Done for phases 1–2** means: on bimbel-tryout, Suggest checks proposes the CI-derived checks above, and the dry run shows `api test` failing on main. After the human approves (with the emoji test fixed or marked optional), a fresh work order runs the checks with DB, Redis and S3, and readiness reaches `READY` without a human verification step.
 
