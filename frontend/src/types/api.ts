@@ -312,6 +312,7 @@ export interface AgentAccount {
   usage?: { session?: UsageWindow; week?: UsageWindow };
   usage_error?: string;
   login_command?: string;
+  roles: string[];
 }
 export interface AgentInfo {
   id: string;

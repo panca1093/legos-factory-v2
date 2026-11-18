@@ -54,12 +54,24 @@ onMounted(load);
 watch(() => props.settings.role_agents, load);
 
 const info = (id: string) => props.agents.find((a) => a.id === id);
+const API_KEY_PLAN = "API key · ";
+function serving(k: RoleKey) {
+  const a = info(agentOf(k));
+  return (
+    a?.accounts.find((x) => (x.roles ?? []).includes(k)) ??
+    a?.accounts.find((x) => x.active)
+  );
+}
+function via(k: RoleKey) {
+  const plan = serving(k)?.plan ?? "";
+  return plan.startsWith(API_KEY_PLAN) ? plan.slice(API_KEY_PLAN.length) : "";
+}
 function hint(k: RoleKey) {
   const a = info(agentOf(k));
   if (!a) return "";
   if (!a.installed) return `${a.name} isn't installed`;
   if (!a.enabled) return `${a.name} is off`;
-  const act = a.accounts.find((x) => x.active);
+  const act = serving(k);
   if (!act || act.status === "signed_out") return `${a.name} isn't signed in`;
   return "";
 }
@@ -202,6 +214,9 @@ const changePerm = (el: HTMLSelectElement) =>
                 {{ m.name }}
               </option>
             </select>
+            <p v-if="via(r.key)" class="help" :data-test="`via-${r.key}`">
+              via {{ via(r.key) }}
+            </p>
           </td>
           <td data-label="Permission">
             <select
