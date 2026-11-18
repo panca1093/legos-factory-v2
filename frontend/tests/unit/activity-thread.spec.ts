@@ -324,6 +324,28 @@ describe("activityThread", () => {
     expect(t[1]!.pill!.tone).toBe("green");
   });
 
+  it("does not double count an unverified check that failed before the change", () => {
+    const t = msgs([
+      ev("inspector", "check_unverified", "a"),
+      ev("inspector", "check_failed_before_change", "a"),
+    ]);
+    expect(t[1]!.text).toBe("1 failed before the change");
+    expect(t[1]!.pill!.tone).toBe("green");
+  });
+
+  it("answers an escalated builder question to the builder", () => {
+    const t = msgs([
+      ev("builder", "clarification_asked", "Which table?"),
+      ev("architect", "clarification_asked", "Which table?"),
+      ev("human", "clarification_answered", "users"),
+    ]);
+    expect(t.at(-1)).toMatchObject({
+      from: "you",
+      to: "builder",
+      type: "Reply",
+    });
+  });
+
   it("groups inspector findings until inspection_finished", () => {
     const t = msgs([
       ev("inspector", "finding", "[sec/blocker] SQL injection", {

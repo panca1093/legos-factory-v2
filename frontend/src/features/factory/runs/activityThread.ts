@@ -100,6 +100,8 @@ export function activityThread(
     pending: string[] = [],
     lastQuestion = "",
     lastAsker = "architect",
+    questionOpen = false,
+    lastCheck = "",
     checks: Record<string, number> = {},
     checksAt = "",
     checksID = "",
@@ -136,7 +138,7 @@ export function activityThread(
   const flushChecks = () => {
     const keys = Object.keys(checks);
     if (!keys.length) return;
-    const bad = "fail" in checks;
+    const bad = keys.some((k) => k !== "pass" && k !== "failed_before_change");
     push({
       id: checksID,
       kind: "system",
@@ -307,7 +309,9 @@ export function activityThread(
       });
     } else if (k === "clarification_asked" || k === "clarification_requested") {
       lastQuestion = e.message;
-      lastAsker = e.actor;
+      // An escalated question re-asks on the original asker's behalf, so the answer still goes to them.
+      if (!questionOpen) lastAsker = e.actor;
+      questionOpen = true;
       push({
         id,
         kind: "message",
@@ -318,6 +322,7 @@ export function activityThread(
       });
     } else if (k === "clarification_answered") {
       const q = str(p.question) || lastQuestion;
+      questionOpen = false;
       if (p.repeated === true) {
         system(e, "Answer reused", "");
         continue;
@@ -386,11 +391,12 @@ export function activityThread(
         checksAt = e.created_at;
         checksID = id;
       }
-      if (o === "failed_before_change" && checks.fail) {
-        checks.fail--;
-        if (!checks.fail) delete checks.fail;
+      if (o === "failed_before_change" && checks[lastCheck]) {
+        checks[lastCheck]--;
+        if (!checks[lastCheck]) delete checks[lastCheck];
       }
       checks[o] = (checks[o] ?? 0) + 1;
+      lastCheck = o;
     } else if (k === "commit_recorded") system(e, "Committed", "green");
     else if (k === "task_merged") system(e, "Merged", "green");
     else if (k === "verification_passed") system(e, "Verified", "green");
