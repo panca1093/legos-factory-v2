@@ -74,7 +74,7 @@ function dispose(f: Finding, action: FindingAction) {
               <span class="fx-code">{{ g.id }}</span>
               <span class="fx-pill" :class="gapTone[g.type]">{{ g.type }}</span>
               <span class="fx-pill">{{ g.layer }}</span>
-              <span class="tiny muted">{{ g.cites }}</span>
+              <span class="tiny muted wrap-any">{{ g.cites }}</span>
             </div>
             <p v-if="g.fix" class="small" data-test="verdict-fix">
               <strong>Suggested fix:</strong> {{ g.fix }}
@@ -116,7 +116,9 @@ function dispose(f: Finding, action: FindingAction) {
             }}</span>
           </div>
           <p class="small muted">{{ f.detail }}</p>
-          <p v-if="f.location" class="tiny mono muted">{{ f.location }}</p>
+          <p v-if="f.location" class="tiny mono muted wrap-any">
+            {{ f.location }}
+          </p>
           <p v-if="f.note" class="small">
             <strong>Human note:</strong> {{ f.note }}
           </p>
@@ -152,7 +154,7 @@ function dispose(f: Finding, action: FindingAction) {
 <style scoped>
 .two {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 24px;
   align-items: start;
 }
@@ -163,9 +165,12 @@ function dispose(f: Finding, action: FindingAction) {
 .two > section :is(h3, p) {
   margin: 0;
 }
+.two .wrap-any {
+  overflow-wrap: anywhere;
+}
 @media (max-width: 720px) {
   .two {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>

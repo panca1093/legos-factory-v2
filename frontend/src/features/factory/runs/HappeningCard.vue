@@ -52,6 +52,13 @@ const shown = computed(() =>
       (filter.value === "human" && steered(it)),
   ),
 );
+const eventTime = (iso: string) => {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString()
+    ? time
+    : `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+};
 const taskTitle = computed(
   () => new Map(props.tasks.map((t) => [t.id, t.title] as const)),
 );
@@ -112,14 +119,15 @@ const taskTitle = computed(
             <div class="row between">
               <strong class="small">{{
                 it.event.actor.charAt(0).toUpperCase() + it.event.actor.slice(1)
-              }}</strong><time :datetime="it.event.created_at">{{
-                new Date(it.event.created_at).toLocaleTimeString([], {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })
-              }}</time>
+              }}</strong><time
+                :datetime="it.event.created_at"
+                :title="new Date(it.event.created_at).toLocaleString()"
+                >{{ eventTime(it.event.created_at) }}</time
+              >
             </div>
-            <p :title="it.event.message">{{ it.event.message }}</p>
+            <p class="event-msg" :title="it.event.message">
+              {{ it.event.message }}
+            </p>
             <div
               v-if="gateSummary(it.event)"
               class="row wrap"
@@ -245,7 +253,7 @@ const taskTitle = computed(
 .fx-tl :deep(.event-body) {
   padding-top: 0;
 }
-.fx-tl :deep(.event-body p) {
+.fx-tl .event-msg {
   margin-top: 2px;
   display: -webkit-box;
   -webkit-line-clamp: 2;

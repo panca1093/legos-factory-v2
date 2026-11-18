@@ -213,6 +213,7 @@ export interface QualityCheck {
   outcome: "PASS" | "FAIL" | "UNVERIFIED";
   exit_code: number;
   output: string;
+  optional?: boolean;
   revision: number;
   commit_sha?: string;
   created_at: string;

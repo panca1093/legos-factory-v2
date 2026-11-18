@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import type { QualityCheck } from "../../../types/api";
 import ActorBadge from "../ActorBadge.vue";
-import { baselineFailures, realChecks } from "./checks";
+import { failsOnMain, realChecks } from "./checks";
 const props = defineProps<{ checks: QualityCheck[]; revision: number }>();
 const picked = ref<string | null>(null);
 const real = computed(() => realChecks(props.checks));
-const onMain = computed(() => baselineFailures(props.checks));
 const current = computed(() =>
   real.value.filter((c) => c.revision === props.revision),
 );
@@ -19,20 +18,31 @@ const earlier = computed(() =>
       checks: real.value.filter((c) => c.revision === revision),
     })),
 );
+const onMain = (c: QualityCheck) => failsOnMain(props.checks, c);
+watch(
+  () => props.revision,
+  () => (picked.value = null),
+);
+const pickedCheck = computed(
+  () =>
+    current.value.find((c) => c.id === picked.value) ??
+    earlier.value.flatMap((g) => g.checks).find((c) => c.id === picked.value) ??
+    null,
+);
 const selected = computed(
   () =>
-    real.value.find((c) => c.id === picked.value) ??
+    pickedCheck.value ??
     current.value.find((c) => c.outcome === "FAIL") ??
     null,
+);
+const selectedHistoric = computed(
+  () => !!selected.value && selected.value.revision !== props.revision,
 );
 const failed = computed(
   () => current.value.filter((c) => c.outcome === "FAIL").length,
 );
 const failedOnMain = computed(
-  () =>
-    current.value.filter(
-      (c) => c.outcome === "FAIL" && onMain.value.has(c.name),
-    ).length,
+  () => current.value.filter((c) => onMain(c)).length,
 );
 const tone = (c: QualityCheck) =>
   c.outcome === "PASS" ? "green" : c.outcome === "FAIL" ? "red" : "orange";
@@ -68,7 +78,7 @@ const tone = (c: QualityCheck) =>
         class="ck"
         :class="{
           fail: c.outcome === 'FAIL',
-          base: c.outcome === 'FAIL' && onMain.has(c.name),
+          base: onMain(c),
           sel: selected?.id === c.id,
         }"
         :data-check="c.id"
@@ -80,15 +90,16 @@ const tone = (c: QualityCheck) =>
           <span class="fx-pill" :class="tone(c)">{{ c.outcome }}</span>
         </span>
         <code>{{ c.command }}</code>
-        <span
-          v-if="c.outcome === 'FAIL' && onMain.has(c.name)"
-          class="note"
-          data-test="main-fail-tag"
+        <span v-if="onMain(c)" class="note" data-test="main-fail-tag"
           >Fails on main too</span
         >
       </button>
     </div>
-    <div v-if="selected" class="detail" data-test="check-detail">
+    <div
+      v-if="selected && !selectedHistoric"
+      class="detail"
+      data-test="check-detail"
+    >
       <div class="fx-row">
         <span class="fx-pill" :class="tone(selected)">{{
           selected.outcome
@@ -123,6 +134,27 @@ const tone = (c: QualityCheck) =>
         <strong class="small">{{ c.name }}</strong>
         <code class="grow">{{ c.command }}</code>
       </button>
+      <div
+        v-if="selected && selectedHistoric && selected.revision === g.revision"
+        class="detail"
+        data-test="check-detail"
+      >
+        <div class="fx-row">
+          <span class="fx-pill" :class="tone(selected)">{{
+            selected.outcome
+          }}</span>
+          <strong class="small">{{ selected.name }}</strong>
+          <span class="small muted"
+            >Revision {{ selected.revision }} · Exit code:
+            {{ selected.exit_code }}</span
+          >
+        </div>
+        <code class="mono">{{ selected.command }}</code>
+        <pre class="output">{{ selected.output || "No output recorded." }}</pre>
+        <p class="tiny muted">
+          {{ selected.created_at }} · Check {{ selected.id }}
+        </p>
+      </div>
     </details>
     <p v-if="!real.length" class="fx-empty">No verification evidence yet.</p>
   </section>
