@@ -273,7 +273,7 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 	if h.Provider == "codex" {
 		// codex has no hard read-only: the mode is the floor and answerPermission refuses every request of a role that must not write
 		mode := "read-only"
-		if req.Role == model.AgentBuilder {
+		if codexWrites(req.Role) {
 			mode = "workspace-write"
 		}
 		if err := conn.setMode(ctx, ns, mode); err != nil {
@@ -618,7 +618,7 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 		if r.conn.agent == "codex" && r.conn.refused.Load() > 0 {
 			// codex ends the turn on a refusal, so it cannot go on
 			why := "the request fell outside the workspace"
-			if r.conn.role != model.AgentBuilder {
+			if !codexWrites(r.conn.role) {
 				why = "this role is read-only on codex"
 			}
 			r.err = fmt.Errorf("%w: codex ended the turn after a permission request was refused; %s", model.ErrPermanent, why)
@@ -1038,7 +1038,7 @@ func (c *acpConn) answerPermission(m acpMsg) {
 		} `json:"options"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
-	if c.agent == "codex" && c.role != model.AgentBuilder {
+	if c.agent == "codex" && !codexWrites(c.role) {
 		c.reply(m.ID, p.Options, false)
 		return
 	}
@@ -1063,7 +1063,7 @@ func (c *acpConn) answerPermission(m acpMsg) {
 		allow = false
 	} else {
 		reads := p.ToolCall.Kind == "read" || p.ToolCall.Kind == "search" || p.ToolCall.Kind == "think"
-		allow = c.role == model.AgentBuilder || (reads && (c.role != model.AgentChat || c.repo))
+		allow = c.role == model.AgentBuilder || (c.agent == "codex" && c.role == model.AgentInspector) || (reads && (c.role != model.AgentChat || c.repo))
 		if reads && c.readsOwnSpill(callPaths(p.ToolCall.Locations, p.ToolCall.RawInput)) {
 			allow = true
 		} else if c.role == model.AgentChat && c.repo {
@@ -1077,6 +1077,10 @@ func (c *acpConn) answerPermission(m acpMsg) {
 		}
 	}
 	c.reply(m.ID, p.Options, allow)
+}
+
+func codexWrites(r model.AgentRole) bool {
+	return r == model.AgentBuilder || r == model.AgentInspector
 }
 
 type acpPermOption = struct {

@@ -259,30 +259,6 @@
   height: 14px;
   color: var(--muted);
 }
-.uc-links {
-  display: grid;
-  margin-top: 4px;
-  padding-top: 4px;
-  border-top: 1px solid var(--line);
-}
-.uc-links a {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 7px 8px;
-  border-radius: var(--radius-md);
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--ink);
-}
-.uc-links a:hover {
-  background: var(--surface);
-}
-.uc-links .icon {
-  width: 14px;
-  height: 14px;
-  color: var(--muted);
-}
 .usage-card .bar,
 .uc-panel .bar {
   display: block;

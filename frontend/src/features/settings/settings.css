@@ -183,6 +183,37 @@
   display: grid;
   overflow-wrap: anywhere;
 }
+.role-chips {
+  flex: 1 0 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.role-chip {
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  font-size: 12px;
+  font-weight: 550;
+  color: var(--muted);
+}
+.role-chip:hover:not(:disabled) {
+  background: var(--panel2);
+}
+.role-chip[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--tint);
+  color: var(--ink);
+}
+.role-chip .chip-holder {
+  font-weight: 400;
+  opacity: 0.75;
+}
+.role-chip:disabled {
+  opacity: 0.6;
+}
 .inline-form {
   display: grid;
   gap: 10px;

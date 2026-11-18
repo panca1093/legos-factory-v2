@@ -1037,3 +1037,137 @@ it("shows usage bars for Codex without any opt-in, and the plan line when there 
   expect(claude.find('[data-test="plan-line"]').exists()).toBe(true);
   w.unmount();
 });
+
+const dsAcct = (over: object = {}) =>
+  acct({
+    id: "ds",
+    label: "DeepSeek",
+    system: false,
+    active: false,
+    who: "",
+    plan: "API key · api.deepseek.com",
+    expires_at: undefined,
+    roles: ["builder"],
+    ...over,
+  });
+
+it("role chips show only with 2+ accounts and PUT the account's new role list", async () => {
+  routes["PUT /api/v1/agents/claude/accounts/ds/roles"] = () =>
+    new Response(null, { status: 204 });
+  agentsBody.agents[0].accounts = [acct({ roles: [] }), dsAcct()];
+  const { w } = await render();
+  expect(w.find('[data-agent="codex"] .role-chip').exists()).toBe(false);
+  const row = w.find('[data-agent="claude"]');
+  const group = row.find('[aria-label="Roles for DeepSeek"]');
+  expect(group.findAll(".role-chip").map((c) => c.text())).toEqual([
+    "Foreman",
+    "Architect",
+    "Builder",
+    "Inspector",
+    "Chat",
+  ]);
+  const pressed = group
+    .findAll(".role-chip")
+    .map((c) => c.attributes("aria-pressed"));
+  expect(pressed).toEqual(["false", "false", "true", "false", "false"]);
+  await group.findAll(".role-chip")[3].trigger("click");
+  await flushPromises();
+  expect(
+    sent("PUT", "/api/v1/agents/claude/accounts/ds/roles")[0].body,
+  ).toEqual({ roles: ["builder", "inspector"] });
+  w.unmount();
+});
+
+it("role chips stay locked until the reload lands, so a second click builds on the first", async () => {
+  agentsBody.agents[0].accounts = [acct({ roles: [] }), dsAcct({ roles: [] })];
+  routes["PUT /api/v1/agents/claude/accounts/ds/roles"] = (body) => {
+    agentsBody.agents[0].accounts[1] = dsAcct({
+      roles: (body as { roles: string[] }).roles,
+    });
+    return new Response(null, { status: 204 });
+  };
+  const { w } = await render();
+  const chips = () =>
+    w
+      .find('[data-agent="claude"] [aria-label="Roles for DeepSeek"]')
+      .findAll(".role-chip");
+  const reload = routes["GET /api/v1/agents"];
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  routes["GET /api/v1/agents"] = async (b, u) => {
+    await gate;
+    return reload(b, u);
+  };
+  await chips()[2].trigger("click");
+  await flushPromises();
+  expect(chips().every((c) => c.attributes("disabled") !== undefined)).toBe(
+    true,
+  );
+  await chips()[3].trigger("click");
+  expect(sent("PUT", "/api/v1/agents/claude/accounts/ds/roles")).toHaveLength(
+    1,
+  );
+  release();
+  await flushPromises();
+  expect(chips()[3].attributes("disabled")).toBeUndefined();
+  await chips()[3].trigger("click");
+  await flushPromises();
+  expect(
+    sent("PUT", "/api/v1/agents/claude/accounts/ds/roles").map((c) => c.body),
+  ).toEqual([{ roles: ["builder"] }, { roles: ["builder", "inspector"] }]);
+  w.unmount();
+});
+
+it("a role chip held by another account names it and still moves the role", async () => {
+  routes["PUT /api/v1/agents/claude/accounts/ds/roles"] = () =>
+    new Response(null, { status: 204 });
+  agentsBody.agents[0].accounts = [
+    acct({ roles: ["chat"] }),
+    dsAcct({ roles: ["builder"] }),
+  ];
+  const { w } = await render();
+  const chats = w
+    .find('[data-agent="claude"] [aria-label="Roles for DeepSeek"]')
+    .findAll(".role-chip")[4];
+  expect(chats.attributes("aria-label")).toBe("Chat · on System default");
+  expect(chats.attributes("title")).toBe("Chat · on System default");
+  await chats.trigger("click");
+  await flushPromises();
+  expect(
+    sent("PUT", "/api/v1/agents/claude/accounts/ds/roles")[0].body,
+  ).toEqual({ roles: ["builder", "chat"] });
+  w.unmount();
+});
+
+it("an account whose settings.json cannot be read shows why", async () => {
+  agentsBody.agents[0].accounts = [
+    acct({ active: false }),
+    dsAcct({
+      active: true,
+      status: "unknown",
+      status_note: "settings.json is not valid JSON",
+    }),
+  ];
+  const { w } = await render();
+  expect(w.find('[data-agent="claude"]').text()).toContain(
+    "settings.json is not valid JSON",
+  );
+  w.unmount();
+});
+
+it("roles table checks the account serving the role and shows the API-key host", async () => {
+  agentsBody.agents[0].accounts = [
+    acct({ roles: [] }),
+    dsAcct({ status: "signed_out", plan: "API key · api.deepseek.com" }),
+  ];
+  const { w } = await render();
+  expect(w.find('[data-test="hint-builder"]').text()).toBe(
+    "Claude isn't signed in",
+  );
+  expect(w.find('[data-test="via-builder"]').text()).toBe(
+    "via api.deepseek.com",
+  );
+  expect(w.find('[data-test="hint-foreman"]').exists()).toBe(false);
+  expect(w.find('[data-test="via-foreman"]').exists()).toBe(false);
+  w.unmount();
+});

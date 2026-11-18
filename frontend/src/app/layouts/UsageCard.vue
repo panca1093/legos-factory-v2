@@ -173,12 +173,6 @@ onBeforeUnmount(() => {
     <p v-if="!rows.length" class="num">
       No agent limits yet. Sign in to Claude or Codex in Settings.
     </p>
-    <nav class="uc-links" aria-label="Usage links">
-      <RouterLink to="/">Usage history<ChevronRight class="icon" /></RouterLink>
-      <RouterLink to="/settings#agents"
-        >Manage accounts<ChevronRight class="icon"
-      /></RouterLink>
-    </nav>
   </div>
   <Teleport to="body">
     <section

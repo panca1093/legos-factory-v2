@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Copy, MoreHorizontal } from "lucide-vue-next";
 import Popover from "../../components/ui/Popover.vue";
 import {
@@ -102,6 +102,52 @@ function remove(a: AgentAccount) {
     return;
   void run(() => api.del(`${base.value}/accounts/${a.id}`));
 }
+const roleLabels: Record<string, string> = {
+  foreman: "Foreman",
+  architect: "Architect",
+  builder: "Builder",
+  inspector: "Inspector",
+  chat: "Chat",
+};
+const chipRoles = computed(() =>
+  Object.keys(roleLabels).filter((r) =>
+    (props.agent.roles_allowed as string[]).includes(r),
+  ),
+);
+const holds = (a: AgentAccount, r: string) => (a.roles ?? []).includes(r);
+const heldElsewhere = (a: AgentAccount, r: string) =>
+  holds(a, r)
+    ? undefined
+    : props.agent.accounts.find((x) => x.id !== a.id && holds(x, r));
+const chipLabel = (a: AgentAccount, r: string) => {
+  const other = heldElsewhere(a, r);
+  return other ? `${roleLabels[r]} · on ${other.label}` : roleLabels[r];
+};
+
+// the chips build their body from props, so they stay locked until the parent's reload hands over a new agent
+const settling = ref(false);
+let settleTimer: ReturnType<typeof setTimeout> | undefined;
+watch(
+  () => props.agent,
+  () => {
+    settling.value = false;
+    clearTimeout(settleTimer);
+  },
+);
+onBeforeUnmount(() => clearTimeout(settleTimer));
+async function toggleRole(a: AgentAccount, r: string) {
+  const ok = await run(() =>
+    api.put(`${base.value}/accounts/${a.id}/roles`, {
+      roles: holds(a, r)
+        ? (a.roles ?? []).filter((x) => x !== r)
+        : [...(a.roles ?? []), r],
+    }),
+  );
+  if (!ok) return;
+  settling.value = true;
+  clearTimeout(settleTimer);
+  settleTimer = setTimeout(() => (settling.value = false), 5000);
+}
 const refresh = () =>
   run(async () => {
     if (active.value)
@@ -153,7 +199,7 @@ const showBars = computed(() => {
         <p v-else class="status">
           {{ active.who || active.label }}
           <template v-if="active.status === 'unknown'">
-            · status unknown</template
+            · {{ active.status_note || "status unknown" }}</template
           >
         </p>
       </div>
@@ -248,7 +294,7 @@ const showBars = computed(() => {
             {{ a.who
             }}<template v-if="a.status === 'signed_out'">
               · signed out</template
-            ></span
+            ><template v-if="a.status_note"> · {{ a.status_note }}</template></span
           >
         </div>
         <button
@@ -260,7 +306,9 @@ const showBars = computed(() => {
         >
           Sign in
         </button>
-        <span v-if="a.active" class="pill green">In use</span>
+        <span v-if="a.active" class="pill green"
+          >In use · unassigned roles</span
+        >
         <button
           v-else-if="canWrite"
           class="btn small"
@@ -279,6 +327,29 @@ const showBars = computed(() => {
         >
           Remove
         </button>
+        <div
+          v-if="chipRoles.length"
+          class="role-chips"
+          role="group"
+          :aria-label="`Roles for ${a.label}`"
+        >
+          <button
+            v-for="r in chipRoles"
+            :key="r"
+            type="button"
+            class="role-chip"
+            :aria-pressed="holds(a, r)"
+            :disabled="!canWrite || busy || settling"
+            :title="chipLabel(a, r)"
+            :aria-label="chipLabel(a, r)"
+            @click="toggleRole(a, r)"
+          >
+            {{ roleLabels[r]
+            }}<small v-if="heldElsewhere(a, r)" class="chip-holder">
+              · {{ heldElsewhere(a, r)!.label }}</small
+            >
+          </button>
+        </div>
       </div>
     </div>
 

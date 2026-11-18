@@ -301,6 +301,7 @@ func (s *Server) routes() {
 	api.POST("/agents/:agent/enabled", s.requireRole(model.RoleAdmin, s.handleSetAgentEnabled))
 	api.POST("/agents/:agent/accounts", s.requireRole(model.RoleEngineer, s.handleCreateAgentAccount))
 	api.POST("/agents/:agent/accounts/:aid/activate", s.requireRole(model.RoleEngineer, s.handleActivateAgentAccount))
+	api.PUT("/agents/:agent/accounts/:aid/roles", s.requireRole(model.RoleEngineer, s.handleSetAgentAccountRoles))
 	api.POST("/agents/:agent/accounts/:aid/refresh", s.handleRefreshAgentAccount)
 	api.DELETE("/agents/:agent/accounts/:aid", s.requireRole(model.RoleEngineer, s.handleDeleteAgentAccount))
 

@@ -68,6 +68,25 @@ func (s *Server) handleActivateAgentAccount(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleSetAgentAccountRoles(c echo.Context) error {
+	if s.Agents == nil {
+		return s.agentsUnavailable(c)
+	}
+	var req struct {
+		Roles *[]string `json:"roles"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
+	}
+	if req.Roles == nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "roles is required")
+	}
+	if err := s.Agents.SetAccountRoles(c.Request().Context(), currentUser(c), c.Param("agent"), c.Param("aid"), *req.Roles); err != nil {
+		return mapAgentError(c, err)
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func (s *Server) handleRefreshAgentAccount(c echo.Context) error {
 	if s.Agents == nil {
 		return s.agentsUnavailable(c)
