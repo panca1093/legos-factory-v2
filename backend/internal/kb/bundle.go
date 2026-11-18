@@ -33,6 +33,7 @@ var (
 // one was never edited, so OpenBundle replaces it with the current default.
 var supersededDefaults = map[string][]string{
 	"playbooks/all/how-we-work.md": {"26f65f768aa276c424f93046ac6957039736d26f3843be04ddafff15671cb4c3"},
+	"playbooks/foreman/checks.md":  {"7063baaab4423027ec0933e7f38d4a90ea6f52b0bc4ff0dcc6f881d9980feccb"},
 }
 
 func isSuperseded(rel string, data []byte) bool {
