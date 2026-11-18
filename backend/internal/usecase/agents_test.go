@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -383,7 +384,7 @@ func TestClaudeAPIKeyAccountLiftsEnvAndReportsSignedIn(t *testing.T) {
 	u, id := apiAccount(t, a, deepseekSettings)
 
 	env, _, err := a.RunEnv(ctx, "claude", "u1", "")
-	if err != nil || len(env) != 3 || env[1] != "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic" || env[2] != "ANTHROPIC_AUTH_TOKEN=sk-secret-1" {
+	if err != nil || len(env) != 4 || env[1] != "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic" || env[2] != "ANTHROPIC_AUTH_TOKEN=sk-secret-1" || env[3] != "ANTHROPIC_API_KEY=" {
 		t.Fatalf("env %v err %v", env, err)
 	}
 	list, _ := a.List(ctx, u)
@@ -404,7 +405,7 @@ func TestClaudeAPIKeyAccountLiftsEnvAndReportsSignedIn(t *testing.T) {
 	if v, err := a.Refresh(ctx, u, "claude", id); err != nil || v.Plan != "API key · api.z.ai" {
 		t.Fatalf("refresh %+v %v", v, err)
 	}
-	if env, _, _ = a.RunEnv(ctx, "claude", "u1", ""); env[2] != "ANTHROPIC_API_KEY=k2" {
+	if env, _, _ = a.RunEnv(ctx, "claude", "u1", ""); env[2] != "ANTHROPIC_AUTH_TOKEN=" || env[3] != "ANTHROPIC_API_KEY=k2" {
 		t.Fatalf("env %v", env)
 	}
 }
@@ -429,8 +430,69 @@ func TestClaudeMalformedSettingsFailsRunWithoutLeakingKey(t *testing.T) {
 	a, _ := newAgents(t)
 	apiAccount(t, a, `{"env":{"ANTHROPIC_BASE_URL":"https://x","ANTHROPIC_AUTH_TOKEN":"sk-secret-1"`)
 	_, _, err := a.RunEnv(context.Background(), "claude", "u1", "")
-	if err == nil || strings.Contains(err.Error(), "sk-secret") {
+	if err == nil || strings.Contains(err.Error(), "sk-secret") || !errors.Is(err, model.ErrPermanent) || !strings.Contains(err.Error(), `"DeepSeek"`) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestClaudeMalformedSettingsShowsUnknownWithReason(t *testing.T) {
+	a, ft := newAgents(t)
+	ft.outputs["claude"] = `{"loggedIn":true}`
+	u, id := apiAccount(t, a, `{"env":{"ANTHROPIC_BASE_URL":"https://x","ANTHROPIC_AUTH_TOKEN":"sk-secret-1"`)
+	list, err := a.List(context.Background(), u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, acc := range list.Agents[0].Accounts {
+		if acc.ID == id && (acc.Status != "unknown" || acc.StatusNote != "settings.json is not valid JSON") {
+			t.Fatalf("view %+v", acc)
+		}
+	}
+}
+
+func TestClaudeEnvOverridesTheBackendsOwnKey(t *testing.T) {
+	cases := map[string]struct{ settings, key, want string }{
+		"token account blanks the api key": {deepseekSettings, "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY="},
+		"api-key account blanks the token": {`{"env":{"ANTHROPIC_BASE_URL":"https://api.z.ai","ANTHROPIC_API_KEY":"k2"}}`, "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN="},
+	}
+	for name, c := range cases {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-backend")
+		t.Setenv("ANTHROPIC_AUTH_TOKEN", "tok-backend")
+		a, _ := newAgents(t)
+		apiAccount(t, a, c.settings)
+		env, _, err := a.RunEnv(context.Background(), "claude", "u1", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		child := exec.Command("sh", "-c", `printf "%s|%s" "$ANTHROPIC_API_KEY" "$ANTHROPIC_AUTH_TOKEN"`)
+		child.Env = append(os.Environ(), env...)
+		out, err := child.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(out), "backend") {
+			t.Fatalf("%s: the child inherited the backend's credential: %q", name, out)
+		}
+		last := ""
+		for _, e := range env {
+			if strings.HasPrefix(e, c.key+"=") {
+				last = e
+			}
+		}
+		if last != c.want {
+			t.Fatalf("%s: %q in %v", name, last, env)
+		}
+	}
+}
+
+func TestClaudeEnvBaseURLWithoutSchemeFallsBackToRawURL(t *testing.T) {
+	_, host, err := claudeAPIEnv(func() string {
+		d := t.TempDir()
+		_ = os.WriteFile(filepath.Join(d, "settings.json"), []byte(`{"env":{"ANTHROPIC_BASE_URL":"user:pw@proxy.local:8080/anthropic","ANTHROPIC_API_KEY":"k"}}`), 0o600)
+		return d
+	}())
+	if err != nil || strings.Contains(host, "pw") || host == "" {
+		t.Fatalf("host %q err %v", host, err)
 	}
 }
 

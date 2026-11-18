@@ -151,6 +151,8 @@ type accountStatus struct {
 	Status    string
 	Who, Plan string
 	ExpiresAt *time.Time
+	Note      string
+	api       bool
 }
 
 type UsageWindow struct {
@@ -180,6 +182,7 @@ type AccountView struct {
 	ExpiresAt    *time.Time    `json:"expires_at,omitempty"`
 	Usage        *AccountUsage `json:"usage,omitempty"`
 	UsageError   string        `json:"usage_error,omitempty"`
+	StatusNote   string        `json:"status_note,omitempty"`
 	LoginCommand string        `json:"login_command"`
 	Roles        []string      `json:"roles"`
 }
@@ -287,7 +290,7 @@ func (a *Agents) RunEnv(ctx context.Context, id, userID string, role model.Agent
 	if spec.ID == "claude" {
 		lift, _, err := claudeAPIEnv(acc.HomeDir)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, fmt.Errorf("%w: account %q: %w", model.ErrPermanent, acc.Label, err)
 		}
 		env = append(env, lift...)
 	}
@@ -343,12 +346,14 @@ func claudeAPIEnv(home string) (env []string, host string, err error) {
 	}
 	env = []string{"ANTHROPIC_BASE_URL=" + base}
 	for _, k := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"} {
-		if v := val(k); v != "" {
-			env = append(env, k+"="+v)
-		}
+		// an empty value overrides the backend's own key, which os/exec would otherwise hand to this provider
+		env = append(env, k+"="+val(k))
 	}
 	if u, err := url.Parse(base); err == nil {
 		host = u.Host
+	}
+	if host == "" {
+		host = base[strings.LastIndex(base, "@")+1:]
 	}
 	return env, host, nil
 }
@@ -359,10 +364,19 @@ func apiKeyStatus(spec AgentSpec, acc model.AgentAccount) (accountStatus, bool) 
 		return accountStatus{}, false
 	}
 	env, host, err := claudeAPIEnv(acc.HomeDir)
-	if err != nil || len(env) < 2 {
+	if err != nil {
+		return accountStatus{Status: "unknown", Note: strings.TrimPrefix(err.Error(), "the account's "), api: true}, true
+	}
+	keys := 0
+	for _, e := range env[min(1, len(env)):] {
+		if !strings.HasSuffix(e, "=") {
+			keys++
+		}
+	}
+	if keys == 0 {
 		return accountStatus{}, false
 	}
-	return accountStatus{Status: "signed_in", Plan: "API key · " + host}, true
+	return accountStatus{Status: "signed_in", Plan: "API key · " + host, api: true}, true
 }
 
 // List describes every known agent with the user's accounts and their status.
@@ -440,7 +454,7 @@ func (a *Agents) accountView(ctx context.Context, spec AgentSpec, acc model.Agen
 		return av
 	}
 	st := a.accountStatus(ctx, spec, acc, fresh)
-	av.Status, av.Who, av.Plan, av.ExpiresAt = st.Status, st.Who, st.Plan, st.ExpiresAt
+	av.Status, av.Who, av.Plan, av.ExpiresAt, av.StatusNote = st.Status, st.Who, st.Plan, st.ExpiresAt, st.Note
 	if st.Status != "signed_in" {
 		return av
 	}
@@ -453,7 +467,7 @@ func (a *Agents) accountView(ctx context.Context, spec AgentSpec, acc model.Agen
 			av.UsageError = err
 		}
 	case "claude":
-		if _, api := apiKeyStatus(spec, acc); !api {
+		if !st.api {
 			av.Usage, av.UsageError = a.claudeUsage(ctx, acc, fresh)
 		}
 	}
