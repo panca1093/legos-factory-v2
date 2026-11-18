@@ -166,6 +166,7 @@ type QualityStore interface {
 	Count(ctx context.Context, woID string) (int, error)
 	CountForRevision(ctx context.Context, woID string, revision int) (int, error)
 	ForRevision(ctx context.Context, woID string, revision int) ([]model.QualityCheck, error)
+	List(ctx context.Context, woID string) ([]model.QualityCheck, error)
 	AttachCommit(ctx context.Context, woID string, revision int, sha string) error
 }
 
