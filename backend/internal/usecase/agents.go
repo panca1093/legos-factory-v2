@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -279,7 +280,60 @@ func (a *Agents) RunEnv(ctx context.Context, id, userID string) (env, args []str
 	if err != nil || acc == nil {
 		return nil, nil, err
 	}
-	return spec.accountEnv(acc.HomeDir), spec.accountArgs(), nil
+	env = spec.accountEnv(acc.HomeDir)
+	if spec.ID == "claude" {
+		lift, _, err := claudeAPIEnv(acc.HomeDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		env = append(env, lift...)
+	}
+	return env, spec.accountArgs(), nil
+}
+
+// claudeAPIEnv reads the Anthropic-compatible endpoint from <home>/settings.json. Claude Code ignores these three keys
+// there, so the factory lifts them into the process env. Errors never carry file content: it holds the key.
+func claudeAPIEnv(home string) (env []string, host string, err error) {
+	raw, err := os.ReadFile(filepath.Join(home, "settings.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", errors.New("cannot read the account's settings.json")
+	}
+	var cfg struct {
+		Env map[string]any `json:"env"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return nil, "", errors.New("the account's settings.json is not valid JSON")
+	}
+	val := func(k string) string { v, _ := cfg.Env[k].(string); return v }
+	base := val("ANTHROPIC_BASE_URL")
+	if base == "" {
+		return nil, "", nil
+	}
+	env = []string{"ANTHROPIC_BASE_URL=" + base}
+	for _, k := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+		if v := val(k); v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	if u, err := url.Parse(base); err == nil {
+		host = u.Host
+	}
+	return env, host, nil
+}
+
+// apiKeyStatus is the status of a Claude account that talks to an Anthropic-compatible provider; ok is false for a regular login.
+func apiKeyStatus(spec AgentSpec, acc model.AgentAccount) (accountStatus, bool) {
+	if spec.ID != "claude" || acc.ID == SystemAccountID {
+		return accountStatus{}, false
+	}
+	env, host, err := claudeAPIEnv(acc.HomeDir)
+	if err != nil || len(env) < 2 {
+		return accountStatus{}, false
+	}
+	return accountStatus{Status: "signed_in", Plan: "API key · " + host}, true
 }
 
 // List describes every known agent with the user's accounts and their status.
@@ -360,7 +414,9 @@ func (a *Agents) accountView(ctx context.Context, spec AgentSpec, acc model.Agen
 			av.UsageError = err
 		}
 	case "claude":
-		av.Usage, av.UsageError = a.claudeUsage(ctx, acc, fresh)
+		if _, api := apiKeyStatus(spec, acc); !api {
+			av.Usage, av.UsageError = a.claudeUsage(ctx, acc, fresh)
+		}
 	}
 	return av
 }
@@ -380,6 +436,9 @@ func (a *Agents) statusKey(spec AgentSpec, acc model.AgentAccount) string {
 }
 
 func (a *Agents) accountStatus(ctx context.Context, spec AgentSpec, acc model.AgentAccount, fresh bool) accountStatus {
+	if st, ok := apiKeyStatus(spec, acc); ok {
+		return st // read from settings.json each time, so an edit shows without waiting for the status cache
+	}
 	key := a.statusKey(spec, acc)
 	ttl := a.StatusTTL
 	if ttl <= 0 {

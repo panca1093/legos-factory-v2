@@ -356,3 +356,93 @@ func TestClaudeServiceNameIsStableAndScoped(t *testing.T) {
 		t.Fatal("scoped name must be a stable function of the path")
 	}
 }
+
+const deepseekSettings = `{"env":{"ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic","ANTHROPIC_AUTH_TOKEN":"sk-secret-1","ANTHROPIC_DEFAULT_OPUS_MODEL":"x","OTHER":"y"}}`
+
+func apiAccount(t *testing.T, a *Agents, settings string) (*model.User, string) {
+	t.Helper()
+	ctx := context.Background()
+	u := &model.User{ID: "u1"}
+	n, err := a.CreateAccount(ctx, u, "claude", "DeepSeek")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings != "" {
+		if err := os.WriteFile(filepath.Join(filepath.Join(a.DataDir, "accounts", "u1", "claude", n.Account.ID), "settings.json"), []byte(settings), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.Activate(ctx, u, "claude", n.Account.ID); err != nil {
+		t.Fatal(err)
+	}
+	return u, n.Account.ID
+}
+
+func TestClaudeAPIKeyAccountLiftsEnvAndReportsSignedIn(t *testing.T) {
+	a, ft := newAgents(t)
+	ft.outputs["claude"] = `{"loggedIn":false}`
+	ctx := context.Background()
+	u, id := apiAccount(t, a, deepseekSettings)
+
+	env, _, err := a.RunEnv(ctx, "claude", "u1")
+	if err != nil || len(env) != 3 || env[1] != "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic" || env[2] != "ANTHROPIC_AUTH_TOKEN=sk-secret-1" {
+		t.Fatalf("env %v err %v", env, err)
+	}
+	list, _ := a.List(ctx, u)
+	var got AccountView
+	for _, acc := range list.Agents[0].Accounts {
+		if acc.ID == id {
+			got = acc
+		}
+	}
+	if got.Status != "signed_in" || got.Plan != "API key · api.deepseek.com" || got.Usage != nil || got.UsageError != "" {
+		t.Fatalf("view %+v", got)
+	}
+
+	home := filepath.Join(a.DataDir, "accounts", "u1", "claude", id)
+	if err := os.WriteFile(filepath.Join(home, "settings.json"), []byte(`{"env":{"ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic","ANTHROPIC_API_KEY":"k2"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := a.Refresh(ctx, u, "claude", id); err != nil || v.Plan != "API key · api.z.ai" {
+		t.Fatalf("refresh %+v %v", v, err)
+	}
+	if env, _, _ = a.RunEnv(ctx, "claude", "u1"); env[2] != "ANTHROPIC_API_KEY=k2" {
+		t.Fatalf("env %v", env)
+	}
+}
+
+func TestClaudeEnvLiftOnlyWhenBaseURLSet(t *testing.T) {
+	ctx := context.Background()
+	for name, settings := range map[string]string{"no file": "", "no base url": `{"env":{"ANTHROPIC_AUTH_TOKEN":"k"}}`, "no env": `{}`} {
+		a, ft := newAgents(t)
+		ft.outputs["claude"] = `{"loggedIn":false}`
+		u, id := apiAccount(t, a, settings)
+		env, _, err := a.RunEnv(ctx, "claude", "u1")
+		if err != nil || len(env) != 1 {
+			t.Fatalf("%s: env %v err %v", name, env, err)
+		}
+		if v, _ := a.Refresh(ctx, u, "claude", id); v.Status != "signed_out" {
+			t.Fatalf("%s: status %q", name, v.Status)
+		}
+	}
+}
+
+func TestClaudeMalformedSettingsFailsRunWithoutLeakingKey(t *testing.T) {
+	a, _ := newAgents(t)
+	apiAccount(t, a, `{"env":{"ANTHROPIC_BASE_URL":"https://x","ANTHROPIC_AUTH_TOKEN":"sk-secret-1"`)
+	_, _, err := a.RunEnv(context.Background(), "claude", "u1")
+	if err == nil || strings.Contains(err.Error(), "sk-secret") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestSystemDefaultNeverLiftsEnv(t *testing.T) {
+	a, _ := newAgents(t)
+	apiAccount(t, a, deepseekSettings)
+	if err := a.Activate(context.Background(), &model.User{ID: "u1"}, "claude", SystemAccountID); err != nil {
+		t.Fatal(err)
+	}
+	if env, _, err := a.RunEnv(context.Background(), "claude", "u1"); err != nil || len(env) != 0 {
+		t.Fatalf("env %v err %v", env, err)
+	}
+}
