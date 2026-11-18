@@ -44,10 +44,9 @@ var AgentSpecs = []AgentSpec{
 	{ID: "claude", Name: "Claude", Command: []string{"claude-agent-acp"},
 		InstallHint: "npm install -g @agentclientprotocol/claude-agent-acp", Roles: allRoles,
 		statusCmd: []string{"claude", "auth", "status"}, loginCmd: []string{"claude", "auth", "login"}},
-	// Builder only: codex reads files without asking and has no read sandbox, so on a read-only role it could read secrets outside the workspace.
 	{ID: "codex", Name: "Codex", Command: []string{"codex-acp"},
 		InstallHint: "npm install -g @agentclientprotocol/codex-acp",
-		Roles:       []model.AgentRole{model.AgentBuilder},
+		Roles:       allRoles,
 		statusCmd:   []string{"codex", "login", "status"}, loginCmd: []string{"codex", "login", "--device-auth"}},
 	{ID: "opencode", Name: "OpenCode", Command: []string{"opencode", "acp"},
 		InstallHint: "curl -fsSL https://opencode.ai/install | bash", Roles: allRoles,

@@ -219,10 +219,8 @@ func TestStatusTimeoutAndUninstalled(t *testing.T) {
 	if l.Agents[0].Accounts[0].Status != "unknown" || l.Agents[1].Installed || l.Agents[1].InstallHint == "" {
 		t.Fatalf("%+v", l.Agents)
 	}
-	for _, r := range l.Agents[1].RolesAllowed {
-		if r == "inspector" {
-			t.Fatal("codex must not be allowed for inspector")
-		}
+	if len(l.Agents[1].RolesAllowed) != len(allRoles) {
+		t.Fatalf("codex serves every role: %v", l.Agents[1].RolesAllowed)
 	}
 }
 
