@@ -9,6 +9,9 @@ import (
 // refusals); the scheduler marks the job FAILED immediately.
 var ErrPermanent = errors.New("permanent failure")
 
+// ErrToolCallAsText marks a turn whose tool call came back as plain text; retryable, and the text is not an answer.
+var ErrToolCallAsText = errors.New("the model returned a tool call as plain text instead of calling the tool; retrying usually works")
+
 // ErrRequeue asks the scheduler to run the job again with a fresh timeout,
 // without spending a retry attempt.
 var ErrRequeue = errors.New("requeue job")

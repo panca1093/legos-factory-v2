@@ -355,6 +355,8 @@ func (h *ACPHarness) Continue(_ context.Context, sessionID string, req model.Age
 	}
 	conn.mu.Lock()
 	conn.text.Reset()
+	conn.toolFrom = 0
+	conn.notices.Reset()
 	conn.steps, conn.tools = 0, nil
 	conn.ctxUsed, conn.ctxSize = 0, 0
 	conn.costSeen = conn.cost != conn.costAttr // cost reported between turns belongs to this run
@@ -524,7 +526,7 @@ func (h *ACPHarness) spawn(config, dir string, runEnv, runArgs []string) (*acpCo
 	go c.readLoop(stdout)
 	raw, err := c.call(context.Background(), "initialize", map[string]any{
 		"protocolVersion":    1,
-		"clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false},
+		"clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false, "session": map[string]any{"notices": map[string]any{}}},
 		"clientInfo":         map[string]any{"name": "legos-factory", "version": "1"},
 	})
 	if err != nil {
@@ -648,6 +650,13 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 		r.result.CostSource = "measured"
 	}
 	c.costAttr = c.cost
+	final := c.text.String()[c.toolFrom:]
+	if strings.Contains(final, "<｜DSML｜") || strings.Contains(final, "<｜｜DSML") {
+		r.result.Text = ""
+		r.err = model.ErrToolCallAsText
+	} else if strings.TrimSpace(c.text.String()) == "" && c.notices.Len() > 0 {
+		r.err = fmt.Errorf("agent stopped: %s", c.notices.String())
+	}
 }
 
 // ---- connection ----
@@ -683,6 +692,8 @@ type acpConn struct {
 
 	mu       sync.Mutex
 	text     strings.Builder
+	toolFrom int             // len(text) at the latest tool call: what follows is the closing answer
+	notices  strings.Builder // warning notices, kept out of text
 	cost     float64
 	costSeen bool
 	costAttr float64 // cost already attributed to finished runs
@@ -939,12 +950,14 @@ func (c *acpConn) readLoop(r io.Reader) {
 func (c *acpConn) onUpdate(params json.RawMessage) {
 	var p struct {
 		Update struct {
-			Kind       string         `json:"sessionUpdate"`
-			ToolCallID string         `json:"toolCallId"`
-			Title      string         `json:"title"`
-			Status     string         `json:"status"`
-			RawInput   map[string]any `json:"rawInput"`
-			Locations  []struct {
+			Kind        string         `json:"sessionUpdate"`
+			ToolCallID  string         `json:"toolCallId"`
+			Severity    string         `json:"severity"`
+			Description string         `json:"description"`
+			Title       string         `json:"title"`
+			Status      string         `json:"status"`
+			RawInput    map[string]any `json:"rawInput"`
+			Locations   []struct {
 				Path string `json:"path"`
 			} `json:"locations"`
 			Content json.RawMessage `json:"content"` // an object on message chunks, an array on tool updates
@@ -972,6 +985,13 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 			c.text.WriteString(chunk.Text)
 			delta = chunk.Text
 		}
+	case "notice":
+		if u.Severity == "warning" {
+			if c.notices.Len() > 0 {
+				c.notices.WriteString("; ")
+			}
+			c.notices.WriteString(strings.TrimSpace(u.Title + " " + u.Description))
+		}
 	case "usage_update":
 		if u.Used > 0 {
 			c.ctxUsed = u.Used
@@ -983,6 +1003,7 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 			c.cost, c.costSeen = u.Cost.Amount, true
 		}
 	case "tool_call", "tool_call_update":
+		c.toolFrom = c.text.Len()
 		if c.tools == nil {
 			c.tools = map[string]*acpTool{}
 		}

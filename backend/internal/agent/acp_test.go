@@ -41,6 +41,7 @@ func fakeAgent(scenario string) {
 	reply := func(id any, result any) { send(map[string]any{"id": id, "result": result}) }
 	var cwd, chosenModel, sessionMeta, sessionMCP string
 	var setCalls []string
+	var noticesDeclared bool
 	var promptID any
 	turns := 0
 	for in.Scan() {
@@ -53,6 +54,15 @@ func fakeAgent(scenario string) {
 		_ = json.Unmarshal(in.Bytes(), &m)
 		switch m.Method {
 		case "initialize":
+			var ip struct {
+				ClientCapabilities struct {
+					Session struct {
+						Notices map[string]any `json:"notices"`
+					} `json:"session"`
+				} `json:"clientCapabilities"`
+			}
+			_ = json.Unmarshal(m.Params, &ip)
+			noticesDeclared = ip.ClientCapabilities.Session.Notices != nil
 			res := map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": "Fake", "version": "0"}}
 			if os.Getenv("ACP_FAKE_EMBEDDED") != "" {
 				res["agentCapabilities"] = map[string]any{"promptCapabilities": map[string]any{"image": true, "embeddedContext": true}}
@@ -230,6 +240,34 @@ func fakeAgent(scenario string) {
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Go usage limit exceeded"}})
 			case "funds":
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Internal error: Upstream request failed: Insufficient account funds"}})
+			case "notice":
+				update(map[string]any{"sessionUpdate": "notice", "severity": "warning", "title": "Warning: auto mode", "description": "api.example.com"})
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": fmt.Sprintf("answer notices=%v", noticesDeclared)}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "dsml":
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "<\uff5c\uff5cDSML\uff5c\uff5c calls>\n<\uff5c\uff5cDSML\uff5c\uff5c invoke name=\"Write\">"}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn", "usage": map[string]any{"inputTokens": 7, "outputTokens": 3}})
+			case "dsml-quote":
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "strings.Contains(t, \"\uff5cDSML\")"}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "dsml-then-tool":
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "<\uff5c\uff5cDSML\uff5c\uff5c calls>\n<\uff5c\uff5cDSML\uff5c\uff5c invoke name=\"Write\">"}})
+				update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "write", "status": "pending"})
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "done"}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "dsml-after-tool":
+				update(map[string]any{"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "write", "status": "pending"})
+				update(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed"})
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "<\uff5c\uff5cDSML\uff5c\uff5c calls>\n<\uff5c\uff5cDSML\uff5c\uff5c invoke name=\"Write\">"}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "notice-empty":
+				update(map[string]any{"sessionUpdate": "notice", "severity": "warning", "title": "Hook blocked", "description": "no force pushes"})
+				update(map[string]any{"sessionUpdate": "notice", "severity": "info", "title": "just fyi"})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "dsml-word":
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "DSML is DeepSeek's markup"}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "refusal":
 				reply(m.ID, map[string]any{"stopReason": "refusal"})
 			case "crash":
@@ -1028,5 +1066,46 @@ func TestACPStepTargetFromPathInputs(t *testing.T) {
 		if got := c.target(&acpTool{input: tc.input}); got != tc.want {
 			t.Errorf("target(%v) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestACPNoticesStayOutOfTheReply(t *testing.T) {
+	res, err := runFake(t, fakeHarness(t, "notice"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "answer notices=true" {
+		t.Fatalf("text = %q", res.Text)
+	}
+}
+
+func TestACPToolCallReturnedAsDSMLTextIsRetryable(t *testing.T) {
+	res, err := runFake(t, fakeHarness(t, "dsml"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
+	if !errors.Is(err, model.ErrToolCallAsText) || errors.Is(err, model.ErrPermanent) || strings.Contains(err.Error(), "DSML") {
+		t.Fatalf("err = %v", err)
+	}
+	if res.Text != "" || res.TokensIn != 7 || res.TokensOut != 3 {
+		t.Fatalf("result = %+v", res)
+	}
+	for _, sc := range []string{"dsml-after-tool"} {
+		if _, err := runFake(t, fakeHarness(t, sc), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"}); !errors.Is(err, model.ErrToolCallAsText) {
+			t.Fatalf("%s err = %v", sc, err)
+		}
+	}
+	for sc, want := range map[string]string{"dsml-quote": "DSML", "dsml-then-tool": "done"} {
+		if res, err := runFake(t, fakeHarness(t, sc), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"}); err != nil || !strings.Contains(res.Text, want) {
+			t.Fatalf("%s: %q %v", sc, res.Text, err)
+		}
+	}
+	res, err = runFake(t, fakeHarness(t, "dsml-word"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
+	if err != nil || !strings.Contains(res.Text, "DSML") {
+		t.Fatalf("plain word: %q %v", res.Text, err)
+	}
+}
+
+func TestACPEmptyReplyAfterWarningNoticeFailsWithTheNotice(t *testing.T) {
+	_, err := runFake(t, fakeHarness(t, "notice-empty"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
+	if err == nil || errors.Is(err, model.ErrPermanent) || !strings.Contains(err.Error(), "Hook blocked no force pushes") || strings.Contains(err.Error(), "fyi") {
+		t.Fatalf("err = %v", err)
 	}
 }
