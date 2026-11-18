@@ -106,10 +106,9 @@ func (f *Factory) Handlers() map[string]func(context.Context, model.Job) error {
 	}
 }
 
-// ResumeOnStart re-enqueues planning jobs for work orders interrupted in
-// pre-execution states. Planning is side-effect free (reasoning + DB
-// writes), so automatic resume is safe; execution-phase work orders are
-// NOT auto-resumed and wait for an explicit human action.
+// ResumeOnStart re-enqueues planning and verification jobs for work orders
+// interrupted in those states. Both are safe to repeat; other execution-phase
+// work orders are NOT auto-resumed and wait for an explicit human action.
 func (f *Factory) ResumeOnStart(ctx context.Context) error {
 	wos, err := f.WO.List(ctx)
 	if err != nil {
@@ -121,6 +120,14 @@ func (f *Factory) ResumeOnStart(ctx context.Context) error {
 		model.StatePlanning: true,
 	}
 	for _, wo := range wos {
+		// verification only re-runs deterministic checks, so a run cut off by the restart is safe to repeat
+		if wo.State == model.StateVerifying && wo.PausedAt == nil && !f.Sched.HasActive(ctx, wo.ID, "", JobVerify) {
+			if _, err := f.Sched.Enqueue(ctx, JobVerify, wo.ID, "", map[string]any{"reason": "startup_resume"}); err != nil {
+				return err
+			}
+			f.event(wo.ID, "factory", "resumed", "Verification resumed after restart", nil)
+			continue
+		}
 		if resumable[wo.State] && !f.Sched.HasActive(ctx, wo.ID, "", JobPlan) {
 			if _, err := f.Sched.Enqueue(ctx, JobPlan, wo.ID, "", map[string]any{"reason": "startup_resume"}); err != nil {
 				return err
