@@ -520,3 +520,13 @@ function endPan() {
     </div></AppDialog
   >
 </template>
+<style scoped>
+.tg-canvas {
+  height: clamp(640px, 78vh, 900px);
+}
+@media (max-width: 720px) {
+  .tg-canvas {
+    height: clamp(420px, 68vh, 760px);
+  }
+}
+</style>

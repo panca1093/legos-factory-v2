@@ -43,49 +43,62 @@ const done = computed(
 );
 </script>
 <template>
-  <section class="plan-progress" data-test="plan-progress">
+  <section class="fx-card pp" data-test="plan-progress">
     <div class="section-head">
       <h2>Plan progress</h2>
       <span class="pill">{{ done }} / {{ tasks.length }} merged</span>
     </div>
-    <ol class="plan-tasks">
+    <div
+      class="pp-meter"
+      role="progressbar"
+      aria-label="Tasks merged"
+      :aria-valuenow="done"
+      :aria-valuemin="0"
+      :aria-valuemax="tasks.length"
+    >
+      <span
+        :style="{
+          width: (tasks.length ? (done / tasks.length) * 100 : 0) + '%',
+        }"
+      ></span>
+    </div>
+    <ol class="pp-tasks">
       <li v-for="r in rows" :key="r.task.id" :data-task="r.task.id">
-        <div class="row between">
-          <strong class="small">{{ r.task.title }}</strong>
-          <span class="row" style="gap: 8px"
-            ><span class="pill" :class="pill[r.state]">{{
-              label[r.state] ?? r.state
-            }}</span
-            ><button
-              v-if="r.state === 'failed' && canRetry"
-              class="btn small"
-              data-test="retry-task"
-              @click="emit('retry', r.task.id)"
-            >
-              <RotateCcw class="icon" />Retry
-            </button></span
+        <div class="pp-row">
+          <strong class="small pp-title" :title="r.task.title">{{
+            r.task.title
+          }}</strong>
+          <span class="tiny muted">#{{ r.task.seq }}</span>
+          <span class="pill" :class="pill[r.state]">{{
+            label[r.state] ?? r.state
+          }}</span>
+          <button
+            v-if="r.state === 'failed' && canRetry"
+            class="btn small"
+            data-test="retry-task"
+            @click="emit('retry', r.task.id)"
           >
+            <RotateCcw class="icon" />Retry
+          </button>
         </div>
         <p v-if="r.error" class="tiny agent-failed">{{ r.error }}</p>
       </li>
       <li v-if="remediation" data-test="remediation">
-        <div class="row between">
-          <strong class="small">{{
+        <div class="pp-row">
+          <strong class="small pp-title">{{
             revision ? `Remediation (revision ${revision})` : "Remediation"
           }}</strong>
-          <span class="row" style="gap: 8px"
-            ><span class="pill" :class="pill[remediation.state]">{{
-              label[remediation.state] ?? remediation.state
-            }}</span
-            ><button
-              v-if="remediation.state === 'failed' && canRetry"
-              class="btn small"
-              data-test="retry-remediation"
-              @click="emit('retryRemediation')"
-            >
-              <RotateCcw class="icon" />Retry
-            </button></span
+          <span class="pill" :class="pill[remediation.state]">{{
+            label[remediation.state] ?? remediation.state
+          }}</span>
+          <button
+            v-if="remediation.state === 'failed' && canRetry"
+            class="btn small"
+            data-test="retry-remediation"
+            @click="emit('retryRemediation')"
           >
+            <RotateCcw class="icon" />Retry
+          </button>
         </div>
         <p v-if="remediation.error" class="tiny agent-failed">
           {{ remediation.error }}
@@ -95,22 +108,49 @@ const done = computed(
   </section>
 </template>
 <style scoped>
-.plan-progress {
-  margin-bottom: 24px;
+.pp-meter {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+  margin-bottom: var(--space-3);
 }
-.plan-tasks {
+.pp-meter span {
+  display: block;
+  height: 100%;
+  background: var(--green);
+  transition: width 0.3s;
+}
+.pp-tasks {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 8px;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
 }
-.plan-tasks li {
+.pp-tasks li {
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 8px 12px;
+  padding: 6px 10px;
+  min-width: 0;
 }
-.plan-tasks p {
+.pp-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.pp-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pp-tasks p {
   margin: 4px 0 0;
+  overflow-wrap: anywhere;
 }
 </style>

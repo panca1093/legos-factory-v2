@@ -17,12 +17,9 @@ it("separates historical passing evidence from current failures and opens real e
   expect(w.text()).toContain("Current revision 1");
   await w.find('[data-check="check-1"]').trigger("click");
   await flushPromises();
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
-    "Exit code: 1",
-  );
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain(
-    "go test ./...",
-  );
+  const detail = w.find('[data-test="check-detail"]').text();
+  expect(detail).toContain("Exit code: 1");
+  expect(detail).toContain("go test ./...");
   w.unmount();
 });
 it("labels mock output and does not permit viewer PR decisions", () => {

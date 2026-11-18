@@ -114,10 +114,31 @@ test("full work order journey: project → plan → graph → build → quality 
     page.getByText("Historical evidence · revision 0"),
   ).toBeVisible();
   await page.locator("[data-check]").first().click();
-  await expect(page.getByRole("dialog")).toContainText("Exit code:");
-  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(page.locator('[data-test="check-detail"]')).toContainText(
+    "Exit code:",
+  );
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const checksBox = await page
+    .locator('[data-test="checks-card"]')
+    .boundingBox();
+  const cols = page.locator(".two > section");
+  const left = await cols.nth(0).boundingBox();
+  const right = await cols.nth(1).boundingBox();
+  expect(checksBox!.y + checksBox!.height).toBeLessThanOrEqual(left!.y);
+  expect(Math.abs(left!.y - right!.y)).toBeLessThan(1);
   await page.getByRole("tab", { name: "Progress", exact: true }).click();
   await expect(page.getByText("Execution runs", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const graph = await page.locator(".tg").boundingBox();
+  const rcol = await page.locator(".fx-rcol").boundingBox();
+  expect(graph!.width / rcol!.width).toBeGreaterThan(3.9);
+  expect(graph!.width / rcol!.width).toBeLessThan(4.1);
+  await page.setViewportSize({ width: 1000, height: 900 });
+  const stackedGraph = await page.locator(".tg").boundingBox();
+  const stackedCol = await page.locator(".fx-rcol").boundingBox();
+  expect(stackedCol!.y).toBeGreaterThanOrEqual(
+    stackedGraph!.y + stackedGraph!.height,
+  );
   await page.getByText("Execution runs", { exact: true }).click();
   await expect(page.getByText("mock", { exact: true }).first()).toBeVisible();
   await page.getByRole("tab", { name: "Review", exact: true }).click();

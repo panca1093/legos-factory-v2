@@ -1,0 +1,583 @@
+<title>Work Order Tabs Proposal</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: centered 1360px column, WO header + Now card, four tabs; Progress 80/20, Review checks-on-top then 50/50 */
+:root {
+  --canvas: #f2f6f3; --surface: #fff; --surface-2: #e9f0eb; --line: #d7e2da; --line-strong: #7f9a8b;
+  --ink: #051f20; --muted: #4a6660; --brand: #163832; --on-brand: #daf1de; --tint: #daf1de;
+  --success: #1d6e4a; --success-soft: #dcf1e4; --warning: #8a4f0c; --warning-soft: #fbecd6;
+  --danger: #a83446; --danger-soft: #f9e1e4; --info: #2a627b; --info-soft: #dcecf3;
+  --c-foreman: #f2aa6b; --c-architect: #a89cec; --c-builder: #8bbcc9; --c-inspector: #a0cfb7; --c-jev: #e5c86a; --c-code: #c9dccf;
+  --dot: rgba(5,31,32,.09);
+  --shadow: 0 1px 2px rgba(5,31,32,.04), 0 8px 24px rgba(5,31,32,.05);
+  --f-display: "Outfit", "Inter", system-ui, sans-serif;
+  --f-body: "Inter", system-ui, -apple-system, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --canvas: #061716; --surface: #0c2421; --surface-2: #123029; --line: #1e3d36; --line-strong: #4f7466;
+  --ink: #daf1de; --muted: #8eb69b; --brand: #daf1de; --on-brand: #051f20; --tint: #173a31;
+  --success: #6fcf9b; --success-soft: #14372a; --warning: #f0b46a; --warning-soft: #3a2a14;
+  --danger: #f08a9a; --danger-soft: #3d1a21; --info: #84c3df; --info-soft: #12303d;
+  --c-code: #3c5c51; --dot: rgba(218,241,222,.07); --shadow: 0 1px 2px rgba(0,0,0,.3); color-scheme: dark } }
+:root[data-theme="dark"] {
+  --canvas: #061716; --surface: #0c2421; --surface-2: #123029; --line: #1e3d36; --line-strong: #4f7466;
+  --ink: #daf1de; --muted: #8eb69b; --brand: #daf1de; --on-brand: #051f20; --tint: #173a31;
+  --success: #6fcf9b; --success-soft: #14372a; --warning: #f0b46a; --warning-soft: #3a2a14;
+  --danger: #f08a9a; --danger-soft: #3d1a21; --info: #84c3df; --info-soft: #12303d;
+  --c-code: #3c5c51; --dot: rgba(218,241,222,.07); --shadow: 0 1px 2px rgba(0,0,0,.3); color-scheme: dark }
+
+* { box-sizing: border-box }
+body { background: var(--canvas); color: var(--ink); font: 14px/1.55 var(--f-body); }
+.page { max-width: 1360px; margin: 0 auto; padding-block: 28px 64px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: flex; flex-direction: column; gap: 20px }
+h1, h2, h3 { font-family: var(--f-display); font-weight: 600; margin: 0; text-wrap: balance }
+h1 { font-size: 24px; letter-spacing: -.01em }
+h2 { font-size: 17px }
+.eyebrow { font: 500 11px/1 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted) }
+.muted { color: var(--muted) }
+code, .mono { font-family: var(--f-mono); font-size: 12.5px }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: var(--shadow) }
+button { font: inherit; color: inherit; cursor: pointer }
+button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid color-mix(in srgb, var(--brand) 35%, transparent); outline-offset: 2px }
+
+/* header */
+.wo-head { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap }
+.wo-head .meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 13px }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; background: var(--surface-2); color: var(--muted); white-space: nowrap }
+.pill.ok { background: var(--success-soft); color: var(--success) }
+.pill.bad { background: var(--danger-soft); color: var(--danger) }
+.pill.warn { background: var(--warning-soft); color: var(--warning) }
+.pill.info { background: var(--info-soft); color: var(--info) }
+.demo { position: relative }
+.demo > summary { list-style: none; border: 1px dashed var(--line-strong); border-radius: 999px; padding: 6px 14px; font-size: 13px; color: var(--muted); cursor: pointer }
+.demo > summary::-webkit-details-marker { display: none }
+.demo .menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 5; width: 260px; padding: 14px; display: flex; flex-direction: column; gap: 12px }
+.seg { display: flex; background: var(--surface-2); border-radius: 10px; padding: 3px }
+.seg button { flex: 1; border: 0; background: none; padding: 6px 8px; border-radius: 8px; font-size: 12.5px; color: var(--muted) }
+.seg button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow) }
+
+.track { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px }
+.stage { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--muted) }
+.stage .bar { height: 4px; border-radius: 4px; background: var(--line) }
+.stage.done .bar { background: var(--brand) }
+.stage.cur .bar { background: linear-gradient(90deg, var(--brand) 55%, var(--line) 55%) }
+.stage.cur, .stage.done { color: var(--ink) }
+
+.now { display: flex; align-items: center; gap: 16px; padding: 18px 22px; flex-wrap: wrap }
+.now .ico { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--line); display: grid; place-items: center; font: 500 13px var(--f-mono) }
+.now .txt { flex: 1; min-width: 200px }
+.now .actions { display: flex; gap: 8px }
+.btn { border: 1px solid var(--line-strong); background: var(--surface); border-radius: 10px; padding: 7px 14px; font-size: 13px; font-weight: 500 }
+.btn.ghost { border-color: transparent; color: var(--danger) }
+.btn.primary { background: var(--brand); color: var(--on-brand); border-color: var(--brand) }
+
+.tabs { display: flex; gap: 28px; border-bottom: 1px solid var(--line); overflow-x: auto }
+.tabs button { border: 0; background: none; padding: 10px 0 12px; font-size: 15px; font-weight: 500; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--brand) }
+.tabs .new { font: 500 10px var(--f-mono); background: var(--tint); color: var(--brand); border-radius: 6px; padding: 1px 5px; margin-left: 6px; vertical-align: 2px }
+
+.why { font-size: 13px; color: var(--muted) }
+.why summary { cursor: pointer; width: fit-content }
+.why ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; max-width: 80ch }
+
+/* ---------- Activity ---------- */
+.act { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; align-items: start }
+.thread { display: flex; flex-direction: column; padding: 8px 0 0; overflow: hidden }
+.thread-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 22px 10px; flex-wrap: wrap }
+.chips { display: flex; gap: 6px; flex-wrap: wrap }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 12px; font-size: 13px; display: inline-flex; gap: 6px; align-items: center }
+.chip b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted) }
+.chip.on { background: var(--brand); color: var(--on-brand); border-color: var(--brand) }
+.chip.on b { color: inherit; opacity: .75 }
+.msgs { display: flex; flex-direction: column; gap: 18px; padding: 10px 22px 22px; max-height: 760px; overflow-y: auto }
+.divider { display: flex; align-items: center; gap: 12px; color: var(--muted) }
+.divider::before, .divider::after { content: ""; flex: 1; height: 1px; background: var(--line) }
+.msg { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 12px; max-width: 760px }
+.av { width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; font: 600 13px var(--f-display); color: #051f20 }
+.mh { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 13px; margin-bottom: 6px }
+.mh .who { font-weight: 600 }
+.mh .to { color: var(--muted) }
+.mh .to b { color: var(--ink); font-weight: 500 }
+.mh time { color: var(--muted); font-size: 12px; margin-left: auto; font-variant-numeric: tabular-nums }
+.kind { font: 500 10.5px/1 var(--f-mono); letter-spacing: .06em; text-transform: uppercase; padding: 4px 7px; border-radius: 6px; background: var(--surface-2); color: var(--muted) }
+.kind.task { background: var(--info-soft); color: var(--info) }
+.kind.feedback { background: var(--warning-soft); color: var(--warning) }
+.kind.reply { background: var(--success-soft); color: var(--success) }
+.kind.steer { background: var(--brand); color: var(--on-brand) }
+.bubble { background: var(--surface-2); border-radius: 4px 14px 14px 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0 }
+.bubble p { margin: 0 }
+.msg.feedback .bubble { background: var(--warning-soft) }
+.msg.feedback .bubble .finding { background: var(--surface); border-radius: 10px; padding: 10px 12px; display: grid; gap: 4px }
+.quote { border-left: 2px solid var(--line-strong); padding: 2px 0 2px 10px; font-size: 12.5px; color: var(--muted) }
+.quote b { color: var(--ink); font-weight: 500 }
+.doc { background: var(--surface); border: 1px solid var(--line); border-radius: 12px }
+.doc summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer }
+.doc summary::-webkit-details-marker { display: none }
+.doc .dico { width: 28px; height: 28px; border-radius: 8px; background: var(--tint); display: grid; place-items: center; font: 600 11px var(--f-mono); color: var(--brand) }
+.doc .dt { flex: 1; min-width: 0 }
+.doc .dt strong { display: block; font-size: 13.5px }
+.doc .dt span { font-size: 12px; color: var(--muted) }
+.doc .chev { color: var(--muted); transition: transform .15s }
+.doc[open] .chev { transform: rotate(90deg) }
+.doc .body { padding: 0 14px 14px 50px; font-size: 13px; display: grid; gap: 10px }
+.doc .body h4 { margin: 0; font: 600 12px var(--f-body); color: var(--muted) }
+.doc .body ul { margin: 4px 0 0; padding-left: 18px; display: grid; gap: 3px }
+.msg.me { margin-left: auto; grid-template-columns: minmax(0, 1fr) 34px }
+.msg.me .av { order: 2; background: var(--brand); color: var(--on-brand) }
+.msg.me .mh { justify-content: flex-end }
+.msg.me .mh time { margin-left: 0; order: -1; margin-right: auto }
+.msg.me .bubble { background: var(--brand); color: var(--on-brand); border-radius: 14px 4px 14px 14px }
+.sys { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--muted); padding-left: 46px; flex-wrap: wrap }
+.sys .ln { display: inline-flex; gap: 6px; align-items: center }
+.typing { display: flex; gap: 10px; align-items: center; padding-left: 46px; font-size: 13px; color: var(--muted) }
+.sq { display: inline-flex; gap: 3px }
+.sq i { width: 7px; height: 7px; border-radius: 2px; background: var(--line-strong); animation: sq 1.4s infinite }
+.sq i:nth-child(2) { animation-delay: .15s } .sq i:nth-child(3) { animation-delay: .3s } .sq i:nth-child(4) { animation-delay: .45s }
+@keyframes sq { 0%, 100% { opacity: .25 } 40% { opacity: 1 } }
+@media (prefers-reduced-motion: reduce) { .sq i { animation: none; opacity: .6 } }
+.composer { border-top: 1px solid var(--line); padding: 14px 22px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap }
+.composer select, .composer input { height: 39px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); padding: 0 12px; font: inherit }
+.composer input { flex: 1; min-width: 180px }
+.side { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 16px }
+.side .card { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px }
+.crew { display: flex; flex-direction: column; gap: 10px }
+.crew-row { display: flex; align-items: center; gap: 10px; font-size: 13px }
+.crew-row .av { width: 26px; height: 26px; border-radius: 8px; font-size: 11px }
+.crew-row span:last-child { margin-left: auto; color: var(--muted); font-size: 12px }
+.loop { display: grid; gap: 8px; font-size: 13px }
+.loop-row { display: flex; justify-content: space-between; gap: 8px }
+.loop-row b { font-variant-numeric: tabular-nums }
+
+/* ---------- Progress ---------- */
+.prog { display: grid; grid-template-columns: minmax(0, 4fr) minmax(300px, 1fr); gap: 24px; align-items: stretch }
+.graph { padding: 16px; display: flex; flex-direction: column; gap: 10px; min-height: 640px }
+.graph-top { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap }
+.canvas { flex: 1; border-radius: 12px; background-color: var(--canvas); background-image: radial-gradient(var(--dot) 1.2px, transparent 1.2px); background-size: 18px 18px; overflow: auto; display: grid; place-items: center; padding: 24px }
+.canvas svg { max-width: 100%; height: auto }
+.graph-foot { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap }
+.legend { display: flex; gap: 14px; flex-wrap: wrap }
+.legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px }
+.rcol { display: flex; flex-direction: column; gap: 24px; min-width: 0 }
+.rcol .card { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; min-width: 0 }
+.ph { display: flex; justify-content: space-between; align-items: center; gap: 8px }
+.tasklist { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto }
+.trow { border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; display: grid; gap: 4px; font-size: 13px }
+.trow .tt { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+.trow .tm { display: flex; justify-content: space-between; align-items: center; gap: 6px; font-size: 12px; color: var(--muted) }
+.trow .pill { padding: 2px 8px; font-size: 11.5px }
+.meter { height: 6px; background: var(--surface-2); border-radius: 6px; overflow: hidden }
+.meter i { display: block; height: 100%; background: var(--brand); border-radius: 6px }
+.feed-card { flex: 1 }
+.live { background: var(--surface-2); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; font-size: 12.5px }
+.live strong { font-size: 13.5px }
+.live input { height: 33px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; font: inherit; font-size: 12.5px; background: var(--surface); color: var(--ink); width: 100% }
+.feed { display: flex; flex-direction: column; gap: 0; max-height: 300px; overflow-y: auto }
+.fi { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12.5px }
+.fi:last-child { border-bottom: 0 }
+.fi .av { width: 22px; height: 22px; border-radius: 7px; font-size: 10px }
+.fi time { color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums }
+.fchips { display: flex; gap: 4px; flex-wrap: wrap }
+.fchips .chip { padding: 3px 9px; font-size: 12px }
+
+/* ---------- Review ---------- */
+.rev { display: flex; flex-direction: column; gap: 24px }
+.checks { padding: 18px 22px; display: flex; flex-direction: column; gap: 12px }
+.checks-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap }
+.checks-head .spacer { flex: 1 }
+.cgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px }
+.ck { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; background: var(--surface); text-align: left }
+.ck .ckt { display: flex; align-items: center; gap: 8px; justify-content: space-between }
+.ck strong { font-size: 13.5px }
+.ck code { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block }
+.ck.fail { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)) }
+.ck.base { border-style: dashed }
+.ck .note { font-size: 12px; color: var(--muted) }
+.ck.sel { box-shadow: 0 0 0 2px var(--brand) }
+.log { background: var(--surface-2); border-radius: 12px; padding: 12px 14px; font: 12px/1.6 var(--f-mono); overflow-x: auto; white-space: pre }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start }
+.two .card { padding: 18px 22px; display: flex; flex-direction: column; gap: 12px; min-width: 0 }
+.rh { display: flex; align-items: center; gap: 10px }
+.rh .av { width: 28px; height: 28px; border-radius: 9px; font-size: 11px }
+.rh .cnt { margin-left: auto }
+.empty { border: 1px dashed var(--line-strong); border-radius: 12px; padding: 22px; text-align: center; color: var(--muted); font-size: 13px }
+.find { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 6px; font-size: 13px }
+.find .fh { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
+.find .fh strong { font-size: 13.5px }
+.find .loc { font: 12px var(--f-mono); color: var(--muted) }
+.sev { font: 600 10.5px var(--f-mono); letter-spacing: .05em; text-transform: uppercase; padding: 3px 6px; border-radius: 5px }
+.sev.high { background: var(--danger-soft); color: var(--danger) }
+.sev.med { background: var(--warning-soft); color: var(--warning) }
+.sev.low { background: var(--surface-2); color: var(--muted) }
+
+.ph-tab { padding: 40px; text-align: center; color: var(--muted) }
+
+@media (max-width: 1080px) {
+  .act { grid-template-columns: 1fr } .side { position: static }
+  .prog { grid-template-columns: 1fr } .cgrid { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+}
+@media (max-width: 720px) {
+  .two { grid-template-columns: 1fr } .track { grid-template-columns: repeat(5, minmax(48px, 1fr)) }
+  .msgs, .thread-top, .composer { padding-left: 14px; padding-right: 14px }
+  .sys, .typing { padding-left: 0 } .cgrid { grid-template-columns: 1fr }
+  .graph { min-height: 420px }
+}
+</style>
+
+<div class="page">
+  <header class="wo-head">
+    <div>
+      <div class="eyebrow">Work order · wo_7c41e0a2 · legos-factory-v2</div>
+      <h1>Skip the cleartext-auth refusal test when 127.0.0.2 cannot be bound</h1>
+      <div class="meta"><span class="pill info">Review</span><span class="muted">Started 14:02 · 23m elapsed · Jev on</span></div>
+    </div>
+    <details class="demo">
+      <summary>Demo ▾</summary>
+      <div class="menu card">
+        <div><div class="eyebrow" style="margin-bottom:6px">Task graph size</div>
+          <div class="seg" data-demo="graph"><button data-v="1">1 task</button><button data-v="6" class="on">6 tasks</button></div></div>
+        <div><div class="eyebrow" style="margin-bottom:6px">Review state</div>
+          <div class="seg" data-demo="review"><button data-v="running">Running</button><button data-v="done" class="on">Findings in</button></div></div>
+        <p class="muted" style="margin:0;font-size:12px">Sample data only. These switches are for judging the layouts.</p>
+      </div>
+    </details>
+  </header>
+
+  <div class="track" aria-label="Stages">
+    <div class="stage done"><div class="bar"></div>Brief</div>
+    <div class="stage done"><div class="bar"></div>Plan</div>
+    <div class="stage done"><div class="bar"></div>Build</div>
+    <div class="stage cur"><div class="bar"></div>Review</div>
+    <div class="stage"><div class="bar"></div>Ship</div>
+  </div>
+
+  <section class="card now">
+    <div class="ico">{ }</div>
+    <div class="txt"><div class="eyebrow">Now</div><h2>Running checks</h2><div class="muted" style="font-size:13px">Latest: running 8 deterministic checks (revision 0)</div></div>
+    <div class="actions"><button class="btn">Pause</button><button class="btn ghost">Cancel</button></div>
+  </section>
+
+  <nav class="tabs" role="tablist">
+    <button data-tab="activity" class="on">Activity<span class="new">was Plan</span></button>
+    <button data-tab="progress">Progress</button>
+    <button data-tab="review">Review</button>
+    <button data-tab="pr">Changes &amp; PR</button>
+  </nav>
+
+  <!-- ACTIVITY -->
+  <section data-panel="activity">
+    <details class="why"><summary>What changes vs today</summary><ul>
+      <li>Plan becomes one chat thread. The brief, acceptance contract and spec show up as documents attached to the message that handed them over.</li>
+      <li>Every message names sender → recipient and a type: Task, Feedback, Reply, Steer. Feedback is tinted, and a reply quotes the feedback it answers.</li>
+      <li>Your own messages sit on the right like chat; deterministic events (gates, checks) are slim system lines.</li>
+      <li>The right rail counts feedback rounds per handoff so loops are visible without reading the thread.</li>
+    </ul></details>
+    <div class="act" style="margin-top:14px">
+      <div class="card thread">
+        <div class="thread-top">
+          <div class="chips" id="actChips">
+            <button class="chip on" data-f="all">All <b>12</b></button>
+            <button class="chip" data-f="task">Tasks <b>3</b></button>
+            <button class="chip" data-f="feedback">Feedback <b>2</b></button>
+            <button class="chip" data-f="me">You <b>2</b></button>
+            <button class="chip" data-f="sys">System <b>3</b></button>
+          </div>
+          <span class="muted" style="font-size:12.5px">Oldest first · live</span>
+        </div>
+        <div class="msgs" id="msgs">
+          <div class="divider eyebrow">Brief · 14:02</div>
+
+          <div class="msg me" data-k="me">
+            <div class="av">SP</div>
+            <div><div class="mh"><time>14:02</time><span class="kind">Request</span><span class="to">to <b>Foreman</b></span><span class="who">You</span></div>
+              <div class="bubble"><p><code>go test ./...</code> fails on my Mac in <code>api/internal/infra</code>. The SMTP cleartext test binds 127.0.0.2. Make it pass without me adding an lo0 alias.</p></div></div>
+          </div>
+
+          <div class="msg" data-k="task">
+            <div class="av" style="background:var(--c-foreman)">F</div>
+            <div><div class="mh"><span class="who">Foreman</span><span class="to">→ <b>Architect</b></span><span class="kind task">Task</span><time>14:03</time></div>
+              <div class="bubble"><p>Test-setup issue, not production code. Skip only when 127.0.0.2 truly cannot be bound; CI on Linux must keep running every assertion.</p>
+                <details class="doc"><summary><span class="dico">BR</span><span class="dt"><strong>Foreman's brief</strong><span>3 invariants · 4 constraints · 4 out of scope</span></span><span class="chev">›</span></summary>
+                  <div class="body">
+                    <div><h4>Domain invariants</h4><ul><li>Target an address that is loopback but not trusted by PLAIN auth, so the refusal is real.</li><li>Refusal is permanent, fixed message, no password leak, exactly one connection.</li><li>Skip only when the address cannot be bound. Any other setup failure still fails.</li></ul></div>
+                    <div><h4>Constraints</h4><ul><li><code>newFakeSMTPOn</code> keeps fail-on-listen-error.</li><li>No production SMTP sender change.</li><li>Assertions unchanged in strength.</li><li><code>go vet ./...</code> stays clean.</li></ul></div>
+                    <div><h4>Out of scope</h4><ul><li>Switching to 127.0.0.1 · alias scripts · other skipping tests · CI config</li></ul></div>
+                  </div></details>
+              </div></div>
+          </div>
+
+          <div class="divider eyebrow">Plan · 14:05</div>
+
+          <div class="msg" data-k="reply">
+            <div class="av" style="background:var(--c-architect)">A</div>
+            <div><div class="mh"><span class="who">Architect</span><span class="to">→ <b>Jev</b></span><span class="kind reply">Spec</span><time>14:07</time></div>
+              <div class="bubble"><p>One task. Probe-bind 127.0.0.2:0, close it, skip with a reason on bind failure, then run the test unchanged.</p>
+                <details class="doc"><summary><span class="dico">AC</span><span class="dt"><strong>Acceptance contract</strong><span>4 criteria</span></span><span class="chev">›</span></summary>
+                  <div class="body"><ul><li>On a host without the alias the test reports SKIP with the reason.</li><li>On Linux CI the test runs and every assertion passes.</li><li>Shared constructor untouched.</li><li><code>go vet ./...</code> clean.</li></ul></div></details>
+                <details class="doc"><summary><span class="dico">SP</span><span class="dt"><strong>Architect's spec</strong><span>1 task · 1 file · <code>smtp_test.go</code></span></span><span class="chev">›</span></summary>
+                  <div class="body"><p style="margin:0">Add a probe listener before <code>newFakeSMTPOn</code>. The probe is closed before the fake server binds an ephemeral port on the same address.</p></div></details>
+              </div></div>
+          </div>
+
+          <div class="msg feedback" data-k="feedback">
+            <div class="av" style="background:var(--c-jev)">J</div>
+            <div><div class="mh"><span class="who">Jev</span><span class="to">→ <b>Architect</b></span><span class="kind feedback">Feedback · revise</span><time>14:08</time></div>
+              <div class="bubble">
+                <div class="finding"><div><span class="sev high">High</span> <strong style="font-size:13px">Skip condition too broad</strong></div><span>Criterion 1 skips on any bind error. The brief says skip only when the address cannot be assigned; other errors must fail.</span></div>
+                <div class="finding"><div><span class="sev low">Low</span> <strong style="font-size:13px">Name the skip reason</strong></div><span>State the exact skip message so the Inspector can check it.</span></div>
+              </div></div>
+          </div>
+
+          <div class="msg" data-k="reply">
+            <div class="av" style="background:var(--c-architect)">A</div>
+            <div><div class="mh"><span class="who">Architect</span><span class="to">→ <b>Jev</b></span><span class="kind reply">Reply · revision 1</span><time>14:10</time></div>
+              <div class="bubble"><div class="quote">Answering <b>Jev</b>: Skip condition too broad · Name the skip reason</div>
+                <p>Skip only on <code>EADDRNOTAVAIL</code>; any other error calls <code>t.Fatal</code>. Skip reason: <code>127.0.0.2 not bound on this host (add lo0 alias to run)</code>.</p></div></div>
+          </div>
+
+          <div class="sys" data-k="sys"><span class="ln"><span class="pill ok">Gate passed</span> Jev approved the plan after 1 revision</span><span>· 14:10</span></div>
+
+          <div class="divider eyebrow">Build · 14:11</div>
+
+          <div class="msg" data-k="task">
+            <div class="av" style="background:var(--c-foreman)">F</div>
+            <div><div class="mh"><span class="who">Foreman</span><span class="to">→ <b>Builder</b></span><span class="kind task">Task #01</span><time>14:11</time></div>
+              <div class="bubble"><p>Skip the cleartext-auth refusal test when 127.0.0.2 cannot be bound. Touch <code>api/internal/infra/smtp_test.go</code> only.</p></div></div>
+          </div>
+
+          <div class="msg me" data-k="me">
+            <div class="av">SP</div>
+            <div><div class="mh"><time>14:14</time><span class="kind steer">Steer</span><span class="to">to <b>Builder</b></span><span class="who">You</span></div>
+              <div class="bubble"><p>Use <code>errors.Is(err, syscall.EADDRNOTAVAIL)</code>, don't match on the error string.</p></div></div>
+          </div>
+
+          <div class="msg" data-k="reply">
+            <div class="av" style="background:var(--c-builder)">B</div>
+            <div><div class="mh"><span class="who">Builder</span><span class="to">→ <b>You</b></span><span class="kind reply">Reply</span><time>14:15</time></div>
+              <div class="bubble"><div class="quote">Answering <b>You</b>: Use errors.Is…</div><p>Done. Switched to <code>errors.Is</code>; the probe now wraps the <code>net.Listen</code> error.</p></div></div>
+          </div>
+
+          <div class="sys" data-k="sys"><span class="ln"><span class="pill">Builder</span> committed revision 0 · 1 file · +14 −1</span><span>· 14:20</span></div>
+
+          <div class="divider eyebrow">Review · 14:21</div>
+
+          <div class="sys" data-k="sys"><span class="ln"><span class="pill bad">Checks 5 / 8</span> 3 failed, all 3 failed the same way on main. Not sent back to the Builder.</span><span>· 14:24</span></div>
+
+          <div class="typing"><span class="sq"><i></i><i></i><i></i><i></i></span><span><b style="color:var(--ink)">Inspector</b> is reviewing revision 0 · 1m 12s</span></div>
+        </div>
+        <div class="composer">
+          <select id="to" aria-label="Recipient"><option>To: Inspector (active)</option><option>To: Foreman</option><option>To: Architect</option><option>To: Builder</option></select>
+          <input id="say" placeholder="Tell the crew something while it works…" aria-label="Message">
+          <button class="btn primary">Send</button>
+        </div>
+      </div>
+
+      <aside class="side">
+        <div class="card">
+          <div class="eyebrow">Handoffs & loops</div>
+          <div class="loop">
+            <div class="loop-row"><span>Foreman → Architect</span><b>1 task</b></div>
+            <div class="loop-row"><span>Architect ⇄ Jev</span><b><span class="pill warn">1 revise</span></b></div>
+            <div class="loop-row"><span>Foreman → Builder</span><b>1 task</b></div>
+            <div class="loop-row"><span>You → Builder</span><b>1 steer</b></div>
+            <div class="loop-row"><span>Inspector → Builder</span><b class="muted">—</b></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="eyebrow">Crew</div>
+          <div class="crew">
+            <div class="crew-row"><span class="av" style="background:var(--c-foreman)">F</span>Foreman<span>idle</span></div>
+            <div class="crew-row"><span class="av" style="background:var(--c-architect)">A</span>Architect<span>done</span></div>
+            <div class="crew-row"><span class="av" style="background:var(--c-jev)">J</span>Jev<span>gate passed</span></div>
+            <div class="crew-row"><span class="av" style="background:var(--c-builder)">B</span>Builder<span>done</span></div>
+            <div class="crew-row"><span class="av" style="background:var(--c-inspector)">I</span>Inspector<span style="color:var(--success)">working</span></div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- PROGRESS -->
+  <section data-panel="progress" hidden>
+    <details class="why"><summary>What changes vs today</summary><ul>
+      <li>Task graph takes 80% of the width at full height instead of sitting on top of everything.</li>
+      <li>Right 20% stacks two cards: Plan progress on top, What's happening below. The right column never goes under 300px.</li>
+      <li>What's happening keeps the live "is building…" card and steer box at its head; the filters shrink to small chips.</li>
+      <li>Under 1080px wide the two columns stack.</li>
+    </ul></details>
+    <div class="prog" style="margin-top:14px">
+      <div class="card graph">
+        <div class="graph-top"><span class="eyebrow">ELK · layered / orthogonal</span><span class="muted" id="gsum" style="font-size:12.5px"></span></div>
+        <div class="canvas"><svg id="g" role="img" aria-label="Task graph"></svg></div>
+        <div class="graph-foot"><span>Drag to pan · scroll to zoom · click a task to inspect</span>
+          <span class="legend"><span><i style="background:var(--success)"></i>Merged</span><span><i style="background:var(--info)"></i>Running</span><span><i style="background:var(--line-strong)"></i>Waiting</span></span></div>
+      </div>
+      <div class="rcol">
+        <div class="card">
+          <div class="ph"><h2>Plan progress</h2><span class="pill" id="pmerged"></span></div>
+          <div class="meter"><i id="pmeter"></i></div>
+          <div class="tasklist" id="tlist"></div>
+        </div>
+        <div class="card feed-card">
+          <div class="ph"><h2>What's happening</h2><span class="muted" style="font-size:12px">31 events</span></div>
+          <div class="live"><div style="display:flex;gap:8px;align-items:center"><span class="sq"><i></i><i></i><i></i><i></i></span><strong>Inspector is reviewing…</strong></div>
+            <span class="muted">Task #01 · last activity 12s ago</span>
+            <input placeholder="Tell the agent something…" aria-label="Steer the agent"></div>
+          <div class="fchips"><button class="chip on">All</button><button class="chip">Code</button><button class="chip">Agents</button><button class="chip">Jev</button><button class="chip">You</button></div>
+          <div class="feed">
+            <div class="fi"><span class="av" style="background:var(--c-code)">{}</span><div><b>Checks</b> 5 passed · 3 failed (baseline) <br><time>14:24</time></div></div>
+            <div class="fi"><span class="av" style="background:var(--c-builder)">B</span><div><b>Builder</b> committed rev 0 · +14 −1<br><time>14:20</time></div></div>
+            <div class="fi"><span class="av" style="background:var(--brand);color:var(--on-brand)">SP</span><div><b>You</b> steered Builder<br><time>14:14</time></div></div>
+            <div class="fi"><span class="av" style="background:var(--c-builder)">B</span><div><b>Builder</b> started task #01<br><time>14:11</time></div></div>
+            <div class="fi"><span class="av" style="background:var(--c-jev)">J</span><div><b>Jev</b> gate passed (1 revision)<br><time>14:10</time></div></div>
+            <div class="fi"><span class="av" style="background:var(--c-jev)">J</span><div><b>Jev</b> asked Architect to revise<br><time>14:08</time></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- REVIEW -->
+  <section data-panel="review" hidden>
+    <details class="why"><summary>What changes vs today</summary><ul>
+      <li>Checks move to the top as their own section, shown as a 4-column grid of tiles instead of a long list. Click a tile for its log.</li>
+      <li>A check that also failed on main is marked "baseline" with a dashed border, so you can see why it did not go back to the Builder.</li>
+      <li>Architect gaps and Inspector findings sit side by side, 50/50, with matching headers and severity tags.</li>
+    </ul></details>
+    <div class="rev" style="margin-top:14px">
+      <div class="card checks">
+        <div class="checks-head"><span class="eyebrow">{ } Checks</span><span class="pill bad">5 passed · 3 failed</span><span class="pill">3 failed on main too</span><span class="spacer"></span><span class="muted" style="font-size:12.5px">Revision 0 · historical passes do not verify it</span></div>
+        <div class="cgrid" id="cgrid"></div>
+        <div class="log" id="clog"></div>
+      </div>
+      <div class="two">
+        <div class="card">
+          <div class="rh"><span class="av" style="background:var(--c-architect)">A</span><span class="eyebrow">Architect gaps</span><span class="cnt pill" id="acnt"></span></div>
+          <div id="alist"></div>
+        </div>
+        <div class="card">
+          <div class="rh"><span class="av" style="background:var(--c-inspector)">I</span><span class="eyebrow">Inspector findings</span><span class="cnt pill" id="icnt"></span></div>
+          <div id="ilist"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-panel="pr" hidden><div class="card ph-tab">Changes &amp; PR stays as it is today. Not part of this proposal.</div></section>
+</div>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  $$('.tabs button').forEach(b => b.onclick = () => {
+    $$('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+    $$('[data-panel]').forEach(p => p.hidden = p.dataset.panel !== b.dataset.tab);
+  });
+
+  $$('#actChips .chip').forEach(c => c.onclick = () => {
+    $$('#actChips .chip').forEach(x => x.classList.toggle('on', x === c));
+    const f = c.dataset.f;
+    $$('#msgs [data-k]').forEach(m => {
+      const k = m.dataset.k;
+      m.hidden = !(f === 'all' || k === f || (f === 'task' && k === 'task'));
+    });
+    $$('#msgs .divider').forEach(d => d.hidden = f !== 'all');
+  });
+
+  const st = { graph: '6', review: 'done' };
+  $$('[data-demo]').forEach(seg => $$('button', seg).forEach(b => b.onclick = () => {
+    $$('button', seg).forEach(x => x.classList.toggle('on', x === b));
+    st[seg.dataset.demo] = b.dataset.v; render();
+  }));
+
+  const T6 = [
+    { id: '01', t: 'Skip cleartext-auth test when 127.0.0.2 cannot be bound', w: 0, s: 'done', deps: [] },
+    { id: '02', t: 'Add bind-probe helper to fake SMTP test utils', w: 0, s: 'done', deps: [] },
+    { id: '03', t: 'Use probe in TLS handshake refusal test', w: 1, s: 'run', deps: ['01'] },
+    { id: '04', t: 'Use probe in STARTTLS downgrade test', w: 1, s: 'run', deps: ['01', '02'] },
+    { id: '05', t: 'Document skip reasons in test README', w: 2, s: 'wait', deps: ['03', '04'] },
+    { id: '06', t: 'Run vet + race on infra package', w: 2, s: 'wait', deps: ['04'] },
+  ];
+  const T1 = [{ id: '01', t: 'Skip the cleartext-auth refusal test when 127.0.0.2 cannot be bound', w: 0, s: 'run', deps: [] }];
+  const label = { done: ['Merged', 'ok'], run: ['Building', 'info'], wait: ['Waiting', ''] };
+  const col = { done: 'var(--success)', run: 'var(--info)', wait: 'var(--line-strong)' };
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  function wrap(text, n) { const out = []; let line = ''; for (const w of text.split(' ')) { if ((line + ' ' + w).trim().length > n) { out.push(line.trim()); line = w; } else line += ' ' + w; } out.push(line.trim()); return out.slice(0, 2).map((l, i, a) => i === 1 && out.length > 2 ? l + '…' : l); }
+
+  function graph(tasks) {
+    const NW = 230, NH = 92, CG = 110, RG = 28, PAD = 28, HEAD = 30;
+    const waves = Math.max(...tasks.map(t => t.w)) + 1;
+    const rows = Array.from({ length: waves }, (_, w) => tasks.filter(t => t.w === w));
+    const maxRows = Math.max(...rows.map(r => r.length));
+    const W = waves * (NW + PAD * 2) + (waves - 1) * CG, H = HEAD + PAD * 2 + maxRows * NH + (maxRows - 1) * RG;
+    const pos = {};
+    rows.forEach((r, w) => r.forEach((t, i) => {
+      const x = w * (NW + PAD * 2 + CG) + PAD, off = (maxRows - r.length) * (NH + RG) / 2;
+      pos[t.id] = { x, y: HEAD + PAD + off + i * (NH + RG) };
+    }));
+    let s = '';
+    rows.forEach((r, w) => { const x = w * (NW + PAD * 2 + CG); s += `<rect x="${x}" y="0" width="${NW + PAD * 2}" height="${H}" rx="12" fill="var(--surface)" opacity=".65"/><text x="${x + PAD}" y="22" font-family="var(--f-mono)" font-size="11" letter-spacing="1" fill="var(--muted)">WAVE ${w + 1}</text>`; });
+    tasks.forEach(t => t.deps.forEach(d => {
+      const a = pos[d], b = pos[t.id], x1 = a.x + NW, y1 = a.y + NH / 2, x2 = b.x, y2 = b.y + NH / 2, mx = x1 + (x2 - x1) / 2;
+      s += `<path d="M${x1} ${y1} H${mx} V${y2} H${x2 - 6}" fill="none" stroke="var(--line-strong)" stroke-width="1.5"/><path d="M${x2 - 7} ${y2 - 4} L${x2} ${y2} L${x2 - 7} ${y2 + 4}Z" fill="var(--line-strong)"/>`;
+    }));
+    tasks.forEach(t => {
+      const p = pos[t.id], [lb] = label[t.s], ls = wrap(t.t, 30), needed = tasks.filter(o => o.deps.includes(t.id)).length;
+      s += `<g><rect x="${p.x}" y="${p.y}" width="${NW}" height="${NH}" rx="10" fill="var(--surface)" stroke="var(--line)"/><rect x="${p.x}" y="${p.y}" width="${NW}" height="3" rx="1.5" fill="${col[t.s]}"/>
+        <text x="${p.x + 12}" y="${p.y + 22}" font-family="var(--f-mono)" font-size="10.5" letter-spacing=".8" fill="var(--muted)">BUILDER</text><text x="${p.x + NW - 12}" y="${p.y + 22}" text-anchor="end" font-family="var(--f-mono)" font-size="11" fill="var(--muted)">#${t.id}</text>
+        ${ls.map((l, i) => `<text x="${p.x + 12}" y="${p.y + 42 + i * 17}" font-family="var(--f-body)" font-size="13" font-weight="600" fill="var(--ink)">${esc(l)}</text>`).join('')}
+        <circle cx="${p.x + 16}" cy="${p.y + NH - 13}" r="4" fill="${col[t.s]}"/><text x="${p.x + 25}" y="${p.y + NH - 9}" font-family="var(--f-body)" font-size="11.5" fill="var(--muted)">${lb}</text>
+        ${needed ? `<text x="${p.x + NW - 12}" y="${p.y + NH - 9}" text-anchor="end" font-family="var(--f-mono)" font-size="10" fill="var(--muted)">NEEDED BY ${needed}</text>` : ''}</g>`;
+    });
+    const g = $('#g'); g.setAttribute('viewBox', `0 0 ${W} ${H}`); g.setAttribute('width', W); g.innerHTML = s;
+    const deps = tasks.reduce((n, t) => n + t.deps.length, 0);
+    $('#gsum').textContent = `${tasks.length} task${tasks.length > 1 ? 's' : ''} · ${deps} dependenc${deps === 1 ? 'y' : 'ies'} · ${waves} wave${waves > 1 ? 's' : ''}`;
+    const merged = tasks.filter(t => t.s === 'done').length;
+    $('#pmerged').textContent = `${merged} / ${tasks.length} merged`;
+    $('#pmeter').style.width = (merged / tasks.length * 100) + '%';
+    $('#tlist').innerHTML = tasks.map(t => { const [lb, c] = label[t.s]; return `<div class="trow"><span class="tt" title="${esc(t.t)}">${esc(t.t)}</span><span class="tm"><span class="mono">#${t.id} · wave ${t.w + 1}</span><span class="pill ${c}">${lb}</span></span></div>`; }).join('');
+  }
+
+  const CHECKS = [
+    { n: 'api tidy', c: 'go mod tidy && git diff --exit-code go.mod go.sum', r: 'fail', base: true, log: 'diff --git a/go.sum b/go.sum\n+golang.org/x/net v0.31.0 h1:…\nexit status 1\n\nAlso failed on main (baseline). Not sent to the Builder.' },
+    { n: 'api build', c: 'go build ./...', r: 'pass', log: 'ok' },
+    { n: 'api vet', c: 'go vet ./...', r: 'pass', log: 'ok' },
+    { n: 'api test', c: 'go test ./... -race', r: 'fail', base: true, log: '--- SKIP: TestSMTPCleartextAuthRefusalIsPermanent (0.00s)\n    smtp_test.go:211: 127.0.0.2 not bound on this host (add lo0 alias to run)\n--- FAIL: TestWorkspaceGC (0.31s)\n    gc_test.go:88: tempdir not empty\nFAIL  api/internal/workspace\n\nTestWorkspaceGC also fails on main (baseline).' },
+    { n: 'web gen api', c: 'npm run gen:api && git diff --exit-code lib/api/schema.ts', r: 'pass', log: 'ok' },
+    { n: 'web typecheck', c: 'npx tsc --noEmit', r: 'pass', log: 'ok' },
+    { n: 'web lint', c: 'npm run lint', r: 'pass', log: 'ok' },
+    { n: 'web build', c: 'npm run build', r: 'fail', base: true, log: 'Error: Cannot find module @rollup/rollup-darwin-arm64\n\nAlso failed on main (baseline).' },
+  ];
+  let sel = 3;
+  function checks() {
+    $('#cgrid').innerHTML = CHECKS.map((k, i) => `<button class="ck ${k.r === 'fail' ? 'fail' : ''} ${k.base ? 'base' : ''} ${i === sel ? 'sel' : ''}" data-i="${i}">
+      <span class="ckt"><strong>${k.n}</strong><span class="pill ${k.r === 'fail' ? 'bad' : 'ok'}">${k.r === 'fail' ? 'Fail' : 'Pass'}</span></span>
+      <code>${esc(k.c)}</code>${k.base ? '<span class="note">Baseline: fails on main too</span>' : ''}</button>`).join('');
+    $('#clog').textContent = `$ ${CHECKS[sel].c}\n${CHECKS[sel].log}`;
+    $$('#cgrid .ck').forEach(b => b.onclick = () => { sel = +b.dataset.i; checks(); });
+  }
+
+  const GAPS = [
+    { sev: 'med', t: 'Skip message differs from contract', loc: 'smtp_test.go:211', d: 'Contract says “127.0.0.2 not bound on this host (add lo0 alias to run)”; code matches. Gap closed on recheck.' },
+    { sev: 'low', t: 'No test proves the non-EADDRNOTAVAIL path fails', loc: 'smtp_test.go:204', d: 'Criterion 3 is covered by reading the code only.' },
+  ];
+  const FINDS = [
+    { sev: 'high', t: 'Probe listener leaks on early return', loc: 'smtp_test.go:206', d: 'If t.Skip runs after Listen succeeded on a later retry path, the listener is not closed. Defer Close right after Listen.' },
+    { sev: 'med', t: 'errors.Is target too narrow on Linux', loc: 'smtp_test.go:208', d: 'Some kernels return EADDRNOTAVAIL wrapped in *os.SyscallError; errors.Is handles it, but add a case in the table test.' },
+    { sev: 'low', t: 'Comment repeats the code', loc: 'smtp_test.go:203', d: 'Drop the “probe the address” comment; the helper name says it.' },
+  ];
+  const fl = xs => xs.map(f => `<div class="find"><div class="fh"><span class="sev ${f.sev}">${f.sev === 'med' ? 'Medium' : f.sev[0].toUpperCase() + f.sev.slice(1)}</span><strong>${esc(f.t)}</strong></div><span class="loc">${f.loc}</span><span>${esc(f.d)}</span></div>`).join('');
+  function review() {
+    const done = st.review === 'done';
+    $('#alist').style.cssText = $('#ilist').style.cssText = 'display:flex;flex-direction:column;gap:10px';
+    $('#alist').innerHTML = done ? fl(GAPS) : '<div class="empty">Runs after the checks pass, alongside the Inspector. Only when Jev is on.</div>';
+    $('#ilist').innerHTML = done ? fl(FINDS) : '<div class="empty"><span class="sq" style="margin-right:8px"><i></i><i></i><i></i><i></i></span>Inspector is reviewing revision 0…</div>';
+    $('#acnt').textContent = done ? `${GAPS.length} gaps` : 'waiting';
+    $('#icnt').textContent = done ? `${FINDS.length} findings` : 'running';
+  }
+
+  function render() { graph(st.graph === '6' ? T6 : T1); checks(); review(); }
+  render();
+})();
+</script>

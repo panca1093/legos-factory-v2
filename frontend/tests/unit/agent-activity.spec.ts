@@ -547,3 +547,29 @@ describe("runCacheSplit", () => {
     w.unmount();
   });
 });
+
+describe("Plan progress card", () => {
+  it("renders without any retryable run", () => {
+    const tasks = [
+      {
+        id: "T1",
+        work_order_id: "wo1",
+        seq: 1,
+        title: "A very long task title that should be ellipsized in the card",
+        objective: "",
+        role: "builder",
+        deps: [],
+      },
+    ];
+    const w = mount(ActivityPanel, {
+      props: { events: [], runs: [], tasks, canRetry: true },
+    });
+    const card = w.find('[data-test="plan-progress"]');
+    expect(card.text()).toContain("0 / 1 merged");
+    expect(
+      card.find('[data-task="T1"] .pp-title').attributes("title"),
+    ).toContain("very long task title");
+    expect(w.find('[data-test="retry-task"]').exists()).toBe(false);
+    w.unmount();
+  });
+});
