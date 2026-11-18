@@ -102,6 +102,27 @@ function remove(a: AgentAccount) {
     return;
   void run(() => api.del(`${base.value}/accounts/${a.id}`));
 }
+const roleLabels: Record<string, string> = {
+  foreman: "Foreman",
+  architect: "Architect",
+  builder: "Builder",
+  inspector: "Inspector",
+  chat: "Chat",
+};
+const chipRoles = computed(() =>
+  Object.keys(roleLabels).filter((r) =>
+    (props.agent.roles_allowed as string[]).includes(r),
+  ),
+);
+const holds = (a: AgentAccount, r: string) => (a.roles ?? []).includes(r);
+const toggleRole = (a: AgentAccount, r: string) =>
+  run(() =>
+    api.put(`${base.value}/accounts/${a.id}/roles`, {
+      roles: holds(a, r)
+        ? (a.roles ?? []).filter((x) => x !== r)
+        : [...(a.roles ?? []), r],
+    }),
+  );
 const refresh = () =>
   run(async () => {
     if (active.value)
@@ -260,7 +281,9 @@ const showBars = computed(() => {
         >
           Sign in
         </button>
-        <span v-if="a.active" class="pill green">In use</span>
+        <span v-if="a.active" class="pill green"
+          >In use · unassigned roles</span
+        >
         <button
           v-else-if="canWrite"
           class="btn small"
@@ -279,6 +302,24 @@ const showBars = computed(() => {
         >
           Remove
         </button>
+        <div
+          v-if="chipRoles.length"
+          class="role-chips"
+          role="group"
+          :aria-label="`Roles for ${a.label}`"
+        >
+          <button
+            v-for="r in chipRoles"
+            :key="r"
+            type="button"
+            class="role-chip"
+            :aria-pressed="holds(a, r)"
+            :disabled="!canWrite || busy"
+            @click="toggleRole(a, r)"
+          >
+            {{ roleLabels[r] }}
+          </button>
+        </div>
       </div>
     </div>
 

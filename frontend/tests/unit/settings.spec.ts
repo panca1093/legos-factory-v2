@@ -1037,3 +1037,60 @@ it("shows usage bars for Codex without any opt-in, and the plan line when there 
   expect(claude.find('[data-test="plan-line"]').exists()).toBe(true);
   w.unmount();
 });
+
+const dsAcct = (over: object = {}) =>
+  acct({
+    id: "ds",
+    label: "DeepSeek",
+    system: false,
+    active: false,
+    who: "",
+    plan: "API key · api.deepseek.com",
+    expires_at: undefined,
+    roles: ["builder"],
+    ...over,
+  });
+
+it("role chips show only with 2+ accounts and PUT the account's new role list", async () => {
+  routes["PUT /api/v1/agents/claude/accounts/ds/roles"] = () =>
+    new Response(null, { status: 204 });
+  agentsBody.agents[0].accounts = [acct({ roles: [] }), dsAcct()];
+  const { w } = await render();
+  expect(w.find('[data-agent="codex"] .role-chip').exists()).toBe(false);
+  const row = w.find('[data-agent="claude"]');
+  const group = row.find('[aria-label="Roles for DeepSeek"]');
+  expect(group.findAll(".role-chip").map((c) => c.text())).toEqual([
+    "Foreman",
+    "Architect",
+    "Builder",
+    "Inspector",
+    "Chat",
+  ]);
+  const pressed = group
+    .findAll(".role-chip")
+    .map((c) => c.attributes("aria-pressed"));
+  expect(pressed).toEqual(["false", "false", "true", "false", "false"]);
+  await group.findAll(".role-chip")[3].trigger("click");
+  await flushPromises();
+  expect(
+    sent("PUT", "/api/v1/agents/claude/accounts/ds/roles")[0].body,
+  ).toEqual({ roles: ["builder", "inspector"] });
+  w.unmount();
+});
+
+it("roles table checks the account serving the role and shows the API-key host", async () => {
+  agentsBody.agents[0].accounts = [
+    acct({ roles: [] }),
+    dsAcct({ status: "signed_out", plan: "API key · api.deepseek.com" }),
+  ];
+  const { w } = await render();
+  expect(w.find('[data-test="hint-builder"]').text()).toBe(
+    "Claude isn't signed in",
+  );
+  expect(w.find('[data-test="via-builder"]').text()).toBe(
+    "via api.deepseek.com",
+  );
+  expect(w.find('[data-test="hint-foreman"]').exists()).toBe(false);
+  expect(w.find('[data-test="via-foreman"]').exists()).toBe(false);
+  w.unmount();
+});
