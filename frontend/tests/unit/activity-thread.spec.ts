@@ -85,6 +85,15 @@ describe("activityThread", () => {
     ]);
   });
 
+  it("attaches doc cards only to the latest plan_ready", () => {
+    const [, p1, p2] = msgs([
+      ev("architect", "plan_ready", "one"),
+      ev("architect", "plan_ready", "two"),
+    ]);
+    expect(p1!.docs).toBeUndefined();
+    expect(p2!.docs).toHaveLength(4);
+  });
+
   it("maps plan_reviewed findings to Foreman feedback rows", () => {
     const [, f] = msgs([
       ev("foreman", "plan_reviewed", "notes", {
@@ -125,7 +134,8 @@ describe("activityThread", () => {
       text: "Fix it",
     });
     expect(plan1!.findings).toEqual([{ severity: "major", title: "a" }]);
-    expect(conv).toMatchObject({ to: "builder", pill: { label: "Needs you" } });
+    expect(conv).toMatchObject({ to: "builder" });
+    expect(conv!.pill).toBeUndefined();
     expect(ok).toMatchObject({
       kind: "system",
       pill: { label: "Gate passed" },
@@ -153,6 +163,30 @@ describe("activityThread", () => {
     });
   });
 
+  it("quotes only critical/high contract findings and resets on a human revision", () => {
+    const reviewed = ev("foreman", "plan_reviewed", "n", {
+      findings: [
+        { severity: "high", layer: "contract", issue: "Keep" },
+        { severity: "high", layer: "design", issue: "Wrong layer" },
+        { severity: "low", layer: "contract", issue: "Too minor" },
+      ],
+    });
+    const t = msgs([
+      reviewed,
+      ev("factory", "plan_revision_requested", "n", { revision: 1 }),
+      ev("architect", "plan_ready", "p"),
+      ev("foreman", "plan_reviewed", "n", {
+        findings: [{ severity: "critical", layer: "contract", issue: "Old" }],
+      }),
+      ev("human", "plan_revision_human", "Do it my way\nmore", {
+        revision: 2,
+      }),
+      ev("architect", "plan_ready", "p2"),
+    ]);
+    expect(t[3]!.quotes).toEqual(["Keep"]);
+    expect(t.at(-1)!.quotes).toEqual(["Do it my way"]);
+  });
+
   it("maps human revisions to the Architect or Builder on the right side", () => {
     const [, a, b] = msgs([
       ev("human", "plan_revision_human", "Rework the plan"),
@@ -164,7 +198,7 @@ describe("activityThread", () => {
 
   it("maps clarification questions and answers", () => {
     const [, q, r] = msgs([
-      ev("builder", "clarification_asked", "Which key?"),
+      ev("builder", "clarification_requested", "Which key?"),
       ev("human", "clarification_answered", "The user id", {
         question: "Which key?",
       }),
@@ -179,6 +213,44 @@ describe("activityThread", () => {
     expect(r!.docs).toEqual([
       { title: "Decision recorded", section: "decision" },
     ]);
+  });
+
+  it("sends an agent's clarification_asked to the Foreman and the Foreman's answer back", () => {
+    const [, q, a] = msgs([
+      ev("architect", "clarification_asked", "Which key?"),
+      ev("foreman", "clarification_answered", "The id", {
+        question: "Which key?",
+      }),
+    ]);
+    expect(q).toMatchObject({
+      from: "architect",
+      to: "foreman",
+      type: "Question",
+    });
+    expect(a).toMatchObject({
+      from: "foreman",
+      to: "architect",
+      type: "Reply",
+    });
+    expect(a!.docs).toBeUndefined();
+  });
+
+  it("renders a repeated answer as a system line and puts the decision doc on the last human answer only", () => {
+    const t = msgs([
+      ev("architect", "clarification_requested", "Q1"),
+      ev("human", "clarification_answered", "A1", { question: "Q1" }),
+      ev("architect", "clarification_requested", "Q2"),
+      ev("human", "clarification_answered", "A2", { question: "Q2" }),
+      ev("foreman", "clarification_answered", "A1", {
+        question: "Q1",
+        repeated: true,
+      }),
+    ]);
+    expect(t[2]!.docs).toBeUndefined();
+    expect(t[4]!.docs).toEqual([
+      { title: "Decision recorded", section: "decision" },
+    ]);
+    expect(t[5]).toMatchObject({ kind: "system", from: "foreman" });
   });
 
   it("maps a steer to the run's role, from You", () => {
@@ -201,6 +273,55 @@ describe("activityThread", () => {
       text: "Wire it up",
     });
     expect(none).toBeUndefined();
+  });
+
+  it("announces a builder task once per task id", () => {
+    const t = msgs([
+      ev("builder", "agent_started", "s", { run_id: "r1", task_id: "t1" }),
+      ev("builder", "agent_started", "s", { run_id: "r2", task_id: "t1" }),
+      ev("builder", "agent_started", "s", { run_id: "r3", task_id: "t2" }),
+    ]);
+    expect(t.map((i) => i.type)).toEqual(["Request", "Task #01", "Task #02"]);
+  });
+
+  it("keeps the findings group open across interleaved events until inspection_finished", () => {
+    const t = msgs([
+      ev("inspector", "inspection_specialists", "go"),
+      ev("inspector", "finding", "[sec/blocker] A", { severity: "blocker" }),
+      ev("inspector", "agent_started", "s", { run_id: "x" }),
+      ev("architect", "agent_completed", "done"),
+      ev("inspector", "finding", "[perf/minor] B", { severity: "minor" }),
+      ev("inspector", "inspection_finished", "2"),
+      ev("factory", "fix_requested", "fix", { revision: 1 }),
+    ]);
+    expect(t).toHaveLength(3);
+    expect(t[1]!.findings!.map((f) => f.title)).toEqual(["A", "B"]);
+    expect(t[2]!.quotes).toEqual(["A", "B"]);
+  });
+
+  it("flushes checks before a stage change so they land before the next divider", () => {
+    const t = thread([
+      ev("inspector", "check_pass", "p"),
+      ev("factory", "state_changed", "s", { to: "VERIFYING" }),
+      ev("inspector", "check_pass", "p"),
+    ]);
+    expect(t.map((i) => i.type)).toEqual([
+      "Stage",
+      "Request",
+      "Checks",
+      "Stage",
+      "Checks",
+    ]);
+  });
+
+  it("does not double count a baseline failure", () => {
+    const t = msgs([
+      ev("inspector", "check_pass", "a"),
+      ev("inspector", "check_fail", "b"),
+      ev("inspector", "check_failed_before_change", "b"),
+    ]);
+    expect(t[1]!.text).toBe("1 passed, 1 failed before the change");
+    expect(t[1]!.pill!.tone).toBe("green");
   });
 
   it("groups inspector findings until inspection_finished", () => {
@@ -269,7 +390,7 @@ describe("activityThread", () => {
     ]);
     expect(t[2]!.text).toBe("2 passed, 1 failed");
     expect(t[2]!.pill!.tone).toBe("red");
-    expect(t[5]!.text).toBe("Needs you: Blockers remain");
+    expect(t[5]!.text).toBe("Blockers remain");
   });
 
   it("puts a stage divider at the first item of each later stage, once", () => {

@@ -4,7 +4,12 @@ import { ChevronRight, Download, FileText, Send } from "lucide-vue-next";
 import type { Run, Task, WOEvent, WorkOrder } from "../../../types/api";
 import ActorBadge from "../ActorBadge.vue";
 import BlueprintSection from "./BlueprintSection.vue";
-import { groupActivity, liveRuns, liveVerb } from "../runs/agentActivity";
+import {
+  groupActivity,
+  liveRuns,
+  liveVerb,
+  type AgentRunGroup,
+} from "../runs/agentActivity";
 import {
   activityThread,
   handoffs,
@@ -108,13 +113,20 @@ const sendError = ref("");
 watch(
   live,
   (rs) => {
-    if (!rs.some((r) => r.id === target.value)) target.value = rs[0]?.id ?? "";
+    if (!target.value) target.value = rs[0]?.id ?? "";
   },
   { immediate: true },
 );
-const picked = computed(
-  () => live.value.find((r) => r.id === target.value) ?? live.value[0],
-);
+const picked = computed(() => live.value.find((r) => r.id === target.value));
+const targetGone = computed(() => !!target.value && !picked.value);
+const runLabel = (r: AgentRunGroup) => {
+  const i = props.tasks.findIndex((t) => t.id === r.taskID);
+  const task =
+    i < 0
+      ? ""
+      : ` · #${String(i + 1).padStart(2, "0")} ${props.tasks[i]!.title}`;
+  return cap(r.actor) + task;
+};
 async function send() {
   const message = draft.value.trim();
   const run = picked.value;
@@ -212,7 +224,9 @@ async function send() {
                 <time :datetime="it.at">{{ time(it.at) }}</time>
               </div>
               <div class="bubble">
-                <p v-for="q in it.quotes" :key="q" class="quote">{{ q }}</p>
+                <p v-for="(q, qi) in it.quotes" :key="qi" class="quote">
+                  {{ q }}
+                </p>
                 <p v-if="it.text">{{ it.text }}</p>
                 <ul v-if="it.findings?.length" class="findings">
                   <li
@@ -293,26 +307,31 @@ async function send() {
           data-test="steer-to"
         >
           <option v-for="r in live" :key="r.id" :value="r.id">
-            {{ cap(r.actor) }}
+            {{ runLabel(r) }}
           </option>
-          <option v-if="!live.length" value="">No one</option>
+          <option v-if="targetGone" :value="target" disabled>
+            Run finished
+          </option>
+          <option v-if="!live.length && !targetGone" value="">No one</option>
         </select>
         <label class="sr-only" for="steer-msg">Message</label>
         <input
           id="steer-msg"
           v-model="draft"
-          :disabled="!live.length || sending"
+          :disabled="!picked || sending"
           :placeholder="
-            live.length
-              ? `Steer ${cap(picked?.actor ?? '')} while it works…`
-              : 'No agent is running, so there is no one to steer.'
+            targetGone
+              ? 'That run has finished. Pick another recipient to steer.'
+              : picked
+                ? `Steer ${cap(picked.actor)} while it works…`
+                : 'No agent is running, so there is no one to steer.'
           "
           data-test="steer-input"
         />
         <button
           class="btn primary"
           type="submit"
-          :disabled="!live.length || sending || !draft.trim()"
+          :disabled="!picked || sending || !draft.trim()"
           data-test="steer-send"
         >
           <Send class="icon" />Send

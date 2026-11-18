@@ -92,6 +92,13 @@ test("full work order journey: project → plan → graph → build → quality 
   await expect(
     page.getByText("Architect review", { exact: true }),
   ).toBeVisible();
+  const planURL = new URL(page.url());
+  planURL.searchParams.set("tab", "plan");
+  await page.goto(planURL.toString());
+  await expect(
+    page.getByRole("tab", { name: "Activity", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('[data-doc="brief"]').first()).toBeVisible();
   await page.getByRole("button", { name: "Approve plan", exact: true }).click();
   await page.getByRole("tab", { name: "Progress", exact: true }).click();
   await expect(page.locator(".task-brick")).toHaveCount(4);

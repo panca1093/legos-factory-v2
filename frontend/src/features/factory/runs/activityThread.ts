@@ -106,9 +106,15 @@ export function activityThread(
     group: { id: string; at: string; rows: ThreadFinding[] } | null = null,
     lastGroup: string[] = [];
 
-  const answeredInThread = sorted.some(
-    (e) => e.kind === "clarification_answered" && e.actor === "human",
-  );
+  const lastHumanAnswer = [...sorted]
+    .reverse()
+    .find(
+      (e) => e.kind === "clarification_answered" && e.actor === "human",
+    )?.id;
+  const latestPlan = [...sorted]
+    .reverse()
+    .find((e) => e.kind === "plan_ready")?.id;
+  const buildersTasked = new Set<string>();
   push({
     id: "request",
     kind: "message",
@@ -121,7 +127,7 @@ export function activityThread(
       ...(order.objective
         ? [{ title: "The outcome", section: "outcome" as const }]
         : []),
-      ...(order.clarif_answer && !answeredInThread
+      ...(order.clarif_answer && lastHumanAnswer === undefined
         ? [{ title: "Decision recorded", section: "decision" as const }]
         : []),
     ],
@@ -130,7 +136,7 @@ export function activityThread(
   const flushChecks = () => {
     const keys = Object.keys(checks);
     if (!keys.length) return;
-    const bad = keys.some((k) => k !== "pass");
+    const bad = "fail" in checks;
     push({
       id: checksID,
       kind: "system",
@@ -146,19 +152,21 @@ export function activityThread(
     checks = {};
   };
   const flushFindings = () => {
-    if (!group) return;
-    lastGroup = group.rows.map((r) => r.title);
+    const open = group;
+    group = null;
+    if (!open) return;
+    lastGroup = open.rows.map((r) => r.title);
+    if (!open.rows.length) return;
     push({
-      id: group.id,
+      id: open.id,
       kind: "message",
       from: "inspector",
       to: "builder",
       type: "Feedback",
-      text: `${group.rows.length} finding${group.rows.length === 1 ? "" : "s"} to fix`,
-      at: group.at,
-      findings: group.rows,
+      text: `${open.rows.length} finding${open.rows.length === 1 ? "" : "s"} to fix`,
+      at: open.at,
+      findings: open.rows,
     });
-    group = null;
   };
   const system = (
     e: WOEvent,
@@ -182,11 +190,12 @@ export function activityThread(
     const id = String(e.id);
     const k = e.kind;
     if (k === "state_changed") {
+      flushChecks();
       const s = stageOfState(str(p.to));
       if (s !== undefined) stage = s;
       continue;
     }
-    if (k !== "finding" && k !== "inspection_finished") flushFindings();
+    if (k === "inspection_specialists") flushFindings();
     if (!k.startsWith("check_")) flushChecks();
 
     if (k === "brief_ready" || k === "brief_amended") {
@@ -204,6 +213,7 @@ export function activityThread(
       });
     } else if (k === "plan_ready") {
       const reply = pendingRevision > 0;
+      const current = e.id === latestPlan;
       push({
         id,
         kind: "message",
@@ -212,14 +222,16 @@ export function activityThread(
         type: reply ? `Reply · revision ${pendingRevision}` : "Spec",
         text: str(p.summary) || e.message,
         quotes: reply && pending.length ? pending : undefined,
-        docs: [
-          { title: "Acceptance contract", section: "acceptance" },
-          ...(order.spec
-            ? [{ title: "Architect's spec", section: "spec" as const }]
-            : []),
-          { title: "How the crew will build it", section: "tasks" },
-          { title: "Scope boundaries", section: "scope" },
-        ],
+        docs: current
+          ? [
+              { title: "Acceptance contract", section: "acceptance" },
+              ...(order.spec
+                ? [{ title: "Architect's spec", section: "spec" as const }]
+                : []),
+              { title: "How the crew will build it", section: "tasks" },
+              { title: "Scope boundaries", section: "scope" },
+            ]
+          : undefined,
       });
       pendingRevision = 0;
       pending = [];
@@ -229,7 +241,17 @@ export function activityThread(
         title: str(f.issue) || str(f.title) || str(f.cites),
         detail: str(f.fix) || undefined,
       }));
-      pending.push(...findings.map((f) => f.title).filter(Boolean));
+      const raw = objects(p.findings);
+      pending.push(
+        ...findings
+          .filter(
+            (f, i) =>
+              f.title &&
+              ["critical", "high"].includes(f.severity) &&
+              str(raw[i]?.layer) === "contract",
+          )
+          .map((f) => f.title),
+      );
       push({
         id,
         kind: "message",
@@ -252,7 +274,8 @@ export function activityThread(
         const issues = strings(p.issues);
         const note = str(p.note) || str(p.error);
         const sev = outcome === "escalate" ? "blocker" : "major";
-        if (gate === "plan") pending.push(...issues);
+        if (gate === "plan" && outcome === "revise")
+          pending.push(...(note ? [firstLine(note)] : issues));
         push({
           id,
           kind: "message",
@@ -261,10 +284,6 @@ export function activityThread(
           type: "Feedback",
           text: note || `${name} gate: ${outcome}`,
           findings: issues.map((title) => ({ severity: sev, title })),
-          pill:
-            outcome === "escalate"
-              ? { label: "Needs you", tone: "orange" }
-              : undefined,
         });
       }
     } else if (k === "plan_revision_requested") {
@@ -276,7 +295,7 @@ export function activityThread(
       if (toPlan) {
         revision = Number(p.revision) || revision + 1;
         pendingRevision = revision;
-        pending.push(firstLine(e.message));
+        pending = [firstLine(e.message)];
       }
       push({
         id,
@@ -286,19 +305,23 @@ export function activityThread(
         type: "Feedback",
         text: e.message,
       });
-    } else if (k === "clarification_asked") {
+    } else if (k === "clarification_asked" || k === "clarification_requested") {
       lastQuestion = e.message;
       lastAsker = e.actor;
       push({
         id,
         kind: "message",
         from: e.actor,
-        to: "you",
+        to: k === "clarification_asked" ? "foreman" : "you",
         type: "Question",
         text: e.message,
       });
     } else if (k === "clarification_answered") {
       const q = str(p.question) || lastQuestion;
+      if (p.repeated === true) {
+        system(e, "Answer reused", "");
+        continue;
+      }
       push({
         id,
         kind: "message",
@@ -308,7 +331,7 @@ export function activityThread(
         text: e.message,
         quotes: q ? [firstLine(q)] : undefined,
         docs:
-          e.actor === "human" && order.clarif_answer
+          e.id === lastHumanAnswer && order.clarif_answer
             ? [{ title: "Decision recorded", section: "decision" }]
             : undefined,
       });
@@ -323,7 +346,8 @@ export function activityThread(
       });
     } else if (k === "agent_started") {
       const entry = taskByID.get(str(p.task_id));
-      if (e.actor === "builder" && entry)
+      if (e.actor === "builder" && entry && !buildersTasked.has(entry.t.id)) {
+        buildersTasked.add(entry.t.id);
         push({
           id,
           kind: "message",
@@ -332,15 +356,17 @@ export function activityThread(
           type: `Task #${pad(entry.n)}`,
           text: entry.t.title,
         });
-    } else if (k === "finding") {
+      }
+    } else if (k === "finding" || k === "inspection_specialists") {
       const m = /^\[[^\]]*\]\s*(.*)$/.exec(e.message);
       group ??= { id, at: e.created_at, rows: [] };
       group.at = e.created_at;
-      group.rows.push({
-        severity: str(p.severity) || "info",
-        title: m?.[1] || e.message,
-        detail: str(p.location) || undefined,
-      });
+      if (k === "finding")
+        group.rows.push({
+          severity: str(p.severity) || "info",
+          title: m?.[1] || e.message,
+          detail: str(p.location) || undefined,
+        });
     } else if (k === "inspection_finished") {
       flushFindings();
     } else if (k === "fix_requested") {
@@ -360,6 +386,10 @@ export function activityThread(
         checksAt = e.created_at;
         checksID = id;
       }
+      if (o === "failed_before_change" && checks.fail) {
+        checks.fail--;
+        if (!checks.fail) delete checks.fail;
+      }
       checks[o] = (checks[o] ?? 0) + 1;
     } else if (k === "commit_recorded") system(e, "Committed", "green");
     else if (k === "task_merged") system(e, "Merged", "green");
@@ -368,7 +398,7 @@ export function activityThread(
       system(e, "Not verified", "orange");
     else if (k === "pr_opened") system(e, "PR opened", "green");
     else if (k === "escalated" || k === "plan_escalated")
-      system(e, "Needs you", "orange", `Needs you: ${e.message}`);
+      system(e, "Needs you", "orange");
     else if (k === "paused") system(e, "Paused", "orange");
     else if (k === "resumed") system(e, "Resumed", "");
     else if (k === "cancelled") system(e, "Cancelled", "red");
