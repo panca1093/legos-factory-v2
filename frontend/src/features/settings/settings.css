@@ -207,6 +207,10 @@
   background: var(--tint);
   color: var(--ink);
 }
+.role-chip .chip-holder {
+  font-weight: 400;
+  opacity: 0.75;
+}
 .role-chip:disabled {
   opacity: 0.6;
 }

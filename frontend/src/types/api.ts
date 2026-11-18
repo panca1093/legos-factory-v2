@@ -311,6 +311,7 @@ export interface AgentAccount {
   expires_at?: string;
   usage?: { session?: UsageWindow; week?: UsageWindow };
   usage_error?: string;
+  status_note?: string;
   login_command?: string;
   roles: string[];
 }
