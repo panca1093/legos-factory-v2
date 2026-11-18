@@ -21,7 +21,7 @@ Done when: the unit test for `baselineFailures` covers same-name fail, base pass
 
 Files: `work-orders/WorkOrderView.vue` (progress branch), `runs/ActivityPanel.vue` split into `runs/PlanProgressCard.vue` + `runs/HappeningCard.vue`, `task-graph/TaskGraph.vue` (height only).
 
-- `grid-template-columns: minmax(0, 4fr) minmax(300px, 1fr)`. The 300px minimum is deliberate: 20% of a 1280px window is about 250px, too narrow for the live card and the steer box.
+- `grid-template-columns: minmax(0, 4fr) minmax(240px, 1fr)`. The page caps at 1320px, so a 300px floor never reaches 4:1; 240px gives a true 80/20 with the sidebar closed.
 - Left: TaskGraph fills the column height (min 640px). ELK layout, zoom and pan unchanged.
 - Right, top: **Plan progress** card, always shown (today it only appears when a retry is possible). Merged count, meter, a compact row per task. Retry and remediation buttons move into this card, unchanged in behaviour.
 - Right, bottom: **What's happening**: `AgentLiveCard` (spinner + steer input) first, then the filter chips at small size, then the event list in a compact one-line-plus-time form. Same `groupActivity` data and filters as today.

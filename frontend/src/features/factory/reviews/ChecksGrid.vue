@@ -42,7 +42,7 @@ const failed = computed(
   () => current.value.filter((c) => c.outcome === "FAIL").length,
 );
 const failedOnMain = computed(
-  () => current.value.filter((c) => onMain(c)).length,
+  () => current.value.filter((c) => c.outcome === "FAIL" && onMain(c)).length,
 );
 const tone = (c: QualityCheck) =>
   c.outcome === "PASS" ? "green" : c.outcome === "FAIL" ? "red" : "orange";

@@ -131,8 +131,8 @@ test("full work order journey: project → plan → graph → build → quality 
   await page.setViewportSize({ width: 1440, height: 900 });
   const graph = await page.locator(".tg").boundingBox();
   const rcol = await page.locator(".fx-rcol").boundingBox();
-  expect(graph!.width / rcol!.width).toBeGreaterThan(3.5);
-  expect(graph!.width / rcol!.width).toBeLessThan(4.5);
+  expect(graph!.width / rcol!.width).toBeGreaterThan(3.9);
+  expect(graph!.width / rcol!.width).toBeLessThan(4.1);
   await page.setViewportSize({ width: 1000, height: 900 });
   const stackedGraph = await page.locator(".tg").boundingBox();
   const stackedCol = await page.locator(".fx-rcol").boundingBox();

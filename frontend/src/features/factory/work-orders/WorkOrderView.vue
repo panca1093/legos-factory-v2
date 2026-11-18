@@ -560,7 +560,7 @@ function download() {
 <style scoped>
 .fx-progress {
   display: grid;
-  grid-template-columns: minmax(0, 4fr) minmax(300px, 1fr);
+  grid-template-columns: minmax(0, 4fr) minmax(240px, 1fr);
   gap: 24px;
   min-width: 0;
   align-items: start;
