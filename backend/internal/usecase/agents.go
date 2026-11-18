@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -101,6 +103,8 @@ type AgentAccountStore interface {
 	Active(ctx context.Context, userID, agent string) (*model.AgentAccount, error)
 	Activate(ctx context.Context, userID, agent, id string) error
 	Delete(ctx context.Context, userID, agent, id string) error
+	RoleAccounts(ctx context.Context, userID, agent string) (map[string]string, error)
+	SetRoleAccounts(ctx context.Context, userID, agent, accountID string, roles []string) error
 	Enabled(ctx context.Context, agent string) (bool, error)
 	SetEnabled(ctx context.Context, agent string, enabled bool) error
 }
@@ -178,6 +182,7 @@ type AccountView struct {
 	Usage        *AccountUsage `json:"usage,omitempty"`
 	UsageError   string        `json:"usage_error,omitempty"`
 	LoginCommand string        `json:"login_command"`
+	Roles        []string      `json:"roles"`
 }
 
 type AgentView struct {
@@ -266,8 +271,8 @@ func (a *Agents) Ready(ctx context.Context, id string) error {
 	return nil
 }
 
-// RunEnv is the environment and extra ACP arguments for a run on behalf of userID: the user's active account for the agent, or nothing for the system default.
-func (a *Agents) RunEnv(ctx context.Context, id, userID string) (env, args []string, err error) {
+// RunEnv is the environment and extra ACP arguments for a run on behalf of userID: the account assigned to role, else the user's active account for the agent, or nothing for the system default. An empty role means the active account.
+func (a *Agents) RunEnv(ctx context.Context, id, userID string, role model.AgentRole) (env, args []string, err error) {
 	spec, ok := AgentByID(id)
 	if !ok {
 		return nil, nil, fmt.Errorf("%w: %q", model.ErrAgentUnknown, id)
@@ -275,11 +280,90 @@ func (a *Agents) RunEnv(ctx context.Context, id, userID string) (env, args []str
 	if userID == "" {
 		return nil, nil, nil
 	}
-	acc, err := a.Store.Active(ctx, userID, id)
+	acc, err := a.roleAccount(ctx, userID, id, role)
 	if err != nil || acc == nil {
 		return nil, nil, err
 	}
-	return spec.accountEnv(acc.HomeDir), spec.accountArgs(), nil
+	env = spec.accountEnv(acc.HomeDir)
+	if spec.ID == "claude" {
+		lift, _, err := claudeAPIEnv(acc.HomeDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		env = append(env, lift...)
+	}
+	return env, spec.accountArgs(), nil
+}
+
+// roleAccount is the account serving role; nil means the system default.
+func (a *Agents) roleAccount(ctx context.Context, userID, agent string, role model.AgentRole) (*model.AgentAccount, error) {
+	if role == model.AgentCataloger {
+		role = model.AgentArchitect
+	}
+	if role != "" {
+		assigned, err := a.Store.RoleAccounts(ctx, userID, agent)
+		if err != nil {
+			return nil, err
+		}
+		if id, ok := assigned[string(role)]; ok {
+			if id == SystemAccountID {
+				return nil, nil
+			}
+			acc, err := a.Store.Get(ctx, userID, agent, id)
+			if err == nil {
+				return acc, nil
+			}
+			if !errors.Is(err, model.ErrAgentAccountNotFound) {
+				return nil, err
+			}
+		}
+	}
+	return a.Store.Active(ctx, userID, agent)
+}
+
+// claudeAPIEnv reads the Anthropic-compatible endpoint from <home>/settings.json. Claude Code ignores these three keys
+// there, so the factory lifts them into the process env. Errors never carry file content: it holds the key.
+func claudeAPIEnv(home string) (env []string, host string, err error) {
+	raw, err := os.ReadFile(filepath.Join(home, "settings.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, "", nil
+	}
+	if err != nil {
+		return nil, "", errors.New("cannot read the account's settings.json")
+	}
+	var cfg struct {
+		Env map[string]any `json:"env"`
+	}
+	if json.Unmarshal(raw, &cfg) != nil {
+		return nil, "", errors.New("the account's settings.json is not valid JSON")
+	}
+	val := func(k string) string { v, _ := cfg.Env[k].(string); return v }
+	base := val("ANTHROPIC_BASE_URL")
+	if base == "" {
+		return nil, "", nil
+	}
+	env = []string{"ANTHROPIC_BASE_URL=" + base}
+	for _, k := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"} {
+		if v := val(k); v != "" {
+			env = append(env, k+"="+v)
+		}
+	}
+	if u, err := url.Parse(base); err == nil {
+		host = u.Host
+	}
+	return env, host, nil
+}
+
+// apiKeyStatus is the status of a Claude account that talks to an Anthropic-compatible provider; ok is false for a regular login.
+func apiKeyStatus(spec AgentSpec, acc model.AgentAccount) (accountStatus, bool) {
+	if spec.ID != "claude" || acc.ID == SystemAccountID {
+		return accountStatus{}, false
+	}
+	env, host, err := claudeAPIEnv(acc.HomeDir)
+	if err != nil || len(env) < 2 {
+		return accountStatus{}, false
+	}
+	return accountStatus{Status: "signed_in", Plan: "API key · " + host}, true
 }
 
 // List describes every known agent with the user's accounts and their status.
@@ -325,6 +409,10 @@ func (a *Agents) view(ctx context.Context, userID string, spec AgentSpec, fresh 
 	for _, s := range stored {
 		active = active || s.Active
 	}
+	assigned, err := a.Store.RoleAccounts(ctx, userID, spec.ID)
+	if err != nil {
+		return nil, err
+	}
 	accs := []model.AgentAccount{{ID: SystemAccountID, UserID: userID, Agent: spec.ID, Label: "System default", Active: !active}}
 	accs = append(accs, stored...)
 	v.Accounts = make([]AccountView, len(accs))
@@ -334,6 +422,12 @@ func (a *Agents) view(ctx context.Context, userID string, spec AgentSpec, fresh 
 		go func() {
 			defer wg.Done()
 			v.Accounts[i] = a.accountView(ctx, spec, accs[i], v.Installed, fresh)
+			v.Accounts[i].Roles = []string{}
+			for _, r := range allRoles {
+				if assigned[string(r)] == accs[i].ID {
+					v.Accounts[i].Roles = append(v.Accounts[i].Roles, string(r))
+				}
+			}
 		}()
 	}
 	wg.Wait()
@@ -360,7 +454,9 @@ func (a *Agents) accountView(ctx context.Context, spec AgentSpec, acc model.Agen
 			av.UsageError = err
 		}
 	case "claude":
-		av.Usage, av.UsageError = a.claudeUsage(ctx, acc, fresh)
+		if _, api := apiKeyStatus(spec, acc); !api {
+			av.Usage, av.UsageError = a.claudeUsage(ctx, acc, fresh)
+		}
 	}
 	return av
 }
@@ -380,6 +476,9 @@ func (a *Agents) statusKey(spec AgentSpec, acc model.AgentAccount) string {
 }
 
 func (a *Agents) accountStatus(ctx context.Context, spec AgentSpec, acc model.AgentAccount, fresh bool) accountStatus {
+	if st, ok := apiKeyStatus(spec, acc); ok {
+		return st // read from settings.json each time, so an edit shows without waiting for the status cache
+	}
 	key := a.statusKey(spec, acc)
 	ttl := a.StatusTTL
 	if ttl <= 0 {
@@ -851,6 +950,35 @@ func (a *Agents) Activate(ctx context.Context, u *model.User, agent, id string) 
 		return a.Store.Activate(ctx, u.ID, agent, "")
 	}
 	return a.Store.Activate(ctx, u.ID, agent, id)
+}
+
+// SetAccountRoles makes the account serve exactly roles for the user; they leave the user's other accounts of the agent.
+func (a *Agents) SetAccountRoles(ctx context.Context, u *model.User, agent, id string, roles []string) error {
+	spec, err := a.spec(agent)
+	if err != nil {
+		return err
+	}
+	if id != SystemAccountID {
+		if _, err := a.Store.Get(ctx, u.ID, agent, id); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	var uniq []string
+	for _, r := range roles {
+		role := model.AgentRole(r)
+		if !slices.Contains(allRoles, role) {
+			return fmt.Errorf("%w: unknown role %q", ErrInvalid, r)
+		}
+		if !spec.Allows(role) {
+			return fmt.Errorf("%w: %s cannot serve the %s role", ErrInvalid, spec.Name, r)
+		}
+		if !seen[r] {
+			seen[r] = true
+			uniq = append(uniq, r)
+		}
+	}
+	return a.Store.SetRoleAccounts(ctx, u.ID, agent, id, uniq)
 }
 
 // DeleteAccount removes the account and its home; deleting the active one falls back to the system default.

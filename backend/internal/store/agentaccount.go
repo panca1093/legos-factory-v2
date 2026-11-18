@@ -95,14 +95,59 @@ func (r *AgentAccountRepo) Activate(ctx context.Context, userID, agent, id strin
 
 // Delete removes the account; deleting the active one leaves the system default active.
 func (r *AgentAccountRepo) Delete(ctx context.Context, userID, agent, id string) error {
-	res, err := r.DB.ExecContext(ctx, `DELETE FROM agent_accounts WHERE id = ? AND user_id = ? AND agent = ?`, id, userID, agent)
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM agent_accounts WHERE id = ? AND user_id = ? AND agent = ?`, id, userID, agent)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return model.ErrAgentAccountNotFound
 	}
-	return nil
+	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_role_accounts WHERE user_id = ? AND agent = ? AND account_id = ?`, userID, agent, id); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// RoleAccounts maps each role the user has assigned for the agent to its account id ("system" is the virtual default).
+func (r *AgentAccountRepo) RoleAccounts(ctx context.Context, userID, agent string) (map[string]string, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT role, account_id FROM agent_role_accounts WHERE user_id = ? AND agent = ?`, userID, agent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var role, id string
+		if err := rows.Scan(&role, &id); err != nil {
+			return nil, err
+		}
+		out[role] = id
+	}
+	return out, rows.Err()
+}
+
+// SetRoleAccounts makes accountID serve exactly roles: they leave the user's other accounts of the agent, and the account's other roles are cleared.
+func (r *AgentAccountRepo) SetRoleAccounts(ctx context.Context, userID, agent, accountID string, roles []string) error {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_role_accounts WHERE user_id = ? AND agent = ? AND account_id = ?`, userID, agent, accountID); err != nil {
+		return err
+	}
+	for _, role := range roles {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_role_accounts (user_id, agent, role, account_id) VALUES (?,?,?,?)
+			ON CONFLICT(user_id, agent, role) DO UPDATE SET account_id = excluded.account_id`, userID, agent, role, accountID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // Enabled reports the agent's switch; an agent never switched is enabled.

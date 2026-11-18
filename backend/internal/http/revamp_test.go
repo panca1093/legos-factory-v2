@@ -207,3 +207,69 @@ func TestContractTestsFeatureIsGone(t *testing.T) {
 		t.Fatalf("old events unreadable: %v", err)
 	}
 }
+
+func TestAgentAccountRolesEndpoint(t *testing.T) {
+	srv, _ := bootRevamp(t)
+	mk := func(as string) string {
+		_, body := chatDo(srv, as, "POST", "/api/v1/agents/claude/accounts", `{"label":"x"}`)
+		var c struct{ Account struct{ ID string } }
+		_ = json.Unmarshal([]byte(body), &c)
+		return c.Account.ID
+	}
+	a, b, other := mk("eng"), mk("eng"), mk("eng2")
+	roles := func() map[string][]string {
+		_, body := chatDo(srv, "eng", "GET", "/api/v1/agents", "")
+		var list struct {
+			Agents []struct {
+				ID       string
+				Accounts []struct {
+					ID    string
+					Roles []string
+				}
+			}
+		}
+		if err := json.Unmarshal([]byte(body), &list); err != nil || !strings.Contains(body, `"roles":[]`) {
+			t.Fatalf("list: %s", body)
+		}
+		out := map[string][]string{}
+		for _, ac := range list.Agents[0].Accounts {
+			out[ac.ID] = ac.Roles
+		}
+		return out
+	}
+	put := func(as, aid, body string) int {
+		code, _ := chatDo(srv, as, "PUT", "/api/v1/agents/claude/accounts/"+aid+"/roles", body)
+		return code
+	}
+	if code := put("eng", a, `{"roles":["chat","builder","foreman"]}`); code != http.StatusNoContent {
+		t.Fatalf("set: %d", code)
+	}
+	if got := roles()[a]; strings.Join(got, ",") != "foreman,builder,chat" {
+		t.Fatalf("roles must come back in role order: %v", got)
+	}
+	if put("eng", b, `{"roles":["builder"]}`) != http.StatusNoContent || put("eng", "system", `{"roles":["inspector"]}`) != http.StatusNoContent {
+		t.Fatal("move/system")
+	}
+	got := roles()
+	if strings.Join(got[a], ",") != "foreman,chat" || strings.Join(got[b], ",") != "builder" || strings.Join(got["system"], ",") != "inspector" {
+		t.Fatalf("roles after move: %v", got)
+	}
+	if put("eng", a, `{"roles":[]}`) != http.StatusNoContent || len(roles()[a]) != 0 {
+		t.Fatalf("empty list must clear: %v", roles()[a])
+	}
+	if code := put("eng", other, `{"roles":["builder"]}`); code != http.StatusNotFound {
+		t.Fatalf("another user's account: %d", code)
+	}
+	if code := put("eng", a, `{"roles":["janitor"]}`); code != http.StatusBadRequest {
+		t.Fatalf("unknown role: %d", code)
+	}
+	if code, _ := chatDo(srv, "eng", "PUT", "/api/v1/agents/codex/accounts/system/roles", `{"roles":["chat"]}`); code != http.StatusBadRequest {
+		t.Fatalf("role the agent cannot serve: %d", code)
+	}
+	if got := roles(); strings.Join(got[b], ",") != "builder" {
+		t.Fatalf("rejected requests must change nothing: %v", got)
+	}
+	if code := put("adm", "system", `{"roles":["chat"]}`); code != http.StatusNoContent {
+		t.Fatalf("admin outranks engineer: %d", code)
+	}
+}

@@ -107,7 +107,7 @@ func (c *catalogs) list(ctx context.Context, agents *usecase.Agents, id, user st
 	if err != nil {
 		return nil, err
 	}
-	env, args, err := agents.RunEnv(ctx, id, user)
+	env, args, err := agents.RunEnv(ctx, id, user, "")
 	if err != nil {
 		return nil, err
 	}
