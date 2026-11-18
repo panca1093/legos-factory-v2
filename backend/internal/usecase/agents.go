@@ -16,6 +16,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -181,6 +182,7 @@ type AccountView struct {
 	Usage        *AccountUsage `json:"usage,omitempty"`
 	UsageError   string        `json:"usage_error,omitempty"`
 	LoginCommand string        `json:"login_command"`
+	Roles        []string      `json:"roles"`
 }
 
 type AgentView struct {
@@ -407,6 +409,10 @@ func (a *Agents) view(ctx context.Context, userID string, spec AgentSpec, fresh 
 	for _, s := range stored {
 		active = active || s.Active
 	}
+	assigned, err := a.Store.RoleAccounts(ctx, userID, spec.ID)
+	if err != nil {
+		return nil, err
+	}
 	accs := []model.AgentAccount{{ID: SystemAccountID, UserID: userID, Agent: spec.ID, Label: "System default", Active: !active}}
 	accs = append(accs, stored...)
 	v.Accounts = make([]AccountView, len(accs))
@@ -416,6 +422,12 @@ func (a *Agents) view(ctx context.Context, userID string, spec AgentSpec, fresh 
 		go func() {
 			defer wg.Done()
 			v.Accounts[i] = a.accountView(ctx, spec, accs[i], v.Installed, fresh)
+			v.Accounts[i].Roles = []string{}
+			for _, r := range allRoles {
+				if assigned[string(r)] == accs[i].ID {
+					v.Accounts[i].Roles = append(v.Accounts[i].Roles, string(r))
+				}
+			}
 		}()
 	}
 	wg.Wait()
@@ -938,6 +950,35 @@ func (a *Agents) Activate(ctx context.Context, u *model.User, agent, id string) 
 		return a.Store.Activate(ctx, u.ID, agent, "")
 	}
 	return a.Store.Activate(ctx, u.ID, agent, id)
+}
+
+// SetAccountRoles makes the account serve exactly roles for the user; they leave the user's other accounts of the agent.
+func (a *Agents) SetAccountRoles(ctx context.Context, u *model.User, agent, id string, roles []string) error {
+	spec, err := a.spec(agent)
+	if err != nil {
+		return err
+	}
+	if id != SystemAccountID {
+		if _, err := a.Store.Get(ctx, u.ID, agent, id); err != nil {
+			return err
+		}
+	}
+	seen := map[string]bool{}
+	var uniq []string
+	for _, r := range roles {
+		role := model.AgentRole(r)
+		if !slices.Contains(allRoles, role) {
+			return fmt.Errorf("%w: unknown role %q", ErrInvalid, r)
+		}
+		if !spec.Allows(role) {
+			return fmt.Errorf("%w: %s cannot serve the %s role", ErrInvalid, spec.Name, r)
+		}
+		if !seen[r] {
+			seen[r] = true
+			uniq = append(uniq, r)
+		}
+	}
+	return a.Store.SetRoleAccounts(ctx, u.ID, agent, id, uniq)
 }
 
 // DeleteAccount removes the account and its home; deleting the active one falls back to the system default.
