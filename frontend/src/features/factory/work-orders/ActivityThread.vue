@@ -127,6 +127,26 @@ const runLabel = (r: AgentRunGroup) => {
       : ` · #${String(i + 1).padStart(2, "0")} ${props.tasks[i]!.title}`;
   return cap(r.actor) + task;
 };
+const ta = ref<HTMLTextAreaElement | null>(null);
+function resize() {
+  const el = ta.value;
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = Math.min(el.scrollHeight, 200) + "px";
+}
+function keydown(e: KeyboardEvent) {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    void send();
+  }
+}
+const hint = computed(() =>
+  targetGone.value
+    ? "That run has finished. Pick another agent to steer."
+    : picked.value
+      ? "Enter to send · Shift+Enter for a new line"
+      : "No agent is running right now, so there is no one to steer.",
+);
 async function send() {
   const message = draft.value.trim();
   const run = picked.value;
@@ -137,6 +157,7 @@ async function send() {
     await props.steer(run.id, message);
     draft.value = "";
     stick = true;
+    void nextTick(resize);
   } catch (e) {
     sendError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -295,47 +316,51 @@ async function send() {
       </div>
       <form
         v-if="steer"
-        class="composer"
+        class="steer-dock"
         data-test="composer"
         @submit.prevent="send"
       >
-        <label class="sr-only" for="steer-to">Send to</label>
-        <select
-          id="steer-to"
-          v-model="target"
-          :disabled="!live.length"
-          data-test="steer-to"
-        >
-          <option v-for="r in live" :key="r.id" :value="r.id">
-            {{ runLabel(r) }}
-          </option>
-          <option v-if="targetGone" :value="target" disabled>
-            Run finished
-          </option>
-          <option v-if="!live.length && !targetGone" value="">No one</option>
-        </select>
-        <label class="sr-only" for="steer-msg">Message</label>
-        <input
-          id="steer-msg"
-          v-model="draft"
-          :disabled="!picked || sending"
-          :placeholder="
-            targetGone
-              ? 'That run has finished. Pick another recipient to steer.'
-              : picked
+        <div class="steer" :class="{ off: !picked }">
+          <label class="sr-only" for="steer-msg">Message</label>
+          <textarea
+            id="steer-msg"
+            ref="ta"
+            v-model="draft"
+            rows="1"
+            :disabled="!picked || sending"
+            :placeholder="
+              picked
                 ? `Steer ${cap(picked.actor)} while it works…`
-                : 'No agent is running, so there is no one to steer.'
-          "
-          data-test="steer-input"
-        />
-        <button
-          class="btn primary"
-          type="submit"
-          :disabled="!picked || sending || !draft.trim()"
-          data-test="steer-send"
-        >
-          <Send class="icon" />Send
-        </button>
+                : 'Nothing to steer right now'
+            "
+            data-test="steer-input"
+            @input="resize"
+            @keydown="keydown"
+          ></textarea>
+          <div class="steer-bar">
+            <template v-if="live.length || targetGone">
+              <label class="sr-only" for="steer-to">Send to</label>
+              <select id="steer-to" v-model="target" data-test="steer-to">
+                <option v-for="r in live" :key="r.id" :value="r.id">
+                  {{ runLabel(r) }}
+                </option>
+                <option v-if="targetGone" :value="target" disabled>
+                  Run finished
+                </option>
+              </select>
+            </template>
+            <span class="steer-hint">{{ hint }}</span>
+            <button
+              class="steer-send"
+              type="submit"
+              aria-label="Send"
+              :disabled="!picked || sending || !draft.trim()"
+              data-test="steer-send"
+            >
+              <Send class="icon" />
+            </button>
+          </div>
+        </div>
         <p v-if="sendError" class="form-error" role="alert">{{ sendError }}</p>
       </form>
     </section>
@@ -675,30 +700,108 @@ async function send() {
     opacity: 0.6;
   }
 }
-.composer {
+.steer-dock {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4) 22px 20px;
   border-top: 1px solid var(--line);
-  padding: 14px 22px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  flex-wrap: wrap;
 }
-.composer select,
-.composer input {
-  height: var(--control-height);
+.steer {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color var(--dur-fast),
+    box-shadow var(--dur-fast);
+}
+.steer:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.steer.off {
+  background: var(--surface-2);
+  box-shadow: none;
+}
+.steer textarea {
+  width: 100%;
+  min-height: 0;
+  max-height: 200px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  resize: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.steer textarea:disabled {
+  opacity: 0.6;
+}
+.steer-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.steer-bar select {
+  max-width: 45%;
+  height: var(--control-height-sm);
+  padding: 0 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-full);
   background: var(--surface);
   color: var(--ink);
-  padding: 0 12px;
   font: inherit;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
 }
-.composer input {
+.steer-hint {
   flex: 1;
-  min-width: 180px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
 }
-.composer .form-error {
-  flex-basis: 100%;
+.steer-send {
+  display: grid;
+  place-items: center;
+  width: var(--control-height-sm);
+  height: var(--control-height-sm);
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--brand);
+  color: var(--on-brand);
+  cursor: pointer;
+  transition:
+    opacity var(--dur-fast),
+    transform var(--dur-fast) var(--ease-out);
+}
+.steer-send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.steer-send:not(:disabled):active {
+  transform: scale(0.92);
+}
+.steer-send:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.steer-send .icon {
+  width: 16px;
+  height: 16px;
+}
+.steer-dock .form-error {
   margin: 0;
 }
 .side {
@@ -741,7 +844,7 @@ async function send() {
 @media (max-width: 720px) {
   .msgs,
   .thread-top,
-  .composer {
+  .steer-dock {
     padding-left: 14px;
     padding-right: 14px;
   }
