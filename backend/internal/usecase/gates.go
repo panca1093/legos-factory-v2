@@ -350,10 +350,10 @@ func convergeGateState(in ConvergeGateInput) (map[string]any, map[string]Noul) {
 	}
 	for _, c := range in.Criteria {
 		qs["met_"+c.ID] = Noul{
-			Instructions: fmt.Sprintf("Does diff implement the behaviour that acceptance_criteria.%s describes?", c.ID),
+			Instructions: fmt.Sprintf("Does diff implement the behaviour that acceptance_criteria.%s describes? A criterion that only asks for a named check to pass is met by that check's outcome in checks.", c.ID),
 			Criteria: yn(
-				fmt.Sprintf("The diff contains code that implements the behaviour acceptance_criteria.%s describes.", c.ID),
-				fmt.Sprintf("The diff contains no code for the behaviour acceptance_criteria.%s describes, or only code for something else.", c.ID)),
+				fmt.Sprintf("The diff contains code that implements the behaviour acceptance_criteria.%s describes, or the criterion only asks for a check to pass and that check is in checks with outcome PASS.", c.ID),
+				fmt.Sprintf("The diff contains no code for the behaviour acceptance_criteria.%s describes, or only code for something else, or the check it asks for is missing from checks or did not pass.", c.ID)),
 		}
 	}
 	return state, qs
