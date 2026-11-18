@@ -203,7 +203,7 @@ describe("Now card and page", () => {
     expect(w.find('[data-test="clarify"]').exists()).toBe(false);
     w.unmount();
   });
-  it("shows the answered clarification on the Plan tab and the crew models", async () => {
+  it("shows the answered clarification on the Activity tab and the crew models", async () => {
     const w = await render("QUEUED", {
       clarif_question: "How long?",
       clarif_answer: "24 hours",
@@ -211,7 +211,7 @@ describe("Now card and page", () => {
     });
     await w.findAll('[role="tab"]')[0].trigger("click");
     await flushPromises();
-    expect(w.find('[data-test="decision"]').text()).toContain("24 hours");
+    expect(w.find('[data-doc="decision"]').text()).toContain("24 hours");
     expect(w.find('[data-test="crew-models"]').text()).toContain(
       "Builder: mock/builder",
     );

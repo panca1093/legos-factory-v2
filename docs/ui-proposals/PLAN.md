@@ -31,7 +31,7 @@ Done when: existing ActivityPanel tests pass after the split, plus Playwright: a
 
 ## PR 3: Activity tab (replaces Plan)
 
-Files: new `runs/activityThread.ts` (pure mapping) + `runs/activityThread.test.ts`, new `work-orders/ActivityThread.vue`, `work-orders/WorkOrderView.vue` (tabs), `work-orders/BlueprintPanel.vue` sections reused as doc-card bodies.
+Files: new `runs/activityThread.ts` (pure mapping) + `runs/activityThread.test.ts`, new `work-orders/ActivityThread.vue`, `work-orders/WorkOrderView.vue` (tabs), `work-orders/BlueprintSection.vue` reused as doc-card bodies.
 
 ### Tab key
 
@@ -46,14 +46,15 @@ Files: new `runs/activityThread.ts` (pure mapping) + `runs/activityThread.test.t
 |---|---|
 | order created (order.description / `created_from_chat`) | You → Foreman · Request (right side) |
 | foreman `brief_ready`, `brief_amended` | Foreman → Architect · Task, doc card "Foreman's brief" (`payload.brief`) |
-| architect `plan_ready` | Architect → Foreman · Spec, doc cards: acceptance contract, spec, how the crew will build it, scope boundaries (from `order` + `tasks`, same text BlueprintPanel shows now) |
+| architect `plan_ready` | Architect → Foreman · Spec, doc cards: acceptance contract, spec, how the crew will build it, scope boundaries (from `order` + `tasks`, same text BlueprintSection renders) |
 | foreman `plan_reviewed` | Foreman → Architect · Feedback, `payload.findings` as finding rows |
 | jev `*_gate` | outcome revise/escalate → Jev → (Architect for plan, Builder for build) · Feedback with `payload.issues`; pass → system line "Gate passed" |
 | factory `plan_revision_requested` | system line "Revision N requested" |
 | `plan_ready` that follows a revision request | Reply · revision N, quoting the titles of the feedback it answers |
 | human `plan_revision_human`, `revision_requested` | You → Architect / Builder · Feedback (right side) |
-| `clarification_asked` | agent → You · Question |
-| `clarification_answered` | You (or Foreman) → agent · Reply, quoting the question |
+| `clarification_asked` | agent → Foreman · Question |
+| `clarification_requested` | agent → You · Question |
+| `clarification_answered` | You (human) or Foreman → the agent that asked · Reply, quoting the question; `repeated: true` answers are a system line |
 | `agent_steered` | You → that run's role · Steer (right side) |
 | builder `agent_started` with a task | Foreman → Builder · Task #NN (task title) |
 | inspector `finding` (grouped until `inspection_finished`) | Inspector → Builder · Feedback, one row per finding with severity |

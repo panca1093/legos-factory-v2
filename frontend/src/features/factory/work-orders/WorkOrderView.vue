@@ -19,7 +19,7 @@ import {
   stageIndex,
   stageTabs,
 } from "../../../composables/presentation";
-import BlueprintPanel from "./BlueprintPanel.vue";
+import ActivityThread from "./ActivityThread.vue";
 import StageTrack from "./StageTrack.vue";
 import NowCard from "./NowCard.vue";
 import TaskGraph from "../task-graph/TaskGraph.vue";
@@ -38,15 +38,15 @@ const factory = useFactory(),
   route = useRoute(),
   router = useRouter();
 const tabs = [
-  { key: "plan", label: "Plan" },
+  { key: "activity", label: "Activity" },
   { key: "progress", label: "Progress" },
   { key: "review", label: "Review" },
   { key: "changes", label: "Changes & PR" },
 ];
 const legacyTabs: Record<string, string> = {
-  blueprint: "plan",
+  plan: "activity",
+  blueprint: "activity",
   graph: "progress",
-  activity: "progress",
   quality: "review",
 };
 const id = computed(() => String(route.params.id)),
@@ -58,7 +58,7 @@ const landing = ref("");
 const tab = computed(() => {
   const q = String(route.query.tab ?? ""),
     key = legacyTabs[q] ?? q;
-  return tabs.some((t) => t.key === key) ? key : landing.value || "plan";
+  return tabs.some((t) => t.key === key) ? key : landing.value || "activity";
 });
 watch(
   [order, runs],
@@ -413,10 +413,18 @@ function download() {
       role="tabpanel"
       :aria-labelledby="'order-tab-' + tab"
     >
-      <BlueprintPanel
-        v-if="tab === 'plan'"
+      <ActivityThread
+        v-if="tab === 'activity'"
         :order="order"
         :tasks="tasks"
+        :events="factory.events"
+        :runs="runs"
+        :has-more="factory.eventsHasMore"
+        :steer="
+          session.canWrite
+            ? (runID: string, m: string) => factory.steer(id, runID, m)
+            : undefined
+        "
         @export="download"
       />
       <div v-else-if="tab === 'progress'" class="fx-progress">
