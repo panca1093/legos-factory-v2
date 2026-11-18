@@ -92,7 +92,13 @@ export const isDeletable = (w: WorkOrder) =>
       !!w.pr_track_failed_at));
 
 export const stages = ["Brief", "Plan", "Build", "Review", "Ship"] as const;
-export const stageTabs = ["plan", "plan", "progress", "review", "changes"];
+export const stageTabs = [
+  "activity",
+  "activity",
+  "progress",
+  "review",
+  "changes",
+];
 const stageByState: Partial<Record<WorkOrderState, number>> = {
   CREATED: 0,
   REQUIREMENT_ANALYSIS: 0,
@@ -110,6 +116,8 @@ const stageByState: Partial<Record<WorkOrderState, number>> = {
   NEEDS_HUMAN_REVIEW: 4,
   READY: 4,
 };
+export const stageOfState = (state: string): number | undefined =>
+  stageByState[state as WorkOrderState];
 const runStage: Record<string, number> = {
   foreman: 0,
   architect: 1,
