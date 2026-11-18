@@ -206,7 +206,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	}
 	if acpMode {
 		factory.RunEnv = func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) ([]string, []string, error) {
-			return agents.RunEnv(ctx, roleAgent(role, wo), wo.CreatedBy)
+			return agents.RunEnv(ctx, roleAgent(role, wo), wo.CreatedBy, role)
 		}
 	}
 
@@ -306,7 +306,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		chatH, _ = hs.get(defaultAgent)
 		chatRunner = func(ctx context.Context, userID string) (usecase.Harness, []string, []string, error) {
 			h := resolve(model.AgentChat, nil)
-			env, args, err := agents.RunEnv(ctx, chatAgent(), userID)
+			env, args, err := agents.RunEnv(ctx, chatAgent(), userID, model.AgentChat)
 			return h, env, args, err
 		}
 	case realH == nil:

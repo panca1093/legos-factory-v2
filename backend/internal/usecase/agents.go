@@ -102,6 +102,8 @@ type AgentAccountStore interface {
 	Active(ctx context.Context, userID, agent string) (*model.AgentAccount, error)
 	Activate(ctx context.Context, userID, agent, id string) error
 	Delete(ctx context.Context, userID, agent, id string) error
+	RoleAccounts(ctx context.Context, userID, agent string) (map[string]string, error)
+	SetRoleAccounts(ctx context.Context, userID, agent, accountID string, roles []string) error
 	Enabled(ctx context.Context, agent string) (bool, error)
 	SetEnabled(ctx context.Context, agent string, enabled bool) error
 }
@@ -267,8 +269,8 @@ func (a *Agents) Ready(ctx context.Context, id string) error {
 	return nil
 }
 
-// RunEnv is the environment and extra ACP arguments for a run on behalf of userID: the user's active account for the agent, or nothing for the system default.
-func (a *Agents) RunEnv(ctx context.Context, id, userID string) (env, args []string, err error) {
+// RunEnv is the environment and extra ACP arguments for a run on behalf of userID: the account assigned to role, else the user's active account for the agent, or nothing for the system default. An empty role means the active account.
+func (a *Agents) RunEnv(ctx context.Context, id, userID string, role model.AgentRole) (env, args []string, err error) {
 	spec, ok := AgentByID(id)
 	if !ok {
 		return nil, nil, fmt.Errorf("%w: %q", model.ErrAgentUnknown, id)
@@ -276,7 +278,7 @@ func (a *Agents) RunEnv(ctx context.Context, id, userID string) (env, args []str
 	if userID == "" {
 		return nil, nil, nil
 	}
-	acc, err := a.Store.Active(ctx, userID, id)
+	acc, err := a.roleAccount(ctx, userID, id, role)
 	if err != nil || acc == nil {
 		return nil, nil, err
 	}
@@ -289,6 +291,32 @@ func (a *Agents) RunEnv(ctx context.Context, id, userID string) (env, args []str
 		env = append(env, lift...)
 	}
 	return env, spec.accountArgs(), nil
+}
+
+// roleAccount is the account serving role; nil means the system default.
+func (a *Agents) roleAccount(ctx context.Context, userID, agent string, role model.AgentRole) (*model.AgentAccount, error) {
+	if role == model.AgentCataloger {
+		role = model.AgentArchitect
+	}
+	if role != "" {
+		assigned, err := a.Store.RoleAccounts(ctx, userID, agent)
+		if err != nil {
+			return nil, err
+		}
+		if id, ok := assigned[string(role)]; ok {
+			if id == SystemAccountID {
+				return nil, nil
+			}
+			acc, err := a.Store.Get(ctx, userID, agent, id)
+			if err == nil {
+				return acc, nil
+			}
+			if !errors.Is(err, model.ErrAgentAccountNotFound) {
+				return nil, err
+			}
+		}
+	}
+	return a.Store.Active(ctx, userID, agent)
 }
 
 // claudeAPIEnv reads the Anthropic-compatible endpoint from <home>/settings.json. Claude Code ignores these three keys
