@@ -41,6 +41,7 @@ func fakeAgent(scenario string) {
 	reply := func(id any, result any) { send(map[string]any{"id": id, "result": result}) }
 	var cwd, chosenModel, sessionMeta, sessionMCP string
 	var setCalls []string
+	var noticesDeclared bool
 	var promptID any
 	turns := 0
 	for in.Scan() {
@@ -53,6 +54,15 @@ func fakeAgent(scenario string) {
 		_ = json.Unmarshal(in.Bytes(), &m)
 		switch m.Method {
 		case "initialize":
+			var ip struct {
+				ClientCapabilities struct {
+					Session struct {
+						Notices map[string]any `json:"notices"`
+					} `json:"session"`
+				} `json:"clientCapabilities"`
+			}
+			_ = json.Unmarshal(m.Params, &ip)
+			noticesDeclared = ip.ClientCapabilities.Session.Notices != nil
 			res := map[string]any{"protocolVersion": 1, "agentInfo": map[string]any{"name": "Fake", "version": "0"}}
 			if os.Getenv("ACP_FAKE_EMBEDDED") != "" {
 				res["agentCapabilities"] = map[string]any{"promptCapabilities": map[string]any{"image": true, "embeddedContext": true}}
@@ -230,6 +240,10 @@ func fakeAgent(scenario string) {
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Go usage limit exceeded"}})
 			case "funds":
 				send(map[string]any{"id": m.ID, "error": map[string]any{"code": -32603, "message": "Internal error: Upstream request failed: Insufficient account funds"}})
+			case "notice":
+				update(map[string]any{"sessionUpdate": "notice", "severity": "warning", "title": "Warning: auto mode", "description": "api.example.com"})
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": fmt.Sprintf("answer notices=%v", noticesDeclared)}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "refusal":
 				reply(m.ID, map[string]any{"stopReason": "refusal"})
 			case "crash":
@@ -1028,5 +1042,15 @@ func TestACPStepTargetFromPathInputs(t *testing.T) {
 		if got := c.target(&acpTool{input: tc.input}); got != tc.want {
 			t.Errorf("target(%v) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func TestACPNoticesStayOutOfTheReply(t *testing.T) {
+	res, err := runFake(t, fakeHarness(t, "notice"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "answer notices=true" {
+		t.Fatalf("text = %q", res.Text)
 	}
 }

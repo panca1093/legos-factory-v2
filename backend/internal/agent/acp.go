@@ -524,7 +524,7 @@ func (h *ACPHarness) spawn(config, dir string, runEnv, runArgs []string) (*acpCo
 	go c.readLoop(stdout)
 	raw, err := c.call(context.Background(), "initialize", map[string]any{
 		"protocolVersion":    1,
-		"clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false},
+		"clientCapabilities": map[string]any{"fs": map[string]any{"readTextFile": false, "writeTextFile": false}, "terminal": false, "session": map[string]any{"notices": map[string]any{}}},
 		"clientInfo":         map[string]any{"name": "legos-factory", "version": "1"},
 	})
 	if err != nil {
@@ -972,6 +972,7 @@ func (c *acpConn) onUpdate(params json.RawMessage) {
 			c.text.WriteString(chunk.Text)
 			delta = chunk.Text
 		}
+	case "notice":
 	case "usage_update":
 		if u.Used > 0 {
 			c.ctxUsed = u.Used
