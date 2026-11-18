@@ -28,9 +28,11 @@ func TestACPCodexRefusesEveryRequestOfReadOnlyRoles(t *testing.T) {
 	}{
 		{model.AgentBuilder, "execute", ws, "yes"},
 		{model.AgentBuilder, "edit", ws + "/a.go", "yes"},
+		{model.AgentInspector, "execute", ws, "yes"},
 		{model.AgentForeman, "read", ws + "/a.go", "no"},
 		{model.AgentArchitect, "execute", ws, "no"},
 		{model.AgentChat, "read", ws + "/a.go", "no"},
+		{model.AgentChat, "execute", ws, "no"},
 	}
 	for _, c := range cases {
 		res, err := runFake(t, fakeCodex(t, "permission", "ACP_FAKE_KIND="+c.kind, "ACP_FAKE_PATH="+c.path),
@@ -46,7 +48,7 @@ func TestACPCodexRefusesEveryRequestOfReadOnlyRoles(t *testing.T) {
 
 func TestACPCodexModeFollowsRole(t *testing.T) {
 	for role, want := range map[model.AgentRole]string{
-		model.AgentBuilder: "mode=workspace-write", model.AgentArchitect: "mode=read-only", model.AgentChat: "mode=read-only",
+		model.AgentBuilder: "mode=workspace-write", model.AgentInspector: "mode=workspace-write", model.AgentForeman: "mode=read-only", model.AgentArchitect: "mode=read-only", model.AgentChat: "mode=read-only",
 	} {
 		res, err := runFake(t, fakeCodex(t, "setcalls"), model.AgentRequest{Role: role, Prompt: "go", Env: []string{"CODEX_HOME=" + t.TempDir()}})
 		if err != nil || res.Text != want {
