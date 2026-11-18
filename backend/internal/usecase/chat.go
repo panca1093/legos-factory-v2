@@ -654,6 +654,9 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	am.Usage = info.usage(c.resolve(ctx, ch), res)
 	if err != nil {
 		am.Content, am.Error = partial(), err.Error()
+		if errors.Is(err, model.ErrToolCallAsText) {
+			am.Content = ""
+		}
 		_ = c.Store.AddMessage(ctx, am)
 		finish(ChatEvent{Kind: "error", Message: am, Error: am.Error})
 		return nil

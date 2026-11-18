@@ -244,6 +244,12 @@ func fakeAgent(scenario string) {
 				update(map[string]any{"sessionUpdate": "notice", "severity": "warning", "title": "Warning: auto mode", "description": "api.example.com"})
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": fmt.Sprintf("answer notices=%v", noticesDeclared)}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "dsml":
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "<\uff5c\uff5cDSML\uff5c\uff5c calls>\n<\uff5c\uff5cDSML\uff5c\uff5c invoke name=\"Write\">"}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "dsml-word":
+				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "DSML is DeepSeek's markup"}})
+				reply(m.ID, map[string]any{"stopReason": "end_turn"})
 			case "refusal":
 				reply(m.ID, map[string]any{"stopReason": "refusal"})
 			case "crash":
@@ -1052,5 +1058,19 @@ func TestACPNoticesStayOutOfTheReply(t *testing.T) {
 	}
 	if res.Text != "answer notices=true" {
 		t.Fatalf("text = %q", res.Text)
+	}
+}
+
+func TestACPToolCallReturnedAsDSMLTextIsRetryable(t *testing.T) {
+	res, err := runFake(t, fakeHarness(t, "dsml"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
+	if !errors.Is(err, model.ErrToolCallAsText) || errors.Is(err, model.ErrPermanent) || strings.Contains(err.Error(), "DSML") {
+		t.Fatalf("err = %v", err)
+	}
+	if res.Text != "" {
+		t.Fatalf("stored text = %q", res.Text)
+	}
+	res, err = runFake(t, fakeHarness(t, "dsml-word"), model.AgentRequest{Role: model.AgentBuilder, Prompt: "go"})
+	if err != nil || !strings.Contains(res.Text, "DSML") {
+		t.Fatalf("plain word: %q %v", res.Text, err)
 	}
 }

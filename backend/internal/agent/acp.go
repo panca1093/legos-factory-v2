@@ -634,6 +634,10 @@ func (r *acpRun) collect(wait func(context.Context) (json.RawMessage, error)) {
 	c := r.conn
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if t := c.text.String(); strings.Contains(t, "｜DSML") || strings.Contains(t, "DSML｜") {
+		r.err = model.ErrToolCallAsText
+		return
+	}
 	r.result = model.AgentResult{
 		Text: c.text.String(), SessionRef: r.sessionID,
 		// inputTokens excludes cache reads/writes, which carry nearly all of a cached prompt
