@@ -114,8 +114,9 @@ test("full work order journey: project → plan → graph → build → quality 
     page.getByText("Historical evidence · revision 0"),
   ).toBeVisible();
   await page.locator("[data-check]").first().click();
-  await expect(page.getByRole("dialog")).toContainText("Exit code:");
-  await page.getByRole("button", { name: "Close dialog" }).click();
+  await expect(page.locator('[data-test="check-detail"]')).toContainText(
+    "Exit code:",
+  );
   await page.getByRole("tab", { name: "Progress", exact: true }).click();
   await expect(page.getByText("Execution runs", { exact: true })).toBeVisible();
   await page.getByText("Execution runs", { exact: true }).click();
