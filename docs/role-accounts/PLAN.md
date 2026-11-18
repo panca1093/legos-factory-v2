@@ -24,6 +24,17 @@ Anthropic-compatible provider (DeepSeek, GLM) at the same time, for the same use
    new secret storage or form.
 3. The account is resolved **at each run**, not snapshotted on the work order.
 
+4. **Codex serves every role** (user, 2026-11-18), accepting that Codex has no hard read-only and reads any file
+   without asking. Foreman, Architect, Chat: mode `read-only`, every permission request refused. Builder and
+   Inspector: mode `workspace-write`, requests allowed, so Inspector can run tests but could also edit code.
+
+## Step 1 result (ACP spike, 2026-11-18)
+
+PASS. Through `claude-agent-acp`, opus answered as `deepseek-flash[1m]` and sonnet as `deepseek-v4-pro`. Unlike the
+CLI, the adapter applies the `settings.json` env block itself: with only `CLAUDE_CONFIG_DIR` set it still routed to
+DeepSeek. The env lift is therefore redundant for runs; it is kept as a guard against the adapter changing, and the
+factory still derives the account's status itself.
+
 ## Design
 
 ### Data
