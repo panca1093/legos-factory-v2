@@ -40,19 +40,32 @@ const event = (
 });
 
 describe("live PR events", () => {
-  it("subscribes to pr_merged, pr_closed and pr_track_failed", () => {
-    const kinds: string[] = [];
+  it("delivers PR events of every kind, including pr_opened", () => {
+    const sources: { onmessage: ((m: { data: string }) => void) | null }[] = [];
     class Fake {
-      addEventListener(k: string) {
-        kinds.push(k);
+      onmessage: ((m: { data: string }) => void) | null = null;
+      constructor() {
+        sources.push(this);
       }
       close() {}
     }
     vi.stubGlobal("EventSource", Fake);
-    subscribe("/x", () => {})();
-    expect(kinds).toEqual(
-      expect.arrayContaining(["pr_merged", "pr_closed", "pr_track_failed"]),
-    );
+    const kinds: string[] = [];
+    const stop = subscribe("/x", (ev) => kinds.push(ev.kind));
+    for (const kind of [
+      "pr_opened",
+      "pr_merged",
+      "pr_closed",
+      "pr_track_failed",
+    ])
+      sources[0].onmessage?.({ data: JSON.stringify({ id: 1, kind }) });
+    expect(kinds).toEqual([
+      "pr_opened",
+      "pr_merged",
+      "pr_closed",
+      "pr_track_failed",
+    ]);
+    stop();
   });
 });
 
