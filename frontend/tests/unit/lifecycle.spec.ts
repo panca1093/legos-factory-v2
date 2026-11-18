@@ -58,14 +58,14 @@ describe("request and stream ownership", () => {
     f.stopLive();
     expect(sources[0].close).toHaveBeenCalledOnce();
   });
-  it("refreshes data from named live events and ignores malformed frames", async () => {
+  it("refreshes data from live events and ignores malformed frames", async () => {
     const f = useFactory();
     const refresh = vi.spyOn(f, "refreshOverview").mockResolvedValue();
     vi.spyOn(f, "refreshWorkOrders").mockResolvedValue();
     f.startLive();
-    sources[0].listeners.get("state_changed")?.({ data: "broken" });
+    sources[0].onmessage?.({ data: "broken" });
     expect(refresh).not.toHaveBeenCalled();
-    sources[0].listeners.get("state_changed")?.({
+    sources[0].onmessage?.({
       data: JSON.stringify({
         id: 1,
         actor: "builder",

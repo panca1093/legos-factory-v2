@@ -60,7 +60,7 @@ func (s *Server) stream(c echo.Context, woID string) error {
 		events, err := s.WORepo.Events(ctx, woID, lastID, 500)
 		if err == nil {
 			for _, ev := range events {
-				fmt.Fprintf(res.Writer, "id: %d\nevent: %s\ndata: %s\n\n", ev.ID, ev.Kind, s.eventJSON(ev))
+				fmt.Fprintf(res.Writer, "id: %d\ndata: %s\n\n", ev.ID, s.eventJSON(ev))
 			}
 			flusher.Flush()
 		}
@@ -85,7 +85,8 @@ func (s *Server) stream(c echo.Context, woID string) error {
 			if !visible(ev.WOID) {
 				continue
 			}
-			fmt.Fprintf(res.Writer, "event: %s\ndata: %s\n\n", ev.Kind, s.liveJSON(woID, ev))
+			// unnamed frames reach the client's onmessage, so a new event kind needs no client allowlist
+			fmt.Fprintf(res.Writer, "data: %s\n\n", s.liveJSON(woID, ev))
 			flusher.Flush()
 		}
 	}

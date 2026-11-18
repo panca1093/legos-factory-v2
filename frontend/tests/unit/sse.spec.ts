@@ -30,11 +30,14 @@ describe("sse", () => {
     const es = FakeEventSource.instances.at(-1)!;
     expect(es.url).toBe("/api/v1/events");
 
-    // simulate a named event frame
-    es.listeners.get("state_changed")?.({
-      data: JSON.stringify({ id: 1, kind: "state_changed", message: "hi" }),
+    // every kind arrives as an unnamed frame, including ones no client list knows
+    es.onmessage?.({
+      data: JSON.stringify({ id: 1, kind: "pr_opened", message: "hi" }),
     });
-    expect(events).toHaveLength(1);
+    es.onmessage?.({
+      data: JSON.stringify({ id: 2, kind: "agent_step", message: "step" }),
+    });
+    expect(events).toEqual([{ id: 1, kind: "pr_opened", message: "hi" }]);
 
     stop();
     expect(closed).toBe(true);
