@@ -163,6 +163,17 @@ func fakeAgent(scenario string) {
 				_ = json.Unmarshal(in.Bytes(), &r)
 				update(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": r.Result.Outcome.OptionID}})
 				reply(m.ID, map[string]any{"stopReason": "end_turn"})
+			case "permission-cancel":
+				send(map[string]any{"id": "perm-1", "method": "session/request_permission", "params": map[string]any{
+					"sessionId": "fake-ses",
+					"toolCall":  fakePermissionCall(),
+					"options": []any{
+						map[string]any{"optionId": "yes", "name": "Allow", "kind": "allow_once"},
+						map[string]any{"optionId": "no", "name": "Reject", "kind": "reject_once"},
+					},
+				}})
+				in.Scan()
+				reply(m.ID, map[string]any{"stopReason": "cancelled"})
 			case "permission-live":
 				send(map[string]any{"id": "perm-1", "method": "session/request_permission", "params": map[string]any{
 					"sessionId": "fake-ses",
