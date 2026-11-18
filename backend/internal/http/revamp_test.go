@@ -263,6 +263,11 @@ func TestAgentAccountRolesEndpoint(t *testing.T) {
 	if code := put("eng", a, `{"roles":["janitor"]}`); code != http.StatusBadRequest {
 		t.Fatalf("unknown role: %d", code)
 	}
+	for _, body := range []string{`{}`, `{"roles":null}`} {
+		if code := put("eng", b, body); code != http.StatusBadRequest {
+			t.Fatalf("%s must be 400, got %d", body, code)
+		}
+	}
 	if code, _ := chatDo(srv, "eng", "PUT", "/api/v1/agents/codex/accounts/system/roles", `{"roles":["chat"]}`); code != http.StatusNoContent {
 		t.Fatalf("codex serves every role: %d", code)
 	}
