@@ -486,7 +486,14 @@ func (f *Factory) workspaceDir(woID string) string {
 	return f.DataDir + "/workspaces/" + woID
 }
 
+// baselineIDPrefix marks the pre-change baseline rows, the only runs verify compares a failure against.
+const baselineIDPrefix = "qc_base_"
+
 func (f *Factory) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Check, r model.CheckResult) error {
+	return f.saveCheckID(ctx, wo, c, r, "qc_")
+}
+
+func (f *Factory) saveCheckID(ctx context.Context, wo *model.WorkOrder, c model.Check, r model.CheckResult, prefix string) error {
 	exit := 0
 	if r.ExitCode != nil {
 		exit = *r.ExitCode
@@ -494,7 +501,7 @@ func (f *Factory) saveCheck(ctx context.Context, wo *model.WorkOrder, c model.Ch
 		exit = -1
 	}
 	return f.Quality.Save(ctx, model.QualityCheck{
-		ID: fmt.Sprintf("qc_%d", time.Now().UnixNano()), WOID: wo.ID, Name: c.Name, Command: c.Command,
+		ID: fmt.Sprintf("%s%d", prefix, time.Now().UnixNano()), WOID: wo.ID, Name: c.Name, Command: c.Command,
 		Outcome: string(r.Outcome), ExitCode: exit, Output: r.Output, Optional: c.Optional, Revision: int64(wo.Revision),
 	})
 }

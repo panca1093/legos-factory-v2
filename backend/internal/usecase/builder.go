@@ -576,7 +576,7 @@ func (f *Factory) recordBaseline(ctx context.Context, wo *model.WorkOrder) error
 	}
 	for i, c := range profile.Checks {
 		r := results[i]
-		if err := f.saveCheck(ctx, wo, c, r); err != nil {
+		if err := f.saveCheckID(ctx, wo, c, r, baselineIDPrefix); err != nil {
 			return err
 		}
 		f.event(wo.ID, "builder", "baseline_"+strings.ToLower(string(r.Outcome)),

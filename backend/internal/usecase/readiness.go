@@ -368,6 +368,14 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 	}
 	decision, reason := "READY", "All checks passed on the current revision and no blocker findings remain."
 	var issues []string
+	var stillFailing []string
+	if stored, err := f.Quality.ForRevision(ctx, wo.ID, wo.Revision); err == nil {
+		for _, c := range latestPerName(stored) {
+			if !c.Optional && c.Outcome != string(model.Pass) {
+				stillFailing = append(stillFailing, fmt.Sprintf("%s is %s", c.Name, c.Outcome))
+			}
+		}
+	}
 	switch {
 	case verificationBlocked || openBlockers > 0:
 		decision = "BLOCKED"
@@ -379,6 +387,10 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 		if checkCount == 0 {
 			reason += " (no verification evidence is recorded for the current revision either)"
 		}
+	case len(stillFailing) > 0:
+		decision = "NEEDS_HUMAN_REVIEW"
+		issues = stillFailing
+		reason = "Required checks fail on this revision as they did before the change: " + joinNotes(issues)
 	case checkCount == 0:
 		decision = "NEEDS_VERIFICATION"
 		reason = "No verification evidence recorded for the current revision."

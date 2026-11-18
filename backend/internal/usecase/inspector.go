@@ -35,6 +35,7 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 	mu.Unlock()
 	failed := ""
 	var failedResults []model.CheckResult
+	baseline := f.baselineChecks(ctx, wo.ID)
 	results, infra := f.runChecks(ctx, wo.ProjectID, fmt.Sprintf("run_%s_%d", wo.ID, wo.Revision), f.workspaceDir(wo.ID), profile)
 	checks := profile.Checks
 	if infra == nil && profile.Smoke != nil && !requiredFailed(profile.Checks, results) {
@@ -49,6 +50,11 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		f.event(wo.ID, "inspector", "check_"+strings.ToLower(string(r.Outcome)),
 			fmt.Sprintf("%s → %s", c.Name, r.Outcome), map[string]any{"command": c.Command, "optional": c.Optional})
 		if infra == nil && r.Outcome != model.Pass && !c.Optional {
+			if b, ok := baseline[c.Name]; ok && failedBefore(b, c, r) {
+				f.event(wo.ID, "inspector", "check_failed_before_change",
+					fmt.Sprintf("%s → %s, as it did before the change; not sent back to the Builder", c.Name, r.Outcome), map[string]any{"command": c.Command})
+				continue
+			}
 			if failed == "" {
 				failed = c.Name
 			}
@@ -102,6 +108,44 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		}
 	}
 	return f.enqueue(ctx, JobInspect, wo.ID, "")
+}
+
+// baselineChecks is each check's pre-change baseline run; without one, no failure is tolerated.
+func (f *Factory) baselineChecks(ctx context.Context, woID string) map[string]model.QualityCheck {
+	all, err := f.Quality.List(ctx, woID)
+	if err != nil {
+		return nil
+	}
+	out := map[string]model.QualityCheck{}
+	for _, c := range all {
+		if !strings.HasPrefix(c.ID, baselineIDPrefix) {
+			continue
+		}
+		if _, ok := out[c.Name]; !ok {
+			out[c.Name] = c
+		}
+	}
+	return out
+}
+
+var goTestFailure = regexp.MustCompile(`(?m)^\s*--- FAIL: (\S+)`)
+
+// failedBefore reports whether r is the same failure the baseline already had: same command, not passing then,
+// and no failing Go test that the baseline did not also fail.
+func failedBefore(b model.QualityCheck, c model.Check, r model.CheckResult) bool {
+	if b.Command != c.Command || b.Outcome == string(model.Pass) {
+		return false
+	}
+	before := map[string]bool{}
+	for _, m := range goTestFailure.FindAllStringSubmatch(b.Output, -1) {
+		before[m[1]] = true
+	}
+	for _, m := range goTestFailure.FindAllStringSubmatch(r.Output, -1) {
+		if !before[m[1]] {
+			return false
+		}
+	}
+	return true
 }
 
 func anyRequiredPassed(checks []model.Check, results []model.CheckResult) bool {
