@@ -748,3 +748,25 @@ func TestChatSecondSessionOnAProjectDoesNotRefreshTheCheckout(t *testing.T) {
 		t.Fatalf("with no other kept session the new one refreshes: %v", *calls)
 	}
 }
+
+func TestChatDSMLTurnStoresNoMarkupAndRecordsUsage(t *testing.T) {
+	ctx := context.Background()
+	h := &chatPlain{reply: "<\uff5c\uff5cDSML\uff5c\uff5c calls>", err: model.ErrToolCallAsText, errRes: model.AgentResult{TokensIn: 7, TokensOut: 3}}
+	r := newChatRig(t, h)
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	evs, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "q"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := evs[len(evs)-1]
+	if end.Kind != "error" || end.Message.Content != "" || end.Error == "" {
+		t.Fatalf("end: %+v", end)
+	}
+	msgs, _ := r.chat.Messages(ctx, r.ana, ch.ID)
+	if len(msgs) != 2 || msgs[1].Content != "" || msgs[1].Error == "" || strings.Contains(msgs[1].Error, "DSML") {
+		t.Fatalf("persisted: %+v", msgs)
+	}
+	if len(r.usage.recs) != 1 || r.usage.recs[0].TokensIn != 7 {
+		t.Fatalf("usage %+v", r.usage.recs)
+	}
+}

@@ -292,6 +292,9 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 			f.closePlanning(wo.ID)
 		}
 		f.failRun(ctx, wo.ID, role, runID, err)
+		if errors.Is(err, model.ErrToolCallAsText) {
+			f.recordUsage(ctx, wo, role, provider, modelID, res)
+		}
 		return model.AgentResult{}, runID, err
 	}
 	if !opts.Hold {
@@ -299,19 +302,24 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 			return model.AgentResult{}, runID, err
 		}
 	}
-	if f.Usage != nil {
-		_ = f.Usage.Record(ctx, model.UsageRecord{
-			WOID: wo.ID, UserID: wo.CreatedBy, Role: string(role),
-			Provider: provider, Model: modelID,
-			TokensIn: res.TokensIn, TokensOut: res.TokensOut,
-			CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
-			CostMicros: res.CostMicros, Source: res.CostSource,
-		})
-	}
+	f.recordUsage(ctx, wo, role, provider, modelID, res)
 	if !opts.Hold {
 		f.event(wo.ID, string(role), "agent_completed", fmt.Sprintf("%s agent finished", role), runRef)
 	}
 	return res, runID, nil
+}
+
+func (f *Factory) recordUsage(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID string, res model.AgentResult) {
+	if f.Usage == nil {
+		return
+	}
+	_ = f.Usage.Record(ctx, model.UsageRecord{
+		WOID: wo.ID, UserID: wo.CreatedBy, Role: string(role),
+		Provider: provider, Model: modelID,
+		TokensIn: res.TokensIn, TokensOut: res.TokensOut,
+		CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
+		CostMicros: res.CostMicros, Source: res.CostSource,
+	})
 }
 
 func (f *Factory) wsLock(woID string) *sync.Mutex       { return lockFor(&f.wsMu, woID) }
