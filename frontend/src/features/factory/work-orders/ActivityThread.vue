@@ -489,13 +489,13 @@ async function send() {
 .mh time {
   color: var(--muted);
   font-size: 12px;
-  margin-left: auto;
+  margin-left: 2px;
   font-variant-numeric: tabular-nums;
 }
 .msg.me .mh time {
   margin-left: 0;
   order: -1;
-  margin-right: auto;
+  margin-right: 2px;
 }
 .kind {
   font: 500 10.5px/1 var(--font-mono);
