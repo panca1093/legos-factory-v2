@@ -384,6 +384,12 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		reviews.CLI = integration.NewGHAuth(nil, nil)
 	}
 	srv.Reviews = reviews
+	if cfg.AuthMode == "dev" {
+		srv.Editor = &usecase.Editor{
+			Store: &store.EditorRepo{DB: db}, FS: sandbox.EditorFS{}, Projects: projects,
+			Proj: projRepo, WO: woRepo, DataDir: cfg.DataDir,
+		}
+	}
 	srv.Rail.Reviews = reviews
 
 	srv.Checks = &usecase.CheckSuggester{

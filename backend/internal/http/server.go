@@ -35,6 +35,7 @@ type Server struct {
 	Integrations *usecase.Integrations
 	MCP          *usecase.MCPServers
 	Local        *usecase.Local
+	Editor       *usecase.Editor
 	Catalog      *usecase.Cataloger
 	KBDocs       *usecase.KBDocs
 	Chat         *usecase.Chat
@@ -64,7 +65,8 @@ func New(cfg *model.Config, log *slog.Logger) *Server {
 	e.Use(echomw.BodyLimitWithConfig(echomw.BodyLimitConfig{
 		Limit: "1MB",
 		Skipper: func(c echo.Context) bool {
-			return c.Request().Method == http.MethodPost && (c.Path() == "/api/v1/chats/:id/messages" || c.Path() == "/api/v1/chats/:id/files")
+			return c.Request().Method == http.MethodPost && (c.Path() == "/api/v1/chats/:id/messages" || c.Path() == "/api/v1/chats/:id/files") ||
+				c.Request().Method == http.MethodPut && c.Path() == "/api/v1/editor/folders/:fid/file"
 		},
 	}))
 	e.Use(echomw.CORSWithConfig(echomw.CORSConfig{
@@ -274,6 +276,7 @@ func (s *Server) routes() {
 	api.POST("/local/clone", s.local(s.handleLocalClone))
 	api.POST("/local/init", s.local(s.handleLocalInit))
 	api.GET("/local/gh", s.local(s.handleLocalGH))
+	s.editorRoutes(api)
 
 	api.GET("/kb/docs", s.handleKBList)
 	api.GET("/kb/doc", s.handleKBGet)
