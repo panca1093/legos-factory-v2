@@ -265,10 +265,11 @@ it("renders Agents, Connections and Advanced with a section nav and none of the 
   const { w } = await render();
   expect(
     w.findAll("section.settings-section").map((s) => s.attributes("id")),
-  ).toEqual(["agents", "connections", "advanced"]);
+  ).toEqual(["agents", "connections", "editor", "advanced"]);
   expect(w.findAll("nav a").map((a) => a.text())).toEqual([
     "Agents",
     "Connections",
+    "Editor",
     "Advanced",
   ]);
   const text = w.text();
