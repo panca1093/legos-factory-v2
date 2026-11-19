@@ -474,15 +474,19 @@ describe("project workspace", () => {
     narrow.w.unmount();
   });
 
-  it("disables the toggle on the pull request list and the code route", async () => {
-    for (const path of ["/projects/atlas/pulls", "/projects/atlas/code"]) {
-      const { w } = await mountWorkspace(path);
-      expect(
-        w.find('[data-test="panel-toggle"]').attributes("disabled"),
-      ).toBeDefined();
-      expect(w.find("#pw-panel").exists()).toBe(false);
-      w.unmount();
-    }
+  it("disables the toggle on the pull request list only; the code route has its Explorer panel", async () => {
+    const list = await mountWorkspace("/projects/atlas/pulls");
+    expect(
+      list.w.find('[data-test="panel-toggle"]').attributes("disabled"),
+    ).toBeDefined();
+    expect(list.w.find("#pw-panel").exists()).toBe(false);
+    list.w.unmount();
+    const code = await mountWorkspace("/projects/atlas/code");
+    expect(
+      code.w.find('[data-test="panel-toggle"]').attributes("disabled"),
+    ).toBeUndefined();
+    expect(code.w.find("#pw-panel").exists()).toBe(true);
+    code.w.unmount();
   });
 
   it("shows Details with the project on the overview", async () => {
@@ -515,7 +519,32 @@ describe("project workspace", () => {
         .findAll("button")
         .find((b) => b.text() === "Open in Code")!
         .attributes("disabled"),
-    ).toBeDefined();
+    ).toBeUndefined();
+    w.unmount();
+  });
+
+  it("Open in Code opens the work order's worktree folder", async () => {
+    const f = useFactory();
+    f.detail = { work_order: structuredClone(orders[1]), plan: [], runs: [] };
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      text: async () =>
+        String(url).endsWith("/editor/folders")
+          ? JSON.stringify({
+              folder: { id: "w9", path: "/d/wt", kind: "worktree", trusted: true },
+            })
+          : "{}",
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { w } = await mountWorkspace("/projects/atlas/wo/LF-127");
+    await w.find('[data-test="wo-open-code"]').trigger("click");
+    await flushPromises();
+    const call = fetchMock.mock.calls.find((c) =>
+      String(c[0]).endsWith("/api/v1/editor/folders"),
+    ) as unknown as [string, { method: string; body: string }];
+    expect(call[1].method).toBe("POST");
+    expect(JSON.parse(call[1].body)).toEqual({ wo_id: "LF-127" });
     w.unmount();
   });
 

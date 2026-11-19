@@ -210,6 +210,21 @@
   white-space: pre;
   padding-right: var(--space-3);
 }
+.dv-open {
+  margin-left: var(--space-3);
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--accent);
+  font: 600 11px var(--font-sans);
+  white-space: nowrap;
+  visibility: hidden;
+}
+.dv-line:hover .dv-open,
+.dv-open:focus-visible {
+  visibility: visible;
+}
 .dv-slot {
   display: grid;
   gap: var(--space-2);

@@ -22,6 +22,8 @@ import { useSession } from "../../stores/session";
 import IconButton from "../../components/ui/IconButton.vue";
 import UsageCard from "../../app/layouts/UsageCard.vue";
 import { projectColor } from "../../composables/presentation";
+import RailOpenFiles from "../editor/RailOpenFiles.vue";
+import { useEditor } from "../editor/editorStore";
 import {
   capRail,
   railDot,
@@ -97,6 +99,22 @@ const pullRows = computed(() =>
     String(selectedPull.value),
   ),
 );
+const editor = useEditor();
+const codeOpen = computed(() =>
+  Object.values(editor.folders)
+    .filter(
+      (f) =>
+        f.status !== "gone" &&
+        (f.folder.project_id || editor.workspaceProject) === projectId.value,
+    )
+    .reduce((n, f) => n + f.tabs.length, 0),
+);
+const codeLast = computed(() => {
+  const f = Object.values(editor.folders).find(
+    (x) => x.folder.kind === "project" && x.tabs.length,
+  );
+  return f?.active ? { file: f.active } : {};
+});
 const isOpen = (key: string) => !collapsed.value[key];
 function toggle(key: string) {
   collapsed.value = { ...collapsed.value, [key]: isOpen(key) };
@@ -158,6 +176,7 @@ function schedule() {
 watch(
   projectId,
   () => {
+    editor.hydrate(projectId.value);
     clearTimeout(timer);
     pullsSeq++;
     rail.value = null;
@@ -383,12 +402,17 @@ const newOrder = () =>
             >
               <ChevronRight class="icon" />
             </button>
-            <RouterLink :to="`/projects/${projectId}/code`" class="pr-title"
+            <RouterLink
+              :to="{ path: `/projects/${projectId}/code`, query: codeLast }"
+              class="pr-title"
+              data-test="rail-code-title"
               >Code</RouterLink
+            ><span v-if="codeOpen" class="pr-count" data-test="rail-code-count"
+              >{{ codeOpen }}<span class="sr-only"> open files</span></span
             >
           </div>
-          <div v-if="isOpen('code')" class="pr-rows">
-            <p class="pr-muted">Editor coming soon</p>
+          <div v-if="isOpen('code')" class="pr-rows" data-test="rail-code">
+            <RailOpenFiles :project-id="projectId" />
           </div>
         </section>
       </template>

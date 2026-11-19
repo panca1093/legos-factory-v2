@@ -175,6 +175,35 @@ type CLIAuth interface {
 	StartLogin(ctx context.Context, host string) (<-chan model.CLILoginStep, error)
 }
 
+// EditorFS does confined file work inside one folder (os.Root); rel paths are slash-separated.
+type EditorFS interface {
+	List(root, rel string) (entries []model.FileEntry, truncated int, err error)
+	Read(root, rel string, max int64) (model.FileContent, error)
+	Write(root, rel string, content []byte, baseHash string, create bool) (model.FileStat, error) // conflict → *model.EditorConflict
+	Mkdir(root, rel string) error
+	Rename(root, from, to string) error
+	Files(ctx context.Context, root string, max int) ([]string, error) // quick open: git ls-files, else a capped walk
+	GitStatus(ctx context.Context, root string) (model.GitStatus, error)
+	Ignored(ctx context.Context, root string, rels []string) (map[string]bool, error)
+	Watch(root string) (model.Watcher, error)
+}
+
+// LSPHost discovers and starts allowlisted language servers.
+type LSPHost interface {
+	Discover(ctx context.Context, servers []model.LSPServerSpec, custom map[string]string) []model.LSPServerState
+	Start(ctx context.Context, spec model.LSPServerSpec, bin, root string) (model.LSPProcess, error)
+}
+
+type EditorStore interface {
+	Folder(ctx context.Context, userID, id string) (*model.EditorFolder, error)
+	UpsertFolder(ctx context.Context, f model.EditorFolder) (*model.EditorFolder, error) // by (user, path)
+	DeleteFolder(ctx context.Context, userID, id string) error
+	SetTrusted(ctx context.Context, userID, id string, trusted bool) error
+	ServerPath(ctx context.Context, userID, server string) (string, error)
+	SetServerPath(ctx context.Context, userID, server, path string) error
+	ServerPaths(ctx context.Context, userID string) (map[string]string, error)
+}
+
 // IssueTracker reads issues; it never modifies them.
 type IssueTracker interface {
 	CheckAuth(ctx context.Context) (account string, err error)
