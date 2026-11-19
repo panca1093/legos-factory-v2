@@ -3,6 +3,8 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { ChevronRight, Download, FileText, Send } from "lucide-vue-next";
 import type { Run, Task, WOEvent, WorkOrder } from "../../../types/api";
 import ActorBadge from "../ActorBadge.vue";
+import PanelCard from "../../projects/PanelCard.vue";
+import { woPanelSlots } from "../../projects/woPanelSlots";
 import BlueprintSection from "./BlueprintSection.vue";
 import {
   groupActivity,
@@ -68,19 +70,8 @@ const shown = computed(() =>
       ),
 );
 
+const slot = computed(() => woPanelSlots.mid.value);
 const pairs = computed(() => handoffs(items.value));
-const roles = ["foreman", "architect", "builder", "inspector"] as const;
-const crew = computed(() =>
-  roles.map((role) => {
-    const last = [...groups.value]
-      .reverse()
-      .find((g) => g.type === "run" && g.actor === role);
-    return {
-      role,
-      state: last && last.type === "run" ? last.status : "idle",
-    };
-  }),
-);
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const who = (a: string) => (a === "you" ? "You" : cap(a));
 const time = (iso: string) =>
@@ -364,9 +355,8 @@ async function send() {
         <p v-if="sendError" class="form-error" role="alert">{{ sendError }}</p>
       </form>
     </section>
-    <aside class="side" aria-label="Crew and handoffs">
-      <div class="fx-card">
-        <h3>Handoffs &amp; loops</h3>
+    <Teleport v-if="slot" :to="slot">
+      <PanelCard id="handoffs" title="Handoffs &amp; loops">
         <div class="loop">
           <div v-for="h in pairs" :key="h.from + h.to" class="loop-row">
             <span>{{ who(h.from) }} → {{ who(h.to) }}</span>
@@ -381,26 +371,13 @@ async function send() {
           </div>
           <p v-if="!pairs.length" class="tiny muted">No handoffs yet.</p>
         </div>
-      </div>
-      <div class="fx-card">
-        <h3>Crew</h3>
-        <div class="crew">
-          <div v-for="c in crew" :key="c.role" class="crew-row">
-            <ActorBadge :actor="c.role" small />
-            <span class="name">{{ cap(c.role) }}</span>
-            <span class="tiny muted">{{ c.state }}</span>
-          </div>
-        </div>
-      </div>
-    </aside>
+      </PanelCard>
+    </Teleport>
   </div>
 </template>
 <style scoped>
 .act {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 280px;
-  gap: var(--space-5);
-  align-items: start;
+  min-width: 0;
 }
 .thread {
   display: flex;
@@ -804,42 +781,18 @@ async function send() {
 .steer-dock .form-error {
   margin: 0;
 }
-.side {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  position: sticky;
-  top: var(--space-4);
-  min-width: 0;
-}
-.crew,
 .loop {
   display: flex;
   flex-direction: column;
   gap: 10px;
   font-size: 13px;
 }
-.crew-row,
 .loop-row {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-.loop-row {
   justify-content: space-between;
   gap: 8px;
-}
-.crew-row .tiny {
-  margin-left: auto;
-}
-@media (max-width: 1100px) {
-  .act {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .side {
-    position: static;
-  }
+  min-width: 0;
 }
 @media (max-width: 720px) {
   .msgs,
