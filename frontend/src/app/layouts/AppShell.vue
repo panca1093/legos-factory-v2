@@ -86,6 +86,20 @@ const inProject = computed(() => /^\/projects\/[^/]+/.test(route.path));
 const toggleBtn = ref<{ $el: HTMLElement }>(),
   closeBtn = ref<{ $el: HTMLElement }>();
 const overlay = () => window.innerWidth <= 1000;
+const overlayQuery = window.matchMedia?.("(max-width: 1000px)");
+function onOverlayChange() {
+  if (overlay()) {
+    sideOpen.value = false;
+    return;
+  }
+  try {
+    const stored = localStorage.getItem(railKey);
+    sideOpen.value = stored === "1" || (stored === null && inProject.value);
+  } catch {
+    /* Browser storage can be disabled. */
+  }
+}
+overlayQuery?.addEventListener("change", onOverlayChange);
 async function setSide(open: boolean) {
   sideOpen.value = open;
   if (!overlay()) {
@@ -215,7 +229,10 @@ onMounted(async () => {
     error.value = e instanceof Error ? e.message : String(e);
   }
 });
-onBeforeUnmount(() => document.removeEventListener("keydown", shortcut));
+onBeforeUnmount(() => {
+  document.removeEventListener("keydown", shortcut);
+  overlayQuery?.removeEventListener("change", onOverlayChange);
+});
 async function logout() {
   try {
     await session.logout();

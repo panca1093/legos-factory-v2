@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import { api, type WorkOrder } from "../../types/api";
 import { PanelRight, PanelRightClose } from "lucide-vue-next";
@@ -41,7 +41,8 @@ const label = computed(
 const hasPanel = computed(
   () => kind.value === "overview" || kind.value === "wo",
 );
-const narrow = () => window.innerWidth < 1280;
+const narrow = () => window.innerWidth <= 1280;
+const narrowQuery = window.matchMedia?.("(max-width: 1280px)");
 const panelOpen = ref(false);
 function initPanel() {
   const stored = readStored(panelKey);
@@ -52,6 +53,8 @@ function togglePanel() {
   if (!narrow()) writeStored(panelKey, panelOpen.value ? "1" : "0");
 }
 initPanel();
+narrowQuery?.addEventListener("change", initPanel);
+onBeforeUnmount(() => narrowQuery?.removeEventListener("change", initPanel));
 const revealChecks = computed(
   () => kind.value === "overview" && route.query.checks === "1",
 );

@@ -65,6 +65,7 @@
   position: sticky;
   top: 12px;
   display: grid;
+  align-content: start;
   gap: var(--space-4);
   max-height: calc(100dvh - 24px);
   overflow-y: auto;
