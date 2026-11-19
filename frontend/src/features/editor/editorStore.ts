@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { markRaw, reactive, ref, shallowRef } from "vue";
+import { computed, markRaw, reactive, ref, shallowRef } from "vue";
 import { useSession } from "../../stores/session";
 import { useToast } from "../../composables/useToast";
 import {
@@ -167,6 +167,11 @@ export const useEditor = defineStore("editor", () => {
 
   const userId = () => session.user?.id ?? "";
   const current = () => folders[currentId.value];
+  // The language client's view of the open folder (lsp.ts reads `folder`).
+  const folder = computed(() => {
+    const f = current()?.folder;
+    return f ? { id: f.id, path: f.path } : null;
+  });
 
   function infoOf(fid: string, path: string, model: ITextModel): ModelInfo {
     return {
@@ -1115,6 +1120,7 @@ export const useEditor = defineStore("editor", () => {
     leavePrompt,
     quickOpen,
     current,
+    folder,
     onModelOpened,
     onModelClosed,
     onModelSaved,

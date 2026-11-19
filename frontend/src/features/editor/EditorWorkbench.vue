@@ -321,8 +321,8 @@ function backToProject() {
   min-width: 0;
 }
 .ew-card {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   height: max(460px, calc(100dvh - 230px));
   overflow: hidden;
   border: 1px solid var(--line);
@@ -332,6 +332,7 @@ function backToProject() {
 }
 .ew-body {
   position: relative;
+  flex: 1 1 auto;
   min-height: 0;
   display: grid;
   grid-template-rows: minmax(0, 1fr);

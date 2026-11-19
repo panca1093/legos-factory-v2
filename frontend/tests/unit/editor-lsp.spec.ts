@@ -100,7 +100,7 @@ function fakeMonaco() {
 
 function setup(models: Record<string, any>) {
   const monaco = fakeMonaco();
-  const opened: ((uri: string, m: any) => void)[] = [];
+  const opened: ((info: { uri: string; model: any }) => void)[] = [];
   const store: LspStore = {
     monaco,
     models: new Map(Object.entries(models)),

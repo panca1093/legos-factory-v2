@@ -128,10 +128,11 @@ let observer: MutationObserver | null = null;
 
 export function loadMonaco(): Promise<Monaco> {
   loading ??= (async () => {
+    // Contributions register their services; they must evaluate before editor.api builds the service collection.
+    await import("./monacoContrib");
     const [monaco, workerMod] = await Promise.all([
       import("monaco-editor/editor/editor.api"),
       import("monaco-editor/editor/editor.worker?worker"),
-      import("./monacoContrib"),
       import("./monacoLanguages"),
     ]);
     const EditorWorker = workerMod.default;

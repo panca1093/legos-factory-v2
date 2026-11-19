@@ -58,8 +58,8 @@ export interface LspStore {
   models: Map<string, any>;
   folder: { id: string; path: string } | null;
   diagnostics: Map<string, Diagnostic[]>;
-  onModelOpened(cb: (uri: string, model: any) => void): (() => void) | void;
-  onModelClosed(cb: (uri: string) => void): (() => void) | void;
+  onModelOpened(cb: (info: { uri: string; model: any }) => void): (() => void) | void;
+  onModelClosed(cb: (info: { uri: string }) => void): (() => void) | void;
   onModelSaved?(cb: (uri: string) => void): (() => void) | void;
   openFileAt?(
     uri: string,
@@ -520,10 +520,10 @@ class Controller {
   start() {
     const store = this.store;
     const subs = [
-      store.onModelOpened((uri, model) =>
+      store.onModelOpened(({ uri, model }) =>
         this.opened(uri, model ?? store.models.get(uri)),
       ),
-      store.onModelClosed((uri) => {
+      store.onModelClosed(({ uri }) => {
         for (const s of this.sessions.values()) s.untrack(uri);
       }),
       store.onModelSaved?.((uri) => {
