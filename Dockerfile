@@ -5,7 +5,7 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM golang:1.26.3-bookworm AS backend
+FROM golang:1.27.3-bookworm AS backend
 WORKDIR /backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
@@ -13,7 +13,7 @@ COPY backend/ ./
 COPY --from=frontend /frontend/dist ./internal/http/dist
 RUN CGO_ENABLED=0 go build -tags embedstatic -o /factory ./cmd/factory
 
-FROM golang:1.26.3-bookworm
+FROM golang:1.27.3-bookworm
 # Work-order checks need Go, Node/npm, and Git at runtime.
 COPY --from=frontend /usr/local/ /usr/local/
 # Agents run as `opencode acp` subprocesses (FACTORY_HARNESS=acp); v2 ships as @opencode/cli.
