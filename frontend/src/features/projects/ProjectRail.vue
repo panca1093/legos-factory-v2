@@ -143,6 +143,14 @@ usePRRefresh(
     return !t.project || t.project === projectId.value;
   },
 );
+let staleTimer: ReturnType<typeof setTimeout> | undefined;
+watch(
+  () => pulls.value?.stale,
+  (stale) => {
+    clearTimeout(staleTimer);
+    if (stale) staleTimer = setTimeout(() => void loadPulls(), 3000);
+  },
+);
 function schedule() {
   clearTimeout(timer);
   timer = setTimeout(() => void load("wo"), 1000);
@@ -175,6 +183,7 @@ watch(
 );
 onBeforeUnmount(() => {
   clearTimeout(timer);
+  clearTimeout(staleTimer);
   seq++;
   pullsSeq++;
 });
@@ -333,7 +342,10 @@ const newOrder = () =>
                   >{{ chipText(r) }}</span
                 ></RouterLink
               >
-              <p v-if="!pulls" class="empty-note">
+              <p
+                v-if="!pulls || (pulls.stale && !pulls.rows?.length)"
+                class="empty-note"
+              >
                 {{ failed ? "Could not load pull requests." : "Loading…" }}
               </p>
               <p

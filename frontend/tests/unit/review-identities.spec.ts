@@ -131,7 +131,7 @@ it("shows the code and url from live events, then falls back", async () => {
   const f = useFactory();
   f.liveEvents = [
     {
-      id: 2,
+      id: 0,
       work_order_id: "",
       actor: "",
       kind: "cli_login.url",
@@ -143,7 +143,7 @@ it("shows the code and url from live events, then falls back", async () => {
       },
     },
     {
-      id: 1,
+      id: 0,
       work_order_id: "",
       actor: "",
       kind: "cli_login.code",
@@ -151,7 +151,7 @@ it("shows the code and url from live events, then falls back", async () => {
       payload: { login_id: "l1", kind: "code", code: "ABCD-1234" },
     },
     {
-      id: 3,
+      id: 0,
       work_order_id: "",
       actor: "",
       kind: "cli_login.code",
@@ -169,7 +169,7 @@ it("shows the code and url from live events, then falls back", async () => {
 
   f.liveEvents = [
     {
-      id: 4,
+      id: 0,
       work_order_id: "",
       actor: "",
       kind: "cli_login.fallback",

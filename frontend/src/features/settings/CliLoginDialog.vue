@@ -13,7 +13,8 @@ const code = ref(""),
   state = ref<"waiting" | "done" | "failed" | "fallback">("waiting"),
   message = ref(""),
   copied = ref(false);
-const seen = new Set<number>();
+// Keyed by event object: the user channel may reuse ids across steps.
+let seen = new WeakSet<object>();
 
 watch(
   () => props.loginId,
@@ -21,7 +22,7 @@ watch(
     code.value = url.value = message.value = "";
     state.value = "waiting";
     copied.value = false;
-    seen.clear();
+    seen = new WeakSet<object>();
   },
 );
 watch(
@@ -29,10 +30,10 @@ watch(
   (events) => {
     if (!props.open || !props.loginId) return;
     for (const ev of [...events].reverse()) {
-      if (!ev.kind.startsWith("cli_login.") || seen.has(ev.id)) continue;
+      if (!ev.kind.startsWith("cli_login.") || seen.has(ev)) continue;
       const step = ev.payload as CLILoginStep | undefined;
       if (step?.login_id !== props.loginId) continue;
-      seen.add(ev.id);
+      seen.add(ev);
       const kind = ev.kind.slice("cli_login.".length);
       if (kind === "code") code.value = step.code ?? "";
       else if (kind === "url") url.value = step.url ?? "";
