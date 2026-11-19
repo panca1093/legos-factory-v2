@@ -351,11 +351,11 @@ describe("work order banner", () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
-        { path: "/factory", component: { render: () => null } },
-        { path: "/factory/:id", component: WorkOrderView },
+        { path: "/projects/:id", component: { render: () => null } },
+        { path: "/projects/:id/wo/:wo", component: WorkOrderView },
       ],
     });
-    await router.push(`/factory/${orders[0].id}`);
+    await router.push(`/projects/atlas/wo/${orders[0].id}`);
     await router.isReady();
     const w = mount(WorkOrderView, { global: { plugins: [router] }, attachTo: document.body });
     await flushPromises();

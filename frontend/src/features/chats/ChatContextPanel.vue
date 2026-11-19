@@ -14,6 +14,7 @@ import Popover from "../../components/ui/Popover.vue";
 import NewWorkOrderDrawer from "../factory/work-orders/NewWorkOrderDrawer.vue";
 import { useToast } from "../../composables/useToast";
 import { money, orderStatus } from "../../composables/presentation";
+import { woPath, woPathFor } from "../projects/rail";
 import { useChats, type ChatMessage, type Chat } from "../../stores/chats";
 import type { WorkOrderDraft } from "../../stores/chats";
 import { useFactory } from "../../stores/factory";
@@ -128,7 +129,7 @@ function created(r: { id: string; planningError: string }) {
   saved.value = null;
   drawerOpen.value = false;
   void router.push({
-    path: `/factory/${r.id}`,
+    path: woPathFor(factory.workOrders, r.id),
     query: r.planningError ? { planningError: r.planningError } : {},
   });
 }
@@ -388,7 +389,9 @@ onBeforeUnmount(() => {
         <div class="rail-group">
           <h5>
             Running now <span>{{ sp.running.length }}</span>
-            <RouterLink class="rail-link" to="/factory"
+            <RouterLink
+              class="rail-link"
+              :to="chat.project_id ? `/projects/${chat.project_id}` : '/projects'"
               >Open factory</RouterLink
             >
           </h5>
@@ -403,7 +406,7 @@ onBeforeUnmount(() => {
               class="rail-dot"
               :style="{ '--dot': crewColor(r.role) }"
             >
-              <RouterLink :to="`/factory/${r.work_order_id}`">
+              <RouterLink :to="woPathFor(factory.workOrders, r.work_order_id)">
                 <span class="rail-name"
                   >{{ agentRole(r.role) }} · {{ r.state }}</span
                 >
@@ -650,7 +653,7 @@ onBeforeUnmount(() => {
         aria-label="Work orders from this chat"
       >
         <li v-for="w in linked" :key="w.id">
-          <RouterLink :to="`/factory/${w.id}`"
+          <RouterLink :to="woPath(w.project_id, w.id)"
             ><span class="t">{{ w.title }}</span
             ><span class="rail-pill">{{ orderStatus(w).label }}</span
             ><ArrowRight class="icon" aria-hidden="true"

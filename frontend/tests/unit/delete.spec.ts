@@ -2,7 +2,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import FactoryView from "../../src/features/factory/FactoryView.vue";
+import FactoryOverview from "../../src/features/projects/FactoryOverview.vue";
 import WorkOrderView from "../../src/features/factory/work-orders/WorkOrderView.vue";
 import { isDeletable } from "../../src/composables/presentation";
 import { useFactory } from "../../src/stores/factory";
@@ -125,11 +125,14 @@ describe("store actions", () => {
 async function renderFactory(url: string) {
   const router = createRouter({
     history: createMemoryHistory(),
-    routes: [{ path: "/factory", component: FactoryView }],
+    routes: [
+      { path: "/projects", component: { render: () => null } },
+      { path: "/projects/:id", component: FactoryOverview },
+    ],
   });
   await router.push(url);
   await router.isReady();
-  const w = mount(FactoryView, {
+  const w = mount(FactoryOverview, {
     global: { plugins: [router] },
     attachTo: document.body,
   });
@@ -146,7 +149,7 @@ async function openProjectDelete(
 
 describe("project delete dialog", () => {
   it("shows the count, blocks confirm while orders are active, focuses Cancel and closes on Escape", async () => {
-    const { w } = await renderFactory("/factory?project=loan");
+    const { w } = await renderFactory("/projects/loan");
     await openProjectDelete(w);
     const dialog = dom('[role="dialog"]');
     expect(dialog.textContent).toContain("Loan Platform");
@@ -167,9 +170,9 @@ describe("project delete dialog", () => {
     expect(deletes()).toHaveLength(0);
     w.unmount();
   });
-  it("deletes an all-terminal project and returns to All projects", async () => {
+  it("deletes an all-terminal project and returns to the project list", async () => {
     useFactory().workOrders.find((o) => o.id === "LF-124")!.state = "CANCELLED";
-    const { w, router } = await renderFactory("/factory?project=orbit");
+    const { w, router } = await renderFactory("/projects/orbit");
     await openProjectDelete(w);
     const confirm = dom<HTMLButtonElement>('[data-test="confirm-delete"]');
     expect(confirm.disabled).toBe(false);
@@ -179,12 +182,12 @@ describe("project delete dialog", () => {
     await flushPromises();
     expect(deletes()[0][0]).toBe("/api/v1/projects/orbit");
     expect(useFactory().projects.map((p) => p.id)).toEqual(["atlas", "loan"]);
-    expect(router.currentRoute.value.query.project).toBeUndefined();
+    expect(router.currentRoute.value.path).toBe("/projects");
     w.unmount();
   });
   it("shows the server message when the delete is refused", async () => {
     useFactory().workOrders.find((o) => o.id === "LF-124")!.state = "CANCELLED";
-    const { w } = await renderFactory("/factory?project=orbit");
+    const { w } = await renderFactory("/projects/orbit");
     await openProjectDelete(w);
     conflict("1 work order is still active");
     dom<HTMLButtonElement>('[data-test="confirm-delete"]').click();
@@ -212,11 +215,11 @@ describe("work order delete", () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
-        { path: "/factory", component: { render: () => null } },
-        { path: "/factory/:id", component: WorkOrderView },
+        { path: "/projects/:id", component: { render: () => null } },
+        { path: "/projects/:id/wo/:wo", component: WorkOrderView },
       ],
     });
-    await router.push(`/factory/${id}`);
+    await router.push(`/projects/atlas/wo/${id}`);
     await router.isReady();
     const w = mount(WorkOrderView, {
       global: { plugins: [router] },
@@ -230,7 +233,7 @@ describe("work order delete", () => {
     expect(w.find('[data-test="delete-order"]').exists()).toBe(false);
     w.unmount();
   });
-  it("confirms with the title, deletes and leaves for the factory floor", async () => {
+  it("confirms with the title, deletes and leaves for its project", async () => {
     const { w, router } = await renderOrder("LF-121");
     await w.find('[data-test="delete-order"]').trigger("click");
     await flushPromises();
@@ -243,7 +246,7 @@ describe("work order delete", () => {
     dom<HTMLButtonElement>('[data-test="confirm-delete"]').click();
     await flushPromises();
     expect(deletes()[0][0]).toBe("/api/v1/work-orders/LF-121");
-    expect(router.currentRoute.value.path).toBe("/factory");
+    expect(router.currentRoute.value.path).toBe(`/projects/${orders.find((o) => o.id === "LF-121")!.project_id}`);
     expect(useFactory().workOrders.map((o) => o.id)).not.toContain("LF-121");
     w.unmount();
   });

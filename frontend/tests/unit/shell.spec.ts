@@ -27,7 +27,7 @@ it("shows navigation, the prototype desktop topbar, search shortcut and theme to
     history: createMemoryHistory(),
     routes: [{ path: "/:pathMatch(.*)*", component: { template: "<div />" } }],
   });
-  await router.push("/factory");
+  await router.push("/projects");
   await router.isReady();
   useSession().user = { id: "u", name: "Panca", email: "p@x", role: "OWNER" };
   const f = useFactory();
@@ -39,7 +39,7 @@ it("shows navigation, the prototype desktop topbar, search shortcut and theme to
     attachTo: document.body,
   });
   await flushPromises();
-  for (const label of ["Home", "Chats", "Factory", "Knowledge"])
+  for (const label of ["Home", "Chats", "Projects", "Reviews", "Knowledge"])
     expect(
       w
         .find(

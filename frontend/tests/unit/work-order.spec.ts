@@ -36,11 +36,11 @@ async function render(id = "LF-128") {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
-      { path: "/factory", component: { render: () => null } },
-      { path: "/factory/:id", component: WorkOrderView },
+      { path: "/projects/:id", component: { render: () => null } },
+      { path: "/projects/:id/wo/:wo", component: WorkOrderView },
     ],
   });
-  await router.push(`/factory/${id}`);
+  await router.push(`/projects/atlas/wo/${id}`);
   await router.isReady();
   const w = mount(WorkOrderView, { global: { plugins: [router] } });
   await flushPromises();
@@ -48,7 +48,7 @@ async function render(id = "LF-128") {
 }
 it("changes the order identity without retaining the old stream or data", async () => {
   const { w, router } = await render();
-  await router.push("/factory/LF-127");
+  await router.push("/projects/atlas/wo/LF-127");
   await flushPromises();
   expect(w.find("h1").text()).toBe("Add accessible product search");
   expect(closed).toBe(1);

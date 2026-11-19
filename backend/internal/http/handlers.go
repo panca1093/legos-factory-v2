@@ -56,6 +56,19 @@ func (s *Server) handleGetProject(c echo.Context) error {
 	return c.JSON(http.StatusOK, p)
 }
 
+func (s *Server) handleProjectRail(c echo.Context) error {
+	rail, err := s.Rail.Get(c.Request().Context(), currentUser(c), c.Param("id"), c.QueryParam("part"))
+	switch {
+	case err == nil:
+		return c.JSON(http.StatusOK, rail)
+	case usecase.IsNotFound(err):
+		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "project not found")
+	case errors.Is(err, usecase.ErrInvalid):
+		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+	}
+	return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not load the project rail")
+}
+
 // ---- work orders ----
 
 func (s *Server) handleCreateWorkOrder(c echo.Context) error {

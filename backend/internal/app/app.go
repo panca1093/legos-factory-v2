@@ -234,6 +234,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Settings = settingsRepo
 	srv.Projects = projects
 	srv.WorkOrders = workOrders
+	srv.Rail = &usecase.Rail{Projects: projects, WO: woRepo, Integrations: integrations}
 	srv.Integrations = integrations
 	srv.MCP = mcpServers
 	srv.Local = localProjects

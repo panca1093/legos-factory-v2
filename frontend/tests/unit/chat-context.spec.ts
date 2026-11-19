@@ -40,6 +40,7 @@ const projects = [
 const workOrders = [
   {
     id: "w1",
+    project_id: "p1",
     title: "Make retries safe",
     state: "CREATED",
     source_chat_id: "c1",
@@ -168,7 +169,11 @@ describe("chat context panel", () => {
 
   it("drafts, opens the prefilled drawer, and sends source_chat_id on submit", async () => {
     handlers["POST /api/v1/chats/c1/work-order-draft"] = () => draft;
-    handlers["POST /api/v1/work-orders"] = () => ({ id: "w9", ...draft });
+    const w9 = { id: "w9", project_id: "p1", ...draft };
+    handlers["POST /api/v1/work-orders"] = () => w9;
+    handlers["GET /api/v1/work-orders"] = () => ({
+      work_orders: [...workOrders, w9],
+    });
     const { w, r } = await mountPanel();
     await w.find('[data-test="create-wo"]').trigger("click");
     await flushPromises();
@@ -192,7 +197,7 @@ describe("chat context panel", () => {
       title: "Drafted",
       source_chat_id: "c1",
     });
-    expect(r.currentRoute.value.path).toBe("/factory/w9");
+    expect(r.currentRoute.value.path).toBe("/projects/p1/wo/w9");
     w.unmount();
   });
 
@@ -240,7 +245,7 @@ describe("chat context panel", () => {
   it("lists only work orders created from this chat, with status", async () => {
     const { w } = await mountPanel();
     const links = w.findAll('ul[aria-label="Work orders from this chat"] a');
-    expect(links.map((a) => a.attributes("href"))).toEqual(["/factory/w1"]);
+    expect(links.map((a) => a.attributes("href"))).toEqual(["/projects/p1/wo/w1"]);
     expect(links[0].text()).toContain("Make retries safe");
     expect(links[0].text()).toContain("Draft");
     w.unmount();

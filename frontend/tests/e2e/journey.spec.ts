@@ -42,7 +42,7 @@ async function createProject(page: Page, name: string) {
       json: { error: { code: "NOT_AVAILABLE", message: "not available" } },
     }),
   );
-  await page.getByRole("link", { name: "Factory", exact: true }).click();
+  await page.getByRole("link", { name: "Projects", exact: true }).click();
   await page
     .getByRole("button", { name: "Add project", exact: true })
     .first()
@@ -206,12 +206,9 @@ test("settings save, navigation and missing-order recovery against the real back
   await page.reload();
   await expect(page.locator("#max-runs")).toHaveValue("6");
   await page.goto("/factory/missing");
-  await expect(page.getByRole("alert")).toContainText("work order not found");
-  await page
-    .getByRole("link", { name: "Back to Factory", exact: true })
-    .click();
+  await expect(page).toHaveURL(/\/projects$/);
   await expect(
-    page.getByRole("heading", { name: "The factory floor" }),
+    page.getByRole("heading", { name: "Projects", exact: true }),
   ).toBeVisible();
 });
 test("knowledge notebook: read first, discussion opens on demand", async ({

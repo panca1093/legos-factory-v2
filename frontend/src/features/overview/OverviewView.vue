@@ -28,6 +28,7 @@ import {
   needsYou,
   persona,
 } from "../../composables/presentation";
+import { woPath } from "../projects/rail";
 import { heatCells, type HeatMode } from "./heatmap";
 import "./overview.css";
 const factory = useFactory(),
@@ -122,22 +123,22 @@ onMounted(() => {
     <RouterLink
       v-if="session.canWrite"
       class="lg-btn primary pill hero-cta"
-      to="/factory?new=1"
+      to="/projects?new=1"
       ><Plus class="icon" />New work order</RouterLink
     >
   </div>
   <section class="kpis" aria-label="Workspace summary">
-    <RouterLink class="lg-card lg-stat" to="/factory?status=attention"
+    <RouterLink class="lg-card lg-stat" to="/projects"
       ><div class="label"><ShieldCheck class="icon" />Needs you</div>
       <div class="value">{{ approvals.length }}</div>
       <div class="note">decisions waiting</div></RouterLink
     >
-    <RouterLink class="lg-card lg-stat" to="/factory"
+    <RouterLink class="lg-card lg-stat" to="/projects"
       ><div class="label"><Zap class="icon" />In the making</div>
       <div class="value">{{ inMaking.length }}</div>
       <div class="note">active work orders</div></RouterLink
     >
-    <RouterLink class="lg-card lg-stat" to="/factory?status=complete"
+    <RouterLink class="lg-card lg-stat" to="/projects"
       ><div class="label"><Rocket class="icon" />Shipped</div>
       <div class="value">{{ shipped }}</div>
       <div class="note">pull requests opened</div></RouterLink
@@ -170,7 +171,7 @@ onMounted(() => {
           <RouterLink
             class="lg-btn small"
             :class="{ primary: w.state === 'WAITING_FOR_HUMAN' }"
-            :to="`/factory/${w.id}`"
+            :to="woPath(w.project_id, w.id)"
             >{{ action(w.state) }}</RouterLink
           >
         </div>
@@ -182,8 +183,8 @@ onMounted(() => {
     <section class="lg-card" aria-labelledby="running-now">
       <div class="lg-card-head">
         <h2 id="running-now">Running now</h2>
-        <RouterLink class="lg-btn ghost small" to="/factory"
-          ><Factory class="icon" />Open Factory</RouterLink
+        <RouterLink class="lg-btn ghost small" to="/projects"
+          ><Factory class="icon" />Open Projects</RouterLink
         >
       </div>
       <div class="box">
@@ -191,7 +192,7 @@ onMounted(() => {
           v-for="w in running"
           :key="w.id"
           class="lg-row runrow"
-          :to="`/factory/${w.id}`"
+          :to="woPath(w.project_id, w.id)"
         >
           <div class="grow">
             <div class="title">{{ w.title }}</div>

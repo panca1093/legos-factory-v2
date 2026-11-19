@@ -30,6 +30,7 @@ type Server struct {
 	Factory      *usecase.Factory
 	Projects     *usecase.Projects
 	WorkOrders   *usecase.WorkOrders
+	Rail         *usecase.Rail
 	Integrations *usecase.Integrations
 	MCP          *usecase.MCPServers
 	Local        *usecase.Local
@@ -214,6 +215,7 @@ func (s *Server) routes() {
 	api.POST("/projects", s.requireRole(model.RoleEngineer, s.handleCreateProject))
 	api.GET("/projects/:id", s.handleGetProject)
 	api.DELETE("/projects/:id", s.requireRole(model.RoleEngineer, s.handleDeleteProject))
+	api.GET("/projects/:id/rail", s.handleProjectRail)
 	api.GET("/projects/:id/members", s.handleListMembers)
 	api.POST("/projects/:id/members", s.requireRole(model.RoleAdmin, s.handleAddMember))
 	api.DELETE("/projects/:id/members/:user_id", s.requireRole(model.RoleAdmin, s.handleRemoveMember))
