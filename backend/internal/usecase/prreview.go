@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -195,7 +194,11 @@ func (r *Reviews) reviewer(provider, baseURL, username, token string) (PRReviewe
 	if r.NewReviewer == nil {
 		return nil, fmt.Errorf("%w: pull request reviews are not configured", ErrNoReviewIdentity)
 	}
-	return r.NewReviewer(provider, baseURL, username, token), nil
+	rv := r.NewReviewer(provider, baseURL, username, token)
+	if rv == nil {
+		return nil, fmt.Errorf("%w: %s reviews are not supported", ErrNoReviewIdentity, provider)
+	}
+	return rv, nil
 }
 
 // resolve picks the account u reviews with for p's repository: the pinned identity, else the user's own
@@ -213,7 +216,7 @@ func (r *Reviews) resolve(ctx context.Context, userID string, p *model.Project, 
 	provider := providerForHost(host)
 	var mine []model.Connection
 	for _, c := range conns {
-		if c.OwnerID == userID && c.IsGit() && c.Status == model.ConnectionActive && connectionHost(c.BaseURL) == host {
+		if c.OwnerID == userID && c.IsGit() && c.Status == model.ConnectionActive && c.VerifiedAt != nil && connectionHost(c.BaseURL) == host {
 			if provider == "" {
 				provider = c.Provider
 			}
@@ -379,8 +382,8 @@ func (r *Reviews) providerErr(err error) *model.ProviderErr {
 	case errors.As(err, &pc):
 		return &model.ProviderErr{Code: model.ErrCodeProvider, Message: err.Error()}
 	case errors.As(err, &pe):
-		switch ra := retryAfter(pe); {
-		case pe.Status == 429 || (pe.Status == 403 && ra > 0):
+		switch ra := pe.RetryAfter; {
+		case pe.RateLimited || pe.Status == 429:
 			e := &model.ProviderErr{Code: model.ErrCodeRateLimit, Message: "rate limited by " + pe.Provider}
 			if ra > 0 {
 				until := r.now().Add(ra)
@@ -399,16 +402,6 @@ func (r *Reviews) providerErr(err error) *model.ProviderErr {
 	return &model.ProviderErr{Code: model.ErrCodeProvider, Message: err.Error()}
 }
 
-// retryAfter reads ProviderError.RetryAfter, which the provider adapters add; reflection keeps this file
-// compiling on either side of that change.
-func retryAfter(pe *model.ProviderError) time.Duration {
-	f := reflect.ValueOf(pe).Elem().FieldByName("RetryAfter")
-	if !f.IsValid() || f.Kind() != reflect.Int64 {
-		return 0
-	}
-	return time.Duration(f.Int())
-}
-
 var retrySleep = func(ctx context.Context, d time.Duration) {
 	select {
 	case <-ctx.Done():
@@ -421,13 +414,16 @@ func retryGet[T any](ctx context.Context, fn func() (T, error)) (T, error) {
 	v, err := fn()
 	var pe *model.ProviderError
 	if errors.As(err, &pe) {
-		if ra := retryAfter(pe); ra > 0 && ra <= 10*time.Second {
+		if ra := pe.RetryAfter; pe.RateLimited && ra > 0 && ra <= 10*time.Second {
 			retrySleep(ctx, ra)
 			return fn()
 		}
 	}
 	return v, err
 }
+
+// ProviderErrOf is the wire form of a review failure, for handlers that map it to a status.
+func (r *Reviews) ProviderErrOf(err error) *model.ProviderErr { return r.providerErr(err) }
 
 // open authorizes u on the project and resolves the review account.
 func (r *Reviews) open(ctx context.Context, u *model.User, projectID string, fresh bool) (*reviewCtx, error) {

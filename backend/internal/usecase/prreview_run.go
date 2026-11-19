@@ -266,7 +266,15 @@ func (r *Reviews) linkedIssue(ctx context.Context, userID string, d model.PRDeta
 	if r.Integrations == nil || r.Integrations.Issues == nil {
 		return ""
 	}
-	key := model.IssueKeyPattern.FindString(strings.ToUpper(d.Title + " " + d.Head))
+	key := ""
+	for _, w := range strings.FieldsFunc(strings.ToUpper(d.Title+" "+d.Head), func(c rune) bool {
+		return !(c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_')
+	}) {
+		if model.IssueKeyPattern.MatchString(w) {
+			key = w
+			break
+		}
+	}
 	if key == "" {
 		return ""
 	}

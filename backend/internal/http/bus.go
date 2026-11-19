@@ -37,11 +37,21 @@ func (b *Bus) Subscribe(woID string) (<-chan model.LiveEvent, func()) {
 	}
 }
 
-// Publish delivers to subscribers of the WO and to "*" (global listeners).
+// SubscribeUser receives the events published for one user (review runs, CLI login).
+func (b *Bus) SubscribeUser(userID string) (<-chan model.LiveEvent, func()) {
+	return b.Subscribe("user:" + userID)
+}
+
+// Publish delivers to subscribers of the WO and to "*" (global listeners); an event
+// with a UserID reaches only that user's subscribers.
 // Slow subscribers drop events (channel is buffered); SSE catches up from
 // the persisted event log.
 func (b *Bus) Publish(e model.LiveEvent) {
-	for _, key := range []string{e.WOID, "*"} {
+	keys := []string{e.WOID, "*"}
+	if e.UserID != "" {
+		keys = []string{"user:" + e.UserID}
+	}
+	for _, key := range keys {
 		b.mu.Lock()
 		subs := append([]chan model.LiveEvent(nil), b.subs[key]...)
 		b.mu.Unlock()
