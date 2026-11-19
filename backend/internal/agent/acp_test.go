@@ -813,12 +813,12 @@ func TestACPRepoChatGetsReadOnlyToolsWithSecretDenials(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Text), &s); err != nil {
 		t.Fatalf("reply %q: %v", res.Text, err)
 	}
-	want := `{"claudeCode":{"options":{"disallowedTools":["Bash","Edit","Write","MultiEdit","NotebookEdit","Agent","Task","Read(./.env)","Read(./.env.*)","Read(./**/.env)","Read(./**/*.pem)","Read(./**/*.key)","Read(./.git/**)","Read(./**/.env.*)"],"extraArgs":{"settings":"{\"permissions\":{\"ask\":[\"Read\",\"Grep\",\"Glob\"]}}"},"settingSources":[],"strictMcpConfig":true,"tools":["Read","Grep","Glob"]}}}`
+	want := `{"claudeCode":{"options":{"disallowedTools":["Agent","Task","Read(./.env)","Read(./.env.*)","Read(./**/.env)","Read(./**/*.pem)","Read(./**/*.key)","Read(./.git/**)","Read(./**/.env.*)"],"extraArgs":{"settings":"{\"permissions\":{\"ask\":[\"Read\",\"Grep\",\"Glob\",\"Bash\",\"Edit\",\"Write\",\"MultiEdit\",\"NotebookEdit\"]}}"},"settingSources":[],"strictMcpConfig":true,"tools":["Read","Grep","Glob","Bash","Edit","Write","MultiEdit","NotebookEdit"]}}}`
 	if s.Meta != want {
 		t.Fatalf("repo chat meta = %s\nwant %s", s.Meta, want)
 	}
-	if s.Set != "model=sonnet,mode=plan" {
-		t.Fatalf("repo chat config calls = %q; want the model, then plan mode", s.Set)
+	if s.Set != "model=sonnet" {
+		t.Fatalf("repo chat config calls = %q; want the model only, as plan mode would refuse calls sent for approval", s.Set)
 	}
 }
 
@@ -841,9 +841,14 @@ func TestACPRepoChatOpenCodeConfigKeepsReadTools(t *testing.T) {
 			t.Fatalf("repo chat config must deny %s: %s", tool, s.Config)
 		}
 	}
-	for _, tool := range []string{"edit", "write", "patch", "apply_patch", "bash", "shell", "execute", "external_directory"} {
+	for _, tool := range []string{"shell", "execute", "external_directory"} {
 		if !strings.Contains(s.Config, `"`+tool+`":"deny"`) {
 			t.Fatalf("repo chat config must deny %s: %s", tool, s.Config)
+		}
+	}
+	for _, tool := range []string{"edit", "write", "patch", "apply_patch", "bash"} {
+		if !strings.Contains(s.Config, `"`+tool+`":"ask"`) {
+			t.Fatalf("repo chat config must ask for %s: %s", tool, s.Config)
 		}
 	}
 	plain, err := runFake(t, fakeHarness(t, "ok"), model.AgentRequest{Role: model.AgentChat, Prompt: "go"})
@@ -868,6 +873,8 @@ func TestACPRepoChatPermissionPolicy(t *testing.T) {
 		{true, "read", "/etc/passwd", "no"},
 		{true, "read", ws + "/../other/.env", "no"},
 		{true, "edit", ws + "/main.go", "no"},
+		{true, "delete", ws + "/main.go", "no"},
+		{true, "move", ws + "/main.go", "no"},
 		{true, "execute", ws, "no"},
 		{true, "fetch", ws, "no"},
 		{false, "read", ws + "/main.go", "no"},
@@ -881,6 +888,44 @@ func TestACPRepoChatPermissionPolicy(t *testing.T) {
 		}
 		if res.Text != c.want {
 			t.Fatalf("repo=%v %s %s: answered %q, want %q", c.repo, c.kind, c.path, res.Text, c.want)
+		}
+	}
+}
+
+func TestACPRepoChatSendsShellAndEditsToApproval(t *testing.T) {
+	ws := t.TempDir()
+	cases := []struct {
+		kind, tool, path, input string
+		approve                 bool
+		want, wantTool          string
+	}{
+		{"execute", "Bash", "", `{"command":"go build ./..."}`, true, "yes", "Bash"},
+		{"execute", "Bash", "", `{"command":"go build ./..."}`, false, "no", "Bash"},
+		{"edit", "Edit", ws + "/main.go", `{"file_path":"main.go"}`, true, "yes", "Edit"},
+		{"edit", "Write", ws + "/main.go", `{"file_path":"main.go"}`, false, "no", "Write"},
+		{"edit", "Edit", ws + "/../other/main.go", "", true, "no", ""},
+		{"edit", "Edit", "/etc/hosts", "", true, "no", ""},
+		{"execute", "", "", `{"command":["git","status"]}`, true, "yes", "execute"},
+	}
+	for _, c := range cases {
+		env := []string{"ACP_FAKE_KIND=" + c.kind, "ACP_FAKE_TOOLNAME=" + c.tool, "ACP_FAKE_PATH=" + c.path, "ACP_FAKE_INPUT=" + c.input}
+		var asked []model.PermissionRequest
+		res, err := runFake(t, fakeHarness(t, "permission", env...), model.AgentRequest{Role: model.AgentChat, WorkspaceDir: ws, Prompt: "go", RepoAccess: true,
+			OnPermission: func(_ context.Context, p model.PermissionRequest) bool { asked = append(asked, p); return c.approve }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Text != c.want {
+			t.Fatalf("%+v: answered %q", c, res.Text)
+		}
+		if c.wantTool == "" {
+			if len(asked) != 0 {
+				t.Fatalf("%+v: a write outside the folder must not reach the user: %+v", c, asked)
+			}
+			continue
+		}
+		if len(asked) != 1 || asked[0].Server != model.RepoToolServer || asked[0].Tool != c.wantTool {
+			t.Fatalf("%+v: asked %+v", c, asked)
 		}
 	}
 }

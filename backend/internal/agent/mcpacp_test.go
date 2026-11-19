@@ -102,7 +102,7 @@ func TestACPAskRuleRoutesEveryMCPCallThroughTheFactory(t *testing.T) {
 			t.Fatalf("architect settings = %s, want %s", got, want)
 		}
 		got, _ = sentSettings(t, model.AgentRequest{Role: model.AgentChat, RepoAccess: true, MCP: two[:1]})
-		if want := `{"permissions":{"ask":["Read","Grep","Glob","mcp__docs"]}}`; got != want {
+		if want := `{"permissions":{"ask":["Read","Grep","Glob","Bash","Edit","Write","MultiEdit","NotebookEdit","mcp__docs"]}}`; got != want {
 			t.Fatalf("repo chat settings = %s, want %s", got, want)
 		}
 	}

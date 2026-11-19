@@ -41,6 +41,9 @@ type AgentRequest struct {
 	OnPermission func(context.Context, PermissionRequest) bool
 }
 
+// RepoToolServer is the Server of a PermissionRequest for a repo chat's own shell or file-writing tool, as opposed to an MCP server's.
+const RepoToolServer = "repo"
+
 // PermissionRequest is a tool call waiting for a human's approval.
 type PermissionRequest struct {
 	ID     string

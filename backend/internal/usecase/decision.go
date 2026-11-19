@@ -285,8 +285,6 @@ func (f *Factory) DeleteProject(ctx context.Context, projectID string) error {
 	for i := range own {
 		f.cleanupWorktreesIn(ctx, &own[i], proj.RepoURL)
 	}
-	f.removeWorkspaces("chat-" + projectID)
-	f.removeWorkspaces("checks-src-" + projectID)
 	f.removeStack(ctx, projectID)
 	f.Log.Info("project deleted", "project", projectID, "work_orders", len(own))
 	return nil
