@@ -8,9 +8,12 @@ import { useFactory } from "../../stores/factory";
 import NewWorkOrderDrawer from "../factory/work-orders/NewWorkOrderDrawer.vue";
 import ProjectDetailsCard from "./ProjectDetailsCard.vue";
 import WorkOrderPanel from "./WorkOrderPanel.vue";
+import PRPanel from "./pulls/PRPanel.vue";
+import { useReviews } from "../../stores/reviews";
 import { readStored, woPath, writeStored } from "./rail";
 
 const factory = useFactory(),
+  reviews = useReviews(),
   route = useRoute(),
   router = useRouter();
 const panelKey = "legos-project-panel";
@@ -25,9 +28,11 @@ const kind = computed(() =>
     ? "wo"
     : route.name === "project-pulls"
       ? "pulls"
-      : route.name === "project-code"
-        ? "code"
-        : "overview",
+      : route.name === "project-pull"
+        ? "pull"
+        : route.name === "project-code"
+          ? "code"
+          : "overview",
 );
 const label = computed(
   () =>
@@ -35,11 +40,13 @@ const label = computed(
       overview: "Factory",
       wo: "Factory",
       pulls: "Pull requests",
+      pull: "Pull requests",
       code: "Code",
     })[kind.value],
 );
 const hasPanel = computed(
-  () => kind.value === "overview" || kind.value === "wo",
+  () =>
+    kind.value === "overview" || kind.value === "wo" || kind.value === "pull",
 );
 const narrow = () => window.innerWidth <= 1280;
 const narrowQuery = window.matchMedia?.("(max-width: 1280px)");
@@ -173,7 +180,13 @@ onMounted(settle);
           <PanelRightClose v-if="showPanel" class="icon" /><PanelRight
             v-else
             class="icon"
-          />{{ showPanel ? "Hide panel" : "Show panel" }}
+          />{{
+            showPanel
+              ? "Hide panel"
+              : kind === "pull" && reviews.pending.length
+                ? `Show panel · ${reviews.pending.length} to decide`
+                : "Show panel"
+          }}
         </button>
       </div>
       <RouterView />
@@ -190,6 +203,7 @@ onMounted(settle);
         :project="project"
         :reveal="revealChecks"
       />
+      <PRPanel v-else-if="kind === 'pull'" />
       <WorkOrderPanel v-else />
     </aside>
   </div>

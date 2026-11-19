@@ -40,15 +40,19 @@ export const router = createRouter({
               path: "wo/:wo",
               name: "project-wo",
               component: () =>
-                import(
-                  "../../features/factory/work-orders/WorkOrderView.vue"
-                ),
+                import("../../features/factory/work-orders/WorkOrderView.vue"),
             },
             {
               path: "pulls",
               name: "project-pulls",
               component: () =>
-                import("../../features/projects/ProjectPlaceholder.vue"),
+                import("../../features/projects/pulls/PullsView.vue"),
+            },
+            {
+              path: "pulls/:number(\\d+)",
+              name: "project-pull",
+              component: () =>
+                import("../../features/projects/pulls/PRView.vue"),
             },
             {
               path: "code/:folder?",

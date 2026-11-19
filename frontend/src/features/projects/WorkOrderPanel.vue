@@ -1,11 +1,22 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount } from "vue";
+import { RouterLink } from "vue-router";
 import ActorBadge from "../factory/ActorBadge.vue";
 import { groupActivity } from "../factory/runs/agentActivity";
 import { woPanelSlots } from "./woPanelSlots";
 import { crew } from "../../composables/presentation";
 import { useFactory } from "../../stores/factory";
 import PanelCard from "./PanelCard.vue";
+import { pullPath } from "../../types/review";
+
+const prNumber = computed(() => {
+  const o = order.value;
+  if (!o?.pr_url || o.pr_merged_at || o.state === "CANCELLED") return 0;
+  const m = /\/pull(?:-requests|s)?\/(\d+)|\/merge_requests\/(\d+)/.exec(
+    o.pr_url,
+  );
+  return Number(m?.[1] ?? m?.[2] ?? 0);
+});
 
 const factory = useFactory();
 const order = computed(() => factory.detail?.work_order);
@@ -90,6 +101,13 @@ const date = (iso: string) =>
           </dd>
         </div>
       </dl>
+      <RouterLink
+        v-if="order && prNumber"
+        :to="pullPath(order.project_id, prNumber)"
+        class="lg-btn small"
+        data-test="wo-review-pr"
+        >Review PR #{{ prNumber }}</RouterLink
+      >
       <button
         type="button"
         class="lg-btn small"

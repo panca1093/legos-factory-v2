@@ -262,7 +262,9 @@ describe("project rail", () => {
     expect(rows[0].text()).toContain("you");
     expect(rows[0].attributes("href")).toBe("/projects/p1/wo/b");
     expect(rows[1].text()).not.toContain("you");
-    expect(w.find('[data-test="rail-pulls"]').text()).toBe("Coming soon");
+    expect(w.find('[data-test="rail-pulls"]').text()).toBe(
+      "Connect an account",
+    );
     expect(w.find('a[href="/projects"]').text()).toContain("All projects");
     w.unmount();
   });

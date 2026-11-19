@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"legos-factory/backend/internal/model"
 )
@@ -16,13 +17,17 @@ import (
 type GitHub struct {
 	api   api
 	token string
+	mu    sync.Mutex
+	me    *model.HostUser
 }
 
 func NewGitHub(baseURL, token string, hc *http.Client) *GitHub {
-	return &GitHub{api: newAPI("github", baseURL, hc, func(r *http.Request) {
+	g := &GitHub{api: newAPI("github", baseURL, hc, func(r *http.Request) {
 		bearer(token)(r)
 		r.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	}), token: token}
+	g.api.cache = newETagCache()
+	return g
 }
 
 func (g *GitHub) CheckAuth(ctx context.Context) (string, error) {

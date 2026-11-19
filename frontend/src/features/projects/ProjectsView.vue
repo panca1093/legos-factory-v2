@@ -14,7 +14,8 @@ import {
 } from "../../composables/presentation";
 import { isOpenOrder, repoLabel, woPath } from "./rail";
 import "../factory/factory.css";
-import type { Project } from "../../types/api";
+import { api, type Project } from "../../types/api";
+import type { ProjectSummary } from "../../types/reviewIdentity";
 
 const factory = useFactory(),
   session = useSession(),
@@ -120,6 +121,18 @@ function ago(iso: string) {
     ? `${Math.round(m / 60)}h ago`
     : `${Math.round(m / 1440)}d ago`;
 }
+const summary = ref<Record<string, number | null>>({});
+const prsForYou = (id: string) => summary.value[id] ?? "—";
+async function loadSummary() {
+  try {
+    const rows = await api.get<ProjectSummary[]>("/api/v1/projects/summary");
+    summary.value = Object.fromEntries(
+      (rows ?? []).map((r) => [r.project_id, r.prs_for_me]),
+    );
+  } catch {
+    summary.value = {};
+  }
+}
 function closeNew() {
   const rest = { ...route.query };
   delete rest.new;
@@ -133,6 +146,7 @@ function created(r: { id: string; planningError: string }) {
   });
 }
 onMounted(async () => {
+  void loadSummary();
   try {
     await Promise.all([factory.refreshProjects(), factory.refreshWorkOrders()]);
   } catch (e) {
@@ -254,7 +268,7 @@ onMounted(async () => {
               <dt>WO running</dt>
             </div>
             <div>
-              <dd>—</dd>
+              <dd data-test="prs-for-you">{{ prsForYou(c.project.id) }}</dd>
               <dt>PRs for you</dt>
             </div>
             <div>
