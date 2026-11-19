@@ -5,6 +5,7 @@ import PanelCard from "./PanelCard.vue";
 import ProjectChecks from "../factory/ProjectChecks.vue";
 import { publishLabel } from "../../composables/presentation";
 import { repoLabel } from "./rail";
+import "./projects.css";
 
 const props = defineProps<{ project: Project; reveal?: boolean }>();
 const checksAnchor = ref<HTMLElement>();
@@ -56,7 +57,8 @@ watch(
         <dd>{{ project.language }}</dd>
       </div>
     </dl>
-    <h4 ref="checksAnchor" class="pc-sub" tabindex="-1">Project checks</h4>
-    <ProjectChecks :project-id="project.id" />
+    <div ref="checksAnchor" class="pc-checks" tabindex="-1">
+      <ProjectChecks :project-id="project.id" />
+    </div>
   </PanelCard>
 </template>
