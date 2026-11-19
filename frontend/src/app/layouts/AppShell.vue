@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { inMonaco } from "./inMonaco";
 import {
   computed,
   nextTick,
@@ -193,7 +194,7 @@ const projects = computed(() =>
   ),
 );
 function shortcut(e: KeyboardEvent) {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k" && !inMonaco(e)) {
     e.preventDefault();
     query.value = "";
     dialog.value = "search";
@@ -257,113 +258,113 @@ async function logout() {
           @hide="setSide(false)"
         />
         <template v-else>
-        <div class="rail-head">
-          <span class="lg-kind">Workspace</span>
-          <IconButton
-            ref="closeBtn"
-            label="Hide sidebar"
-            @click="setSide(false)"
-            ><PanelLeftClose class="icon"
-          /></IconButton>
-        </div>
-        <Button
-          variant="primary"
-          pill
-          :disabled="!session.canWrite"
-          @click="router.push({ path: '/chats', query: { new: '1' } })"
-          ><Plus class="icon" />New chat</Button
-        >
-        <div class="lg-nav-label ap-head">
-          Projects
-          <IconButton
-            v-if="session.canWrite"
-            label="Add a project"
-            @click="addProject = true"
-            ><FolderPlus class="icon"
-          /></IconButton>
-        </div>
-        <nav class="lg-nav rail-tree grow" aria-label="Chats by project">
-          <div v-for="g in chatGroups.projects" :key="g.id" class="rt-group">
-            <div class="rt-head">
-              <button
-                type="button"
-                class="rt-toggle"
-                :aria-expanded="isOpen(g.id)"
-                @click="toggleGroup(g.id)"
-              >
-                <ChevronRight class="icon rt-chev" /><i
-                  class="dot"
-                  :style="{ '--c': g.color }"
-                ></i
-                ><span class="t">{{ g.name }}</span
-                ><span class="rt-count">{{ g.chats.length || "" }}</span>
-              </button>
-              <IconButton
-                v-if="session.canWrite"
-                class="rt-act"
-                :label="`New chat in ${g.name}`"
-                @click="newChatIn(g.id)"
-                ><Plus class="icon"
-              /></IconButton>
-              <RouterLink
-                class="rt-act lg-icon-btn"
-                :to="`/projects/${g.id}`"
-                :aria-label="`Open ${g.name} project`"
-                :title="`Open project`"
-                ><ArrowUpRight class="icon"
-              /></RouterLink>
-            </div>
-            <div v-if="isOpen(g.id)" class="rt-items">
-              <RouterLink
-                v-for="c in shown(g.id, g.chats, 3)"
-                :key="c.id"
-                :to="`/chats/${c.id}`"
-                active-class="active"
-                ><span class="t">{{ chatTitle(c) }}</span></RouterLink
-              >
-              <p v-if="!g.chats.length" class="empty-note">No chats yet.</p>
-              <button
-                v-if="g.chats.length > 3"
-                type="button"
-                class="rt-more"
-                @click="toggleMore(g.id)"
-              >
-                {{
-                  moreGroups[g.id]
-                    ? "Show less"
-                    : `Show ${g.chats.length - 3} more`
-                }}
-              </button>
-            </div>
+          <div class="rail-head">
+            <span class="lg-kind">Workspace</span>
+            <IconButton
+              ref="closeBtn"
+              label="Hide sidebar"
+              @click="setSide(false)"
+              ><PanelLeftClose class="icon"
+            /></IconButton>
           </div>
-          <p v-if="!factory.projects.length" class="empty-note">
-            Projects appear here.
-          </p>
-          <div class="lg-nav-label">General chats</div>
-          <RouterLink
-            v-for="c in shown('', chatGroups.general, 5)"
-            :key="c.id"
-            :to="`/chats/${c.id}`"
-            active-class="active"
-            ><span class="t">{{ chatTitle(c) }}</span></RouterLink
+          <Button
+            variant="primary"
+            pill
+            :disabled="!session.canWrite"
+            @click="router.push({ path: '/chats', query: { new: '1' } })"
+            ><Plus class="icon" />New chat</Button
           >
-          <p v-if="!chatGroups.general.length" class="empty-note">
-            Chats without a project appear here.
-          </p>
-          <button
-            v-if="chatGroups.general.length > 5"
-            type="button"
-            class="rt-more"
-            @click="toggleMore('')"
-          >
-            {{
-              moreGroups[""]
-                ? "Show less"
-                : `Show ${chatGroups.general.length - 5} more`
-            }}
-          </button>
-        </nav>
-        <UsageCard />
+          <div class="lg-nav-label ap-head">
+            Projects
+            <IconButton
+              v-if="session.canWrite"
+              label="Add a project"
+              @click="addProject = true"
+              ><FolderPlus class="icon"
+            /></IconButton>
+          </div>
+          <nav class="lg-nav rail-tree grow" aria-label="Chats by project">
+            <div v-for="g in chatGroups.projects" :key="g.id" class="rt-group">
+              <div class="rt-head">
+                <button
+                  type="button"
+                  class="rt-toggle"
+                  :aria-expanded="isOpen(g.id)"
+                  @click="toggleGroup(g.id)"
+                >
+                  <ChevronRight class="icon rt-chev" /><i
+                    class="dot"
+                    :style="{ '--c': g.color }"
+                  ></i
+                  ><span class="t">{{ g.name }}</span
+                  ><span class="rt-count">{{ g.chats.length || "" }}</span>
+                </button>
+                <IconButton
+                  v-if="session.canWrite"
+                  class="rt-act"
+                  :label="`New chat in ${g.name}`"
+                  @click="newChatIn(g.id)"
+                  ><Plus class="icon"
+                /></IconButton>
+                <RouterLink
+                  class="rt-act lg-icon-btn"
+                  :to="`/projects/${g.id}`"
+                  :aria-label="`Open ${g.name} project`"
+                  :title="`Open project`"
+                  ><ArrowUpRight class="icon"
+                /></RouterLink>
+              </div>
+              <div v-if="isOpen(g.id)" class="rt-items">
+                <RouterLink
+                  v-for="c in shown(g.id, g.chats, 3)"
+                  :key="c.id"
+                  :to="`/chats/${c.id}`"
+                  active-class="active"
+                  ><span class="t">{{ chatTitle(c) }}</span></RouterLink
+                >
+                <p v-if="!g.chats.length" class="empty-note">No chats yet.</p>
+                <button
+                  v-if="g.chats.length > 3"
+                  type="button"
+                  class="rt-more"
+                  @click="toggleMore(g.id)"
+                >
+                  {{
+                    moreGroups[g.id]
+                      ? "Show less"
+                      : `Show ${g.chats.length - 3} more`
+                  }}
+                </button>
+              </div>
+            </div>
+            <p v-if="!factory.projects.length" class="empty-note">
+              Projects appear here.
+            </p>
+            <div class="lg-nav-label">General chats</div>
+            <RouterLink
+              v-for="c in shown('', chatGroups.general, 5)"
+              :key="c.id"
+              :to="`/chats/${c.id}`"
+              active-class="active"
+              ><span class="t">{{ chatTitle(c) }}</span></RouterLink
+            >
+            <p v-if="!chatGroups.general.length" class="empty-note">
+              Chats without a project appear here.
+            </p>
+            <button
+              v-if="chatGroups.general.length > 5"
+              type="button"
+              class="rt-more"
+              @click="toggleMore('')"
+            >
+              {{
+                moreGroups[""]
+                  ? "Show less"
+                  : `Show ${chatGroups.general.length - 5} more`
+              }}
+            </button>
+          </nav>
+          <UsageCard />
         </template>
       </div>
     </aside>

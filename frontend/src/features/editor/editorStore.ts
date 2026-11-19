@@ -148,7 +148,9 @@ export const useEditor = defineStore("editor", () => {
   const monaco = shallowRef<Monaco | null>(null);
   const models = markRaw(new Map<string, ITextModel>());
   const diagnostics = reactive(new Map<string, Diagnostic[]>());
-  const serverStates = reactive<Record<string, ServerState>>({});
+  const serverStates = reactive<Record<string, Record<string, ServerState>>>(
+    {},
+  );
   const reveal = ref<RevealTarget | null>(null);
   const closeRequest = ref<{ folderId: string; paths: string[] } | null>(null);
   const leavePrompt = ref<{ resolve: (ok: boolean) => void } | null>(null);
@@ -531,7 +533,10 @@ export const useEditor = defineStore("editor", () => {
         if (f.branch) st.folder = { ...st.folder, branch: f.branch };
         break;
       case "server_state":
-        serverStates[f.server] = f;
+        (serverStates[fid] ??= {})[f.server] = {
+          ...f,
+          version: f.version ?? serverStates[fid][f.server]?.version,
+        };
         break;
       case "folder_gone":
         markGone(fid);
@@ -1076,8 +1081,12 @@ export const useEditor = defineStore("editor", () => {
     return rollupCounts(per);
   }
 
-  function setServerState(id: string, s: Omit<ServerState, "server">) {
-    serverStates[id] = { server: id, ...s };
+  function setServerState(
+    fid: string,
+    id: string,
+    s: Omit<ServerState, "server">,
+  ) {
+    (serverStates[fid] ??= {})[id] = { server: id, ...s };
   }
 
   // ---- guards ------------------------------------------------------------

@@ -202,7 +202,11 @@ func (s *Server) handleEditorWrite(c echo.Context) error {
 		return editorError(c, err)
 	}
 	if s.EditorLive != nil {
-		s.EditorLive.NoteWrite(currentUser(c).ID, c.Param("fid"), path.Clean(req.Path), st.Hash)
+		uid, fid := currentUser(c).ID, c.Param("fid")
+		s.EditorLive.NoteWrite(uid, fid, path.Clean(req.Path), st.Hash)
+		if st.Resolved != "" && st.Resolved != path.Clean(req.Path) {
+			s.EditorLive.NoteWrite(uid, fid, st.Resolved, st.Hash)
+		}
 	}
 	return c.JSON(http.StatusOK, st)
 }

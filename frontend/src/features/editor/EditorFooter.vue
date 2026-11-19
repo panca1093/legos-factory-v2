@@ -16,7 +16,7 @@ const tab = computed(() =>
 const lang = computed(() => buf.value?.language ?? "");
 const server = computed(() => SERVER_FOR[lang.value]);
 const serverState = computed(() =>
-  server.value ? store.serverStates[server.value] : undefined,
+  server.value ? store.serverStates[props.folderId]?.[server.value] : undefined,
 );
 const dirtyCount = computed(
   () => Object.values(st.value?.buffers ?? {}).filter((b) => b.dirty).length,

@@ -421,6 +421,7 @@ func (r *LSPRegistry) onExit(e *lspEntry, proc model.LSPProcess, gen int) {
 	e.proc = nil
 	c := e.client
 	e.client = nil
+	_ = proc.Kill()
 	if e.stopping || r.closed {
 		r.mu.Unlock()
 		if c != nil {

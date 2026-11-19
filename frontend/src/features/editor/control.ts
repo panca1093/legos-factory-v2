@@ -42,6 +42,8 @@ export class ControlSocket {
   private attempt = 0;
   private closed = false;
   private hasOpened = false;
+  private opened = false;
+  private gone = false;
   private watch: WatchSet = { dirs: [""], files: [] };
 
   constructor(
@@ -61,7 +63,9 @@ export class ControlSocket {
       return;
     }
     this.ws = ws;
+    this.opened = false;
     ws.onopen = () => {
+      this.opened = true;
       this.attempt = 0;
       this.h.state?.("open");
       const again = this.hasOpened;
@@ -71,7 +75,9 @@ export class ControlSocket {
     };
     ws.onmessage = (ev) => {
       try {
-        this.h.frame(JSON.parse(String(ev.data)) as ControlFrame);
+        const f = JSON.parse(String(ev.data)) as ControlFrame;
+        if (f.type === "folder_gone") this.gone = true;
+        this.h.frame(f);
       } catch {
         /* A malformed frame is ignored. */
       }
@@ -79,7 +85,12 @@ export class ControlSocket {
     ws.onclose = () => {
       this.ws = null;
       this.h.state?.("closed");
-      this.retry();
+      if (this.gone) {
+        this.closed = true;
+        return;
+      }
+      if (this.opened) this.retry();
+      else void this.probeThenRetry();
     };
     ws.onerror = () => ws.close();
   }
@@ -103,6 +114,23 @@ export class ControlSocket {
   private sendWatch() {
     if (this.ws?.readyState === WebSocket.OPEN)
       this.ws.send(JSON.stringify({ type: "watch", ...this.watch }));
+  }
+
+  // A browser hides the status of a failed upgrade, so a socket that never opened is checked over HTTP.
+  private async probeThenRetry() {
+    try {
+      const r = await fetch(
+        `/api/v1/editor/folders/${encodeURIComponent(this.folderID)}`,
+      );
+      if (r.status === 404 || r.status === 410) {
+        this.closed = true;
+        this.h.frame({ type: "folder_gone" } as ControlFrame);
+        return;
+      }
+    } catch {
+      /* Offline: back off and try again. */
+    }
+    this.retry();
   }
 
   private retry() {

@@ -101,6 +101,9 @@ func (EditorFS) List(root, rel string) ([]model.FileEntry, int, error) {
 		return nil, 0, err
 	}
 	defer r.Close()
+	if rel, err = resolvePath(r, rel, true); err != nil {
+		return nil, 0, err
+	}
 	d, err := r.Open(rel)
 	if err != nil {
 		return nil, 0, mapRootErr(err)
@@ -165,6 +168,9 @@ func (EditorFS) Read(root, rel string, max int64) (model.FileContent, error) {
 		return model.FileContent{}, err
 	}
 	defer r.Close()
+	if rel, err = resolvePath(r, rel, true); err != nil {
+		return model.FileContent{}, err
+	}
 	pre, err := r.Stat(rel)
 	if err != nil {
 		return model.FileContent{}, mapRootErr(err)
@@ -200,28 +206,54 @@ func (EditorFS) Read(root, rel string, max int64) (model.FileContent, error) {
 	return model.FileContent{Content: string(b), Hash: hashHex(b), MTime: st.ModTime(), Size: int64(len(b))}, nil
 }
 
-// resolveLink follows symlinks lexically inside the root so a write lands on the in-root target
-// and never replaces the link itself.
-func resolveLink(r *os.Root, rel string) (string, error) {
-	for range editorMaxLinks {
-		st, err := r.Lstat(rel)
-		if err != nil || st.Mode()&fs.ModeSymlink == 0 {
-			return rel, nil
+// resolvePath walks rel component by component inside the root, following symlinks lexically, and
+// refuses any step that lands on .git. follow=false keeps a symlink in the last component unresolved.
+func resolvePath(r *os.Root, rel string, follow bool) (string, error) {
+	parts := strings.Split(rel, "/")
+	var out []string
+	links := 0
+	for len(parts) > 0 {
+		p := parts[0]
+		parts = parts[1:]
+		switch p {
+		case "", ".":
+			continue
+		case "..":
+			if len(out) == 0 {
+				return "", model.ErrOutsideFolder
+			}
+			out = out[:len(out)-1]
+			continue
 		}
-		target, err := r.Readlink(rel)
+		if strings.EqualFold(p, ".git") {
+			return "", fmt.Errorf("%w: .git is not accessible", model.ErrOutsideFolder)
+		}
+		cand := path.Join(append(out, p)...)
+		st, err := r.Lstat(cand)
+		if err != nil || st.Mode()&fs.ModeSymlink == 0 || (!follow && len(parts) == 0) {
+			out = append(out, p)
+			continue
+		}
+		if links++; links > editorMaxLinks {
+			return "", fmt.Errorf("%w: too many levels of symbolic links", model.ErrBadPath)
+		}
+		target, err := r.Readlink(cand)
 		if err != nil {
 			return "", mapRootErr(err)
 		}
-		next := path.Join(path.Dir(rel), filepath.ToSlash(target))
-		if strings.HasPrefix(target, "/") || !filepath.IsLocal(next) {
+		if strings.HasPrefix(target, "/") {
 			return "", model.ErrOutsideFolder
 		}
-		if _, err := checkRel(next, false); err != nil {
-			return "", err
-		}
-		rel = next
+		parts = append(strings.Split(filepath.ToSlash(target), "/"), parts...)
 	}
-	return "", fmt.Errorf("%w: too many levels of symbolic links", model.ErrBadPath)
+	if len(out) == 0 {
+		return ".", nil
+	}
+	res := path.Join(out...)
+	if _, err := checkRel(res, true); err != nil {
+		return "", err
+	}
+	return res, nil
 }
 
 // Write replaces rel atomically (temp file in the same directory, fsync, rename) once baseHash
@@ -236,7 +268,7 @@ func (EditorFS) Write(root, rel string, content []byte, baseHash string, create 
 		return model.FileStat{}, err
 	}
 	defer r.Close()
-	rel, err = resolveLink(r, rel)
+	rel, err = resolvePath(r, rel, true)
 	if err != nil {
 		return model.FileStat{}, err
 	}
@@ -307,7 +339,7 @@ func (EditorFS) Write(root, rel string, content []byte, baseHash string, create 
 	if err != nil {
 		return model.FileStat{}, err
 	}
-	return model.FileStat{Hash: hashHex(content), MTime: ns.ModTime(), Size: int64(len(content))}, nil
+	return model.FileStat{Hash: hashHex(content), MTime: ns.ModTime(), Size: int64(len(content)), Resolved: rel}, nil
 }
 
 func (EditorFS) Mkdir(root, rel string) error {
@@ -320,6 +352,9 @@ func (EditorFS) Mkdir(root, rel string) error {
 		return err
 	}
 	defer r.Close()
+	if rel, err = resolvePath(r, rel, false); err != nil {
+		return err
+	}
 	if _, err := r.Lstat(rel); err == nil {
 		return fs.ErrExist
 	}
@@ -342,6 +377,12 @@ func (EditorFS) Rename(root, from, to string) error {
 		return err
 	}
 	defer r.Close()
+	if from, err = resolvePath(r, from, false); err != nil {
+		return err
+	}
+	if to, err = resolvePath(r, to, false); err != nil {
+		return err
+	}
 	if _, err := r.Lstat(from); err != nil {
 		return mapRootErr(err)
 	}

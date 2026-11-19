@@ -6,7 +6,13 @@ import { useEditor } from "./editorStore";
 const props = defineProps<{
   model: ITextModel | null;
   readOnly: boolean;
-  reveal: { line: number; col: number; n: number } | null;
+  reveal: {
+    line: number;
+    col: number;
+    n: number;
+    folderId?: string;
+    path?: string;
+  } | null;
   cursor?: { line: number; col: number };
 }>();
 const emit = defineEmits<{
@@ -24,6 +30,7 @@ let editor: ICodeEditor | null = null;
 const views = new Map<string, unknown>();
 let disposed = false;
 let changeSub: { dispose(): void } | null = null;
+let pending: NonNullable<typeof props.reveal> | null = null;
 
 function attach(model: ITextModel | null, prev: ITextModel | null) {
   if (!editor) return;
@@ -41,15 +48,29 @@ function attach(model: ITextModel | null, prev: ITextModel | null) {
     });
     editor.revealLineInCenterIfOutsideViewport(props.cursor.line);
   }
+  applyPending();
+  editor.focus();
+}
+
+function belongsToModel(r: NonNullable<typeof pending>): boolean {
+  if (!props.model) return false;
+  if (r.path === undefined) return true;
+  const loc = store.locate(props.model.uri.toString());
+  return !!loc && loc.folderId === r.folderId && loc.path === r.path;
+}
+
+function applyPending() {
+  const r = pending;
+  if (!editor || !r || !belongsToModel(r)) return;
+  pending = null;
+  editor.setPosition({ lineNumber: r.line, column: r.col });
+  editor.revealLineInCenter(r.line);
   editor.focus();
 }
 
 function doReveal() {
-  const r = props.reveal;
-  if (!editor || !r || !props.model) return;
-  editor.setPosition({ lineNumber: r.line, column: r.col });
-  editor.revealLineInCenter(r.line);
-  editor.focus();
+  pending = props.reveal;
+  applyPending();
 }
 
 onMounted(async () => {
@@ -75,17 +96,6 @@ onMounted(async () => {
   );
   editor.addCommand(KeyMod.CtrlCmd | KeyCode.KeyP, () => emit("quick"));
   editor.addCommand(KeyMod.CtrlCmd | KeyCode.KeyW, () => emit("closeTab"));
-  // Drops Monaco's Cmd+K chords so the app search dialog still opens.
-  editor.addCommand(KeyMod.CtrlCmd | KeyCode.KeyK, () =>
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "k",
-        metaKey: true,
-        ctrlKey: true,
-        bubbles: true,
-      }),
-    ),
-  );
   editor.onDidChangeCursorPosition((e) =>
     emit("cursor", e.position.lineNumber, e.position.column),
   );

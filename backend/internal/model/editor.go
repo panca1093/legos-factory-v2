@@ -47,6 +47,8 @@ type FileStat struct {
 	Hash  string    `json:"hash"`
 	MTime time.Time `json:"mtime"`
 	Size  int64     `json:"size"`
+	// Resolved is the in-root path a write landed on after following symlinks; set by Write only.
+	Resolved string `json:"-"`
 }
 
 // GitStatusEntry is one porcelain v2 entry; X and Y are the index and work-tree codes.

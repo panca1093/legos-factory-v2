@@ -7,6 +7,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -31,6 +32,8 @@ type Editor struct {
 	Home     string // the user's home directory; os.UserHomeDir when empty
 	// Actor names who most likely changed rel on disk at the given time; nil result means unknown.
 	Actor func(ctx context.Context, f *model.EditorFolder, rel string, at time.Time) *model.EditorActor
+
+	writeLocks sync.Map // folder id + "\x00" + path -> *sync.Mutex
 }
 
 // WriteConflict is a write rejected because the disk no longer matches the caller's base hash.
@@ -298,6 +301,9 @@ func (e *Editor) Write(ctx context.Context, u *model.User, id, rel, content, bas
 	if len(content) > EditorEditableMax {
 		return model.FileStat{}, &model.SizedError{Err: model.ErrTooLarge, Size: int64(len(content))}
 	}
+	mu, _ := e.writeLocks.LoadOrStore(id+"\x00"+path.Clean(rel), &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
 	body := []byte(content)
 	if create {
 		return e.write(ctx, f, rel, body, "", true)

@@ -277,6 +277,9 @@ func TestCrashClosesClientWith4005AndRestartWaitsForBackoff(t *testing.T) {
 	if code := lspWaitDone(t, c); code != CloseCrashed {
 		t.Fatalf("code %d", code)
 	}
+	if !h.proc(0).wasKilled() {
+		t.Fatal("a crashed server's process group was not killed")
+	}
 	c2 := lspAttach(t, r, lspKey("u", "f"), t.TempDir())
 	defer c2.Close()
 	if d := time.Since(crashAt); d < 18*time.Millisecond {

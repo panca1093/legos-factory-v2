@@ -340,7 +340,7 @@ type ServerStateMsg struct {
 	Server   string `json:"server"`
 	State    string `json:"state"`
 	Version  string `json:"version,omitempty"`
-	Progress string `json:"progress,omitempty"`
+	Progress *int   `json:"progress,omitempty"` // percent
 	Error    string `json:"error,omitempty"`
 }
 
@@ -367,6 +367,8 @@ type ControlSession struct {
 	mu     sync.Mutex
 	files  map[string]bool
 	headAt time.Time
+
+	versions map[string]string // server id -> version, from the initial state; registry events carry none
 }
 
 // OpenControl starts watching the folder for the user.
@@ -517,7 +519,10 @@ func (s *ControlSession) run(states <-chan LSPStateEvent) {
 			s.onFSEvent(ev)
 			schedule()
 		case ev := <-states:
-			s.emit(ServerStateMsg{Type: "server_state", Server: ev.Server, State: ev.State, Error: ev.Error})
+			s.mu.Lock()
+			ver := s.versions[ev.Server]
+			s.mu.Unlock()
+			s.emit(ServerStateMsg{Type: "server_state", Server: ev.Server, State: ev.State, Version: ver, Error: ev.Error})
 		case <-gitC:
 			gitC = nil
 			lastGit = time.Now()
@@ -608,6 +613,13 @@ func (s *ControlSession) initialServerStates() {
 	}
 	running := l.Reg.Running(s.user, s.folder.ID)
 	chk, _ := l.Host.(goplsChecker)
+	vers := map[string]string{}
+	for _, st := range states {
+		vers[st.ID] = st.Version
+	}
+	s.mu.Lock()
+	s.versions = vers
+	s.mu.Unlock()
 	for _, st := range states {
 		msg := ServerStateMsg{Type: "server_state", Server: st.ID, State: st.State, Version: st.Version, Error: st.Error}
 		if running[st.ID] {

@@ -52,9 +52,11 @@ type LSPHost struct {
 	NPMPrefix    func(ctx context.Context) string
 	FixedDirs    []string
 
-	mu        sync.Mutex
+	loginMu   sync.Mutex
 	loginDone bool
 	loginPath string
+
+	mu        sync.Mutex
 	path      []string
 	goenv     map[string]string
 	builtWith map[string]string
@@ -79,6 +81,8 @@ func envGet(env []string, key string) string {
 var goEnvKeys = []string{"GOBIN", "GOPATH", "GOMODCACHE", "GOFLAGS", "GOPROXY", "GOPRIVATE", "GONOSUMDB", "GOTOOLCHAIN"}
 
 func (h *LSPHost) loginShellPath(ctx context.Context) string {
+	h.loginMu.Lock()
+	defer h.loginMu.Unlock()
 	if h.loginDone {
 		return h.loginPath
 	}
@@ -116,14 +120,14 @@ func (h *LSPHost) loginShellPath(ctx context.Context) string {
 	return h.loginPath
 }
 
-func (h *LSPHost) runGoEnv(ctx context.Context) map[string]string {
+func (h *LSPHost) runGoEnv(ctx context.Context, path []string) map[string]string {
 	if h.GoEnv != nil {
 		return h.GoEnv(ctx)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "go", append([]string{"env", "-json"}, goEnvKeys...)...)
-	cmd.Env = h.processEnv()
+	cmd.Env = h.processEnv(path)
 	out, err := cmd.Output()
 	if err != nil {
 		return map[string]string{}
@@ -133,22 +137,22 @@ func (h *LSPHost) runGoEnv(ctx context.Context) map[string]string {
 	return m
 }
 
-func (h *LSPHost) processEnv() []string {
+func (h *LSPHost) processEnv(path []string) []string {
 	env := h.environ()
-	if len(h.path) > 0 {
-		env = append(env, "PATH="+strings.Join(h.path, string(os.PathListSeparator)))
+	if len(path) > 0 {
+		env = append(env, "PATH="+strings.Join(path, string(os.PathListSeparator)))
 	}
 	return env
 }
 
-func (h *LSPHost) runNPMPrefix(ctx context.Context) string {
+func (h *LSPHost) runNPMPrefix(ctx context.Context, path []string) string {
 	if h.NPMPrefix != nil {
 		return h.NPMPrefix(ctx)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "npm", "prefix", "-g")
-	cmd.Env = h.processEnv()
+	cmd.Env = h.processEnv(path)
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -158,8 +162,6 @@ func (h *LSPHost) runNPMPrefix(ctx context.Context) string {
 
 // refresh recomputes the augmented PATH and Go environment; the login-shell PATH is read once per process.
 func (h *LSPHost) refresh(ctx context.Context) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	var dirs []string
 	add := func(list string) {
 		for _, d := range filepath.SplitList(list) {
@@ -170,9 +172,7 @@ func (h *LSPHost) refresh(ctx context.Context) {
 	}
 	add(envGet(h.environ(), "PATH"))
 	add(h.loginShellPath(ctx))
-	h.path = dirs
-	goenv := h.runGoEnv(ctx)
-	h.goenv = goenv
+	goenv := h.runGoEnv(ctx, dirs)
 	if d := goenv["GOBIN"]; d != "" {
 		add(d)
 	}
@@ -187,19 +187,20 @@ func (h *LSPHost) refresh(ctx context.Context) {
 			dirs = append(dirs, filepath.Join(home, ".volta", "bin"), filepath.Join(home, ".bun", "bin"))
 		}
 	}
-	h.path = dirs
-	if p := h.runNPMPrefix(ctx); p != "" {
+	if p := h.runNPMPrefix(ctx, dirs); p != "" {
 		dirs = append(dirs, filepath.Join(p, "bin"))
 	}
 	seen := map[string]bool{}
-	h.path = h.path[:0:0]
+	var path []string
 	for _, d := range dirs {
 		if !seen[d] {
 			seen[d] = true
-			h.path = append(h.path, d)
+			path = append(path, d)
 		}
 	}
-	h.builtWith = map[string]string{}
+	h.mu.Lock()
+	h.path, h.goenv, h.builtWith = path, goenv, map[string]string{}
+	h.mu.Unlock()
 }
 
 func (h *LSPHost) lookPath(name string) string {
@@ -324,7 +325,7 @@ func (h *LSPHost) GoplsOutdated(ctx context.Context, bin, root string) (outdated
 		defer cancel()
 		cmd := exec.CommandContext(cctx, "go", "version", "-m", bin)
 		h.mu.Lock()
-		cmd.Env = h.processEnv()
+		cmd.Env = h.processEnv(h.path)
 		h.mu.Unlock()
 		if out, err := cmd.Output(); err == nil {
 			first, _, _ := strings.Cut(string(out), "\n")

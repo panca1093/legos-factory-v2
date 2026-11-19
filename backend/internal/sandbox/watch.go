@@ -117,7 +117,7 @@ func (fw *FSWatcher) Set(dirs []string) error {
 		if len(want) >= MaxWatchedDirs && !want[d] {
 			break
 		}
-		if st, err := os.Stat(filepath.Join(fw.root, filepath.FromSlash(d))); err != nil || !st.IsDir() {
+		if !fw.plainDir(d) {
 			continue
 		}
 		want[d] = true
@@ -151,6 +151,22 @@ func (fw *FSWatcher) Set(dirs []string) error {
 		_ = fw.w.Add(gd)
 	}
 	return nil
+}
+
+// plainDir reports whether rel is an existing directory reached without any symlink, so a watch
+// can never land outside the folder (or inside .git) through a link.
+func (fw *FSWatcher) plainDir(rel string) bool {
+	cur := fw.root
+	if rel != "." {
+		for _, seg := range strings.Split(rel, "/") {
+			cur = filepath.Join(cur, seg)
+			if st, err := os.Lstat(cur); err != nil || !st.IsDir() {
+				return false
+			}
+		}
+	}
+	st, err := os.Lstat(cur)
+	return err == nil && st.IsDir()
 }
 
 func (fw *FSWatcher) Close() error {
