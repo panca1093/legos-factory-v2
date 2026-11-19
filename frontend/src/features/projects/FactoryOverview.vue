@@ -7,10 +7,10 @@ import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
 import { useToast } from "../../composables/useToast";
 import Popover from "../../components/ui/Popover.vue";
-import ActorBadge from "../factory/ActorBadge.vue";
 import DeleteDialog from "../factory/work-orders/DeleteDialog.vue";
 import {
   actorOf,
+  crew,
   isDeletable,
   isNeedsYou,
   orderStatus,
@@ -18,6 +18,7 @@ import {
   stages,
 } from "../../composables/presentation";
 import { filterOrders, orderFilter, woPath, type OrderFilter } from "./rail";
+import type { WorkOrder } from "../../types/api";
 
 const factory = useFactory(),
   session = useSession(),
@@ -58,6 +59,25 @@ function ago(iso: string) {
     ? `${Math.round(m / 60)}h ago`
     : `${Math.round(m / 1440)}d ago`;
 }
+const actorName = (w: WorkOrder) => {
+  const a = actorOf(w);
+  return a === "you"
+    ? "You"
+    : (crew.find((c) => c.id === a)?.name ?? "Factory");
+};
+const prNumber = (w: WorkOrder) =>
+  /(\d+)\/?$/.exec(w.pr_ref || w.pr_url || "")?.[1];
+const day = (iso: string) =>
+  new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+function statusLine(w: WorkOrder) {
+  if (w.pr_merged_at) return `Merged ${day(w.pr_merged_at)}`;
+  if (w.state === "WAITING_FOR_HUMAN" && w.clarif_question && !w.clarif_answer)
+    return `Foreman asks: ${w.clarif_question}`;
+  if (isNeedsYou(w)) return orderStatus(w).label;
+  return `${actorName(w)} · updated ${ago(w.updated_at)}`;
+}
+const stageLabel = (w: WorkOrder) =>
+  stages.map((s, i) => ({ name: s, st: stageStatuses(w)[i] }));
 const newOrder = () =>
   void router.replace({ query: { ...route.query, new: "1" } });
 
@@ -159,27 +179,35 @@ async function confirmDelete() {
         >
           <div class="fx-order-top">
             <span class="mono muted tiny">{{ w.id.slice(0, 12) }}</span>
-            <ActorBadge :actor="actorOf(w)" />
+            <span
+              :id="`wo-status-${w.id}`"
+              class="fx-pill"
+              :class="orderStatus(w).tone"
+              >{{ orderStatus(w).label }}</span
+            >
           </div>
-          <div class="fx-order-main">
-            <strong :id="`wo-title-${w.id}`">{{ w.title }}</strong>
-            <span class="tiny muted">updated {{ ago(w.updated_at) }}</span>
+          <strong :id="`wo-title-${w.id}`" class="fx-order-title">{{
+            w.title
+          }}</strong>
+          <ol class="fx-stages" aria-label="Stages">
+            <li v-for="s in stageLabel(w)" :key="s.name" :class="s.st">
+              <i></i
+              ><span
+                >{{ s.name
+                }}<span class="sr-only">: {{ s.st }}</span></span
+              >
+            </li>
+          </ol>
+          <div class="fx-order-foot">
+            <span class="fx-order-line small muted">{{ statusLine(w) }}</span>
+            <span
+              v-if="w.pr_url && prNumber(w)"
+              class="fx-prchip"
+              :class="{ merged: w.pr_merged_at }"
+              >PR #{{ prNumber(w) }} ·
+              {{ w.pr_merged_at ? "merged" : "open" }}</span
+            >
           </div>
-          <div
-            class="fx-segs"
-            role="img"
-            :aria-label="
-              stages.map((s, i) => `${s}: ${stageStatuses(w)[i]}`).join(', ')
-            "
-          >
-            <i v-for="(st, i) in stageStatuses(w)" :key="i" :class="st"></i>
-          </div>
-          <span
-            :id="`wo-status-${w.id}`"
-            class="fx-pill"
-            :class="orderStatus(w).tone"
-            >{{ orderStatus(w).label }}</span
-          >
         </RouterLink>
       </li>
     </ul>
