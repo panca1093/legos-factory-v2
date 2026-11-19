@@ -403,7 +403,7 @@ describe("rail chats by project", () => {
     w.findAll('nav[aria-label="Chats by project"] > a').map((a) => a.text());
 
   it("groups chats under their project and lists the rest as general", async () => {
-    const { w } = await mountRail("/factory");
+    const { w } = await mountRail("/projects");
     expect(w.find(".rail-search").exists()).toBe(false);
     expect(w.find(".rt-toggle").text()).toContain("Loan");
     expect(w.find(".rt-toggle").text()).toContain("5");
@@ -423,7 +423,7 @@ describe("rail chats by project", () => {
   });
 
   it("starts a new chat bound to a project without creating one", async () => {
-    const { w, router, calls } = await mountRail("/factory");
+    const { w, router, calls } = await mountRail("/projects");
     await w.find('[aria-label="New chat in Loan"]').trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.fullPath).toBe(

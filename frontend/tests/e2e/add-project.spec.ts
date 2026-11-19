@@ -52,7 +52,7 @@ test("Enter browses a local folder, shows publishing, Escape closes", async ({
   page,
 }) => {
   await fixture(page);
-  await page.goto("/factory");
+  await page.goto("/projects");
   await page
     .getByRole("button", { name: "Add project", exact: true })
     .first()

@@ -11,7 +11,8 @@ import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import {
   Home,
   MessageSquare,
-  Factory,
+  FolderKanban,
+  GitPullRequest,
   BookOpen,
   Settings,
   Search,
@@ -41,11 +42,13 @@ import SearchField from "../../components/ui/SearchField.vue";
 import AddProjectDialog from "../../features/factory/work-orders/AddProjectDialog.vue";
 import Toast from "../../components/ui/Toast.vue";
 import UsageCard from "./UsageCard.vue";
+import ProjectRail from "../../features/projects/ProjectRail.vue";
 import {
   needsYou,
   projectColor,
   publishLabel,
 } from "../../composables/presentation";
+import { woPath } from "../../features/projects/rail";
 import { useTheme } from "../../composables/useTheme";
 const session = useSession(),
   factory = useFactory(),
@@ -63,7 +66,8 @@ const error = ref("");
 const tabs = [
   { to: "/", label: "Home", icon: Home },
   { to: "/chats", label: "Chats", icon: MessageSquare },
-  { to: "/factory", label: "Factory", icon: Factory },
+  { to: "/projects", label: "Projects", icon: FolderKanban },
+  { to: "/reviews", label: "Reviews", icon: GitPullRequest },
   { to: "/knowledge", label: "Knowledge", icon: BookOpen },
 ];
 const current = computed(
@@ -75,12 +79,27 @@ const current = computed(
 const navItems = computed(() =>
   tabs.map((t) => ({
     ...t,
-    dot: t.label === "Factory" && attention.value.length > 0,
+    dot: t.label === "Projects" && attention.value.length > 0,
   })),
 );
+const inProject = computed(() => /^\/projects\/[^/]+/.test(route.path));
 const toggleBtn = ref<{ $el: HTMLElement }>(),
   closeBtn = ref<{ $el: HTMLElement }>();
 const overlay = () => window.innerWidth <= 1000;
+const overlayQuery = window.matchMedia?.("(max-width: 1000px)");
+function onOverlayChange() {
+  if (overlay()) {
+    sideOpen.value = false;
+    return;
+  }
+  try {
+    const stored = localStorage.getItem(railKey);
+    sideOpen.value = stored === "1" || (stored === null && inProject.value);
+  } catch {
+    /* Browser storage can be disabled. */
+  }
+}
+overlayQuery?.addEventListener("change", onOverlayChange);
 async function setSide(open: boolean) {
   sideOpen.value = open;
   if (!overlay()) {
@@ -191,8 +210,10 @@ watch(
 onMounted(async () => {
   document.addEventListener("keydown", shortcut);
   try {
+    const stored = localStorage.getItem(railKey);
     sideOpen.value =
-      localStorage.getItem(railKey) === "1" && window.innerWidth > 1000;
+      (stored === "1" || (stored === null && inProject.value)) &&
+      window.innerWidth > 1000;
   } catch {
     sideOpen.value = false;
   }
@@ -208,7 +229,10 @@ onMounted(async () => {
     error.value = e instanceof Error ? e.message : String(e);
   }
 });
-onBeforeUnmount(() => document.removeEventListener("keydown", shortcut));
+onBeforeUnmount(() => {
+  document.removeEventListener("keydown", shortcut);
+  overlayQuery?.removeEventListener("change", onOverlayChange);
+});
 async function logout() {
   try {
     await session.logout();
@@ -220,8 +244,19 @@ async function logout() {
 <template>
   <a class="skip" href="#main">Skip to content</a>
   <div class="app" :class="{ 'side-open': sideOpen }">
-    <aside id="rail" class="rail" aria-label="Workspace" :inert="!sideOpen">
+    <aside
+      id="rail"
+      class="rail"
+      :aria-label="inProject ? 'Project sidebar' : 'Workspace'"
+      :inert="!sideOpen"
+    >
       <div class="rail-in">
+        <ProjectRail
+          v-if="inProject"
+          :key="'project-rail'"
+          @hide="setSide(false)"
+        />
+        <template v-else>
         <div class="rail-head">
           <span class="lg-kind">Workspace</span>
           <IconButton
@@ -272,9 +307,9 @@ async function logout() {
               /></IconButton>
               <RouterLink
                 class="rt-act lg-icon-btn"
-                :to="{ path: '/factory', query: { project: g.id } }"
-                :aria-label="`Open ${g.name} in Factory`"
-                :title="`Open in Factory`"
+                :to="`/projects/${g.id}`"
+                :aria-label="`Open ${g.name} project`"
+                :title="`Open project`"
                 ><ArrowUpRight class="icon"
               /></RouterLink>
             </div>
@@ -329,6 +364,7 @@ async function logout() {
           </button>
         </nav>
         <UsageCard />
+        </template>
       </div>
     </aside>
     <div class="scrim" @click="setSide(false)"></div>
@@ -432,7 +468,7 @@ async function logout() {
     @created="
       (id) => {
         addProject = false;
-        router.push({ path: '/factory', query: { project: id } });
+        router.push(`/projects/${id}`);
       }
     "
   />
@@ -452,7 +488,7 @@ async function logout() {
         v-for="p in projects"
         :key="p.id"
         class="search-result"
-        :to="{ path: '/factory', query: { project: p.id } }"
+        :to="`/projects/${p.id}`"
         ><strong>{{ p.name }}</strong
         ><small
           >Project · {{ p.repo_url }} · {{ publishLabel(p) }}</small
@@ -461,7 +497,7 @@ async function logout() {
         v-for="w in results"
         :key="w.id"
         class="search-result"
-        :to="`/factory/${w.id}`"
+        :to="woPath(w.project_id, w.id)"
         ><strong>{{ w.title }}</strong
         ><small
           >{{ w.id }} ·
@@ -482,7 +518,7 @@ async function logout() {
         v-for="w in attention"
         :key="w.id"
         class="search-result"
-        :to="`/factory/${w.id}`"
+        :to="woPath(w.project_id, w.id)"
         ><StatusBadge :state="w.state" /><strong
           style="display: block; margin-top: 8px"
           >{{ w.title }}</strong

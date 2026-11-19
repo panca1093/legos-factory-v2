@@ -45,7 +45,7 @@ const legacyTabs: Record<string, string> = {
   quality: "review",
   changes: "activity",
 };
-const id = computed(() => String(route.params.id)),
+const id = computed(() => String(route.params.wo)),
   order = computed(() => factory.detail?.work_order),
   tasks = computed(() => factory.detail?.plan ?? []),
   runs = computed(() => factory.detail?.runs ?? []);
@@ -77,13 +77,14 @@ const { toast } = useToast();
 const deleting = ref(false),
   deleteError = ref("");
 async function confirmDelete() {
+  const projectID = order.value?.project_id ?? String(route.params.id);
   busy.value = true;
   deleteError.value = "";
   try {
     await factory.deleteWorkOrder(id.value);
     deleting.value = false;
     toast("Work order deleted");
-    await router.replace("/factory");
+    await router.replace(`/projects/${projectID}`);
   } catch (e) {
     deleteError.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -257,19 +258,24 @@ function download() {
     <h2>We couldn’t load this work order.</h2>
     <p class="small">{{ factory.error }}</p>
     <button class="btn" @click="factory.loadDetail(id)">Try again</button>
-    <RouterLink class="btn" to="/factory">Back to Factory</RouterLink>
+    <RouterLink class="btn" :to="`/projects/${route.params.id}`"
+      >Back to project</RouterLink
+    >
   </div>
   <div v-else-if="!order" class="panel empty" aria-busy="true">
     Loading work order…
   </div>
   <div v-else class="fx-page">
     <div class="fx-head">
-      <RouterLink to="/factory" class="fx-back" aria-label="Back to factory"
+      <RouterLink
+        :to="`/projects/${order.project_id}`"
+        class="fx-back"
+        aria-label="Back to project"
         ><ArrowLeft class="icon"
       /></RouterLink>
       <div class="grow">
         <div class="fx-crumb">
-          <RouterLink to="/factory">Factory</RouterLink> /
+          <RouterLink :to="`/projects/${order.project_id}`">Factory</RouterLink> /
           {{ project?.name || "Project" }} ·
           <span class="mono">{{ order.id }}</span>
         </div>
@@ -322,10 +328,7 @@ function download() {
       <span v-else-if="checks.status?.proposal"
         >Checks suggested.
         <RouterLink
-          :to="{
-            path: '/factory',
-            query: { project: order.project_id, checks: '1' },
-          }"
+          :to="`/projects/${order.project_id}`"
           >Review them</RouterLink
         ></span
       >

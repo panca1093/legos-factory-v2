@@ -298,6 +298,15 @@ func connectionHost(baseURL string) string {
 	return strings.TrimPrefix(strings.ToLower(u.Hostname()), "api.")
 }
 
+// RepoLabel is host/owner/repo from the project's origin, "" when it has none.
+func (in *Integrations) RepoLabel(ctx context.Context, p *model.Project) string {
+	host, repo := parseRemote(in.origin(ctx, p))
+	if host == "" || repo == "" {
+		return ""
+	}
+	return host + "/" + repo
+}
+
 // Annotate fills the computed publish_via and github_repo fields: gh for a GitHub origin, remote
 // for any other origin (a personal connection serves it), none without an origin.
 func (in *Integrations) Annotate(ctx context.Context, p *model.Project) {

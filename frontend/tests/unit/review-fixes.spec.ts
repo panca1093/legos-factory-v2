@@ -39,11 +39,11 @@ describe("Now card and page", () => {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
-        { path: "/factory", component: { render: () => null } },
-        { path: "/factory/:id", component: WorkOrderView },
+        { path: "/projects/:id", component: { render: () => null } },
+        { path: "/projects/:id/wo/:wo", component: WorkOrderView },
       ],
     });
-    await router.push("/factory/LF-128");
+    await router.push("/projects/atlas/wo/LF-128");
     await router.isReady();
     const w = mount(WorkOrderView, { global: { plugins: [router] } });
     await flushPromises();

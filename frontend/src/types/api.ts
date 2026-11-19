@@ -475,6 +475,27 @@ export interface IssueDraft {
   url: string;
 }
 
+export interface RailWorkOrder {
+  id: string;
+  title: string;
+  state: WorkOrderState;
+  stage: string;
+  waiting_on_you: boolean;
+  updated_at: string;
+}
+
+export interface ProjectRail {
+  project: { id: string; name: string; repo: string; needs_you: number };
+  work_orders?: { open: number; rows: RailWorkOrder[] };
+  pulls?: {
+    identity: unknown;
+    count: number;
+    rows: unknown[];
+    stale: boolean;
+    error?: string;
+  };
+}
+
 export class ApiError extends Error {
   constructor(
     public status: number,

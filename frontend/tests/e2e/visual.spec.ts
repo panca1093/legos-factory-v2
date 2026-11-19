@@ -24,6 +24,38 @@ async function fixture(page: Page, role: string = user.role) {
       body = { user: { ...user, role }, mode: "test" };
     else if (p.endsWith("/projects")) body = { projects };
     else if (p.endsWith("/work-orders")) body = { work_orders: orders };
+    else if (p.endsWith("/rail")) {
+      const id = p.split("/").at(-2);
+      const rows = orders
+        .filter((w) => w.project_id === id && w.state !== "CANCELLED")
+        .map((w) => ({
+          id: w.id,
+          title: w.title,
+          state: w.state,
+          stage: "build",
+          waiting_on_you: ["WAITING_FOR_HUMAN", "NEEDS_HUMAN_REVIEW"].includes(
+            w.state,
+          ),
+          updated_at: w.updated_at,
+        }));
+      body = {
+        project: {
+          id,
+          name: projects.find((x) => x.id === id)?.name,
+          repo: "github.com/acme/app",
+          needs_you: rows.filter((r) => r.waiting_on_you).length,
+        },
+        work_orders: { open: rows.length, rows },
+        pulls: {
+          identity: null,
+          count: 0,
+          rows: [],
+          stale: false,
+          error: "no_identity",
+        },
+      };
+    } else if (p.endsWith("/checks"))
+      body = { profile: null, proposal: null, run: { status: "idle" }, stale: false };
     else if (p.endsWith("/overview")) body = overview;
     else if (p.endsWith("/usage/summary")) body = usage;
     else if (p.endsWith("/models")) body = { models };
@@ -125,8 +157,8 @@ for (const viewport of viewports)
     await capture("01-overview");
     await app.getByRole("button", { name: "Cumulative" }).click();
     await capture("01-overview-cumulative");
-    await app.goto("/factory");
-    await capture("02-factory-board");
+    await app.goto("/projects");
+    await capture("02-projects");
     if (viewport.width > 720) {
       await expect(app.locator(".topnav")).toBeVisible();
       await expect(app.locator(".tabbar")).toBeHidden();
@@ -136,23 +168,24 @@ for (const viewport of viewports)
     }
     await expect(
       app.locator(".topnav a.active, .tabbar a.active").first(),
-    ).toHaveText("Factory");
-    await capture("03-factory-list");
-    await app.goto("/factory/LF-128");
+    ).toHaveText("Projects");
+    await app.goto("/projects/loan");
+    await capture("03-project-factory");
+    await app.goto("/projects/loan/wo/LF-128");
     await capture("04-blueprint");
-    await app.goto("/factory/LF-127?tab=graph");
+    await app.goto("/projects/atlas/wo/LF-127?tab=progress");
     await capture("05-task-graph");
     await app.locator('[data-node="implementation"]').click();
     await capture("06-task-details");
-    await app.goto("/factory/LF-127?tab=activity");
+    await app.goto("/projects/atlas/wo/LF-127?tab=activity");
     await capture("07-activity");
-    await app.goto("/factory/LF-125?tab=quality");
+    await app.goto("/projects/atlas/wo/LF-125?tab=review");
     await capture("08-quality");
     await app.locator("[data-check]").first().click();
     await capture("09-evidence");
-    await app.goto("/factory/LF-125?tab=activity");
+    await app.goto("/projects/atlas/wo/LF-125?tab=activity");
     await capture("10-ship");
-    await app.goto("/factory?new=1");
+    await app.goto("/projects/loan?new=1");
     await expect(app.getByRole("dialog")).toBeVisible();
     await capture("11-new-order-intent");
     await app.fill("#wo-title", "Make payment retries idempotent");
@@ -188,11 +221,11 @@ test("browser permissions, unavailable settings, dialog keyboard handling and er
   page,
 }) => {
   await fixture(page, "VIEWER");
-  await page.goto("/factory");
+  await page.goto("/projects/atlas");
   await expect(
     page.getByRole("button", { name: "New work order", exact: true }),
   ).toHaveCount(0);
-  await page.goto("/factory/LF-125");
+  await page.goto("/projects/atlas/wo/LF-125");
   await expect(
     page.getByRole("button", { name: "Approve and open PR", exact: true }),
   ).toBeDisabled();
