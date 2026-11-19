@@ -65,15 +65,17 @@ func (k *KB) RemoveFactory(ctx context.Context, rel, message string) error {
 func (k *KB) SyncFactory(ctx context.Context) (kb.SyncStats, error) {
 	var live func(string) bool
 	if k.Projects != nil {
-		ps, err := k.Projects.List(ctx)
-		if err != nil {
-			return kb.SyncStats{}, err
+		if ps, err := k.Projects.List(ctx); err != nil {
+			if k.Log != nil {
+				k.Log.Warn("listing projects for knowledge sync failed; indexing every project folder", "err", err)
+			}
+		} else {
+			ids := make(map[string]bool, len(ps))
+			for _, p := range ps {
+				ids[p.ID] = true
+			}
+			live = func(id string) bool { return ids[id] }
 		}
-		ids := make(map[string]bool, len(ps))
-		for _, p := range ps {
-			ids[p.ID] = true
-		}
-		live = func(id string) bool { return ids[id] }
 	}
 	st, err := kb.SyncFactory(ctx, k.Idx, k.Emb, k.Bundle, live)
 	if len(st.Skipped) > 0 && k.Log != nil {

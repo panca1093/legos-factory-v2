@@ -256,7 +256,7 @@ describe("project rail", () => {
     expect(w.text()).toContain("Name p1");
     expect(w.text()).toContain("github.com/o/p1");
     expect(w.find('[data-test="rail-factory"]').text()).toBe("Factory");
-    expect(w.find(".pr-count").text()).toBe("2");
+    expect(w.find(".pr-count").text()).toBe("2 open work orders");
     const rows = w.findAll('[data-test="rail-wo"]');
     expect(rows[0].text()).toContain("Title b");
     expect(rows[0].text()).toContain("you");

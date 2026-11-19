@@ -178,9 +178,9 @@ const newOrder = () =>
               class="pr-title"
               data-test="rail-factory"
               >Factory</RouterLink
-            ><span class="pr-count" aria-label="open work orders">{{
-              open
-            }}</span>
+            ><span class="pr-count"
+              >{{ open }}<span class="sr-only"> open work orders</span></span
+            >
             <IconButton
               v-if="session.canWrite"
               label="Add a work order"

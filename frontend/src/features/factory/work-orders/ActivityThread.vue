@@ -355,7 +355,7 @@ async function send() {
         <p v-if="sendError" class="form-error" role="alert">{{ sendError }}</p>
       </form>
     </section>
-    <Teleport v-if="slot" :to="slot">
+    <Teleport :to="slot ?? 'body'" :disabled="!slot">
       <PanelCard id="handoffs" title="Handoffs &amp; loops">
         <div class="loop">
           <div v-for="h in pairs" :key="h.from + h.to" class="loop-row">

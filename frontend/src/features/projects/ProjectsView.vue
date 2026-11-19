@@ -79,7 +79,9 @@ const cards = computed<Card[]>(() =>
         running: open.filter(isRunning).length,
         shipped: own.filter(isShipped).length,
         shippedRecent: own.filter(
-          (w) => isShipped(w) && Date.now() - Date.parse(w.updated_at) < MONTH,
+          (w) =>
+            isShipped(w) &&
+            Date.now() - Date.parse(w.pr_merged_at ?? w.updated_at) < MONTH,
         ).length,
         lastActivity: own.reduce(
           (m, w) => (w.updated_at > m ? w.updated_at : m),
@@ -224,6 +226,9 @@ onMounted(async () => {
         Add project
       </button>
     </div>
+    <p v-else-if="!cards.length" class="muted section-gap" data-test="projects-no-match">
+      No projects match “{{ search.trim() }}”.
+    </p>
     <ul v-else class="pj-grid" aria-label="Projects">
       <li v-for="c in cards" :key="c.project.id">
         <RouterLink

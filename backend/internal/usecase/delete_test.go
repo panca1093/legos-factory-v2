@@ -353,6 +353,10 @@ func TestDeleteProjectRemovesItsKnowledgeAndStartupSkipsOrphans(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bundle.Root(), "projects", "p1")); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("project knowledge folder left: %v", err)
 	}
+	var rows int
+	if err := wos.DB.QueryRow(`SELECT COUNT(*) FROM kb_docs WHERE project_id = 'p1'`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("index rows left for p1: %d %v", rows, err)
+	}
 	if out, err := exec.Command("git", "-C", bundle.Root(), "status", "--porcelain").Output(); err != nil || len(out) != 0 {
 		t.Fatalf("removal not committed: %q %v", out, err)
 	}

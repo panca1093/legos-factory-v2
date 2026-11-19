@@ -66,7 +66,10 @@ const actorName = (w: WorkOrder) => {
     : (crew.find((c) => c.id === a)?.name ?? "Factory");
 };
 const prNumber = (w: WorkOrder) =>
-  /(\d+)\/?$/.exec(w.pr_ref || w.pr_url || "")?.[1];
+  /\/pull(?:-requests|s)?\/(\d+)|\/merge_requests\/(\d+)/
+    .exec(w.pr_url ?? "")
+    ?.slice(1)
+    .find(Boolean) ?? /#(\d+)$/.exec(w.pr_ref ?? "")?.[1];
 const day = (iso: string) =>
   new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 function statusLine(w: WorkOrder) {

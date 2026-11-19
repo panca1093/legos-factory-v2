@@ -29,7 +29,7 @@ const slot = computed(() => woPanelSlots.top.value);
 const hasTasks = computed(() => props.tasks.length > 0);
 </script>
 <template>
-  <Teleport v-if="inPanel && slot" :to="slot">
+  <Teleport v-if="inPanel" :to="slot ?? 'body'" :disabled="!slot">
     <PanelCard v-if="hasTasks" id="plan-progress" title="Plan progress">
       <PlanProgressCard
         bare
@@ -52,7 +52,7 @@ const hasTasks = computed(() => props.tasks.length > 0);
       />
     </PanelCard>
   </Teleport>
-  <div v-else-if="!inPanel" class="fx-rcol">
+  <div v-else class="fx-rcol">
     <PlanProgressCard
       v-if="hasTasks"
       :tasks="tasks"

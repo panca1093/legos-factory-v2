@@ -280,21 +280,22 @@ func (b *Bundle) RemoveProject(projectID, message string) (string, error) {
 	if _, err := os.Stat(abs); errors.Is(err, fs.ErrNotExist) {
 		return "", nil
 	}
-	if err := os.RemoveAll(abs); err != nil {
-		return "", err
-	}
+	removeErr := os.RemoveAll(abs)
+	// Commit whatever was removed even on a partial failure, so a later unrelated commit never sweeps it in.
+	var tidyErr error
 	for d := path.Dir(rel); ; d = path.Dir(d) {
-		if err := b.regenIndex(d); err != nil {
-			return "", err
+		if err := b.regenIndex(d); err != nil && tidyErr == nil {
+			tidyErr = err
 		}
 		if d == "." {
 			break
 		}
 	}
-	if err := b.logEntry(message); err != nil {
-		return "", err
+	if err := b.logEntry(message); err != nil && tidyErr == nil {
+		tidyErr = err
 	}
-	return b.commit(message)
+	sha, err := b.commit(message)
+	return sha, errors.Join(removeErr, tidyErr, err)
 }
 
 func (b *Bundle) writeRaw(rel string, data []byte, message string) (string, error) {
