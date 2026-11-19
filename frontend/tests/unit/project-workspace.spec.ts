@@ -504,8 +504,9 @@ describe("project workspace", () => {
     const { w } = await mountWorkspace("/projects/atlas/wo/LF-127");
     const state = (role: string) =>
       w.find(`[data-role="${role}"] .pc-state`).text();
-    expect(state("builder")).toBe("active");
-    expect(state("architect")).toBe("idle");
+    expect(state("builder")).toBe("working");
+    expect(state("architect")).toBe("finished");
+    expect(state("foreman")).toBe("idle");
     expect(w.findAll("[data-role]")).toHaveLength(4);
     expect(w.text()).toContain("legos/LF-127");
     expect(
