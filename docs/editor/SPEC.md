@@ -56,8 +56,8 @@ Legos produces code, but to read or touch it the user leaves for another editor:
 
 | Fact | Where | Consequence |
 |---|---|---|
-| A local-folder project stores the folder's absolute path in `projects.repo_url` (`~` expanded); WOs clone it into `<DataDir>/workspaces/<wo_id>` | `usecase/project.go` `expandPath`, `sandbox/workspace.go` `Prepare` | The Code selection opens the user's real folder. Agents never write there |
-| Builder task worktrees live at `<DataDir>/workspaces/<wo_id>.tasks/<task_id>` on branch `legos/task/<task_id>`; they are removed after merge | `usecase/builder.go` `taskDir`, `RemoveTaskWorktree` | A worktree folder can disappear under the editor; the editor must show "folder removed" |
+| A local-folder project stores the folder's absolute path in `projects.repo_url` (`~` expanded); since #91 every project is a local folder, and a WO is a git worktree of it at `<DataDir>/worktrees/<project>/<wo_id>` on branch `legos/<wo_id>` | `usecase/project.go` `expandPath`, `sandbox/worktree.go` | The Code selection opens the user's real folder. Agents write only in worktrees; branches and commits land in the user's repo, its checked-out tree is never touched |
+| Task worktrees live at `<DataDir>/worktrees/<project>/<wo_id>.tasks/<task_id>` on branch `legos/<wo_id>.tasks/<task_id>`; task worktrees go after merge, the WO worktree on PR merged/closed, cancel, decline or delete | `usecase/builder.go` `taskDir`, `sandbox/worktree.go` `Cleanup` | A worktree folder can disappear under the editor; the editor must show "folder removed" |
 | Agents write files with their own tools in `cwd`; Legos sees no per-write event (`clientCapabilities.fs.writeTextFile: false`) | `agent/acp.go:529` | Attribution is path-based: folder → WO/task → the run running there |
 | `RunRepo.RunningByProject` returns only the latest running run per WO | `store/run.go:83` | Parallel task builders need a per-task lookup (`RunningByWO(woID) []RunningRun`) |
 | `Server.local` gates `/local/*` to Engineers in `dev` mode; `loopbackHostOnly` rejects non-loopback `Host` in dev mode | `http/local.go`, `http/server.go` | Reuse both for every editor route (P1) |
@@ -66,7 +66,7 @@ Legos produces code, but to read or touch it the user leaves for another editor:
 | `LiveEvent` has only `WOID`; `Bus` keys by WO | `model/event.go`, `http/bus.go` | Editor events use the control socket (P3), not the bus |
 | Vite proxies `/api` without `ws: true` | `frontend/vite.config.ts` | Dev proxy needs `ws: true` for the editor sockets |
 | Existing diff parser and views: `parseUnifiedDiff`, `DiffView.vue`, `DiffFileView.vue`; themes via `[data-theme="dark"]` in `tokens.css`; Cmd+K search dialog in `AppShell.vue` | `frontend/src/…` | Compare uses Monaco's diff editor (two full texts), not the unified parser; Monaco themes are built from tokens; Cmd+K gets no editor entry (D6) |
-| Migrations end at `028`; Review PR claims `029` | `store/migrations` | Editor uses `030_editor.sql` |
+| Migrations end at `030` (#91); Review PR claims `031` | `store/migrations` | Editor uses `032_editor.sql` |
 | On this machine: `gopls` v0.16.2 built with go1.22.5 at `~/Documents/go/bin` (GOPATH is not `~/go`); `go` 1.27.3; `typescript-language-server` and `vue-language-server` not installed; `node` v26.13.0 at `/opt/homebrew/bin` | local check 2026-11-19 | Discovery must ask `go env GOPATH`/`GOBIN`; the panel must show "found but likely too old" for a gopls built with an older Go than the module needs ? verify the exact gopls failure mode |
 
 ## Flows
@@ -179,7 +179,7 @@ Keyboard: Cmd/Ctrl+S save, Cmd+Alt+S save all, Cmd+P quick open (fuzzy over `git
 - `internal/usecase/editor.go` — `Editor` usecase: folder resolution and registration, trust, allowed-roots policy, size/binary rules, write preconditions, actor attribution, server allowlist and limits. All rules here.
 - `internal/sandbox/editorfs.go` — `os.Root`-based listing/read/atomic write/rename/delete, binary sniff, `git status`/`check-ignore`/branch, fsnotify watcher.
 - `internal/sandbox/lsp.go` — process manager: discovery, spawn, stdio framing, idle/crash handling.
-- `internal/store/editor.go` + `030_editor.sql`.
+- `internal/store/editor.go` + `032_editor.sql`.
 - `internal/http/editor.go` — handlers and both WebSockets.
 
 Ports (`usecase/ports.go`):
@@ -214,7 +214,7 @@ type EditorStore interface {
 }
 ```
 
-### Persistence (`030_editor.sql`)
+### Persistence (`032_editor.sql`)
 
 ```sql
 CREATE TABLE editor_folders (
@@ -245,10 +245,10 @@ A folder is registered only through one of:
 | Source | Rule | kind / trusted |
 |---|---|---|
 | Project | `Projects.Authorize`; `repo_url` absolute + git repo, else `editor_project_folders` | project / yes |
-| WO workspace | path is `<DataDir>/workspaces/<wo_id>` or `…/<wo_id>.tasks/<task_id>`; user can access the WO's project | worktree / yes |
+| WO workspace | path is `<DataDir>/worktrees/<project>/<wo_id>` or `…/<wo_id>.tasks/<task_id>`; user can access the WO's project | worktree / yes |
 | Any folder | user typed or picked it | folder / ask |
 
-Refused (400 with reason): `/`, the user's home directory itself, `<DataDir>` and anything under it except the WO workspace pattern above (holds `factory.db`, `secret.key`, `accounts/`, other checkouts like `chat-*`), system dirs (`/System`, `/usr`, `/bin`, `/etc`, `/private`, `/Library` on macOS; `/proc`, `/sys`, `/etc` on Linux). The path is cleaned and `filepath.EvalSymlinks`-resolved before the check and before storing.
+Refused (400 with reason): `/`, the user's home directory itself, `<DataDir>` and anything under it except the WO workspace pattern above (holds `factory.db`, `secret.key`, `accounts/`, old `workspaces/` clones), system dirs (`/System`, `/usr`, `/bin`, `/etc`, `/private`, `/Library` on macOS; `/proc`, `/sys`, `/etc` on Linux). The path is cleaned and `filepath.EvalSymlinks`-resolved before the check and before storing.
 
 Read-only external roots for go-to-definition targets (F3): `go env GOROOT`, `$(go env GOMODCACHE)`, and `node_modules` directories of the folder's parent chain up to `$HOME`. Read-only, no tree, opened from a definition jump only.
 
@@ -407,7 +407,7 @@ Errors use the existing envelope; codes `NOT_AVAILABLE`, `VALIDATION_FAILED`, `O
 Backend unit (`sandbox`, `usecase`):
 
 - Confinement table: `../x`, `/etc/passwd`, `a/../../x`, NUL, `.git/config` write, symlink file → outside (403), symlink dir → outside, symlink chain inside (allowed), symlink replaced between list and read (still confined).
-- Refused roots: `/`, `$HOME`, `<DataDir>`, `<DataDir>/workspaces/chat-x`, `<DataDir>/workspaces/<wo>` (allowed only with project access), `<wo>.tasks/<t>` allowed.
+- Refused roots: `/`, `$HOME`, `<DataDir>`, `<DataDir>/workspaces/x`, `<DataDir>/worktrees/<project>/<wo>` (allowed only with project access), `<wo>.tasks/<t>` allowed.
 - Read: UTF-8, BOM, CRLF round trip, binary 415, 2 MB/10 MB boundaries, non-UTF-8 → readonly.
 - Write: precondition 409 with current hash; atomic (target never half-written: kill between temp write and rename leaves the old file); mode preserved; symlinked target written in place; create-existing 409.
 - Git: porcelain v2 `-z` parsing (renames, untracked dir, conflicts, detached head); `GIT_OPTIONAL_LOCKS=0` set; non-repo.
@@ -429,7 +429,7 @@ Live check (manual): gopls on this repo's `backend/` (expect "outdated" with gop
 | # | PR | Depends on |
 |---|---|---|
 | 0 | Spike (not merged): fake WS proxy + gopls + both client options on one page; measure bundle, LOC, feature coverage → decide P5, record in this spec | — |
-| 1 | Migration 030, `EditorStore`, folder resolution + refused roots, `os.Root` FS ops, git status, HTTP file/tree/folder routes, JSON content-type guard; tests | — |
+| 1 | Migration 032, `EditorStore`, folder resolution + refused roots, `os.Root` FS ops, git status, HTTP file/tree/folder routes, JSON content-type guard; tests | — |
 | 2 | Frontend: Code selection in the workspace — editor card (tabs, breadcrumb, Save, footer without LSP), Explorer card (branch, Find files, tree), rail Code section + open-files persistence, workspace-scoped editor store, `FileTree` shared component, Monaco lazy chunk, save + 409 handling, Vite `ws: true` | 1, Review PR #4a (workspace shell) |
 | 3 | Control socket + watcher + attribution (`RunningByWO`) + git status push; banner, Compare, auto-reload, folder gone | 1, 2 |
 | 4 | LSP manager: allowlist, discovery, spawn/idle/crash, LSP socket with Origin checks; servers endpoints; fake-server tests | 1 |

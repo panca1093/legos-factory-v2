@@ -43,7 +43,7 @@ Legos turns work orders into PRs, but the user's other daily job — reviewing P
 
 | # | Decision | Why | Rejected alternative |
 |---|---|---|---|
-| P1 | Review PR always needs a **personal identity** (personal connection or CLI login). A project's shared connection is never used, not even for reads | "Me" (author/reviewer filters) and "Posting as" must be the user; a shared token is an admin's or bot's account | Shared connection for reads + personal for posting: two identities per page, filters computed for the wrong account |
+| P1 | Review PR always needs a **personal identity** (personal connection or CLI login). (Since #91 shared connections no longer exist, so this is the only path) | "Me" (author/reviewer filters) and "Posting as" must be the user; a shared token is an admin's or bot's account | Shared connection for reads + personal for posting: two identities per page, filters computed for the wrong account |
 | P2 | v1 anchors are single-line (path + side + line). Multi-line ranges later | Ranges map differently on all three hosts (see §Line mapping) | Ranges in v1 |
 | P3 | Posting requires the PR head to equal the head the drafts were made on; otherwise 409 and the user re-runs or refreshes | Avoids comments landing on moved lines | Posting anyway against an old commit (GitHub marks them outdated; GitLab/Bitbucket behaviour differs) |
 | P4 | One Inspector run per review, with the routed specialties as a focus list, not one run per specialty | Cost: the factory fans out per specialty; a PR review is interactive and paid by the user | Factory-style fan-out |
@@ -132,7 +132,7 @@ Live updates of the rail: WO rows and the Factory count update from the existing
 
 ### Work order selection
 
-- Center: the existing work-order view unchanged in content — stage track Brief / Plan / Build / Review / Ship, "Now" card with the current actor and, when escalated, the answer box; tabs Plan / Progress / Review / Changes & PR. Header actions add **Review PR #n** when the WO's PR is open on the host (→ `/projects/:id/pulls/:n`).
+- Center: the existing work-order view unchanged in content — stage track Brief / Plan / Build / Review / Ship, "Now" card with the current actor and, when escalated, the answer box; tabs Activity / Progress / Review (the Changes & PR tab was removed in #91: the PR opens automatically after the final gate and the escalation decisions live on the Now card). Header actions add **Review PR #n** when the WO's PR is open on the host (→ `/projects/:id/pulls/:n`).
 - Right panel: **Crew** (Foreman / Architect / Builder / Inspector, `--crew-<role>` colours, `active` while a run of that role is running, else `idle`) and **Details** (branch, started, "Open in Code" → the WO worktree in the same workspace, Editor spec F5).
 - The Crew and Details data come from the WO payload and its runs already loaded by the view; no new endpoint.
 
@@ -162,7 +162,7 @@ Filter chips: Related to me (default) / Reviewer: me / Author: me. Empty, no-ide
 
 - `internal/integration/` — REST adapters (github.go, gitlab.go, bitbucket.go extended; one new file each for review calls if the files grow past ~300 lines). CLI token borrowing in `ghcli.go` + new `glabcli.go`.
 - `internal/usecase/prreview.go` — `Reviews` usecase: identity resolution, list/status derivation, rail summary (`Rail(ctx, userID, projectID, part)`: open-WO rule, "you" rule, PR label derivation), drafts, viewed, posting rules, AI run. All rules live here (team convention), not in store or integration.
-- `internal/store/prreview.go` + migration `029_pr_reviews.sql`.
+- `internal/store/prreview.go` + migration `031_pr_reviews.sql`.
 - `internal/http/reviews.go` — handlers.
 
 ### Interface additions (`usecase/ports.go`)
@@ -265,12 +265,12 @@ type PostedReview struct {
 
 Input: user, project. Output: `(PRReviewer, HostUser, source)` or a typed "no identity" error.
 
-1. **Repo and host.** Bound project: provider + base URL of its git connection, `RemoteRepo`. Local project: parse `origin` — generalise `ParseGitHubRepo` to `ParseRemote(origin) (provider, host, repo)`: `github.com` → github, `gitlab.com` → gitlab, `bitbucket.org` → bitbucket; any other host is ambiguous (Q2).
+1. **Repo and host.** Every project is a local folder (#91): parse its `origin` the way `Integrations.GitFor` does — `github.com` → github; any other host → the user's own connection whose base URL host matches (`api.` prefix ignored).
 2. **Pinned identity** for (user, provider, host) in `review_identities` → use it.
 3. Else the user's **personal, active, verified** connection for that provider whose base URL host matches. More than one → the user picks once, then pinned.
 4. Else **CLI** (`gh` for GitHub, `glab` for GitLab), only when the server runs in local/dev auth mode (same gate as `Integrations.GH` today: the CLI login belongs to the OS user running the backend, so a multi-user server must never lend it). One logged-in user → pin it on first use; several → user picks.
 5. Else: `ErrNoReviewIdentity` → UI "Connect an account".
-6. Never the project's shared connection (P1).
+6. There is no shared connection since #91 (P1).
 
 CLI borrowing: `gh auth token --hostname <host> --user <pinned>` (flags confirmed on gh 2.103.3). Each usecase operation borrows once and builds a REST client in memory; nothing is cached on disk or in the DB. After borrowing, `Me()` must equal the pinned login, else `ErrIdentityChanged`.
 `glab`: **uncertain** — I could not verify a `glab auth token` equivalent or multi-account support; candidates are `glab config get token --host <host>` and parsing `glab auth status --show-token`, and newer glab may keep the token in the OS keyring. Verify against a current glab before building phase 8.
@@ -326,7 +326,7 @@ The usecase disables Approve / Request changes when the user is the PR author (a
 - Bitbucket: inline comments one by one, recording `posted_ref` per draft as each succeeds; then summary comment; then verdict. A retry skips drafts with a `posted_ref`. Partial success is reported per draft.
 - All: before posting, the usecase re-reads `HeadSHA` (P3) and the identity's `Me()`.
 
-### Persistence (`029_pr_reviews.sql`)
+### Persistence (`031_pr_reviews.sql`)
 
 ```sql
 CREATE TABLE review_identities (           -- pin: which account posts for this user on this host
@@ -492,7 +492,7 @@ Live check (manual, sandbox repo per provider, own account): list filters, inlin
 | # | PR | Depends on |
 |---|---|---|
 | 1 | Model types + `PRReviewer` read side (Me, TokenInfo, List, Get, Files) for GitHub/GitLab/Bitbucket + contract tests; `ProviderError.RetryAfter` | — |
-| 2 | Migration 029 + `ReviewStore` + store tests | — |
+| 2 | Migration 031 + `ReviewStore` + store tests | — |
 | 3 | `Reviews` usecase: identity resolution (connections + gh), pinning, list/status derivation, files + viewed; HTTP list/detail/files/viewed/identities | 1, 2 |
 | 4a | Frontend workspace shell: nav change (Projects replaces Factory, Reviews added), `/projects` list page, `ProjectWorkspace.vue` (rail + content + context panel framework with Hide/Show, card slots per selection), Factory overview with Open/Done filter, WO selection (existing view moved in) + Crew/Details cards + "Open in Code" placeholder, route table + all redirects. Backend `GET /projects/:id/rail` WO part (PR part returns `no_identity` until 4b). Code section and Code route are placeholders | 3 |
 | 4b | Rail PR section + labels, `/projects/:id/pulls` list, "Review PR #n" on WOs, live refresh of rail counts | 3, 4a |
@@ -504,7 +504,7 @@ Live check (manual, sandbox repo per provider, own account): list filters, inlin
 ## Open questions
 
 1. ~~Project page~~ — resolved 2026-11-19, revised the same day: `/projects/:id` is the v2 project workspace (rail + content + context panel, no tabs; see D4 and §Project workspace); the chat rail's project link moves to it.
-2. **Local projects on non-standard hosts.** A local project whose origin is GHE or self-managed GitLab: how is the provider chosen — a per-project setting, or matching against the user's connections' base URLs?
+2. ~~Local projects on non-standard hosts~~ — resolved by #91: matched against the user's connections' base URL hosts (`Integrations.GitFor`).
 3. **AI run trigger.** Does opening a PR start the AI review automatically, or only on "Run AI review"? (Cost is on the user's subscription.)
 4. **Summary comment.** Prefilled from the AI summary, or empty?
 5. **GitLab "Request changes".** Hide it, or fall back to a comment prefixed "Changes requested" + unapprove? Needs the verified API behaviour per GitLab version/tier first.
@@ -512,7 +512,7 @@ Live check (manual, sandbox repo per provider, own account): list filters, inlin
 7. **Fork PRs** on Bitbucket (no PR head ref): support in v1 or show "AI review unavailable for fork PRs"?
 8. **Review checkout lifetime** and disk budget: delete when the PR closes, after N days, or keep one per project?
 9. **Manual comments.** Can the user add their own inline comment (not from AI) in v1? The decisions only cover AI drafts.
-10. **P1 (shared connection never used)** and P2–P5 above need a yes.
+10. **P1** (settled by #91: no shared connections) and P2–P5 above need a yes.
 11. **Draft PRs** (GitHub/GitLab draft, Bitbucket draft): listed, hidden, or listed with a badge?
 12. **Unverified external behaviour** to settle in phase 1/7 contract work before relying on it: glab token borrowing and multi-account; GitLab `reviewer_username` minimum version, `/diffs` endpoint, draft notes + `bulk_publish` availability per tier; Bitbucket BBQL `reviewers.uuid`, `request-changes` endpoint, own-PR approve, batched/pending comments, token scope introspection and expiry; parseability of `gh`/`glab` login output when run without a TTY.
 13. **Narrow screens.** Proposed: below 1280px the context panel starts hidden and opens as an overlay; below 1000px the rail becomes an overlay too (panel collapses first, rail second). Breakpoints and order need a yes; the prototype shows desktop only.
