@@ -96,7 +96,7 @@ type SettingsReader interface {
 // not under version control) and pushes a branch to origin.
 type Sandbox interface {
 	Prepare(ctx context.Context, projectID, woID, repo, baseBranch string) (dir, base string, err error)
-	Cleanup(ctx context.Context, projectID, woID, repo string) error
+	Cleanup(ctx context.Context, projectID, woID, repo string, force bool) (kept []string, err error)
 	Dirty(ctx context.Context, repo string) bool
 	RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration, env []string) model.CheckResult
 	Commit(ctx context.Context, dir, message string) (string, error)

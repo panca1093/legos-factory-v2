@@ -124,7 +124,7 @@ func (p *Projects) Create(ctx context.Context, u *model.User, pr *model.Project)
 	if cloneURL.MatchString(pr.RepoURL) {
 		return fmt.Errorf("%w: projects are local folders: clone %s into a folder first (Add project, From GitHub/GitLab/Bitbucket) and add that folder", ErrInvalid, pr.RepoURL)
 	}
-	if pr.RepoURL != "" && !filepath.IsAbs(pr.RepoURL) {
+	if !filepath.IsAbs(pr.RepoURL) {
 		return fmt.Errorf("%w: repo_url must be the absolute path of a local folder", ErrInvalid)
 	}
 	if err := p.Store.Create(ctx, pr); err != nil {

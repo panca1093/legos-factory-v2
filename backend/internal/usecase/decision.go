@@ -185,7 +185,7 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		}
 		f.recordPRDecision(ctx, wo, "PR declined", reason)
 		f.completeWO(ctx, wo, "DECLINED")
-		f.cleanupWorktrees(ctx, wo)
+		f.cleanupWorktrees(ctx, wo, false)
 		return nil
 	default:
 		return fmt.Errorf("unknown PR decision %q", decision)
@@ -213,7 +213,7 @@ func (f *Factory) Cancel(ctx context.Context, woID string) error {
 	}
 	f.event(woID, "human", "cancelled", "Work order cancelled", map[string]any{"from": string(wo.State)})
 	f.completeWO(ctx, wo, "CANCELLED")
-	f.cleanupWorktrees(ctx, wo)
+	f.cleanupWorktrees(ctx, wo, false)
 	return nil
 }
 
@@ -244,7 +244,7 @@ func (f *Factory) DeleteWorkOrder(ctx context.Context, woID string) error {
 	if err := f.WO.Delete(ctx, wo); err != nil {
 		return err
 	}
-	f.cleanupWorktrees(ctx, wo)
+	f.cleanupWorktreesIn(ctx, wo, f.repoOf(ctx, wo), false, false)
 	f.Log.Info("work order deleted", "wo", woID, "project", wo.ProjectID, "state", string(wo.State))
 	return nil
 }
@@ -283,7 +283,7 @@ func (f *Factory) DeleteProject(ctx context.Context, projectID string) error {
 		return err
 	}
 	for i := range own {
-		f.cleanupWorktreesIn(ctx, &own[i], proj.RepoURL)
+		f.cleanupWorktreesIn(ctx, &own[i], proj.RepoURL, false, false)
 	}
 	f.removeStack(ctx, projectID)
 	f.Log.Info("project deleted", "project", projectID, "work_orders", len(own))
@@ -291,45 +291,78 @@ func (f *Factory) DeleteProject(ctx context.Context, projectID string) error {
 }
 
 // cleanupWorktrees removes the order's worktrees and legos/ branches from the project's repository.
-func (f *Factory) cleanupWorktrees(ctx context.Context, wo *model.WorkOrder) {
+// The order's branch survives unless its PR is merged or closed (prDone) or origin has its tip.
+func (f *Factory) cleanupWorktrees(ctx context.Context, wo *model.WorkOrder, prDone bool) {
 	repo := ""
 	if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil {
 		repo = proj.RepoURL
 	}
-	f.cleanupWorktreesIn(ctx, wo, repo)
+	f.cleanupWorktreesIn(ctx, wo, repo, prDone, true)
 }
 
-func (f *Factory) cleanupWorktreesIn(ctx context.Context, wo *model.WorkOrder, repo string) {
+func (f *Factory) cleanupWorktreesIn(ctx context.Context, wo *model.WorkOrder, repo string, prDone, emit bool) {
 	if f.Sandbox == nil {
 		return
 	}
-	if err := f.Sandbox.Cleanup(context.WithoutCancel(ctx), wo.ProjectID, wo.ID, repo); err != nil {
+	prDone = prDone || wo.PRMergedAt != nil || wo.PRClosedAt != nil
+	kept, err := f.Sandbox.Cleanup(context.WithoutCancel(ctx), wo.ProjectID, wo.ID, repo, prDone)
+	if err != nil {
 		f.Log.Warn("worktree cleanup failed", "wo", wo.ID, "err", err)
+	}
+	if len(kept) > 0 {
+		msg := fmt.Sprintf("Kept local branch %s in %s: its commits are not on the remote and no pull request was merged or closed. Delete it yourself when you no longer need it.", strings.Join(kept, ", "), repo)
+		f.Log.Info("branches kept", "wo", wo.ID, "branches", kept)
+		if emit {
+			f.event(wo.ID, "factory", "branch_kept", msg, map[string]any{"branches": kept})
+		}
 	}
 }
 
-// RemoveLegacyWorkspaces deletes the old clone-based <DataDir>/workspaces tree once no work order
-// is in flight; with one in flight it is left alone.
+// RemoveLegacyWorkspaces cleans the old clone-based <DataDir>/workspaces tree without losing unpublished
+// work. A work order's old clone is only dropped when the order is cancelled or has a pull request
+// (opened, merged or closed); the chat and check-suggestion clones always go. Anything else stays and is logged.
 func (f *Factory) RemoveLegacyWorkspaces(ctx context.Context) {
+	root := filepath.Join(f.DataDir, "workspaces")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
 	all, err := f.WO.List(ctx)
 	if err != nil {
 		f.Log.Warn("legacy workspace cleanup skipped", "err", err)
 		return
 	}
+	var keep []string
+	droppable := map[string]bool{}
 	for _, wo := range all {
-		if !wo.State.Terminal() {
-			return
+		if wo.State == model.StateCancelled || wo.PRRef != "" || wo.PRURL != "" {
+			droppable[wo.ID] = true
+		} else {
+			keep = append(keep, wo.ID)
 		}
 	}
-	root := filepath.Join(f.DataDir, "workspaces")
-	if _, err := os.Stat(root); err != nil {
+	if len(keep) == 0 {
+		if err := os.RemoveAll(root); err != nil {
+			f.Log.Warn("legacy workspace cleanup failed", "dir", root, "err", err)
+			return
+		}
+		f.Log.Info("removed the old clone-based workspaces", "dir", root)
 		return
 	}
-	if err := os.RemoveAll(root); err != nil {
-		f.Log.Warn("legacy workspace cleanup failed", "dir", root, "err", err)
-		return
+	var used []string
+	for _, e := range entries {
+		name := e.Name()
+		id := strings.TrimSuffix(name, ".tasks")
+		switch {
+		case strings.HasPrefix(name, "chat-"), strings.HasPrefix(name, "checks-src-"), strings.HasPrefix(name, "suggest-"), droppable[id]:
+			if err := removeInside(root, filepath.Join(root, name)); err != nil {
+				f.Log.Warn("legacy workspace cleanup failed", "dir", name, "err", err)
+			}
+		default:
+			used = append(used, name)
+		}
 	}
-	f.Log.Info("removed the old clone-based workspaces", "dir", root)
+	f.Log.Info("old clone-based workspaces kept: their work orders have no pull request yet", "work_orders", keep, "dirs", used)
 }
 
 // removeWorkspaces deletes a read-only clone (chat, check suggestions) by its folder name.
@@ -481,4 +514,11 @@ func (f *Factory) DecideFinding(ctx context.Context, woID, findingID, actorID st
 		}
 	}
 	return f.Findings.Get(ctx, woID, findingID)
+}
+
+func (f *Factory) repoOf(ctx context.Context, wo *model.WorkOrder) string {
+	if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil {
+		return proj.RepoURL
+	}
+	return ""
 }

@@ -73,13 +73,13 @@ func (f *Factory) checkPR(ctx context.Context, gitFor gitLookup, wo model.WorkOr
 			return err
 		}
 		f.portCodeMap(ctx, &wo)
-		f.cleanupWorktrees(ctx, &wo)
+		f.cleanupWorktrees(ctx, &wo, true)
 		return nil
 	case st.State == model.PRStateClosed && wo.PRClosedAt == nil:
 		if err := f.recordPR(ctx, wo, "pr_closed", "closed without merging", st.At, map[string]any{"pr_closed_at": st.At.Unix()}); err != nil {
 			return err
 		}
-		f.cleanupWorktrees(ctx, &wo)
+		f.cleanupWorktrees(ctx, &wo, true)
 		return nil
 	}
 	return nil

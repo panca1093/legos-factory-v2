@@ -50,7 +50,8 @@ func refExists(ctx context.Context, repo, ref string) bool {
 	return err == nil
 }
 
-// defaultBranch is origin's default branch, else the local main, master or checked-out branch.
+// defaultBranch is origin's default branch (origin/HEAD, then main or master on origin), else the
+// local main or master. It never falls back to whatever the user has checked out.
 func defaultBranch(ctx context.Context, repo string, origin bool) (string, error) {
 	if origin {
 		if out, err := git(ctx, repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
@@ -76,10 +77,7 @@ func defaultBranch(ctx context.Context, repo string, origin bool) (string, error
 			return b, nil
 		}
 	}
-	if out, err := git(ctx, repo, "symbolic-ref", "--short", "HEAD"); err == nil && strings.TrimSpace(out) != "" {
-		return strings.TrimSpace(out), nil
-	}
-	return "", fmt.Errorf("cannot determine the default branch of %s: name a base branch", repo)
+	return "", fmt.Errorf("cannot determine the default branch of %s (no origin/HEAD, main or master): name a base branch when creating the work order", repo)
 }
 
 // Dirty reports uncommitted changes (tracked or untracked) in the project folder.
@@ -131,7 +129,7 @@ func (l Local) Prepare(ctx context.Context, projectID, woID, repo, baseBranch st
 	if err := os.RemoveAll(dir); err != nil {
 		return "", "", err
 	}
-	_, _ = git(ctx, repo, "worktree", "prune")
+	forgetWorktree(repo, dir)
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return "", "", err
 	}
@@ -140,6 +138,8 @@ func (l Local) Prepare(ctx context.Context, projectID, woID, repo, baseBranch st
 		args = []string{"worktree", "add", "--quiet", dir, branch} // an earlier attempt's commits stay
 	}
 	if out, err := git(ctx, repo, args...); err != nil {
+		_ = os.RemoveAll(dir)
+		forgetWorktree(repo, dir)
 		return "", "", fmt.Errorf("git worktree add: %v: %s", err, strings.TrimSpace(out))
 	}
 	if sha, err := git(ctx, repo, "rev-parse", start); err == nil {
@@ -174,36 +174,81 @@ func worktreeOnBranch(ctx context.Context, repo, dir, branch string) bool {
 	return e1 == nil && e2 == nil && ea == eb
 }
 
-// Cleanup removes a work order's worktree, its task worktrees and their legos/ branches. It is
-// idempotent, tolerates folders or branches that are already gone and touches no other branch.
-func (l Local) Cleanup(ctx context.Context, projectID, woID, repo string) error {
+// Cleanup removes a work order's worktree and its task worktrees, then its legos/ branches. It is
+// idempotent and touches no other branch. The work order's own branch is the only copy of unpublished
+// work, so it is deleted only when force is set (the PR is merged or closed) or origin has its tip;
+// otherwise it is kept and returned in kept. Task branches go once merged into it.
+func (l Local) Cleanup(ctx context.Context, projectID, woID, repo string, force bool) (kept []string, err error) {
 	dir := model.WorktreeDir(l.DataDir, projectID, woID)
 	tasks := dir + ".tasks"
 	root := filepath.Join(l.DataDir, "worktrees", projectID)
 	if !isLocalGitRepo(repo) {
-		return removeUnder(root, dir, tasks)
+		return nil, removeUnder(root, dir, tasks)
 	}
 	defer lockRepo(ctx, repo)()
 	if entries, err := os.ReadDir(tasks); err == nil {
 		for _, e := range entries {
-			_, _ = git(ctx, repo, "worktree", "remove", "--force", filepath.Join(tasks, e.Name()))
+			p := filepath.Join(tasks, e.Name())
+			_, _ = git(ctx, repo, "worktree", "remove", "--force", p)
+			forgetWorktree(repo, p)
 		}
 	}
 	_, _ = git(ctx, repo, "worktree", "remove", "--force", dir)
 	if err := removeUnder(root, dir, tasks); err != nil {
-		return err
+		return nil, err
 	}
-	_, _ = git(ctx, repo, "worktree", "prune")
-	for _, prefix := range []string{"refs/heads/" + woBranch(woID), "refs/heads/" + woBranch(woID) + ".tasks"} {
-		out, err := git(ctx, repo, "for-each-ref", "--format=%(refname:short)", prefix)
-		if err != nil {
-			continue
-		}
+	forgetWorktree(repo, dir)
+	wob := woBranch(woID)
+	wobRef := "refs/heads/" + wob
+	wobAlive := refExists(ctx, repo, wobRef)
+	if out, err := git(ctx, repo, "for-each-ref", "--format=%(refname:short)", wobRef+".tasks"); err == nil {
 		for _, b := range strings.Fields(out) {
-			_, _ = git(ctx, repo, "branch", "-D", b)
+			if force || (wobAlive && isAncestor(ctx, repo, "refs/heads/"+b, wobRef)) {
+				_, _ = git(ctx, repo, "branch", "-D", b)
+			} else {
+				kept = append(kept, b)
+			}
 		}
 	}
-	return nil
+	if wobAlive {
+		if force || isAncestor(ctx, repo, wobRef, "refs/remotes/origin/"+wob) {
+			_, _ = git(ctx, repo, "branch", "-D", wob)
+		} else if _, err := git(ctx, repo, "branch", "-d", wob); err != nil {
+			kept = append(kept, wob)
+		}
+	}
+	return kept, nil
+}
+
+func isAncestor(ctx context.Context, repo, a, b string) bool {
+	_, err := git(ctx, repo, "merge-base", "--is-ancestor", a, b)
+	return err == nil
+}
+
+// forgetWorktree drops the repository's record of a worktree folder that is gone, leaving the user's own
+// worktrees alone (a broad `git worktree prune` would drop any whose folder is temporarily missing).
+func forgetWorktree(repo, path string) {
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		return
+	}
+	admin := filepath.Join(strings.TrimSpace(string(out)), "worktrees")
+	entries, err := os.ReadDir(admin)
+	if err != nil {
+		return
+	}
+	want := map[string]bool{filepath.Join(path, ".git"): true}
+	if real, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		want[filepath.Join(real, filepath.Base(path), ".git")] = true
+	}
+	for _, e := range entries {
+		b, err := os.ReadFile(filepath.Join(admin, e.Name(), "gitdir"))
+		if err == nil && want[filepath.Clean(strings.TrimSpace(string(b)))] {
+			if _, serr := os.Stat(strings.TrimSpace(string(b))); serr != nil {
+				_ = os.RemoveAll(filepath.Join(admin, e.Name()))
+			}
+		}
+	}
 }
 
 func removeUnder(root string, paths ...string) error {
@@ -232,16 +277,59 @@ func gitSigned(ctx context.Context, dir string, args ...string) (string, error) 
 
 var signingFailure = []string{"gpg failed to sign", "failed to write commit object", "signing failed", "ssh-keygen", "No secret key", "error: Load key"}
 
-// rejection classifies a failed commit or merge: a signing failure is the user's to fix, anything
-// else is a repository hook the Builder can fix.
-func rejection(op, out string) error {
+// plainGitFailures are git errors no hook can have caused, whatever hooks exist.
+var plainGitFailures = []string{"would be overwritten", "index.lock", "unrelated histories", "not something we can merge", "Please commit your changes",
+	"Unable to create", "cannot lock ref", "not a git repository", "Your local changes", "untracked working tree files"}
+
+var hooksByOp = map[string][]string{
+	"commit": {"pre-commit", "prepare-commit-msg", "commit-msg"},
+	"merge":  {"pre-merge-commit", "prepare-commit-msg", "commit-msg"},
+}
+
+// installedHooks lists the hooks git may have run for op: files in the repository's effective hooks
+// directory (core.hooksPath respected) that are executable.
+func installedHooks(ctx context.Context, dir, op string) []string {
+	out, err := git(ctx, dir, "rev-parse", "--git-path", "hooks")
+	if err != nil {
+		return nil
+	}
+	hooks := strings.TrimSpace(out)
+	if !filepath.IsAbs(hooks) {
+		hooks = filepath.Join(dir, hooks)
+	}
+	var found []string
+	for _, name := range hooksByOp[op] {
+		if fi, err := os.Stat(filepath.Join(hooks, name)); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+			found = append(found, name)
+		}
+	}
+	return found
+}
+
+// rejection classifies a failed commit or merge. A signing failure is the user's to fix; a
+// *model.HookError needs a hook that is installed and git output that no plain git failure explains;
+// every other failure is a plain error.
+func rejection(ctx context.Context, dir, op, out string) error {
 	out = strings.TrimSpace(out)
 	for _, m := range signingFailure {
 		if strings.Contains(out, m) {
 			return &model.SigningError{Op: op, Output: out}
 		}
 	}
-	return &model.HookError{Op: op, Output: out}
+	for _, m := range plainGitFailures {
+		if strings.Contains(out, m) {
+			return fmt.Errorf("git %s failed: %s", op, out)
+		}
+	}
+	hooks := installedHooks(ctx, dir, op)
+	if len(hooks) == 0 {
+		return fmt.Errorf("git %s failed: %s", op, out)
+	}
+	he := &model.HookError{Op: op, Output: out}
+	if len(hooks) == 1 {
+		he.Hook = hooks[0]
+	}
+	return he
 }
 
 // requireIdentity fails with ErrNoGitIdentity when git has no author for dir (repo-local config, then global).

@@ -37,9 +37,9 @@ func (s *cloneSandbox) Prepare(_ context.Context, projectID, woID, _, baseBranch
 
 func (s *cloneSandbox) Dirty(context.Context, string) bool { return s.dirty }
 
-func (s *cloneSandbox) Cleanup(_ context.Context, _, woID, _ string) error {
+func (s *cloneSandbox) Cleanup(_ context.Context, _, woID, _ string, _ bool) ([]string, error) {
 	s.destroyed = append(s.destroyed, woID)
-	return nil
+	return nil, nil
 }
 
 type fixedSettings struct{}

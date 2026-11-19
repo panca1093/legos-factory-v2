@@ -77,6 +77,7 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 	// prepare before persisting: a stored CREATED order without a workspace gets resumed into planning on restart
 	dir, base, err := w.Sandbox.Prepare(ctx, wo.ProjectID, wo.ID, proj.RepoURL, req.BaseBranch)
 	if err != nil {
+		w.cleanup(ctx, wo, proj)
 		return nil, fmt.Errorf("%w: could not prepare workspace: %v", ErrWorkspace, err)
 	}
 	wo.BaseBranch = base
@@ -108,5 +109,5 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 }
 
 func (w *WorkOrders) cleanup(ctx context.Context, wo *model.WorkOrder, proj *model.Project) {
-	_ = w.Sandbox.Cleanup(context.WithoutCancel(ctx), wo.ProjectID, wo.ID, proj.RepoURL)
+	_, _ = w.Sandbox.Cleanup(context.WithoutCancel(ctx), wo.ProjectID, wo.ID, proj.RepoURL, true)
 }

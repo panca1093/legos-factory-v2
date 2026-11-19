@@ -34,9 +34,10 @@ var ErrNoGitIdentity = fmt.Errorf("%w: no git identity for this repository: set 
 type HookError struct {
 	Op     string // commit | merge
 	Output string
+	Hook   string // the hook that rejected it when only one could have ("commit-msg"), else ""
 }
 
-func (e *HookError) Error() string { return "git " + e.Op + " was rejected: " + e.Output }
+func (e *HookError) Error() string { return "git " + e.Op + " was rejected by a repository hook: " + e.Output }
 
 // SigningError is a commit or merge that failed because git could not sign it (the repository sets
 // commit.gpgsign). The Builder cannot fix it: the user must make the signing key available.

@@ -151,15 +151,8 @@ test("full work order journey: project → plan → graph → build → quality 
   await page.getByRole("tab", { name: "Review", exact: true }).click();
   await expect(page.getByText("blocker", { exact: true })).toBeVisible();
   await expect(page.getByText("resolved", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Changes & PR", exact: true }).click();
-  await page.getByRole("button", { name: "Approve", exact: true }).click();
-  await page.fill("#decision-notes", "Evidence reviewed at revision 1");
-  await page
-    .getByRole("button", { name: "Record approval", exact: true })
-    .click();
-  await expect(
-    page.getByText("Approved · no pull request").first(),
-  ).toBeVisible({
+  // a clean order ships on its own; the e2e project folder has no remote, so the PR cannot open and says so
+  await expect(page.getByText("PR failed to open").first()).toBeVisible({
     timeout: 30_000,
   });
 });

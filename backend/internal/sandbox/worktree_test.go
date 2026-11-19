@@ -153,7 +153,7 @@ func TestCleanupRemovesOnlyThisWorkOrdersWorktreesAndBranchesAndIsIdempotent(t *
 		t.Fatalf("task worktree: %v %v", ok, err)
 	}
 	for i := 0; i < 2; i++ {
-		if err := l.Cleanup(ctx, "p1", "wo_1", r.folder); err != nil {
+		if _, err := l.Cleanup(ctx, "p1", "wo_1", r.folder, true); err != nil {
 			t.Fatalf("cleanup #%d: %v", i+1, err)
 		}
 	}
@@ -166,10 +166,10 @@ func TestCleanupRemovesOnlyThisWorkOrdersWorktreesAndBranchesAndIsIdempotent(t *
 	if strings.Contains(branches, "legos/wo_1") || !strings.Contains(branches, "legos/wo_2") || !strings.Contains(branches, "wip") {
 		t.Fatalf("branches after cleanup:\n%s", branches)
 	}
-	if err := l.Cleanup(ctx, "p1", "wo_never", r.folder); err != nil {
+	if _, err := l.Cleanup(ctx, "p1", "wo_never", r.folder, false); err != nil {
 		t.Fatalf("cleanup of an unknown order: %v", err)
 	}
-	if err := l.Cleanup(ctx, "p1", "wo_2", filepath.Join(t.TempDir(), "missing")); err != nil {
+	if _, err := l.Cleanup(ctx, "p1", "wo_2", filepath.Join(t.TempDir(), "missing"), false); err != nil {
 		t.Fatalf("cleanup with the repo folder gone: %v", err)
 	}
 }
@@ -325,5 +325,159 @@ func TestMergeTaskReportsHookRejection(t *testing.T) {
 	}
 	if st := gitIn(t, dir, "status", "--porcelain"); st != "" {
 		t.Fatalf("a rejected merge must leave the worktree clean:\n%s", st)
+	}
+}
+
+func TestCleanupKeepsUnpublishedWorkUnlessThePRIsDoneOrOriginHasIt(t *testing.T) {
+	r := newRig(t)
+	l := Local{DataDir: t.TempDir()}
+	ctx := context.Background()
+	branches := func() string { return gitIn(t, r.folder, "branch", "--format=%(refname:short)") }
+
+	// no commits beyond the base: nothing to lose
+	if _, _, err := l.Prepare(ctx, "p1", "wo_empty", r.folder, ""); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := l.Cleanup(ctx, "p1", "wo_empty", r.folder, false); err != nil || len(kept) != 0 || strings.Contains(branches(), "legos/wo_empty") {
+		t.Fatalf("an untouched branch goes: kept=%v err=%v\n%s", kept, err, branches())
+	}
+
+	// local commits, nothing published: kept
+	dir, _, err := l.Prepare(ctx, "p1", "wo_work", r.folder, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskDir := dir + ".tasks/t1"
+	if _, err := l.TaskWorktree(ctx, dir, taskDir, "legos/wo_work.tasks/t1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(taskDir, "t.txt"), []byte("t\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Commit(ctx, taskDir, "chore(legos): task"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.MergeTask(ctx, dir, "legos/wo_work.tasks/t1", "chore(legos): merge t1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.TaskWorktree(ctx, dir, dir+".tasks/t2", "legos/wo_work.tasks/t2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir+".tasks/t2", "u.txt"), []byte("u\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Commit(ctx, dir+".tasks/t2", "chore(legos): task 2"); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := l.Cleanup(ctx, "p1", "wo_work", r.folder, false)
+	if err != nil || len(kept) != 2 {
+		t.Fatalf("the order branch and its unmerged task branch stay: kept=%v err=%v", kept, err)
+	}
+	got := branches()
+	if !strings.Contains(got, "legos/wo_work\n") && !strings.HasSuffix(got, "legos/wo_work") || strings.Contains(got, "wo_work.tasks/t1") || !strings.Contains(got, "wo_work.tasks/t2") {
+		t.Fatalf("merged task branch goes, unmerged one stays:\n%s", got)
+	}
+
+	// once origin has the tip, the branch can go
+	dir, _, err = l.Prepare(ctx, "p1", "wo_work", r.folder, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.PushBranch(ctx, dir, "legos/wo_work", nil); err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := l.Cleanup(ctx, "p1", "wo_work", r.folder, false); err != nil || len(kept) != 1 || kept[0] != "legos/wo_work.tasks/t2" {
+		t.Fatalf("published: only the unmerged task branch stays: kept=%v err=%v", kept, err)
+	}
+	if strings.Contains(branches(), "legos/wo_work\n") {
+		t.Fatalf("the published branch should be gone:\n%s", branches())
+	}
+}
+
+func TestPrepareAndCleanupLeaveTheUsersOwnWorktreesAlone(t *testing.T) {
+	r := newRig(t)
+	l := Local{DataDir: t.TempDir()}
+	ctx := context.Background()
+	own := filepath.Join(t.TempDir(), "mine")
+	gitIn(t, r.folder, "worktree", "add", "-q", "-b", "mine", own)
+	if err := os.RemoveAll(own); err != nil { // temporarily missing, e.g. an unmounted disk
+		t.Fatal(err)
+	}
+	if _, _, err := l.Prepare(ctx, "p1", "wo_1", r.folder, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.Cleanup(ctx, "p1", "wo_1", r.folder, true); err != nil {
+		t.Fatal(err)
+	}
+	if out := gitIn(t, r.folder, "worktree", "list", "--porcelain"); !strings.Contains(out, "mine") {
+		t.Fatalf("the user's worktree registration was pruned:\n%s", out)
+	}
+}
+
+func TestDefaultBranchNeverFallsBackToTheCheckedOutBranch(t *testing.T) {
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "trunk")
+	gitIn(t, repo, "config", "user.email", "t@t")
+	gitIn(t, repo, "config", "user.name", "t")
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "base")
+	l := Local{DataDir: t.TempDir()}
+	if _, _, err := l.Prepare(context.Background(), "p1", "wo_1", repo, ""); err == nil || !strings.Contains(err.Error(), "base branch") {
+		t.Fatalf("want an error asking for a base branch, got %v", err)
+	}
+	if _, base, err := l.Prepare(context.Background(), "p1", "wo_2", repo, "trunk"); err != nil || base != "trunk" {
+		t.Fatalf("an explicit base works: %q %v", base, err)
+	}
+}
+
+func TestRejectionOnlyBlamesHooksThatExist(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	hooks := filepath.Join(r.folder, ".git", "hooks")
+	plain := "error: Your local changes to the following files would be overwritten by merge:\n\ta.txt"
+
+	if err := rejection(ctx, r.folder, "commit", "boom"); !isPlain(err) {
+		t.Fatalf("no hook installed: a plain error, got %T %v", err, err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "commit-msg"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var he *model.HookError
+	if err := rejection(ctx, r.folder, "commit", "subject must be conventional"); !errors.As(err, &he) || he.Hook != "commit-msg" {
+		t.Fatalf("an installed commit-msg hook: %T %v", err, err)
+	}
+	if err := rejection(ctx, r.folder, "merge", plain); !isPlain(err) {
+		t.Fatalf("git's own failure is not a hook's even when hooks exist: %T %v", err, err)
+	}
+	if err := rejection(ctx, r.folder, "commit", "fatal: Unable to create '.git/index.lock': File exists."); !isPlain(err) {
+		t.Fatalf("index.lock is plain: %T %v", err, err)
+	}
+	if err := os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejection(ctx, r.folder, "commit", "lint failed"); !errors.As(err, &he) || he.Hook != "" {
+		t.Fatalf("two hooks could have rejected it, so none is named: %T %v", err, err)
+	}
+}
+
+func isPlain(err error) bool {
+	var he *model.HookError
+	var se *model.SigningError
+	return err != nil && !errors.As(err, &he) && !errors.As(err, &se)
+}
+
+func TestAuthHeaderIsScopedToTheRemote(t *testing.T) {
+	r := newRig(t)
+	ctx := context.Background()
+	gitIn(t, r.folder, "remote", "set-url", "origin", "https://user:pw@git.example.com/acme/app.git")
+	if got := authScope(ctx, r.folder, []string{"push", "--quiet", "origin", "HEAD:refs/heads/x"}); got != "https://git.example.com/acme/app.git" {
+		t.Fatalf("scope = %q", got)
+	}
+	gitIn(t, r.folder, "remote", "set-url", "origin", "git@git.example.com:acme/app.git")
+	if got := authScope(ctx, r.folder, []string{"fetch", "origin"}); got != "" {
+		t.Fatalf("an ssh remote gets no header, got %q", got)
+	}
+	if got := authScope(ctx, "", []string{"clone", "--quiet", "https://h.example/x.git", "/tmp/y"}); got != "https://h.example/x.git" {
+		t.Fatalf("clone scope = %q", got)
 	}
 }

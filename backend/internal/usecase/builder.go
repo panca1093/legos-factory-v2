@@ -392,27 +392,29 @@ func (f *Factory) requireChanges(ctx context.Context, wo *model.WorkOrder, job m
 // against the latest workspace HEAD; it returns the runs that resolution used.
 func (f *Factory) integrateTask(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, branch, provider, modelID string) ([]heldRun, error) {
 	woDir := f.workspaceDir(wo)
-	msg := fmt.Sprintf("legos-factory: %s task %s", wo.ID, job.TaskID)
-	runs, err := f.withHookFeedback(ctx, wo, job, dir, provider, modelID, func() error {
-		_, err := f.Sandbox.Commit(ctx, dir, msg)
-		return err
-	})
-	if err != nil {
-		return runs, err
-	}
+	msg := fmt.Sprintf("chore(legos): %s task %s", wo.ID, job.TaskID)
+	mergeMsg := fmt.Sprintf("chore(legos): merge %s", job.TaskID)
 	var conflict bool
-	more, err := f.withHookFeedback(ctx, wo, job, dir, provider, modelID, func() error {
+	runs, err := f.withHookFeedback(ctx, wo, job, dir, provider, modelID, func() error {
+		if _, err := f.Sandbox.Commit(ctx, dir, msg); err != nil {
+			return err
+		}
 		var err error
-		conflict, err = f.mergeTask(ctx, wo.ID, woDir, branch, msg)
+		conflict, err = f.mergeTask(ctx, wo.ID, woDir, branch, mergeMsg)
 		return err
 	})
-	runs = append(runs, more...)
 	if err != nil || !conflict {
 		return runs, f.afterMerge(ctx, wo, job, woDir, dir, branch, err)
 	}
-	files, err := f.Sandbox.SyncTask(ctx, woDir, dir)
+	var files []string
+	more, err := f.withHookFeedback(ctx, wo, job, dir, provider, modelID, func() error {
+		var err error
+		files, err = f.Sandbox.SyncTask(ctx, woDir, dir)
+		return err
+	})
+	runs = append(runs, more...)
 	if err != nil {
-		return nil, err
+		return runs, err
 	}
 	f.event(wo.ID, "builder", "task_conflict",
 		fmt.Sprintf("Task %s conflicts with merged work in %s; builder resolving", job.TaskID, strings.Join(files, ", ")), nil)
@@ -429,7 +431,7 @@ func (f *Factory) integrateTask(ctx context.Context, wo *model.WorkOrder, job mo
 			return err
 		}
 		var err error
-		conflict, err = f.mergeTask(ctx, wo.ID, woDir, branch, msg)
+		conflict, err = f.mergeTask(ctx, wo.ID, woDir, branch, mergeMsg)
 		return err
 	})
 	runs = append(runs, more...)
@@ -453,6 +455,12 @@ func (f *Factory) withHookFeedback(ctx context.Context, wo *model.WorkOrder, job
 				f.event(wo.ID, "factory", "commit_signing_failed", se.Error(), map[string]any{"task_id": job.TaskID})
 			}
 			return runs, err
+		}
+		if he.Hook == "commit-msg" {
+			// the Builder cannot change the factory's commit message, so looping it would only burn revisions
+			f.event(wo.ID, "factory", "hook_rejected_message", fmt.Sprintf("The repository's commit-msg hook rejected the factory's commit message (%s): adjust the hook or the message rules", he.Output),
+				map[string]any{"task_id": job.TaskID, "output": lastBytes(he.Output, 2000)})
+			return runs, fmt.Errorf("%w: task %s: %v", model.ErrPermanent, job.TaskID, he)
 		}
 		if attempt > MaxRevisionCycles {
 			return runs, fmt.Errorf("%w: task %s: %v", model.ErrPermanent, job.TaskID, he)

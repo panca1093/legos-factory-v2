@@ -62,11 +62,11 @@ func TestProjectsRejectRemoteURLs(t *testing.T) {
 	_ = f
 }
 
-// hookRepo makes the project's own pre-commit hook reject commits until ok.txt exists.
-func hookRepo(t *testing.T, f *Factory, wo *model.WorkOrder) string {
+// hookRepo installs the project's own hook of that name: it rejects until ok.txt exists.
+func hookRepo(t *testing.T, f *Factory, wo *model.WorkOrder, name string) string {
 	t.Helper()
 	common := strings.TrimSpace(gitRun(t, f.workspaceDir(wo), "rev-parse", "--path-format=absolute", "--git-common-dir"))
-	hook := filepath.Join(common, "hooks", "pre-commit")
+	hook := filepath.Join(common, "hooks", name)
 	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestHookRejectionIsFedBackToTheBuilderLikeAFailedCheck(t *testing.T) {
 		return map[string]string{"T1.txt": "T1\n"}
 	}}
 	f, wo := worktreeFactory(t, h, "T1")
-	hookRepo(t, f, wo)
+	hookRepo(t, f, wo, "pre-commit")
 	if _, _, err := f.runBuilder(context.Background(), wo, model.Job{TaskID: "T1"}, "p", "m"); err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestHookRejectionGivesUpAfterTheRevisionCap(t *testing.T) {
 		return map[string]string{"T1.txt": "T1\n"}
 	}}
 	f, wo := worktreeFactory(t, h, "T1")
-	hookRepo(t, f, wo)
+	hookRepo(t, f, wo, "pre-commit")
 	_, _, err := f.runBuilder(context.Background(), wo, model.Job{TaskID: "T1"}, "p", "m")
 	var he *model.HookError
 	if !errors.Is(err, model.ErrPermanent) || !strings.Contains(err.Error(), "ok.txt is required") || errors.As(err, &he) && false {
@@ -194,5 +194,54 @@ func TestWorktreesAreRemovedWhenAnOrderIsCancelled(t *testing.T) {
 		if exists(wsOf(f, d)) {
 			t.Fatalf("%s survived the cancel", d)
 		}
+	}
+}
+
+func TestMergeHookRejectionIsFixedByTheBuilderAndRetried(t *testing.T) {
+	var fixes atomic.Int32
+	h := &scriptHarness{write: func(req model.AgentRequest) map[string]string {
+		if strings.Contains(req.Prompt, "git hook rejected") {
+			fixes.Add(1)
+			return map[string]string{"ok.txt": "ok\n"}
+		}
+		return map[string]string{"T1.txt": "T1\n"}
+	}}
+	f, wo := worktreeFactory(t, h, "T1")
+	hookRepo(t, f, wo, "pre-merge-commit")
+	if _, _, err := f.runBuilder(context.Background(), wo, model.Job{TaskID: "T1"}, "p", "m"); err != nil {
+		t.Fatal(err)
+	}
+	if fixes.Load() != 1 {
+		t.Fatalf("the merge rejection reaches the builder once, got %d fixes", fixes.Load())
+	}
+	for _, name := range []string{"T1.txt", "ok.txt"} {
+		if _, err := os.Stat(filepath.Join(f.workspaceDir(wo), name)); err != nil {
+			t.Fatalf("%s must be merged after the fix: %v", name, err)
+		}
+	}
+}
+
+func TestCommitMsgHookRejectionEscalatesInsteadOfLoopingTheBuilder(t *testing.T) {
+	var runs atomic.Int32
+	h := &scriptHarness{write: func(req model.AgentRequest) map[string]string {
+		runs.Add(1)
+		return map[string]string{"T1.txt": "T1\n"}
+	}}
+	f, wo := worktreeFactory(t, h, "T1")
+	hookRepo(t, f, wo, "commit-msg")
+	_, _, err := f.runBuilder(context.Background(), wo, model.Job{TaskID: "T1"}, "p", "m")
+	if !errors.Is(err, model.ErrPermanent) || !strings.Contains(err.Error(), "ok.txt is required") {
+		t.Fatalf("want a permanent error carrying the hook output, got %v", err)
+	}
+	if runs.Load() != 1 {
+		t.Fatalf("the builder cannot change the commit message, so it must not run again: %d runs", runs.Load())
+	}
+	evs, _ := f.WO.(*store.WorkOrderRepo).Events(context.Background(), wo.ID, 0, 100)
+	found := false
+	for _, e := range evs {
+		found = found || e.Kind == "hook_rejected_message"
+	}
+	if !found {
+		t.Fatal("the user must be told why")
 	}
 }

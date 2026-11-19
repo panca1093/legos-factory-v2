@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -214,7 +215,7 @@ func (Local) Commit(ctx context.Context, dir, message string) (string, error) {
 			return "", err
 		}
 		if out, err := gitSigned(ctx, dir, "commit", "--quiet", "-m", message); err != nil {
-			return "", rejection("commit", out)
+			return "", rejection(ctx, dir, "commit", out)
 		}
 	}
 	sha, err := git(ctx, dir, "rev-parse", "HEAD")
@@ -228,16 +229,51 @@ func (Local) Commit(ctx context.Context, dir, message string) (string, error) {
 // GIT_CONFIG_* environment variables, so it never lands in argv, the remote
 // URL or .git/config. Local remotes ignore it.
 func gitAuthed(ctx context.Context, dir string, auth *model.GitAuth, args ...string) (string, error) {
+	timeout := 2 * time.Minute
+	if len(args) > 0 && args[0] == "clone" {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "SSH_ASKPASS_REQUIRE=never")
+	if os.Getenv("GIT_SSH_COMMAND") == "" {
+		if out, err := git(ctx, dir, "config", "--get", "core.sshCommand"); err != nil || strings.TrimSpace(out) == "" {
+			cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+		}
+	}
 	if auth != nil && auth.Password != "" {
-		token := base64.StdEncoding.EncodeToString([]byte(auth.Username + ":" + auth.Password))
-		cmd.Env = append(cmd.Env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader",
-			"GIT_CONFIG_VALUE_0=Authorization: Basic "+token)
+		if u := authScope(ctx, dir, args); u != "" {
+			token := base64.StdEncoding.EncodeToString([]byte(auth.Username + ":" + auth.Password))
+			cmd.Env = append(cmd.Env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http."+u+".extraHeader",
+				"GIT_CONFIG_VALUE_0=Authorization: Basic "+token)
+		}
 	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// authScope is the URL the credential may be sent to: the clone URL, or origin's. An unscoped
+// http.extraHeader would also go to any other host a hook or submodule contacts. "" means no header.
+func authScope(ctx context.Context, dir string, args []string) string {
+	target := ""
+	for _, a := range args {
+		if strings.HasPrefix(a, "https://") || strings.HasPrefix(a, "http://") {
+			target = a
+		}
+	}
+	if target == "" && slices.Contains(args, "origin") {
+		if out, err := git(ctx, dir, "remote", "get-url", "origin"); err == nil {
+			target = strings.TrimSpace(out)
+		}
+	}
+	u, err := url.Parse(target)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return ""
+	}
+	u.User = nil
+	return u.String()
 }
 
 func isRemote(repoURL string) bool {
@@ -459,7 +495,7 @@ func (Local) TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (b
 	if err := os.RemoveAll(taskDir); err != nil {
 		return false, err
 	}
-	_, _ = git(ctx, woDir, "worktree", "prune")
+	forgetWorktree(woDir, taskDir)
 	if err := os.MkdirAll(filepath.Dir(taskDir), 0o755); err != nil {
 		return false, err
 	}
@@ -488,7 +524,7 @@ func (Local) MergeTask(ctx context.Context, woDir, branch, message string) (conf
 		return true, nil
 	}
 	_, _ = git(ctx, woDir, "merge", "--abort")
-	return false, rejection("merge", out)
+	return false, rejection(ctx, woDir, "merge", out)
 }
 
 // SyncTask merges the work order workspace HEAD into the task worktree and
@@ -501,7 +537,7 @@ func (Local) SyncTask(ctx context.Context, woDir, taskDir string) ([]string, err
 	if err := requireIdentity(ctx, taskDir); err != nil {
 		return nil, err
 	}
-	out, err := gitSigned(ctx, taskDir, "merge", "--no-edit", strings.TrimSpace(head))
+	out, err := gitSigned(ctx, taskDir, "merge", "--no-edit", "-m", "chore(legos): sync with the work order", strings.TrimSpace(head))
 	unmerged, uerr := git(ctx, taskDir, "diff", "--name-only", "--diff-filter=U")
 	if uerr != nil {
 		return nil, fmt.Errorf("git diff: %v: %s", uerr, unmerged)
@@ -514,7 +550,7 @@ func (Local) SyncTask(ctx context.Context, woDir, taskDir string) ([]string, err
 	}
 	if err != nil && len(files) == 0 {
 		_, _ = git(ctx, taskDir, "merge", "--abort")
-		return nil, rejection("merge", out)
+		return nil, rejection(ctx, taskDir, "merge", out)
 	}
 	return files, nil
 }

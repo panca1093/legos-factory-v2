@@ -78,6 +78,9 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		var he *model.HookError
 		var se *model.SigningError
 		switch {
+		case errors.As(err, &he) && he.Hook == "commit-msg":
+			f.event(wo.ID, "factory", "hook_rejected_message", fmt.Sprintf("The repository's commit-msg hook rejected the factory's commit message (%s): adjust the hook or the message rules", he.Output), nil)
+			return fmt.Errorf("%w: %v", model.ErrPermanent, he)
 		case errors.As(err, &he):
 			return f.sendBackToBuilder(ctx, wo, "git "+he.Op+" hook", []model.CheckResult{{Name: "git " + he.Op + " hook", Command: "git " + he.Op, Outcome: model.Fail, Output: he.Output}})
 		case errors.As(err, &se):
@@ -440,7 +443,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 // commitVerified records the verified workspace as a local commit (never
 // pushed) and stamps the work order and this revision's checks with its SHA.
 func (f *Factory) commitVerified(ctx context.Context, wo *model.WorkOrder) error {
-	sha, err := f.Sandbox.Commit(ctx, f.workspaceDir(wo), fmt.Sprintf("legos-factory: %s revision %d (%s)", wo.ID, wo.Revision, wo.Title))
+	sha, err := f.Sandbox.Commit(ctx, f.workspaceDir(wo), fmt.Sprintf("chore(legos): %s verified revision %d", wo.ID, wo.Revision))
 	if err != nil {
 		return err
 	}

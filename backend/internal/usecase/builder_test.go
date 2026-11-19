@@ -19,7 +19,9 @@ type dirSandbox struct{}
 func (dirSandbox) Prepare(context.Context, string, string, string, string) (string, string, error) {
 	return "", "", nil
 }
-func (dirSandbox) Cleanup(context.Context, string, string, string) error { return nil }
+func (dirSandbox) Cleanup(context.Context, string, string, string, bool) ([]string, error) {
+	return nil, nil
+}
 func (dirSandbox) Dirty(context.Context, string) bool                    { return false }
 func (dirSandbox) RunCheck(context.Context, string, model.Check, time.Duration, []string) model.CheckResult {
 	return model.CheckResult{}

@@ -150,8 +150,8 @@ for (const viewport of viewports)
     await capture("08-quality");
     await app.locator("[data-check]").first().click();
     await capture("09-evidence");
-    await app.goto("/factory/LF-125?tab=changes");
-    await capture("10-changes-pr");
+    await app.goto("/factory/LF-125?tab=activity");
+    await capture("10-ship");
     await app.goto("/factory?new=1");
     await expect(app.getByRole("dialog")).toBeVisible();
     await capture("11-new-order-intent");
@@ -192,9 +192,9 @@ test("browser permissions, unavailable settings, dialog keyboard handling and er
   await expect(
     page.getByRole("button", { name: "New work order", exact: true }),
   ).toHaveCount(0);
-  await page.goto("/factory/LF-125?tab=changes");
+  await page.goto("/factory/LF-125");
   await expect(
-    page.getByRole("button", { name: "Approve", exact: true }),
+    page.getByRole("button", { name: "Approve and open PR", exact: true }),
   ).toBeDisabled();
   await page.goto("/settings");
   await expect(page.locator("#agent-architect")).toBeDisabled();

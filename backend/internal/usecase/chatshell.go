@@ -75,7 +75,7 @@ func splitPlainCommand(cmd string) ([]string, bool) {
 			quote, inWord = r, true
 		case r == ' ' || r == '\t':
 			flush()
-		case strings.ContainsRune(";&|<>$`(){}\\\n\r!#", r):
+		case strings.ContainsRune(";&|<>$`(){}\\\n\r!#*?[", r):
 			return nil, false
 		default:
 			cur.WriteRune(r)
@@ -89,15 +89,93 @@ func splitPlainCommand(cmd string) ([]string, bool) {
 	return argv, len(argv) > 0
 }
 
+// flagSet is the flags a read-only command may carry; anything not listed asks the user. Long flags match
+// exactly (no abbreviations: git accepts `--open-files` for `--open-files-in-pager`). A cluster of short
+// letters is allowed only when every letter is listed. words are single-dash words (find, go).
+type flagSet struct {
+	short string
+	long  []string
+	words []string
+}
+
+func (f flagSet) ok(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return true
+		}
+		if !strings.HasPrefix(a, "-") || a == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(a, "=")
+		switch {
+		case strings.HasPrefix(a, "--"):
+			if !slices.Contains(f.long, name) && !slices.Contains(f.words, strings.TrimPrefix(name, "-")) {
+				return false
+			}
+		case f.words != nil:
+			if !slices.Contains(f.words, strings.TrimPrefix(name, "-")) {
+				return false
+			}
+		default:
+			for _, r := range a[1:] {
+				if (r < '0' || r > '9') && !strings.ContainsRune(f.short, r) {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
 var (
-	gitReadOnly   = []string{"status", "log", "diff", "show", "rev-parse", "blame", "ls-files", "grep", "describe"}
+	gitFlags = map[string]flagSet{
+		"status": {short: "sbu", long: []string{"--short", "--branch", "--porcelain", "--untracked-files", "--ignored"}},
+		"log": {short: "npSG", long: []string{"--oneline", "--graph", "--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--decorate",
+			"--all", "--no-merges", "--merges", "--follow", "--reverse", "--patch", "--max-count", "--since", "--until", "--author", "--grep",
+			"--pretty", "--format", "--abbrev-commit", "--date", "--first-parent", "--no-color", "--no-ext-diff"}},
+		"diff": {short: "pUwb", long: []string{"--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--cached", "--staged", "--no-color",
+			"--patch", "--unified", "--ignore-all-space", "--ignore-space-change", "--no-ext-diff", "--minimal", "--summary"}},
+		"show": {short: "ps", long: []string{"--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--no-color", "--format", "--pretty",
+			"--oneline", "--patch", "--no-ext-diff", "--summary"}},
+		"rev-parse": {long: []string{"--abbrev-ref", "--short", "--show-toplevel", "--is-inside-work-tree", "--verify", "--symbolic-full-name"}},
+		"blame":     {short: "Lwsel", long: []string{"--porcelain", "--line-porcelain"}},
+		"ls-files":  {short: "cmodsz", long: []string{"--cached", "--others", "--modified", "--deleted", "--stage", "--exclude-standard", "--full-name"}},
+		"grep": {short: "niwvlLceEFABCHhIqapz", long: []string{"--line-number", "--ignore-case", "--word-regexp", "--invert-match", "--files-with-matches",
+			"--files-without-match", "--count", "--extended-regexp", "--fixed-strings", "--context", "--after-context", "--before-context",
+			"--heading", "--break", "--full-name", "--no-color", "--untracked"}},
+		"describe": {long: []string{"--tags", "--always", "--abbrev", "--long", "--dirty"}},
+	}
 	gitBranchOpts = []string{"-a", "-r", "-v", "-vv", "--list", "--show-current", "--all", "--remotes"}
-	fileReaders   = []string{"ls", "cat", "head", "tail", "wc", "grep", "rg", "pwd"}
-	goReadOnly    = []string{"test", "vet", "list", "version", "env", "doc"}
-	findWrites    = []string{"-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"}
-	// flags that write a file, run another program or change configuration
-	writingFlags = []string{"output", "o", "exec", "toolexec", "vettool", "coverprofile", "cpuprofile", "memprofile", "blockprofile",
-		"mutexprofile", "trace", "outputdir", "overlay", "modfile", "pre", "pre-glob", "ext-diff", "open-files-in-pager", "w", "u", "O"}
+
+	cmdFlags = map[string]flagSet{
+		"ls":   {short: "lahARtrSdFps1i", long: []string{"--all", "--almost-all", "--human-readable", "--recursive"}},
+		"cat":  {short: "nbsAETv", long: []string{"--number", "--number-nonblank", "--squeeze-blank", "--show-all"}},
+		"head": {short: "ncqv", long: []string{"--lines", "--bytes", "--quiet", "--verbose"}},
+		"tail": {short: "ncqv", long: []string{"--lines", "--bytes", "--quiet", "--verbose"}},
+		"wc":   {short: "lwcmL", long: []string{"--lines", "--words", "--bytes", "--chars"}},
+		"pwd":  {short: "LP"},
+		"grep": {short: "niwvlLceEFGABCHhIqarRosxzm", long: []string{"--line-number", "--ignore-case", "--word-regexp", "--invert-match",
+			"--files-with-matches", "--files-without-match", "--count", "--regexp", "--extended-regexp", "--fixed-strings", "--context",
+			"--after-context", "--before-context", "--recursive", "--no-filename", "--with-filename", "--only-matching", "--quiet",
+			"--max-count", "--include", "--exclude", "--exclude-dir", "--color"}},
+		"rg": {short: "niwvlceFABCgtTsSoHIq", long: []string{"--line-number", "--ignore-case", "--word-regexp", "--invert-match", "--files-with-matches",
+			"--count", "--regexp", "--fixed-strings", "--context", "--after-context", "--before-context", "--glob", "--type", "--type-not",
+			"--files", "--hidden", "--no-ignore", "--max-count", "--only-matching", "--smart-case", "--case-sensitive", "--no-heading",
+			"--heading", "--color", "--json", "--max-depth"}},
+		"find": {words: []string{"name", "iname", "type", "maxdepth", "mindepth", "path", "ipath", "not", "and", "or", "newer", "size", "mtime",
+			"empty", "print", "print0", "prune", "regex", "iregex", "perm", "user", "group", "mmin", "atime", "ctime", "readable", "writable", "executable"}},
+		"npm":  {long: []string{"--depth", "--json", "--all", "--long"}},
+		"pnpm": {long: []string{"--depth", "--json", "--long"}},
+	}
+
+	goFlags = map[string]flagSet{
+		"test":    {words: []string{"run", "v", "count", "short", "race", "timeout", "json", "p", "parallel", "failfast", "list", "tags"}},
+		"vet":     {words: []string{"v", "tags", "json"}},
+		"list":    {words: []string{"m", "json", "f", "e", "deps", "tags", "test"}},
+		"version": {words: []string{"m", "v"}},
+		"env":     {words: []string{"json"}},
+		"doc":     {words: []string{"all", "src", "short", "u", "c", "cmd"}},
+	}
 )
 
 // ReadOnlyArgv reports whether one already-split command is on the read-only allowlist.
@@ -121,22 +199,19 @@ func ReadOnlyArgv(argv []string) bool {
 		case rest[0] == "remote":
 			return slices.Equal(rest[1:], []string{"-v"})
 		}
-		return slices.Contains(gitReadOnly, rest[0]) && !hasWritingFlag(rest[1:], true)
+		fs, ok := gitFlags[rest[0]]
+		return ok && fs.ok(rest[1:])
 	case "go":
-		return len(rest) > 0 && slices.Contains(goReadOnly, rest[0]) && !hasWritingFlag(rest[1:], true)
-	case "find":
-		for _, a := range rest {
-			if slices.Contains(findWrites, a) {
-				return false
-			}
+		if len(rest) == 0 {
+			return false
 		}
-		return true
+		fs, ok := goFlags[rest[0]]
+		return ok && fs.ok(rest[1:])
 	case "npm", "pnpm":
-		return len(rest) > 0 && rest[0] == "ls" && !hasWritingFlag(rest[1:], true)
-	case "npx":
-		return slices.Equal(rest, []string{"tsc", "--noEmit"})
+		return len(rest) > 0 && rest[0] == "ls" && cmdFlags[argv[0]].ok(rest[1:])
 	}
-	return slices.Contains(fileReaders, argv[0]) && !hasWritingFlag(rest, false)
+	fs, ok := cmdFlags[argv[0]]
+	return ok && fs.ok(rest)
 }
 
 func allIn(args, allowed []string) bool {
@@ -146,20 +221,6 @@ func allIn(args, allowed []string) bool {
 		}
 	}
 	return true
-}
-
-// hasWritingFlag looks at flag names; one-letter flags only count when short is set, as `grep -o` is harmless while `git -o` is not.
-func hasWritingFlag(args []string, short bool) bool {
-	for _, a := range args {
-		if !strings.HasPrefix(a, "-") {
-			continue
-		}
-		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
-		if slices.Contains(writingFlags, name) && (short || len(name) > 1) {
-			return true
-		}
-	}
-	return false
 }
 
 // safeArg refuses a word that points outside the project, into .git, or at a common secret file.
