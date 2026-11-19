@@ -255,9 +255,8 @@ describe("project rail", () => {
     const { w } = await mountRail("/projects/p1");
     expect(w.text()).toContain("Name p1");
     expect(w.text()).toContain("github.com/o/p1");
-    expect(w.find('[data-test="rail-factory"]').text()).toBe(
-      "Factory · 2 open",
-    );
+    expect(w.find('[data-test="rail-factory"]').text()).toBe("Factory");
+    expect(w.find(".pr-count").text()).toBe("2");
     const rows = w.findAll('[data-test="rail-wo"]');
     expect(rows[0].text()).toContain("Title b");
     expect(rows[0].text()).toContain("you");

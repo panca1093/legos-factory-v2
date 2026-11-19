@@ -528,3 +528,20 @@ async function logout() {
     </div></AppDialog
   >
 </template>
+<style scoped>
+.topnav :deep(.thumb) {
+  display: none;
+}
+.topnav :deep(a) {
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.topnav :deep(a:hover:not(.active)) {
+  background: var(--surface-2);
+}
+.topnav :deep(a.active) {
+  background: var(--brand);
+  color: var(--on-brand);
+}
+</style>

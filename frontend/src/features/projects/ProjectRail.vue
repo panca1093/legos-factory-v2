@@ -8,6 +8,7 @@ import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
 import IconButton from "../../components/ui/IconButton.vue";
 import UsageCard from "../../app/layouts/UsageCard.vue";
+import { projectColor } from "../../composables/presentation";
 import {
   capRail,
   railDot,
@@ -44,6 +45,19 @@ const repo = computed(
   () =>
     rail.value?.project?.repo ||
     (project.value ? repoLabel(project.value) : ""),
+);
+const initials = computed(
+  () =>
+    name.value
+      .split(/[\s\-_/]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase() || "?",
+);
+const tileColor = computed(() =>
+  projectColor(factory.projects.findIndex((p) => p.id === projectId.value)),
 );
 const rows = computed(() => sortRail(rail.value?.work_orders?.rows ?? []));
 const open = computed(() => rail.value?.work_orders?.open ?? rows.value.length);
@@ -124,15 +138,24 @@ const newOrder = () =>
       /></IconButton>
     </div>
     <div class="pr-id">
-      <div class="pr-name">
-        <strong>{{ missing ? "Project not found" : name }}</strong><i
-          v-if="needsYou"
-          class="pr-attn"
-          title="Waiting on you"
-          aria-label="Waiting on you"
-        ></i>
+      <span
+        v-if="!missing"
+        class="pr-tile"
+        :style="{ '--c': tileColor }"
+        aria-hidden="true"
+        >{{ initials }}</span
+      >
+      <div class="pr-id-text">
+        <div class="pr-name">
+          <strong>{{ missing ? "Project not found" : name }}</strong><i
+            v-if="needsYou"
+            class="pr-attn"
+            title="Waiting on you"
+            aria-label="Waiting on you"
+          ></i>
+        </div>
+        <small v-if="repo && !missing" class="pr-repo">{{ repo }}</small>
       </div>
-      <small v-if="repo && !missing" class="pr-repo">{{ repo }}</small>
     </div>
     <nav class="pr-nav grow" aria-label="Project">
       <p v-if="missing" class="empty-note">
@@ -154,8 +177,10 @@ const newOrder = () =>
               :to="`/projects/${projectId}`"
               class="pr-title"
               data-test="rail-factory"
-              >Factory · {{ open }} open</RouterLink
-            >
+              >Factory</RouterLink
+            ><span class="pr-count" aria-label="open work orders">{{
+              open
+            }}</span>
             <IconButton
               v-if="session.canWrite"
               label="Add a work order"
@@ -240,3 +265,189 @@ const newOrder = () =>
     <UsageCard />
   </div>
 </template>
+<style scoped>
+.pr {
+  gap: var(--space-3);
+}
+.pr-back {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px 4px 4px;
+  margin-left: -4px;
+  border-radius: var(--radius-full);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.pr-back:hover {
+  background: var(--surface-2);
+}
+.pr-id {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--canvas);
+  box-shadow: var(--shadow-card);
+}
+.pr-id-text {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.pr-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--c) 22%, var(--surface));
+  color: var(--ink);
+  border: 1px solid color-mix(in srgb, var(--c) 45%, transparent);
+  font: 700 13px var(--font-display);
+  letter-spacing: 0.02em;
+}
+.pr-name {
+  font: 600 16px/1.2 var(--font-display);
+  letter-spacing: -0.01em;
+  min-width: 0;
+}
+.pr-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-attn {
+  flex: none;
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+.pr-repo {
+  font: 11px var(--font-mono);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.pr-nav {
+  gap: var(--space-4);
+  padding: 2px 0;
+}
+.pr-sec-head {
+  gap: var(--space-1);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+}
+.pr-chev {
+  border-radius: var(--radius-xs);
+  transition: background var(--dur-fast);
+}
+.pr-chev:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.pr-title {
+  padding: 6px 0;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+}
+.pr-count {
+  flex: none;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--tint);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 650;
+  text-align: center;
+}
+.pr-sec-head :deep(.lg-icon-btn) {
+  width: 26px;
+  height: 26px;
+  margin-left: var(--space-1);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--accent);
+  transition:
+    background var(--dur-fast),
+    border-color var(--dur-fast);
+}
+.pr-sec-head :deep(.lg-icon-btn:hover) {
+  background: var(--tint);
+  border-color: var(--line-strong);
+}
+.pr-rows {
+  gap: 2px;
+  margin: var(--space-2) 0 0;
+}
+.pr-row {
+  position: relative;
+  gap: 10px;
+  padding: 7px 10px 7px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  transition:
+    background var(--dur-fast),
+    color var(--dur-fast);
+}
+.pr-row:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.pr-row.active {
+  background: var(--tint);
+  color: var(--ink);
+  font-weight: 600;
+}
+.pr-row.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+.pr-dot {
+  background: var(--success);
+  box-shadow: 0 0 0 3px var(--success-soft);
+}
+.pr-dot.waiting {
+  background: var(--warning);
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+.pr-dot.failed {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+.pr-dot.queued {
+  background: var(--line-strong);
+  box-shadow: 0 0 0 3px var(--surface-2);
+}
+.pr-you {
+  padding: 1px 8px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pr-muted {
+  padding: 6px 12px;
+  font-style: normal;
+  opacity: 0.8;
+}
+.pr .rt-more {
+  padding: 4px 12px;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+}
+.pr .rt-more:hover {
+  text-decoration: underline;
+}
+.pr .empty-note {
+  padding: 6px 12px;
+}
+</style>
