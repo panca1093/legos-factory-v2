@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"mime"
 	"net/http"
+	"path"
 	"strings"
 
 	"github.com/labstack/echo/v4"
@@ -199,6 +200,9 @@ func (s *Server) handleEditorWrite(c echo.Context) error {
 	st, err := s.Editor.Write(c.Request().Context(), currentUser(c), c.Param("fid"), req.Path, req.Content, req.BaseHash, req.Create)
 	if err != nil {
 		return editorError(c, err)
+	}
+	if s.EditorLive != nil {
+		s.EditorLive.NoteWrite(currentUser(c).ID, c.Param("fid"), path.Clean(req.Path), st.Hash)
 	}
 	return c.JSON(http.StatusOK, st)
 }
