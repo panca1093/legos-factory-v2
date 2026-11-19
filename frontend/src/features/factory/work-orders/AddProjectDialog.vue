@@ -15,7 +15,6 @@ import "../factory.css";
 import "./add-project.css";
 import AppDialog from "../../../components/ui/AppDialog.vue";
 import Popover from "../../../components/ui/Popover.vue";
-import ProjectBindingRow from "../../settings/ProjectBindingRow.vue";
 import { api, ApiError } from "../../../services/api/client";
 import { useFactory } from "../../../stores/factory";
 import { useSession } from "../../../stores/session";
@@ -45,13 +44,10 @@ const step = ref<Step>("probing"),
   pasted = ref(""),
   copied = ref(false),
   helpHost = ref(false),
-  helpPublish = ref(false),
-  createdID = ref("");
+  helpPublish = ref(false);
 const form = reactive({
   name: "",
   repo_url: "",
-  git_connection_id: "",
-  remote_repo: "",
 });
 const clone = reactive({ url: "", parent: "" });
 const fresh = reactive({ name: "", parent: "" });
@@ -61,12 +57,6 @@ let controller: AbortController | null = null;
 let intent: Intent = "browse";
 let workBack: Step = "home";
 let picking = false;
-const gitConnections = computed(() =>
-  factory.connections.filter(
-    (c) =>
-      c.scope === "shared" && c.status === "active" && c.provider !== "jira",
-  ),
-);
 const norm = (p: string) => p.replace(/\/+$/, "");
 const used = (path: string) =>
   factory.projects.some((p) => norm(p.repo_url) === norm(path));
@@ -87,16 +77,6 @@ const needsGh = computed(() =>
 );
 const fixCommand = computed(() =>
   gh.value?.installed ? "gh auth login" : "brew install gh && gh auth login",
-);
-const viaConnection = computed(
-  () =>
-    (kind.value === "repo" || step.value === "manual") &&
-    !!form.git_connection_id,
-);
-const connectionName = computed(
-  () =>
-    gitConnections.value.find((c) => c.id === form.git_connection_id)?.name ??
-    "connection",
 );
 const addable = computed(() =>
   kind.value === "many"
@@ -129,18 +109,14 @@ function reset() {
   info.value = null;
   selected.value = [];
   pasted.value = "";
-  createdID.value = "";
   Object.assign(form, {
     name: "",
     repo_url: "",
-    git_connection_id: "",
-    remote_repo: "",
   });
   Object.assign(clone, { url: "", parent: "" });
   Object.assign(fresh, { name: "", parent: "" });
 }
 async function probe() {
-  factory.refreshConnections().catch(() => {});
   try {
     gh.value = await api.get<LocalGh>("/api/v1/local/gh");
     step.value = "home";
@@ -318,21 +294,10 @@ async function copyFix() {
 }
 async function submit() {
   if (busy.value || !session.canWrite) return;
-  if (createdID.value) {
-    emit("created", createdID.value);
-    return;
-  }
   error.value = "";
   const manual = step.value === "manual";
   if (manual && (!form.name.trim() || !form.repo_url.trim())) {
     error.value = "Project name and repository are required.";
-    return;
-  }
-  if (
-    viaConnection.value &&
-    !/^[\w.-]+(\/[\w.-]+)+$/.test(form.remote_repo.trim())
-  ) {
-    error.value = "Remote repository must look like owner/repo.";
     return;
   }
   busy.value = true;
@@ -360,18 +325,6 @@ async function submit() {
       name: form.name.trim(),
       repo_url: manual ? form.repo_url.trim() : info.value!.path,
     });
-    if (form.git_connection_id) {
-      try {
-        await factory.bindProject(p.id, {
-          git_connection_id: form.git_connection_id,
-          remote_repo: form.remote_repo.trim(),
-        });
-      } catch (e) {
-        createdID.value = p.id;
-        error.value = `Project created without a repository connection: ${message(e)}`;
-        return;
-      }
-    }
     emit("created", p.id);
   } catch (e) {
     error.value = message(e);
@@ -384,7 +337,6 @@ const primaryText = computed(() => {
   if (step.value === "clone") return "Clone";
   if (step.value === "create") return "Create";
   if (busy.value) return "Adding…";
-  if (createdID.value) return "Close";
   if (step.value === "manual") return "Create project";
   if (kind.value === "many")
     return `Add ${selected.value.length} project${selected.value.length === 1 ? "" : "s"}`;
@@ -401,7 +353,7 @@ const primaryDisabled = computed(
     (step.value === "create" && !fresh.name.trim()) ||
     (["confirm", "manual"].includes(step.value) &&
       (!session.canWrite ||
-        (!createdID.value && step.value === "confirm" && !addable.value))),
+        (step.value === "confirm" && !addable.value))),
 );
 function primary() {
   if (step.value === "paste") return void inspect(pasted.value.trim());
@@ -608,13 +560,6 @@ function close() {
             placeholder="/path/to/repo or https://…"
           />
         </div>
-        <ProjectBindingRow
-          id-prefix="prj"
-          label="the new project"
-          :repo-url="form.repo_url"
-          v-model:connection-id="form.git_connection_id"
-          v-model:remote-repo="form.remote_repo"
-        />
       </form>
 
       <form
@@ -693,17 +638,12 @@ function close() {
         <div
           v-if="kind === 'repo' || (kind === 'many' && needsGh)"
           class="ap-publish"
-          :class="{ warn: needsGh && !ghReady && !viaConnection }"
+          :class="{ warn: needsGh && !ghReady }"
         >
-          <Check v-if="viaConnection || !needsGh || ghReady" class="icon" />
+          <Check v-if="!needsGh || ghReady" class="icon" />
           <TriangleAlert v-else class="icon" />
           <div>
-            <template v-if="viaConnection"
-              >Publishing
-              <b>{{ form.remote_repo.trim() || "the remote" }}</b> via
-              connection {{ connectionName }}</template
-            >
-            <template v-else-if="!needsGh && kind === 'repo' && info.remote_url"
+            <template v-if="!needsGh && kind === 'repo' && info.remote_url"
               >Remote <span class="mono">{{ info.remote_url }}</span> is not on
               GitHub, so pull requests are off</template
             >
@@ -754,21 +694,6 @@ function close() {
             </div>
           </Popover>
         </div>
-
-        <details
-          v-if="kind === 'repo' && gitConnections.length && !used(info.path)"
-        >
-          <summary>Publish through a connection</summary>
-          <div class="ap">
-            <ProjectBindingRow
-              id-prefix="prj"
-              :label="form.name || 'the new project'"
-              :repo-url="info.path"
-              v-model:connection-id="form.git_connection_id"
-              v-model:remote-repo="form.remote_repo"
-            />
-          </div>
-        </details>
       </form>
 
       <p v-if="error" class="form-error" role="alert">{{ error }}</p>

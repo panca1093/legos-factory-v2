@@ -18,7 +18,6 @@ const (
 	ProviderBitbucket = "bitbucket"
 	ProviderJira      = "jira"
 
-	ScopeShared   = "shared"
 	ScopePersonal = "personal"
 
 	ConnectionActive   = "active"
@@ -149,8 +148,8 @@ func (r *CreateConnectionRequest) Validate() error {
 	default:
 		return fmt.Errorf("provider must be github, gitlab, bitbucket or jira")
 	}
-	if r.Scope != ScopeShared && r.Scope != ScopePersonal {
-		return fmt.Errorf("scope must be shared or personal")
+	if r.Scope != "" && r.Scope != ScopePersonal {
+		return fmt.Errorf("connections are personal; scope must be omitted or personal")
 	}
 	if r.Name == "" || len(r.Name) > 100 {
 		return fmt.Errorf("name is required (max 100 characters)")
@@ -195,11 +194,6 @@ type UpdateConnectionRequest struct {
 	Name   *string `json:"name"`
 	Status *string `json:"status"`
 	Token  *string `json:"token"`
-}
-
-type ProjectBindingRequest struct {
-	GitConnectionID string `json:"git_connection_id"`
-	RemoteRepo      string `json:"remote_repo"`
 }
 
 type IssueLookupRequest struct {

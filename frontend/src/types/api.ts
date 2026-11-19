@@ -467,7 +467,7 @@ export interface Connection {
   id: string;
   provider: Provider;
   name: string;
-  scope: "shared" | "personal";
+  scope: "personal";
   owner_id: string;
   base_url: string;
   username?: string;

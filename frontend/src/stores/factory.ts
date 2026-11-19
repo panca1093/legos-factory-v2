@@ -157,7 +157,6 @@ export const useFactory = defineStore("factory", {
     async createConnection(input: {
       provider: string;
       name: string;
-      scope: string;
       base_url: string;
       username: string;
       token: string;
@@ -179,17 +178,6 @@ export const useFactory = defineStore("factory", {
     async deleteConnection(id: string) {
       await api.del(`/api/v1/connections/${id}`);
       await this.refreshConnections();
-    },
-    async bindProject(
-      id: string,
-      binding: { git_connection_id: string; remote_repo: string },
-    ) {
-      const res = await api.put<Project>(
-        `/api/v1/projects/${id}/binding`,
-        binding,
-      );
-      this.projects = this.projects.map((p) => (p.id === id ? res : p));
-      return res;
     },
     lookupJiraIssue(connection_id: string, key: string) {
       return api.post<IssueDraft>("/api/v1/integrations/jira/lookup", {

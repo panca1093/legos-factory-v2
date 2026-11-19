@@ -15,9 +15,7 @@ import (
 )
 
 // Integrations manages provider connections and their use. Rules:
-//   - shared connections are created and managed by admins and are the only
-//     ones a project can bind for PRs;
-//   - personal connections are visible to and usable by their owner only;
+//   - every connection is personal: visible to and usable by its owner only;
 //   - credentials are sealed at rest and never returned.
 type Integrations struct {
 	Store    ConnectionStore
@@ -45,8 +43,6 @@ const ghAuthTTL = 5 * time.Minute
 type warmer interface {
 	Warm(ctx context.Context) error
 }
-
-var remoteRepoPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)+$`)
 
 func (in *Integrations) List(ctx context.Context, u *model.User) ([]model.Connection, error) {
 	return in.Store.Visible(ctx, u.ID)
@@ -117,14 +113,14 @@ func (in *Integrations) Create(ctx context.Context, u *model.User, req model.Cre
 	if in.Secrets == nil {
 		return nil, model.ErrSecretsUnavailable
 	}
-	if req.Scope == model.ScopeShared && !u.Role.IsAdmin() {
-		return nil, ErrForbidden
+	if req.Scope != "" && req.Scope != model.ScopePersonal {
+		return nil, fmt.Errorf("%w: connections are personal; scope must be omitted or personal", ErrInvalid)
 	}
 	sealed, err := in.Secrets.Seal([]byte(req.Token))
 	if err != nil {
 		return nil, err
 	}
-	c := &model.Connection{Provider: req.Provider, Name: req.Name, Scope: req.Scope, OwnerID: u.ID,
+	c := &model.Connection{Provider: req.Provider, Name: req.Name, Scope: model.ScopePersonal, OwnerID: u.ID,
 		BaseURL: req.BaseURL, Username: req.Username}
 	if err := in.Store.Create(ctx, c, sealed); err != nil {
 		return nil, err
@@ -211,35 +207,6 @@ func (in *Integrations) Test(ctx context.Context, u *model.User, id string) (*mo
 		return nil, rerr
 	}
 	return in.Store.Get(ctx, id)
-}
-
-// Bind points a project at a shared git connection and provider repo slug;
-// an empty connection id unbinds it.
-func (in *Integrations) Bind(ctx context.Context, u *model.User, projectID string, req model.ProjectBindingRequest) (*model.Project, error) {
-	if err := in.Projects.Authorize(ctx, u, projectID); err != nil {
-		return nil, err
-	}
-	req.RemoteRepo = strings.Trim(strings.TrimSpace(req.RemoteRepo), "/")
-	if req.GitConnectionID != "" {
-		c, err := in.Store.Get(ctx, req.GitConnectionID)
-		if err != nil {
-			return nil, err
-		}
-		switch {
-		case c.Scope != model.ScopeShared:
-			return nil, fmt.Errorf("%w: only shared connections can be bound to a project", ErrInvalid)
-		case !c.IsGit():
-			return nil, fmt.Errorf("%w: %s is not a git provider", ErrInvalid, c.Provider)
-		case !remoteRepoPattern.MatchString(req.RemoteRepo):
-			return nil, fmt.Errorf("%w: remote_repo must look like owner/repo", ErrInvalid)
-		}
-	} else {
-		req.RemoteRepo = ""
-	}
-	if err := in.Projects.Store.SetBinding(ctx, projectID, req.GitConnectionID, req.RemoteRepo); err != nil {
-		return nil, err
-	}
-	return in.Projects.Store.Get(ctx, projectID)
 }
 
 // LookupIssue reads an issue through a visible Jira connection and returns a
@@ -394,13 +361,13 @@ func (in *Integrations) token(ctx context.Context, c *model.Connection) (string,
 	return string(plain), err
 }
 
-// usable returns c when u may use it: any shared connection, or u's own.
+// usable returns c when it is u's own and active.
 func (in *Integrations) usable(ctx context.Context, u *model.User, id string) (*model.Connection, error) {
 	c, err := in.Store.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if c.Scope == model.ScopePersonal && c.OwnerID != u.ID {
+	if c.OwnerID != u.ID {
 		return nil, model.ErrConnectionNotFound
 	}
 	if c.Status != model.ConnectionActive {
@@ -409,18 +376,14 @@ func (in *Integrations) usable(ctx context.Context, u *model.User, id string) (*
 	return c, nil
 }
 
-// manageable returns c when u may change it: admins for shared connections,
-// the owner for personal ones. Others' personal connections stay invisible.
+// manageable returns c when u owns it; others' connections stay invisible.
 func (in *Integrations) manageable(ctx context.Context, u *model.User, id string) (*model.Connection, error) {
 	c, err := in.Store.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case c.Scope == model.ScopePersonal && c.OwnerID != u.ID:
+	if c.OwnerID != u.ID {
 		return nil, model.ErrConnectionNotFound
-	case c.Scope == model.ScopeShared && !u.Role.IsAdmin():
-		return nil, ErrForbidden
 	}
 	return c, nil
 }

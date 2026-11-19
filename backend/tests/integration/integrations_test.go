@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 const ghToken = "ghp_e2e_secret_token_value"
@@ -95,21 +94,19 @@ func decode[T any](t *testing.T, body string) T {
 	return v
 }
 
-func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
+func TestIntegrationsConnectionsAndJiraImport(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test")
 	}
-	gh := &fakeGitHub{}
-	ghSrv := gh.server(t)
+	ghSrv := (&fakeGitHub{}).server(t)
 	jiraSrv := fakeJira(t)
-	repo := fixtureRepo(t)
 	dataDir := t.TempDir()
 	ta := bootAt(t, dataDir)
 	eng := ta.loginAs(t, "eng@example.com", "Eng")
 
-	// connections: shared GitHub (admin), personal Jira; credentials never returned
+	// connections are all personal; credentials never returned
 	status, body := ta.do(t, "POST", "/api/v1/connections", fmt.Sprintf(
-		`{"provider":"github","name":"Acme GitHub","scope":"shared","base_url":%q,"token":%q}`, ghSrv.URL, ghToken))
+		`{"provider":"github","name":"Acme GitHub","scope":"personal","base_url":%q,"token":%q}`, ghSrv.URL, ghToken))
 	if status != 201 || strings.Contains(body, ghToken) {
 		t.Fatalf("create github connection: %d %s", status, body)
 	}
@@ -133,21 +130,21 @@ func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
 
 	// role and ownership rules
 	if status, _ := ta.doAs(t, eng, "POST", "/api/v1/connections",
-		`{"provider":"github","name":"x","scope":"shared","token":"t"}`); status != 403 {
-		t.Fatalf("engineer must not create shared connections, got %d", status)
+		`{"provider":"github","name":"x","scope":"shared","token":"t"}`); status != 400 {
+		t.Fatalf("shared connections must be rejected, got %d", status)
 	}
-	if status, body := ta.doAs(t, eng, "GET", "/api/v1/connections", ""); status != 200 || strings.Contains(body, jiraConn.ID) || !strings.Contains(body, ghConn.ID) {
-		t.Fatalf("engineer sees shared but not others' personal connections: %d %s", status, body)
+	if status, body := ta.doAs(t, eng, "GET", "/api/v1/connections", ""); status != 200 || strings.Contains(body, jiraConn.ID) || strings.Contains(body, ghConn.ID) {
+		t.Fatalf("engineer must not see others' connections: %d %s", status, body)
 	}
 	if status, _ := ta.doAs(t, eng, "POST", "/api/v1/integrations/jira/lookup",
 		fmt.Sprintf(`{"connection_id":%q,"key":"PAY-7"}`, jiraConn.ID)); status != 404 {
 		t.Fatalf("someone else's personal connection must be unusable, got %d", status)
 	}
-	if status, _ := ta.doAs(t, eng, "POST", "/api/v1/connections/"+ghConn.ID+"/test", ""); status != 403 {
-		t.Fatalf("engineer must not manage shared connections, got %d", status)
+	if status, _ := ta.doAs(t, eng, "POST", "/api/v1/connections/"+ghConn.ID+"/test", ""); status != 404 {
+		t.Fatalf("engineer must not manage others' connections, got %d", status)
 	}
 	if status, _ := ta.do(t, "POST", "/api/v1/connections",
-		`{"provider":"github","name":"leak","scope":"shared","base_url":"http://example.com","token":"t"}`); status != 400 {
+		`{"provider":"github","name":"leak","scope":"personal","base_url":"http://example.com","token":"t"}`); status != 400 {
 		t.Fatalf("non-loopback http base URL must be rejected, got %d", status)
 	}
 
@@ -172,74 +169,5 @@ func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
 	}](t, body)
 	if draft.SourceRef != "jira:PAY-7" || draft.Acceptance != "TestGreet passes with go test ./..." || strings.Contains(draft.Objective, "Acceptance") {
 		t.Fatalf("bad draft: %+v", draft)
-	}
-
-	// project bound to the shared GitHub connection
-	proj := ta.createProject(t, "Greeter", repo)
-	if status, body := ta.do(t, "PUT", "/api/v1/projects/"+proj+"/binding",
-		fmt.Sprintf(`{"git_connection_id":%q,"remote_repo":"acme/greeter"}`, jiraConn.ID)); status != 400 {
-		t.Fatalf("personal/non-git connections must not bind: %d %s", status, body)
-	}
-	if status, body := ta.do(t, "PUT", "/api/v1/projects/"+proj+"/binding",
-		fmt.Sprintf(`{"git_connection_id":%q,"remote_repo":"acme/greeter"}`, ghConn.ID)); status != 200 || !strings.Contains(body, `"remote_repo":"acme/greeter"`) {
-		t.Fatalf("bind: %d %s", status, body)
-	}
-
-	// work order from the Jira draft, through to the automatic pull request
-	status, body = ta.do(t, "POST", "/api/v1/work-orders", fmt.Sprintf(
-		`{"project_id":%q,"title":%q,"objective":%q,"acceptance":%q,"source_ref":%q}`,
-		proj, draft.Title, draft.Objective, draft.Acceptance, draft.SourceRef))
-	if status != 201 || !strings.Contains(body, `"source_ref":"jira:PAY-7"`) {
-		t.Fatalf("create work order: %d %s", status, body)
-	}
-	wo := decode[struct{ ID string }](t, body).ID
-	ta.plan(t, wo)
-	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+wo+"/plan/decisions", `{"decision":"approve"}`); status != 202 {
-		t.Fatalf("approve plan: %d %s", status, body)
-	}
-
-	// a clean converge on a bound project is approved by the factory, no human decision
-
-	// the factory pushes the verified commit and opens exactly one PR
-	var doc map[string]any
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		doc = ta.awaitState(t, wo, "READY", 60*time.Second)
-		if doc["work_order"].(map[string]any)["pr_url"] != nil {
-			break
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	w := doc["work_order"].(map[string]any)
-	if w["pr_url"] != "https://github.example/acme/greeter/pull/5" || w["pr_ref"] != "github:acme/greeter#5" {
-		t.Fatalf("PR not recorded on the work order: %v", w)
-	}
-	sha, _ := w["commit_sha"].(string)
-	if got := gitOut(t, repo, "rev-parse", "refs/heads/legos-factory/"+wo); got != sha {
-		t.Fatalf("remote branch %s != verified commit %s", got, sha)
-	}
-	base := gitOut(t, repo, "rev-parse", "--abbrev-ref", "HEAD")
-	created := gh.prs()
-	if len(created) != 1 || created[0]["head"] != "legos-factory/"+wo || created[0]["base"] != base ||
-		!strings.Contains(fmt.Sprint(created[0]["body"]), "jira:PAY-7") {
-		t.Fatalf("unexpected PR creation: %+v (base %s)", created, base)
-	}
-	if got := gitOut(t, repo, "rev-parse", base); got == sha {
-		t.Fatal("the default branch must never be pushed")
-	}
-	if pr := awaitLogLine(t, ta, proj, "`"+wo+"` **pr_opened** (factory)"); !strings.Contains(pr, "Pull request opened: github:acme/greeter#5") {
-		t.Fatalf("PR log line: %s", pr)
-	}
-
-	// a disabled connection blocks new work on the bound project
-	if status, body := ta.do(t, "PATCH", "/api/v1/connections/"+ghConn.ID, `{"status":"disabled"}`); status != 200 {
-		t.Fatalf("disable: %d %s", status, body)
-	}
-	status, body = ta.do(t, "POST", "/api/v1/work-orders", fmt.Sprintf(`{"project_id":%q,"title":"next","objective":"more"}`, proj))
-	if status != 500 || !strings.Contains(body, "WORKSPACE_FAILED") || !strings.Contains(body, "disabled") {
-		t.Fatalf("disabled connection must block new work: %d %s", status, body)
-	}
-	if status, body := ta.do(t, "GET", "/api/v1/work-orders", ""); status != 200 || strings.Contains(body, `"title":"next"`) {
-		t.Fatalf("a work order without a workspace must not be persisted: %d %s", status, body)
 	}
 }
