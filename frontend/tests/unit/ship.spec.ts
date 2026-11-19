@@ -4,8 +4,6 @@ import { createRouter, createMemoryHistory } from "vue-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import WorkOrderView from "../../src/features/factory/work-orders/WorkOrderView.vue";
 import ReviewPanel from "../../src/features/factory/reviews/ReviewPanel.vue";
-import ChangesPanel from "../../src/features/factory/reviews/ChangesPanel.vue";
-import { parseUnifiedDiff } from "../../src/features/factory/reviews/diff";
 import {
   architectReport,
   changeRequestDraft,
@@ -19,7 +17,7 @@ import {
 import { subscribe } from "../../src/services/events/sse";
 import { useFactory } from "../../src/stores/factory";
 import { useSession } from "../../src/stores/session";
-import type { Run, WOEvent, WorkOrder } from "../../src/types/api";
+import type { WOEvent, WorkOrder } from "../../src/types/api";
 import { orders, projects, runs, tasks, user } from "../fixtures/workspace";
 
 const PR = "https://example.test/acme/repo/pull/7",
@@ -112,17 +110,18 @@ describe("work order page ship states", () => {
     return w;
   }
 
-  it("lands on Changes & PR at Ship and shows the open PR with a link", async () => {
+  it("has no Changes & PR tab and shows the open PR with a link on the Now card", async () => {
     const w = await render("READY", { pr_url: PR, pr_ref: "acme/repo#7" });
-    expect(w.find('[role="tab"][aria-selected="true"]').text()).toBe(
-      "Changes & PR",
-    );
-    expect(w.find('[data-test="ship-state"]').text()).toContain(
-      "PR open · in review",
-    );
-    expect(w.find('[data-test="pr-link"]').attributes("href")).toBe(PR);
+    expect(w.findAll('[role="tab"]').map((t) => t.text())).toEqual([
+      "Activity",
+      "Progress",
+      "Review",
+    ]);
     expect(w.find('[data-test="now-card"]').text()).toContain(
       "PR open · in review",
+    );
+    expect(w.find('[data-test="now-card"] a.fx-link').attributes("href")).toBe(
+      PR,
     );
     expect(
       w.find('[data-test="stage-track"] [data-stage="Ship"]').classes(),
@@ -134,9 +133,10 @@ describe("work order page ship states", () => {
     const w = await render("READY", {}, [
       event("pr_open_failed", "Could not open pull request: no auth"),
     ]);
-    expect(w.find('[data-test="ship-state"]').text()).toContain(
+    expect(w.find('[data-test="now-card"]').text()).toContain(
       "PR failed to open",
     );
+    expect(w.find('[data-test="open-failure"]').text()).toContain("no auth");
     expect(
       w.find('[data-test="stage-track"] [data-stage="Ship"]').classes(),
     ).not.toContain("done");
@@ -149,25 +149,22 @@ describe("work order page ship states", () => {
     [{ pr_url: PR, pr_merged_at: AT }, "Merged", "done"],
   ])("shows %j as %s", async (extra, label, stage) => {
     const w = await render("READY", extra);
-    expect(w.find('[data-test="ship-state"]').text()).toContain(label);
+    expect(w.find('[data-test="now-card"]').text()).toContain(label);
     expect(
       w.find('[data-test="stage-track"] [data-stage="Ship"]').classes(),
     ).toContain(stage);
     w.unmount();
   });
 
-  it("explains why the converge gate escalated and offers the decisions on Changes & PR", async () => {
+  it("explains why the converge gate escalated and offers the decisions on the Now card", async () => {
     const gate = event(
       "converge_gate",
       "Converge gate escalated",
       { outcome: "escalate", row: 2, note: "No acceptance criteria recorded" },
       "jev",
     );
-    const w = await render("NEEDS_HUMAN_REVIEW", {}, [gate], "changes");
-    expect(w.find('[data-test="ship-state"]').text()).toContain(
-      "Waiting for your approval",
-    );
-    expect(w.find('[data-test="ship-state"]').text()).toContain(
+    const w = await render("NEEDS_HUMAN_REVIEW", {}, [gate]);
+    expect(w.find('[data-test="now-card"]').text()).toContain(
       "No acceptance criteria recorded",
     );
     expect(
@@ -280,73 +277,5 @@ describe("escalation and Architect helpers", () => {
       "c2: give each section a budget",
     );
     expect(changeRequestDraft(null)).toBe("");
-  });
-});
-
-describe("diff", () => {
-  const patch = [
-    "diff --git a/a.go b/a.go",
-    "index 1..2 100644",
-    "--- a/a.go",
-    "+++ b/a.go",
-    "@@ -1,3 +1,4 @@",
-    " package a",
-    "-var x = 1",
-    "-- not a header",
-    "+var x = 2",
-    "+var y = 3",
-    " ",
-    "diff --git a/new.txt b/new.txt",
-    "new file mode 100644",
-    "--- /dev/null",
-    "+++ b/new.txt",
-    "@@ -0,0 +1,2 @@",
-    "+one",
-    "+two",
-  ].join("\n");
-  it("parses files, counts and line numbers without mistaking a deleted '-- ' line for a header", () => {
-    const files = parseUnifiedDiff(patch);
-    expect(files.map((f) => [f.path, f.add, f.del])).toEqual([
-      ["a.go", 2, 2],
-      ["new.txt", 2, 0],
-    ]);
-    const lines = files[0].hunks[0].lines;
-    expect(lines[1]).toMatchObject({ t: "del", o: 2, s: "var x = 1" });
-    expect(lines[2]).toMatchObject({ t: "del", o: 3, s: "- not a header" });
-    expect(lines[3]).toMatchObject({ t: "add", n: 2 });
-  });
-  const builder = (output: string): Run => ({
-    ...runs[0],
-    id: "r",
-    output,
-  });
-  it("renders a file list, collapses files and switches between unified and split", async () => {
-    const w = mount(ChangesPanel, {
-      props: {
-        runs: [builder(patch)],
-        state: "NEEDS_HUMAN_REVIEW",
-        canWrite: true,
-        busy: false,
-      },
-    });
-    expect(w.findAll('[data-test="diff-file"]')).toHaveLength(2);
-    expect(w.find('[data-test="diff-total"]').text()).toContain(
-      "2 files changed",
-    );
-    expect(w.find(".fx-dtable.unified").exists()).toBe(true);
-    await w.findAll(".fx-seg button")[1].trigger("click");
-    expect(w.find(".fx-dtable.split").exists()).toBe(true);
-    expect(w.find(".fx-sl").exists()).toBe(true);
-    await w.find('[aria-label="Collapse a.go"]').trigger("click");
-    expect(w.findAll(".fx-dtable")).toHaveLength(1);
-    expect(w.text()).toContain("Builder output");
-    expect(w.find("details.fx-card").attributes("open")).toBeUndefined();
-  });
-  it("falls back to recorded builder output when no run printed a diff", () => {
-    const w = mount(ChangesPanel, {
-      props: { runs, state: "IMPLEMENTING", canWrite: true, busy: false },
-    });
-    expect(w.text()).toContain("Builder output");
-    expect(w.find('[data-test="diff-file"]').exists()).toBe(false);
   });
 });

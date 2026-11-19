@@ -62,9 +62,9 @@ func TestParseCodeFact(t *testing.T) {
 	}
 }
 
-func gitWorkspace(t *testing.T, data, woID string) (ws, base string) {
+func gitWorkspace(t *testing.T, data, projectID, woID string) (ws, base string) {
 	t.Helper()
-	ws = filepath.Join(data, "workspaces", woID)
+	ws = model.WorktreeDir(data, projectID, woID)
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func gitWorkspace(t *testing.T, data, woID string) (ws, base string) {
 
 func TestCodeFactsSectionHidesStaleFacts(t *testing.T) {
 	data := t.TempDir()
-	ws, base := gitWorkspace(t, data, "wo1")
+	ws, base := gitWorkspace(t, data, "", "wo1")
 	mem := &memFacts{}
 	f := &Factory{CodeFacts: mem, DataDir: data}
 	ctx := context.Background()
@@ -126,7 +126,7 @@ func TestRecordCodeFactsCapsAtForty(t *testing.T) {
 
 func TestAgentPromptsCarryCodeFacts(t *testing.T) {
 	r := newRig(t)
-	ws, base := gitWorkspace(t, r.f.DataDir, r.wo.ID)
+	ws, base := gitWorkspace(t, r.f.DataDir, r.wo.ProjectID, r.wo.ID)
 	_ = ws
 	r.f.CodeFacts = &store.CodeFactRepo{DB: r.db}
 	ctx := context.Background()

@@ -246,7 +246,7 @@ func (f *Factory) changedFileLines(ctx context.Context, wo *model.WorkOrder) []s
 	if !mu.TryLock() {
 		return []string{"unavailable (workspace busy)"}
 	}
-	files, err := f.Sandbox.ChangedFiles(ctx, f.workspaceDir(wo.ID))
+	files, err := f.Sandbox.ChangedFiles(ctx, f.workspaceDir(wo))
 	mu.Unlock()
 	switch {
 	case err != nil:

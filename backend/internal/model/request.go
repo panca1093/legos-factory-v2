@@ -34,7 +34,10 @@ type CreateWorkOrderRequest struct {
 	InspectorModel string `json:"inspector_model"`
 	SourceRef      string `json:"source_ref"`
 	SourceChatID   string `json:"source_chat_id"`
+	BaseBranch     string `json:"base_branch"`
 }
+
+var branchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 
 func (r *CreateWorkOrderRequest) Validate() error {
 	r.Title = strings.TrimSpace(r.Title)
@@ -47,6 +50,10 @@ func (r *CreateWorkOrderRequest) Validate() error {
 		return fmt.Errorf("objective is required")
 	case r.ProjectID == "":
 		return fmt.Errorf("project_id is required")
+	}
+	r.BaseBranch = strings.TrimSpace(r.BaseBranch)
+	if b := r.BaseBranch; b != "" && (!branchPattern.MatchString(b) || strings.Contains(b, "..") || strings.HasSuffix(b, "/") || strings.HasSuffix(b, ".lock") || strings.Contains(b, "//")) {
+		return fmt.Errorf("base_branch is not a valid branch name")
 	}
 	r.SourceRef = strings.TrimSpace(r.SourceRef)
 	if r.SourceRef != "" && !sourceRefPattern.MatchString(r.SourceRef) {

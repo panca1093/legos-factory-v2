@@ -341,7 +341,7 @@ func (c *Chat) sessionProject(ctx context.Context, p *model.Project, msgs []mode
 			}
 			ws := ""
 			if c.DataDir != "" {
-				ws = filepath.Join(c.DataDir, "workspaces", r.WOID)
+				ws = model.WorktreeDir(c.DataDir, p.ID, r.WOID)
 			}
 			sp.Running = append(sp.Running, SessionRunning{
 				WorkOrderID: r.WOID, Title: r.WOTitle, State: string(r.WOState), Role: r.Kind, TaskID: r.TaskID,

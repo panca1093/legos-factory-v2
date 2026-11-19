@@ -600,12 +600,12 @@ function close() {
           />
         </div>
         <div class="form-group">
-          <label for="prj-repo">Repository (local path or URL)</label>
+          <label for="prj-repo">Repository (local folder path)</label>
           <input
             id="prj-repo"
             v-model="form.repo_url"
             required
-            placeholder="/path/to/repo or https://…"
+            placeholder="/path/to/repo"
           />
         </div>
         <ProjectBindingRow

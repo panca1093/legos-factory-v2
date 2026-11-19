@@ -87,7 +87,7 @@ func (f *Factory) convergeGate(ctx context.Context, wo *model.WorkOrder) (handle
 	for _, fd := range openFindings(findings) {
 		open = append(open, GateFinding{Severity: fd.Severity, Path: fd.Location, Message: fd.Title + ": " + fd.Detail})
 	}
-	diff, derr := f.Sandbox.Diff(ctx, f.workspaceDir(wo.ID))
+	diff, derr := f.Sandbox.Diff(ctx, f.workspaceDir(wo))
 	if derr != nil {
 		f.event(wo.ID, "factory", "diff_unavailable", derr.Error(), nil)
 	}
@@ -269,7 +269,7 @@ func (f *Factory) appendRound(ctx context.Context, wo *model.WorkOrder, in Conve
 		if findClarification(wo.Clarifications, q) != nil {
 			continue
 		}
-		r, runID, err := f.askForeman(ctx, wo, "architect", q, "", repoFacts(ctx, f.workspaceDir(wo.ID)), false)
+		r, runID, err := f.askForeman(ctx, wo, "architect", q, "", repoFacts(ctx, f.workspaceDir(wo)), false)
 		if err != nil {
 			return err
 		}
@@ -401,10 +401,10 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 	}
 	f.event(wo.ID, "factory", "readiness_"+strings.ToLower(decision), reason, payload)
 	f.Catalog.Record(ctx, wo, model.KnowledgeReadiness, model.TrustVerified, "factory", "Merge readiness: "+decision, reason)
-	if decision == "READY" && f.autoShip(ctx, wo) {
+	if decision == "READY" {
 		return f.openPRAutomatically(ctx, wo)
 	}
-	// Without a clean converge or a bound repo the disposition stays human:
+	// Without a clean converge the disposition stays human:
 	// NEEDS_HUMAN_REVIEW, then the approve/decline endpoint decides READY.
 	next := model.StateNeedsHumanReview
 	if decision == "BLOCKED" {
@@ -417,16 +417,6 @@ func (f *Factory) evaluateReadiness(ctx context.Context, wo *model.WorkOrder, ve
 		f.completeWO(ctx, wo, "BLOCKED")
 	}
 	return nil
-}
-
-// autoShip reports whether a clean order can go straight to a pull request; an unreadable project falls back to a human.
-func (f *Factory) autoShip(ctx context.Context, wo *model.WorkOrder) bool {
-	proj, err := f.Proj.Get(ctx, wo.ProjectID)
-	if err != nil {
-		f.Log.Warn("project lookup failed; leaving order for human review", "wo", wo.ID, "err", err)
-		return false
-	}
-	return f.Integrations.Bound(ctx, proj)
 }
 
 // openPRAutomatically approves a clean order as the factory; the pull request is where the human reviews.

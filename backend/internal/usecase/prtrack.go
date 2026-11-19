@@ -11,7 +11,7 @@ import (
 
 const prPollEvery = 2 * time.Minute
 
-type gitLookup func(ctx context.Context, p *model.Project) (GitProvider, bool, error)
+type gitLookup func(ctx context.Context, p *model.Project, userID string) (GitProvider, string, bool, error)
 
 // WatchPRs polls READY orders' PRs at once and then every prPollEvery until ctx ends.
 func (f *Factory) WatchPRs(ctx context.Context) {
@@ -49,9 +49,9 @@ func (f *Factory) checkPR(ctx context.Context, gitFor gitLookup, wo model.WorkOr
 	if err != nil {
 		return err
 	}
-	g, bound, err := gitFor(ctx, proj)
+	g, _, bound, err := gitFor(ctx, proj, wo.CreatedBy)
 	if !bound {
-		return f.trackFailed(ctx, wo, "the project is no longer bound to a git connection")
+		return f.trackFailed(ctx, wo, "the project folder no longer has an origin remote")
 	}
 	if err != nil {
 		return err
@@ -73,9 +73,14 @@ func (f *Factory) checkPR(ctx context.Context, gitFor gitLookup, wo model.WorkOr
 			return err
 		}
 		f.portCodeMap(ctx, &wo)
+		f.cleanupWorktrees(ctx, &wo)
 		return nil
 	case st.State == model.PRStateClosed && wo.PRClosedAt == nil:
-		return f.recordPR(ctx, wo, "pr_closed", "closed without merging", st.At, map[string]any{"pr_closed_at": st.At.Unix()})
+		if err := f.recordPR(ctx, wo, "pr_closed", "closed without merging", st.At, map[string]any{"pr_closed_at": st.At.Unix()}); err != nil {
+			return err
+		}
+		f.cleanupWorktrees(ctx, &wo)
+		return nil
 	}
 	return nil
 }

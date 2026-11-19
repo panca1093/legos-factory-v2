@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"legos-factory/backend/internal/model"
 	"time"
 )
 
@@ -81,10 +83,7 @@ func TestCatalogerJournalIsAProjectLog(t *testing.T) {
 	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+wo1+"/plan/decisions", `{"decision":"approve"}`); status != 202 {
 		t.Fatalf("approve: %d %s", status, body)
 	}
-	ta.awaitState(t, wo1, "NEEDS_HUMAN_REVIEW", 60*time.Second)
-	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+wo1+"/pr-decision", `{"decision":"approve","reason":"evidence complete"}`); status != 202 {
-		t.Fatalf("pr decision: %d %s", status, body)
-	}
+	ta.awaitState(t, wo1, "READY", 60*time.Second)
 	doc := ta.awaitState(t, wo1, "READY", 5*time.Second)
 	woSHA, _ := doc["work_order"].(map[string]any)["commit_sha"].(string)
 	if !sha40.MatchString(woSHA) {
@@ -92,7 +91,7 @@ func TestCatalogerJournalIsAProjectLog(t *testing.T) {
 	}
 
 	// the commit exists in the isolated workspace and was never pushed to the source repo
-	ws := filepath.Join(dataDir, "workspaces", wo1)
+	ws := model.WorktreeDir(dataDir, p1, wo1)
 	if head := gitOut(t, ws, "rev-parse", "HEAD"); head != woSHA {
 		t.Fatalf("workspace HEAD %s != recorded %s", head, woSHA)
 	}
@@ -108,7 +107,7 @@ func TestCatalogerJournalIsAProjectLog(t *testing.T) {
 	}
 	for kind, actor := range map[string]string{
 		"architect_review": "architect", "plan_approved": "human", "findings": "inspector",
-		"readiness": "factory", "pr_decision": "human", "work_order_completed": "cataloger",
+		"readiness": "factory", "work_order_completed": "cataloger",
 	} {
 		if !strings.Contains(log, "`"+wo1+"` **"+kind+"** ("+actor+")") {
 			t.Fatalf("missing %s line:\n%s", kind, log)
@@ -143,7 +142,7 @@ func TestCatalogerJournalIsAProjectLog(t *testing.T) {
 
 	// decisions the summary reads are events
 	evs := ta.eventKinds(t, wo1)
-	for _, kind := range []string{"plan_approved", "pr_approved", "verification_started", "verification_passed"} {
+	for _, kind := range []string{"plan_approved", "pr_auto_approved", "verification_started", "verification_passed"} {
 		if !hasEvent(evs, kind) {
 			t.Fatalf("run log must keep %s; have %v", kind, evs)
 		}

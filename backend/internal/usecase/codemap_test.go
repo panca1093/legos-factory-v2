@@ -25,7 +25,7 @@ func TestPortCodeMapMergesReplacesAndSkipsStale(t *testing.T) {
 	ctx := context.Background()
 	mem := &memFacts{}
 	r.f.CodeFacts = mem
-	ws, base := gitWorkspace(t, r.f.DataDir, r.wo.ID)
+	ws, base := gitWorkspace(t, r.f.DataDir, r.wo.ProjectID, r.wo.ID)
 	r.wo.KBBaseSHA = base
 	r.f.recordCodeFacts(ctx, r.wo, model.AgentForeman, []string{"keep.go:1 — first claim", "change.go:1 — goes stale", "gone.go:2 — file removed"})
 	if err := os.WriteFile(filepath.Join(ws, "change.go"), []byte("package z\n"), 0o644); err != nil {
@@ -125,7 +125,7 @@ func TestPortCodeMapDropsMapLinesOnEditedFiles(t *testing.T) {
 	ctx := context.Background()
 	mem := &memFacts{}
 	r.f.CodeFacts = mem
-	ws, base := gitWorkspace(t, r.f.DataDir, r.wo.ID)
+	ws, base := gitWorkspace(t, r.f.DataDir, r.wo.ProjectID, r.wo.ID)
 	r.wo.KBBaseSHA = base
 	mem.facts = []model.CodeFact{{Path: "change.go", Line: 1, Claim: "old", SHA: "zzz"}, {Path: "keep.go", Line: 1, Claim: "kept", SHA: "zzz"}}
 	r.f.portCodeMap(ctx, &model.WorkOrder{ID: "other", ProjectID: "p1"}) // no workspace: stores both

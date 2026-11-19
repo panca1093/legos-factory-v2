@@ -69,46 +69,70 @@ func TestParseGitHubRepo(t *testing.T) {
 
 func TestGitForSelection(t *testing.T) {
 	ctx := context.Background()
-	host := &fakeHost{repos: map[string]string{"/w/gh": "git@github.com:acme/greeter.git", "/w/gl": "https://gitlab.com/a/b.git"}}
+	host := &fakeHost{repos: map[string]string{"/w/gh": "git@github.com:acme/greeter.git", "/w/gl": "https://gitlab.com/a/b.git", "/w/ee": "ssh://git@git.corp.example:2222/team/app.git"}}
 	var asked string
-	in := &Integrations{Host: host, GH: func(repo, _ string) GitProvider { asked = repo; return fakeGH{} }}
+	conns := personalConns{conns: []model.Connection{
+		{ID: "c1", Provider: model.ProviderGitLab, BaseURL: "https://gitlab.com/api/v4", OwnerID: "u1", Scope: model.ScopePersonal, Status: model.ConnectionActive},
+		{ID: "c2", Provider: model.ProviderGitLab, BaseURL: "https://git.corp.example/api/v4", OwnerID: "u1", Scope: model.ScopePersonal, Status: model.ConnectionActive},
+	}}
+	var picked string
+	in := &Integrations{Host: host, GH: func(repo, _ string) GitProvider { asked = repo; return fakeGH{} }, Store: conns, Secrets: plainSealer{},
+		Git: func(c model.Connection, _ string) (GitProvider, error) { picked = c.ID; return fakeGH{}, nil }}
 
-	g, bound, err := in.GitFor(ctx, &model.Project{RepoURL: "/w/gh"})
-	if !bound || err != nil || g == nil || asked != "acme/greeter" {
-		t.Fatalf("gh mode: bound=%v err=%v asked=%q", bound, err, asked)
+	g, repo, bound, err := in.GitFor(ctx, &model.Project{RepoURL: "/w/gh"}, "u1")
+	if !bound || err != nil || g == nil || asked != "acme/greeter" || repo != "acme/greeter" {
+		t.Fatalf("gh path: bound=%v err=%v asked=%q repo=%q", bound, err, asked, repo)
 	}
-	for _, p := range []*model.Project{{RepoURL: "/w/gl"}, {RepoURL: "/w/none"}, {RepoURL: "https://github.com/a/b"}, {}} {
-		if _, bound, _ := in.GitFor(ctx, p); bound {
-			t.Fatalf("%q should stay unbound", p.RepoURL)
+	for path, want := range map[string][2]string{"/w/gl": {"c1", "a/b"}, "/w/ee": {"c2", "team/app"}} {
+		picked = ""
+		_, repo, bound, err := in.GitFor(ctx, &model.Project{RepoURL: path}, "u1")
+		if !bound || err != nil || picked != want[0] || repo != want[1] {
+			t.Fatalf("%s: bound=%v err=%v picked=%q repo=%q", path, bound, err, picked, repo)
 		}
 	}
-
-	asked = ""
-	in.Store = noConns{}
-	if _, bound, err := in.GitFor(ctx, &model.Project{RepoURL: "/w/gh", GitConnection: "c1"}); !bound || !errors.Is(err, model.ErrConnectionNotFound) || asked != "" {
-		t.Fatalf("a bound connection must win over gh mode: bound=%v err=%v asked=%q", bound, err, asked)
+	if _, _, bound, err := in.GitFor(ctx, &model.Project{RepoURL: "/w/gl"}, "u2"); !bound || err == nil {
+		t.Fatalf("another user's connection must not serve the host: bound=%v err=%v", bound, err)
 	}
-
+	for _, p := range []*model.Project{{RepoURL: "/w/none"}, {RepoURL: "https://github.com/a/b"}, {}} {
+		if _, _, bound, _ := in.GitFor(ctx, p, "u1"); bound {
+			t.Fatalf("%q has no origin and must stay unbound", p.RepoURL)
+		}
+	}
 	var off *Integrations
-	if _, bound, _ := off.GitFor(ctx, &model.Project{RepoURL: "/w/gh"}); bound {
+	if _, _, bound, _ := off.GitFor(ctx, &model.Project{RepoURL: "/w/gh"}, "u1"); bound {
 		t.Fatal("nil integrations must be unbound")
 	}
-	if _, bound, _ := (&Integrations{Host: host}).GitFor(ctx, &model.Project{RepoURL: "/w/gh"}); bound {
-		t.Fatal("gh mode must be off without a GH constructor (non-dev auth)")
+	asked = ""
+	if _, _, bound, err := (&Integrations{Host: host, Store: conns, Secrets: plainSealer{}}).GitFor(ctx, &model.Project{RepoURL: "/w/gh"}, "u1"); !bound || err == nil || asked != "" {
+		t.Fatalf("without a gh constructor a github.com origin needs a personal connection: bound=%v err=%v", bound, err)
 	}
 }
 
 func TestGitForReportsMissingGH(t *testing.T) {
 	host := &fakeHost{repos: map[string]string{"/w/gh": "https://github.com/acme/greeter.git"}}
 	in := &Integrations{Host: host, GH: func(string, string) GitProvider { return fakeGH{err: model.ErrGHMissing} }}
-	g, bound, err := in.GitFor(context.Background(), &model.Project{RepoURL: "/w/gh"})
+	g, _, bound, err := in.GitFor(context.Background(), &model.Project{RepoURL: "/w/gh"}, "u1")
 	if !bound || g != nil || !errors.Is(err, model.ErrGHMissing) {
 		t.Fatalf("bound=%v g=%v err=%v", bound, g, err)
 	}
 }
 
+func TestParseRemote(t *testing.T) {
+	for in, want := range map[string][2]string{
+		"https://github.com/acme/greeter.git":          {"github.com", "acme/greeter"},
+		"https://tok@gitlab.example.com/g/sub/app":     {"gitlab.example.com", "g/sub/app"},
+		"git@bitbucket.org:team/repo.git":              {"bitbucket.org", "team/repo"},
+		"ssh://git@git.corp.example:2222/team/app.git": {"git.corp.example", "team/app"},
+		"/Users/me/code/x":                             {"", ""},
+	} {
+		if h, r := parseRemote(in); h != want[0] || r != want[1] {
+			t.Errorf("parseRemote(%q) = %q, %q; want %q", in, h, r, want)
+		}
+	}
+}
+
 func TestAnnotate(t *testing.T) {
-	host := &fakeHost{repos: map[string]string{"/w/gh": "https://github.com/acme/greeter.git"}}
+	host := &fakeHost{repos: map[string]string{"/w/gh": "https://github.com/acme/greeter.git", "/w/gl": "https://gitlab.com/a/b.git"}}
 	in := &Integrations{Host: host, GH: func(string, string) GitProvider { return fakeGH{} }}
 	for _, tc := range []struct {
 		p    model.Project
@@ -116,7 +140,7 @@ func TestAnnotate(t *testing.T) {
 		repo string
 	}{
 		{model.Project{RepoURL: "/w/gh"}, "gh", "acme/greeter"},
-		{model.Project{RepoURL: "/w/gh", GitConnection: "c1"}, "connection", ""},
+		{model.Project{RepoURL: "/w/gl"}, "remote", ""},
 		{model.Project{RepoURL: "/w/other"}, "none", ""},
 	} {
 		in.Annotate(context.Background(), &tc.p)

@@ -62,7 +62,7 @@ func (f *Factory) recordCodeFacts(ctx context.Context, wo *model.WorkOrder, role
 	}
 	sha := wo.KBBaseSHA
 	if sha == "" {
-		sha = kb.GitHead(f.workspaceDir(wo.ID))
+		sha = kb.GitHead(f.workspaceDir(wo))
 	}
 	var facts []model.CodeFact
 	for _, it := range items {
@@ -88,7 +88,7 @@ func (f *Factory) codeFactsText(ctx context.Context, wo *model.WorkOrder) string
 	if err != nil || len(all) == 0 {
 		return ""
 	}
-	dir := f.workspaceDir(wo.ID)
+	dir := f.workspaceDir(wo)
 	changed := map[string]map[string]bool{} // sha → paths changed since; nil value = git could not tell
 	var shas []string
 	fresh := map[string][]model.CodeFact{}
@@ -178,7 +178,7 @@ func (f *Factory) portCodeMap(ctx context.Context, wo *model.WorkOrder) {
 	if err != nil || len(all) == 0 {
 		return
 	}
-	dir := f.workspaceDir(wo.ID)
+	dir := f.workspaceDir(wo)
 	_, statErr := os.Stat(dir)
 	haveDir := statErr == nil
 	changed := map[string]map[string]bool{}

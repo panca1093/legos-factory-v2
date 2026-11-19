@@ -140,7 +140,6 @@ it("prefills Request changes only from the current revision's Architect report",
     f.selectedID = id;
     f.detail = { work_order: order, plan: tasks, runs: [] };
   });
-  vi.spyOn(f, "loadDiff").mockResolvedValue();
   const verified = (revision: number) => ({
     id: revision,
     work_order_id: order.id,
@@ -165,8 +164,6 @@ it("prefills Request changes only from the current revision's Architect report",
   const notesAfterOpen = async (events: unknown[]) => {
     const { w } = await render();
     f.events = events as never;
-    await w.find(".fx-now button.primary").trigger("click");
-    await flushPromises();
     await w.find('[data-test="pr-changes"]').trigger("click");
     await flushPromises();
     const value =

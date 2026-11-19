@@ -164,7 +164,7 @@ func TestPlanGateRevisesOnceThenStartsTheBuildAndInvalidRepliesAreRetried(t *tes
 	if status, _ := ta.do(t, "POST", "/api/v1/work-orders/"+revise+"/plan/generate", ""); status != 202 {
 		t.Fatal("plan generate")
 	}
-	ta.awaitState(t, revise, "NEEDS_HUMAN_REVIEW", 90*time.Second)
+	ta.awaitState(t, revise, "READY", 90*time.Second)
 	if w := ta.workOrder(t, revise); w["plan_revisions"].(float64) != 1 {
 		t.Fatalf("expected one gate revision, got %v", w["plan_revisions"])
 	}
@@ -189,7 +189,7 @@ func TestPlanGateRevisesOnceThenStartsTheBuildAndInvalidRepliesAreRetried(t *tes
 	if status, _ := ta.do(t, "POST", "/api/v1/work-orders/"+invalid+"/plan/generate", ""); status != 202 {
 		t.Fatal("plan generate")
 	}
-	ta.awaitState(t, invalid, "NEEDS_HUMAN_REVIEW", 90*time.Second)
+	ta.awaitState(t, invalid, "READY", 90*time.Second)
 	if ev := ta.eventKinds(t, invalid); !hasEvent(ev, "agent_reply_invalid") {
 		t.Fatalf("invalid reply should be rejected visibly: %v", ev)
 	}
@@ -226,7 +226,7 @@ func TestJevGatedLifecycleNeedsNoHumanUntilThePRDecision(t *testing.T) {
 	if status, _ := ta.do(t, "POST", "/api/v1/work-orders/"+id+"/plan/generate", ""); status != 202 {
 		t.Fatal("plan generate")
 	}
-	ta.awaitState(t, id, "NEEDS_HUMAN_REVIEW", 120*time.Second)
+	ta.awaitState(t, id, "READY", 120*time.Second)
 
 	evs := ta.activity(t, id)
 	var gates []string
@@ -282,17 +282,10 @@ func TestJevGatedLifecycleNeedsNoHumanUntilThePRDecision(t *testing.T) {
 		t.Fatalf("findings must carry their specialty: %+v", findings)
 	}
 
-	// dispositions: a dispute needs a reason, and is recorded
+	// the order shipped on its own, so the pull request is where findings are reviewed now
 	fid := findings[0].ID
-	if status, _ := ta.do(t, "POST", "/api/v1/work-orders/"+id+"/findings/"+fid+"/decision", `{"action":"dispute"}`); status != 400 {
-		t.Fatalf("dispute without a note must be rejected, got %d", status)
-	}
-	status, body = ta.do(t, "POST", "/api/v1/work-orders/"+id+"/findings/"+fid+"/decision", `{"action":"dispute","note":"scripted mock regression"}`)
-	if status != 200 || !strings.Contains(body, `"status":"disputed"`) || !strings.Contains(body, `"decided_by":"usr-test"`) {
-		t.Fatalf("dispute: %d %s", status, body)
-	}
-	if status, _ := ta.do(t, "POST", "/api/v1/work-orders/"+id+"/findings/nope/decision", `{"action":"confirm"}`); status != 404 {
-		t.Fatalf("unknown finding: %d", status)
+	if status, _ := ta.do(t, "POST", "/api/v1/work-orders/"+id+"/findings/"+fid+"/decision", `{"action":"dispute","note":"scripted mock regression"}`); status != 409 {
+		t.Fatalf("a shipped order's findings no longer change, got %d", status)
 	}
 
 	// the settings page learns that Jev is on
@@ -326,7 +319,7 @@ func TestManualPauseHoldsAnOrder(t *testing.T) {
 	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+manual+"/resume", ""); status != 202 {
 		t.Fatalf("resume: %d %s", status, body)
 	}
-	ta.awaitState(t, manual, "NEEDS_HUMAN_REVIEW", 60*time.Second)
+	ta.awaitState(t, manual, "READY", 60*time.Second)
 }
 
 func TestConvergeGapAppendsATaskEndToEnd(t *testing.T) {
@@ -340,7 +333,7 @@ func TestConvergeGapAppendsATaskEndToEnd(t *testing.T) {
 	if status, _ := ta.do(t, "POST", "/api/v1/work-orders/"+id+"/plan/generate", ""); status != 202 {
 		t.Fatal("plan generate")
 	}
-	ta.awaitState(t, id, "NEEDS_HUMAN_REVIEW", 120*time.Second)
+	ta.awaitState(t, id, "READY", 120*time.Second)
 	var gates []string
 	for _, e := range ta.activity(t, id) {
 		if e.Kind == "converge_gate" {

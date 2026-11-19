@@ -16,7 +16,7 @@ func infraVerifyRig(t *testing.T, d *fakeDocker) (*Factory, *model.WorkOrder, *s
 	f, wo, wos := monitorFactory(t, nil)
 	q := &fakeQueue{}
 	f.Sched, f.Sandbox, f.DataDir, f.Docker = q, failSandbox{}, t.TempDir(), d
-	if err := os.MkdirAll(f.workspaceDir(wo.ID), 0o755); err != nil {
+	if err := os.MkdirAll(f.workspaceDir(wo), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	f.Proj, f.Quality, f.Findings = &store.ProjectRepo{DB: wos.DB}, &store.QualityRepo{DB: wos.DB}, &store.FindingRepo{DB: wos.DB}

@@ -88,7 +88,7 @@ func (r *rig) markAppends(t *testing.T, n int) {
 func TestConvergeGateConvergedContinuesToReadiness(t *testing.T) {
 	j := &fakeJudge{}
 	r := convergeRig(t, j, cleanReport)
-	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview {
+	if wo := r.evaluate(t); wo.State != model.StateReady {
 		t.Fatalf("state %s", wo.State)
 	}
 	ev := eventByKind(t, r, "converge_gate")
@@ -285,7 +285,7 @@ func TestConvergeUnsettledAnswers(t *testing.T) {
 	// an unsettled gap_valid never appends: with nothing else wrong the order converges
 	r := convergeRig(t, &fakeJudge{over: map[string]float64{"gap_valid_C1-G1": 0.5}}, gapsReport(codeGapJSON))
 	r.builtPlan(t)
-	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview || len(r.events(t, "converge_append")) != 0 {
+	if wo := r.evaluate(t); wo.State != model.StateReady || len(r.events(t, "converge_append")) != 0 {
 		t.Fatalf("state %s", wo.State)
 	}
 	if ev := eventByKind(t, r, "converge_gate"); ev.Payload["outcome"] != GateConverged {
@@ -340,7 +340,7 @@ func TestConvergeGateEscalatesOnJevFailureOrMissingReport(t *testing.T) {
 
 func TestConvergeIsSkippedWithoutJev(t *testing.T) {
 	r := convergeRig(t, nil, cleanReport)
-	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview {
+	if wo := r.evaluate(t); wo.State != model.StateReady {
 		t.Fatalf("state %s", wo.State)
 	}
 	if len(r.events(t, "converge_gate")) != 0 || len(r.h.prompts["foreman"]) != 0 || len(r.h.prompts["architect"]) != 0 {
@@ -562,7 +562,7 @@ func TestNonBlockingFindingsAreNotesForTheNextBuilder(t *testing.T) {
 	if prompt := implementPrompt(wo, model.Job{TaskID: "wo1_t1"}, nil); !strings.Contains(prompt, "Unused import") || !strings.Contains(prompt, "Review notes") {
 		t.Fatalf("Builder prompt lacks the note:\n%s", prompt)
 	}
-	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview {
+	if wo := r.evaluate(t); wo.State != model.StateReady {
 		t.Fatalf("state %s", wo.State)
 	}
 	open := j.calls[0].state.(map[string]any)["open_findings"].([]GateFinding)
@@ -761,7 +761,7 @@ func TestLostEnqueueAfterAContractAmendmentIsRecoveredOnRetry(t *testing.T) {
 func TestUnverifiedCriterionDoesNotAppendOrEscalate(t *testing.T) {
 	j := &fakeJudge{}
 	r := convergeRig(t, j, `{"revision":0,"round":1,"gaps":[],"unverified":[{"criterion":"c1","reason":"needs postgres"}],"converged":true}`)
-	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview {
+	if wo := r.evaluate(t); wo.State != model.StateReady {
 		t.Fatalf("state %s", wo.State)
 	}
 	if ev := eventByKind(t, r, "converge_gate"); ev.Payload["outcome"] != GateConverged {

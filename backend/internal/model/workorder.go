@@ -109,6 +109,8 @@ type WorkOrder struct {
 	ArchitectReport string            `json:"-"`                    // JSON of the latest Architect verification
 	SourceRef       string            `json:"source_ref,omitempty"` // e.g. jira:ABC-12
 	SourceChatID    string            `json:"source_chat_id,omitempty"`
+	BaseBranch      string            `json:"base_branch,omitempty"` // branch the PR targets; empty means the remote default branch
+	Warning         string            `json:"warning,omitempty"`     // set on the create response only
 	PRURL           string            `json:"pr_url,omitempty"`
 	PRRef           string            `json:"pr_ref,omitempty"`
 	PRMergedAt      *time.Time        `json:"pr_merged_at,omitempty"`

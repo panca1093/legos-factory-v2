@@ -15,7 +15,6 @@ import {
   money,
   orderStatus,
   publishNote,
-  shipState,
   stageIndex,
   stageTabs,
 } from "../../../composables/presentation";
@@ -25,12 +24,9 @@ import NowCard from "./NowCard.vue";
 import TaskGraph from "../task-graph/TaskGraph.vue";
 import ActivityPanel from "../runs/ActivityPanel.vue";
 import ReviewPanel from "../reviews/ReviewPanel.vue";
-import ChangesPanel from "../reviews/ChangesPanel.vue";
 import {
   architectReport,
   changeRequestDraft,
-  currentIssues,
-  currentReason,
 } from "../runs/agentActivity";
 const factory = useFactory(),
   checks = useChecks(),
@@ -41,13 +37,13 @@ const tabs = [
   { key: "activity", label: "Activity" },
   { key: "progress", label: "Progress" },
   { key: "review", label: "Review" },
-  { key: "changes", label: "Changes & PR" },
 ];
 const legacyTabs: Record<string, string> = {
   plan: "activity",
   blueprint: "activity",
   graph: "progress",
   quality: "review",
+  changes: "activity",
 };
 const id = computed(() => String(route.params.id)),
   order = computed(() => factory.detail?.work_order),
@@ -130,21 +126,6 @@ const crewModels = computed(
 const status = computed(
     () => order.value && orderStatus(order.value, publish.value.remote),
   ),
-  ship = computed(() =>
-    order.value
-      ? shipState(order.value, factory.events, publish.value.remote)
-      : null,
-  ),
-  reason = computed(() =>
-    order.value
-      ? currentReason(order.value, factory.events, factory.eventsHasMore)
-      : "",
-  ),
-  issues = computed(() =>
-    order.value
-      ? currentIssues(order.value, factory.events, factory.eventsHasMore)
-      : [],
-  ),
   publish = computed(() => publishNote(project.value)),
   cost = computed(() => runs.value.reduce((n, r) => n + r.cost_micros, 0));
 watch(
@@ -163,13 +144,6 @@ watch(
       unsubscribe();
     });
     await factory.loadDetail(value);
-  },
-  { immediate: true },
-);
-watch(
-  [id, tab, () => order.value?.revision, () => order.value?.commit_sha],
-  ([value, key]) => {
-    if (key === "changes" && order.value) void factory.loadDiff(value);
   },
   { immediate: true },
 );
@@ -391,6 +365,7 @@ function download() {
       @resume="act(() => factory.resume(id))"
       @cancel="open('cancel')"
       @goto="setTab"
+      @decision="open"
     />
     <div class="fx-tabs" role="tablist" aria-label="Work order sections">
       <button
@@ -446,7 +421,7 @@ function download() {
         />
       </div>
       <ReviewPanel
-        v-else-if="tab === 'review'"
+        v-else
         :checks="factory.quality"
         :findings="factory.findings"
         :revision="order.revision"
@@ -458,24 +433,6 @@ function download() {
           (f, action, note) =>
             act(() => factory.decideFinding(id, f, action, note))
         "
-      />
-      <ChangesPanel
-        v-else
-        :runs="runs"
-        :state="order.state"
-        :can-write="session.canWrite"
-        :busy="busy"
-        :ship="ship"
-        :reason="reason"
-        :issues="issues"
-        :publish-note="publish.text"
-        :diff="factory.diff"
-        :refresh-failed="factory.diffRefreshFailed"
-        :order-id="id"
-        :pr-url="order.pr_url"
-        :pr-ref="order.pr_ref"
-        :source-ref="order.source_ref"
-        @decision="open"
       />
     </div>
   </div>

@@ -51,7 +51,7 @@ func (f *Factory) handleReview(ctx context.Context, job model.Job) error {
 		}
 	}
 	var r reviewReply
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+taskList(tasks), f.workspaceDir(wo.ID), wo.KBBaseSHA)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+taskList(tasks), f.workspaceDir(wo), wo.KBBaseSHA)
 	_, runID, err := f.runStructured(ctx, wo, model.AgentForeman, foremanReviewPrompt(wo, tasks, criticals(prev), scoped)+kbText,
 		map[string]string{"stage": "review", "clarification_answer": wo.ClarifAnswer},
 		"", &r, runOpts{Audit: audit, Planning: true, Prime: foremanPrime(wo)})

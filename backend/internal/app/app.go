@@ -457,6 +457,7 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	a.Sched.Start(ctx)
 	go a.warm()
+	a.Server.Factory.RemoveLegacyWorkspaces(ctx)
 	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {
 		return err
 	}

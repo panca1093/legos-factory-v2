@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -119,7 +120,13 @@ func (p *Projects) List(ctx context.Context, u *model.User) ([]model.Project, er
 
 // Create stores the project and makes its creator the first member.
 func (p *Projects) Create(ctx context.Context, u *model.User, pr *model.Project) error {
-	pr.RepoURL = expandPath(pr.RepoURL)
+	pr.RepoURL = expandPath(strings.TrimSpace(pr.RepoURL))
+	if cloneURL.MatchString(pr.RepoURL) {
+		return fmt.Errorf("%w: projects are local folders: clone %s into a folder first (Add project, From GitHub/GitLab/Bitbucket) and add that folder", ErrInvalid, pr.RepoURL)
+	}
+	if pr.RepoURL != "" && !filepath.IsAbs(pr.RepoURL) {
+		return fmt.Errorf("%w: repo_url must be the absolute path of a local folder", ErrInvalid)
+	}
 	if err := p.Store.Create(ctx, pr); err != nil {
 		return err
 	}

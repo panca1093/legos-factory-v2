@@ -1,6 +1,9 @@
 package model
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 var (
 	ErrWorkOrderNotFound = errors.New("work order not found")
@@ -22,6 +25,36 @@ var (
 	ErrCancelled         = errors.New("cancelled")
 	ErrBusy              = errors.New("another folder chooser is already open")
 )
+
+// ErrNoGitIdentity means the repository has no user.name/user.email configured, so commits cannot be made.
+var ErrNoGitIdentity = fmt.Errorf("%w: no git identity for this repository: set user.name and user.email (for example with `git config --global user.name \"Your Name\"` and `git config --global user.email you@example.com`)", ErrPermanent)
+
+// HookError is a commit or merge that git rejected, almost always a repository hook (pre-commit,
+// commit-msg); Output is what git and the hook printed, so the Builder can fix it.
+type HookError struct {
+	Op     string // commit | merge
+	Output string
+}
+
+func (e *HookError) Error() string { return "git " + e.Op + " was rejected: " + e.Output }
+
+// SigningError is a commit or merge that failed because git could not sign it (the repository sets
+// commit.gpgsign). The Builder cannot fix it: the user must make the signing key available.
+type SigningError struct {
+	Op     string
+	Output string
+}
+
+func (e *SigningError) Error() string {
+	return "git " + e.Op + " could not be signed: " + e.Output + " (commit.gpgsign is on for this repository; make the signing key available without a prompt, for example add it to ssh-agent, or turn signing off)"
+}
+
+func (e *SigningError) Unwrap() error { return ErrPermanent }
+
+// WorktreeDir is where a work order's worktree lives, outside the project folder.
+func WorktreeDir(dataDir, projectID, woID string) string {
+	return dataDir + "/worktrees/" + projectID + "/" + woID
+}
 
 // ErrStateConflict marks domain rejections that indicate an invalid
 // operation for the current state (mapped to HTTP 409).

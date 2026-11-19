@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,8 +36,8 @@ type Integrations struct {
 }
 
 type originInfo struct {
-	mod          time.Time
-	repo, origin string
+	mod    time.Time
+	origin string
 }
 
 const ghAuthTTL = 5 * time.Minute
@@ -276,107 +277,129 @@ func (in *Integrations) LookupIssue(ctx context.Context, u *model.User, req mode
 		Acceptance: acceptance, URL: issue.URL}, nil
 }
 
-// localGitHub returns owner/repo when p has no connection and is a local git
-// repo whose origin is on github.com, else "".
-func (in *Integrations) localGitHub(ctx context.Context, p *model.Project) (repo, origin string) {
-	if in == nil || in.GH == nil || in.Host == nil || p.GitConnection != "" {
-		return "", ""
+// origin returns the project folder's origin URL, "" when it is not a git repo or has no origin.
+func (in *Integrations) origin(ctx context.Context, p *model.Project) string {
+	if in == nil || in.Host == nil {
+		return ""
 	}
 	dir := expandPath(p.RepoURL)
 	if !filepath.IsAbs(dir) {
-		return "", ""
+		return ""
 	}
 	var mod time.Time
 	if fi, err := os.Stat(filepath.Join(dir, ".git", "config")); err == nil {
 		mod = fi.ModTime()
 		if v, ok := in.origins.Load(dir); ok && v.(originInfo).mod.Equal(mod) {
-			return v.(originInfo).repo, v.(originInfo).origin
+			return v.(originInfo).origin
 		}
 	}
 	if !in.Host.IsGitRepo(dir) {
-		return "", ""
+		return ""
 	}
-	origin = in.Host.OriginURL(ctx, dir)
-	repo = ParseGitHubRepo(origin)
+	origin := in.Host.OriginURL(ctx, dir)
 	if !mod.IsZero() {
-		in.origins.Store(dir, originInfo{mod, repo, origin})
+		in.origins.Store(dir, originInfo{mod: mod, origin: origin})
 	}
-	return repo, origin
+	return origin
 }
 
-// Annotate fills the computed publish_via and github_repo fields.
+var (
+	urlRemote = regexp.MustCompile(`^(?:https?|ssh|git)://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)$`)
+	scpRemote = regexp.MustCompile(`^(?:[^@/\s]+@)?([^:/\s]+):(.+)$`)
+)
+
+// parseRemote splits a git remote URL (https, ssh or scp-style) into its host and "owner/repo" path.
+func parseRemote(origin string) (host, repo string) {
+	origin = strings.TrimSpace(origin)
+	m := urlRemote.FindStringSubmatch(origin)
+	if m == nil {
+		m = scpRemote.FindStringSubmatch(origin)
+	}
+	if m == nil {
+		return "", ""
+	}
+	repo = strings.Trim(strings.TrimSuffix(strings.Trim(m[2], "/"), ".git"), "/")
+	return strings.ToLower(m[1]), repo
+}
+
+// connectionHost is the git host a connection's API base URL serves (api.github.com serves github.com).
+func connectionHost(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(strings.ToLower(u.Hostname()), "api.")
+}
+
+// Annotate fills the computed publish_via and github_repo fields: gh for a GitHub origin, remote
+// for any other origin (a personal connection serves it), none without an origin.
 func (in *Integrations) Annotate(ctx context.Context, p *model.Project) {
 	p.PublishVia, p.GitHubRepo = "none", ""
-	if p.GitConnection != "" {
-		p.PublishVia = "connection"
-	} else if repo, _ := in.localGitHub(ctx, p); repo != "" {
+	origin := in.origin(ctx, p)
+	if origin == "" {
+		return
+	}
+	p.PublishVia = "remote"
+	if repo := ParseGitHubRepo(origin); repo != "" && in.GH != nil {
 		p.PublishVia, p.GitHubRepo = "gh", repo
 	}
 }
 
-// Bound reports whether GitFor would bind the project, without any network
-// call: a connection, or a local repo with a GitHub origin in gh mode.
-func (in *Integrations) Bound(ctx context.Context, p *model.Project) bool {
-	if in == nil {
-		return false
+// GitFor returns the provider and repo slug for the project's origin. A GitHub origin goes
+// through the user's gh login; any other host through userID's own active connection whose base
+// URL names that host. ok is false when the folder has no origin; a missing connection or login is err.
+func (in *Integrations) GitFor(ctx context.Context, p *model.Project, userID string) (g GitProvider, repo string, ok bool, err error) {
+	origin := in.origin(ctx, p)
+	if origin == "" {
+		return nil, "", false, nil
 	}
-	if p.GitConnection != "" {
-		return true
+	host, repo := parseRemote(origin)
+	if host == "" || repo == "" {
+		return nil, "", true, fmt.Errorf("origin %q is not a remote URL legos-factory can open pull requests on", origin)
 	}
-	repo, _ := in.localGitHub(ctx, p)
-	return repo != ""
-}
-
-// GitFor returns the provider and auth for a project: its bound connection,
-// which wins, else the user's gh login for a local repo with a GitHub origin.
-// ok is false when the project is neither.
-func (in *Integrations) GitFor(ctx context.Context, p *model.Project) (g GitProvider, ok bool, err error) {
-	if in == nil {
-		return nil, false, nil
-	}
-	if p.GitConnection == "" {
-		repo, origin := in.localGitHub(ctx, p)
-		if repo == "" {
-			return nil, false, nil
-		}
-		g = in.GH(repo, origin)
-		if at, ok := in.authOK.Load(repo); !ok || time.Since(at.(time.Time)) > ghAuthTTL {
+	if gh := ParseGitHubRepo(origin); gh != "" && in.GH != nil {
+		g = in.GH(gh, origin)
+		if at, ok := in.authOK.Load(gh); !ok || time.Since(at.(time.Time)) > ghAuthTTL {
 			if _, err := g.CheckAuth(ctx); err != nil {
-				return nil, true, err
+				return nil, gh, true, err
 			}
-			in.authOK.Store(repo, time.Now())
+			in.authOK.Store(gh, time.Now())
 		}
 		if w, ok := g.(warmer); ok {
 			if err := w.Warm(ctx); err != nil {
-				return nil, true, fmt.Errorf("%w: %v", model.ErrGHUnreachable, err)
+				return nil, gh, true, fmt.Errorf("%w: %v", model.ErrGHUnreachable, err)
 			}
 		}
-		return g, true, nil
+		return g, gh, true, nil
 	}
-	c, err := in.Store.Get(ctx, p.GitConnection)
+	conns, err := in.Store.Visible(ctx, userID)
 	if err != nil {
-		return nil, true, err
+		return nil, repo, true, err
 	}
-	if c.Status != model.ConnectionActive {
-		return nil, true, model.ErrConnectionDisabled
+	for i := range conns {
+		c := &conns[i]
+		if c.OwnerID != userID || !c.IsGit() || c.Status != model.ConnectionActive || connectionHost(c.BaseURL) != host {
+			continue
+		}
+		token, err := in.token(ctx, c)
+		if err != nil {
+			return nil, repo, true, err
+		}
+		g, err = in.Git(*c, token)
+		return g, repo, true, err
 	}
-	token, err := in.token(ctx, c)
-	if err != nil {
-		return nil, true, err
-	}
-	g, err = in.Git(*c, token)
-	return g, true, err
+	return nil, repo, true, fmt.Errorf("no active personal connection for %s: add a GitHub, GitLab or Bitbucket connection for that host in Settings, then retry", host)
 }
 
-// GitAuth is the auth a project is cloned with, as for a work order workspace: nil when the project is
-// unbound or its gh login is unavailable, since a local folder clones without one.
+// GitAuth is the auth the read-only checkouts use: nil unless the user's own gh login serves the
+// folder, since a local folder clones without one.
 func (in *Integrations) GitAuth(ctx context.Context, p *model.Project) (*model.GitAuth, error) {
-	g, bound, err := in.GitFor(ctx, p)
-	switch {
-	case !bound, errors.Is(err, model.ErrGHMissing), errors.Is(err, model.ErrGHUnauthenticated), errors.Is(err, model.ErrGHUnreachable):
+	if in == nil {
 		return nil, nil
-	case err != nil:
-		return nil, fmt.Errorf("repository connection unavailable: %w", err)
+	}
+	g, _, ok, err := in.GitFor(ctx, p, "")
+	if !ok || err != nil || g == nil {
+		return nil, nil
 	}
 	a := g.GitAuth()
 	return &a, nil

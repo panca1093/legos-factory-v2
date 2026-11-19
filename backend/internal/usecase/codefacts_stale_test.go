@@ -12,7 +12,7 @@ import (
 
 func TestCodeFactsStaleOnUncommittedEditAndRename(t *testing.T) {
 	data := t.TempDir()
-	ws, base := gitWorkspace(t, data, "wo1")
+	ws, base := gitWorkspace(t, data, "", "wo1")
 	f := &Factory{CodeFacts: &memFacts{}, DataDir: data}
 	ctx := context.Background()
 	wo := &model.WorkOrder{ID: "wo1", KBBaseSHA: base}

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"legos-factory/backend/internal/model"
+	"legos-factory/backend/internal/sandbox"
 	"legos-factory/backend/internal/store"
 )
 
@@ -33,16 +34,19 @@ func deleteFixture(t *testing.T, state model.State) (*Factory, *store.WorkOrderR
 	f.Proj = &store.ProjectRepo{DB: wos.DB}
 	f.Sched = &jobQueue{JobRepo: &store.JobRepo{DB: wos.DB}}
 	f.DataDir = t.TempDir()
+	f.Sandbox = sandbox.Local{DataDir: f.DataDir}
 	if err := wos.UpdateFields(context.Background(), wo.ID, map[string]any{"state": string(state)}); err != nil {
 		t.Fatal(err)
 	}
 	for _, d := range []string{"wo1", "wo1.tasks/t1"} {
-		if err := os.MkdirAll(filepath.Join(f.DataDir, "workspaces", d), 0o755); err != nil {
+		if err := os.MkdirAll(wsOf(f, d), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return f, wos
 }
+
+func wsOf(f *Factory, id string) string { return model.WorktreeDir(f.DataDir, "p1", id) }
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
@@ -63,7 +67,7 @@ func TestDeleteWorkOrderTerminalRemovesRowsAndDirs(t *testing.T) {
 		t.Fatalf("events left: %d %v", n, err)
 	}
 	for _, d := range []string{"wo1", "wo1.tasks"} {
-		if exists(filepath.Join(f.DataDir, "workspaces", d)) {
+		if exists(wsOf(f, d)) {
 			t.Fatalf("%s survived", d)
 		}
 	}
@@ -75,7 +79,7 @@ func TestDeleteWorkOrderRefusesActive(t *testing.T) {
 	if err := f.DeleteWorkOrder(ctx, "wo1"); !errors.Is(err, model.ErrStateConflict) {
 		t.Fatalf("want state conflict, got %v", err)
 	}
-	if _, err := wos.Get(ctx, "wo1"); err != nil || !exists(filepath.Join(f.DataDir, "workspaces", "wo1")) {
+	if _, err := wos.Get(ctx, "wo1"); err != nil || !exists(wsOf(f, "wo1")) {
 		t.Fatal("active order was touched")
 	}
 }
@@ -125,7 +129,7 @@ func TestDeleteProjectKeepsLocalFolderAndRemovesOrders(t *testing.T) {
 	if err := wos.Create(ctx, &model.WorkOrder{ID: "wo2", ProjectID: "p2", Title: "t", Objective: "o", State: model.StateCancelled, CreatedBy: "u1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(f.DataDir, "workspaces", "wo2"), 0o755); err != nil {
+	if err := os.MkdirAll(model.WorktreeDir(f.DataDir, "p2", "wo2"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.DeleteProject(ctx, "p2"); err != nil {
@@ -140,7 +144,7 @@ func TestDeleteProjectKeepsLocalFolderAndRemovesOrders(t *testing.T) {
 	if !exists(filepath.Join(folder, "main.go")) {
 		t.Fatal("the user's own folder was touched")
 	}
-	if exists(filepath.Join(f.DataDir, "workspaces", "wo2")) {
+	if exists(model.WorktreeDir(f.DataDir, "p2", "wo2")) {
 		t.Fatal("workspace survived")
 	}
 	if _, err := wos.Get(ctx, "wo1"); err != nil {
@@ -161,7 +165,7 @@ func TestDeleteProjectRefusesWhileOrdersActive(t *testing.T) {
 	if _, gerr := f.Proj.Get(ctx, "p1"); gerr != nil {
 		t.Fatal("project removed")
 	}
-	if _, gerr := wos.Get(ctx, "wo1"); gerr != nil || !exists(filepath.Join(f.DataDir, "workspaces", "wo1")) {
+	if _, gerr := wos.Get(ctx, "wo1"); gerr != nil || !exists(wsOf(f, "wo1")) {
 		t.Fatal("terminal order removed although project delete was refused")
 	}
 }
@@ -198,7 +202,7 @@ func TestDeleteWorkOrderRefusesWhileJobRunning(t *testing.T) {
 	if err := f.DeleteWorkOrder(ctx, "wo1"); !errors.Is(err, model.ErrStateConflict) {
 		t.Fatalf("want state conflict, got %v", err)
 	}
-	if _, err := wos.Get(ctx, "wo1"); err != nil || !exists(filepath.Join(f.DataDir, "workspaces", "wo1")) {
+	if _, err := wos.Get(ctx, "wo1"); err != nil || !exists(wsOf(f, "wo1")) {
 		t.Fatal("order with a running job was removed")
 	}
 }
@@ -271,7 +275,7 @@ func TestDeleteProjectRefusesWhileJobRunning(t *testing.T) {
 			t.Fatalf("%s removed: %v", id, err)
 		}
 	}
-	if _, err := f.Proj.Get(ctx, "p1"); err != nil || !exists(filepath.Join(f.DataDir, "workspaces", "wo1")) {
+	if _, err := f.Proj.Get(ctx, "p1"); err != nil || !exists(wsOf(f, "wo1")) {
 		t.Fatal("project delete was not all-or-nothing")
 	}
 }
@@ -290,7 +294,7 @@ func TestDeleteProjectLateOrderIsConflictAndRemovesNothing(t *testing.T) {
 			t.Fatalf("%s removed: %v", id, err)
 		}
 	}
-	if !exists(filepath.Join(f.DataDir, "workspaces", "wo1")) {
+	if !exists(wsOf(f, "wo1")) {
 		t.Fatal("workspace removed although nothing was deleted")
 	}
 }

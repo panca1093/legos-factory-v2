@@ -19,7 +19,6 @@ import {
   type Task,
   type WorkOrder,
   type WOEvent,
-  type WODiff,
 } from "../types/api";
 
 const ignoreGone = (e: unknown) => {
@@ -45,10 +44,6 @@ export const useFactory = defineStore("factory", {
     detail: null as WODetail | null,
     events: [] as WOEvent[],
     eventsHasMore: false,
-    diffSeq: 0,
-    diffAbort: null as AbortController | null,
-    diffRefreshFailed: false,
-    diff: null as WODiff | null,
     quality: [] as QualityCheck[],
     findings: [] as Finding[],
     loading: false,
@@ -95,10 +90,6 @@ export const useFactory = defineStore("factory", {
       this.detail = null;
       this.events = [];
       this.eventsHasMore = false;
-      this.diffSeq++;
-      this.diffAbort?.abort();
-      this.diffRefreshFailed = false;
-      this.diff = null;
       this.quality = [];
       this.findings = [];
       this.loading = false;
@@ -215,6 +206,7 @@ export const useFactory = defineStore("factory", {
       inspector_model: string;
       source_ref?: string;
       source_chat_id?: string;
+      base_branch?: string;
     }) {
       const res = await api.post<WorkOrder>("/api/v1/work-orders", input);
       this.workOrders = [
@@ -244,10 +236,6 @@ export const useFactory = defineStore("factory", {
         this.detail = null;
         this.events = [];
         this.eventsHasMore = false;
-        this.diffSeq++;
-        this.diffAbort?.abort();
-        this.diffRefreshFailed = false;
-        this.diff = null;
         this.quality = [];
         this.findings = [];
       }
@@ -282,29 +270,6 @@ export const useFactory = defineStore("factory", {
           this.error = e instanceof Error ? e.message : String(e);
       } finally {
         if (request === this.requestID) this.loading = false;
-      }
-    },
-    async loadDiff(id: string) {
-      const seq = ++this.diffSeq;
-      this.diffAbort?.abort();
-      const ctl = (this.diffAbort = new AbortController());
-      try {
-        const diff = await api.get<WODiff>(
-          `/api/v1/work-orders/${id}/diff`,
-          ctl.signal,
-        );
-        if (seq !== this.diffSeq) return;
-        this.diff = { ...diff, files: diff.files ?? [] };
-        this.diffRefreshFailed = false;
-      } catch (e) {
-        if (seq !== this.diffSeq) return;
-        if (this.diff?.available) this.diffRefreshFailed = true;
-        else
-          this.diff = {
-            available: false,
-            reason: e instanceof Error ? e.message : String(e),
-            files: [],
-          };
       }
     },
     async reloadDetail() {

@@ -15,8 +15,7 @@ import (
 // ErrWorkspace marks a work order whose isolated workspace could not be prepared.
 var ErrWorkspace = errors.New("WORKSPACE_FAILED")
 
-// WorkOrders creates work orders and their isolated workspaces. A project
-// bound to a git connection is cloned with that connection's credential.
+// WorkOrders creates work orders and their isolated workspaces: git worktrees of the project folder.
 type WorkOrders struct {
 	Store        WorkOrderStore
 	Projects     *Projects
@@ -75,31 +74,20 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 		RoleAgents:     roleAgents,
 		CreatedBy:      u.ID,
 	}
-	var auth *model.GitAuth
-	if g, bound, err := w.Integrations.GitFor(ctx, proj); bound {
-		switch {
-		case errors.Is(err, model.ErrGHMissing), errors.Is(err, model.ErrGHUnauthenticated), errors.Is(err, model.ErrGHUnreachable):
-			// a missing gh login must not block local work; the open-PR job reports it
-		case err != nil:
-			return nil, fmt.Errorf("%w: repository connection unavailable: %v", ErrWorkspace, err)
-		default:
-			a := g.GitAuth()
-			auth = &a
-		}
-	}
 	// prepare before persisting: a stored CREATED order without a workspace gets resumed into planning on restart
-	dir, err := w.Sandbox.Prepare(ctx, wo.ID, proj.RepoURL, auth)
+	dir, base, err := w.Sandbox.Prepare(ctx, wo.ProjectID, wo.ID, proj.RepoURL, req.BaseBranch)
 	if err != nil {
 		return nil, fmt.Errorf("%w: could not prepare workspace: %v", ErrWorkspace, err)
 	}
+	wo.BaseBranch = base
 	p, err := repoProfile(dir)
 	if err != nil {
-		_ = w.Sandbox.Destroy(ctx, wo.ID)
+		w.cleanup(ctx, wo, proj)
 		return nil, fmt.Errorf("%w: %v", ErrWorkspace, err)
 	}
 	b, err := json.Marshal(p)
 	if err != nil {
-		_ = w.Sandbox.Destroy(ctx, wo.ID)
+		w.cleanup(ctx, wo, proj)
 		return nil, err
 	}
 	wo.CheckProfile = string(b)
@@ -107,11 +95,18 @@ func (w *WorkOrders) Create(ctx context.Context, u *model.User, req model.Create
 		_ = w.Projects.Store.SetLanguage(ctx, proj.ID, p.Language)
 	}
 	if err := w.Store.Create(ctx, wo); err != nil {
-		_ = w.Sandbox.Destroy(ctx, wo.ID)
+		w.cleanup(ctx, wo, proj)
 		return nil, err
+	}
+	if w.Sandbox.Dirty(ctx, proj.RepoURL) {
+		wo.Warning = "Your project folder has uncommitted changes. They are not part of this work order, which starts from " + base + "."
 	}
 	if wo.SourceChatID != "" {
 		_, _ = w.Store.AppendEvent(ctx, wo.ID, u.ID, "created_from_chat", "Created from a chat conversation", map[string]any{"chat_id": wo.SourceChatID})
 	}
 	return wo, nil
+}
+
+func (w *WorkOrders) cleanup(ctx context.Context, wo *model.WorkOrder, proj *model.Project) {
+	_ = w.Sandbox.Cleanup(context.WithoutCancel(ctx), wo.ProjectID, wo.ID, proj.RepoURL)
 }

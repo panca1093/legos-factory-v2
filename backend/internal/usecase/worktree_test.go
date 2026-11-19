@@ -71,7 +71,9 @@ func worktreeFactory(t *testing.T, h Harness, tasks ...string) (*Factory, *model
 	f.DataDir = t.TempDir()
 	f.Sandbox = sandbox.Local{DataDir: f.DataDir}
 	src := t.TempDir()
-	gitRun(t, src, "init", "--quiet")
+	gitRun(t, src, "init", "--quiet", "-b", "main")
+	gitRun(t, src, "config", "user.email", "t@t")
+	gitRun(t, src, "config", "user.name", "t")
 	for name, content := range map[string]string{"shared.txt": "base\n", ".gitignore": "setup-ran\n"} {
 		if err := os.WriteFile(filepath.Join(src, name), []byte(content), 0o644); err != nil {
 			t.Fatal(err)
@@ -79,7 +81,7 @@ func worktreeFactory(t *testing.T, h Harness, tasks ...string) (*Factory, *model
 	}
 	gitRun(t, src, "add", "-A")
 	gitRun(t, src, "commit", "--quiet", "-m", "base")
-	if _, err := f.Sandbox.Prepare(context.Background(), wo.ID, src, nil); err != nil {
+	if _, _, err := f.Sandbox.Prepare(context.Background(), wo.ProjectID, wo.ID, src, ""); err != nil {
 		t.Fatal(err)
 	}
 	return f, wo
@@ -120,7 +122,7 @@ func TestParallelTasksRunInOwnWorktreesAndMerge(t *testing.T) {
 	if err := errors.Join(errs...); err != nil {
 		t.Fatal(err)
 	}
-	woDir := f.workspaceDir(wo.ID)
+	woDir := f.workspaceDir(wo)
 	for i, d := range h.dirs {
 		if d == woDir || !h.setup[i] {
 			t.Fatalf("a task ran in the shared workspace or before setup: %v %v", h.dirs, h.setup)
@@ -130,7 +132,7 @@ func TestParallelTasksRunInOwnWorktreesAndMerge(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(woDir, id+".txt")); err != nil {
 			t.Fatalf("%s not merged: %v", id, err)
 		}
-		if _, err := os.Stat(f.taskDir(wo.ID, id)); !os.IsNotExist(err) {
+		if _, err := os.Stat(f.taskDir(wo, id)); !os.IsNotExist(err) {
 			t.Fatalf("worktree of %s not removed: %v", id, err)
 		}
 	}
@@ -190,12 +192,12 @@ func TestConflictingTaskIsResolvedByBuilder(t *testing.T) {
 			close(release)
 			<-t2
 			done, _ := f.Runs.CompletedBuilderTasks(ctx, wo.ID)
-			got, _ := os.ReadFile(filepath.Join(f.workspaceDir(wo.ID), "shared.txt"))
+			got, _ := os.ReadFile(filepath.Join(f.workspaceDir(wo), "shared.txt"))
 			if tc.wantErr {
 				if !errors.Is(err, model.ErrPermanent) || done["T2"] || string(got) != "T1\n" {
 					t.Fatalf("err = %v, done = %v, shared = %q", err, done, got)
 				}
-				if _, serr := os.Stat(f.taskDir(wo.ID, "T2")); serr != nil {
+				if _, serr := os.Stat(f.taskDir(wo, "T2")); serr != nil {
 					t.Fatalf("failed worktree should be kept: %v", serr)
 				}
 				runs, _ := f.Runs.(*store.RunRepo).List(ctx, wo.ID)

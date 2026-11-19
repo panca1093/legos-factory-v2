@@ -38,6 +38,9 @@ func (s *Server) handleCreateProject(c echo.Context) error {
 	}
 	p := &model.Project{Name: req.Name, Description: req.Description, RepoURL: req.RepoURL}
 	if err := s.Projects.Create(c.Request().Context(), currentUser(c), p); err != nil {
+		if errors.Is(err, usecase.ErrInvalid) {
+			return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+		}
 		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", "could not create project")
 	}
 	s.Integrations.Annotate(c.Request().Context(), p)
@@ -304,14 +307,6 @@ func (s *Server) handleListEvents(c echo.Context) error {
 		events = []model.Event{}
 	}
 	return c.JSON(http.StatusOK, map[string]any{"events": events, "has_more": more})
-}
-
-func (s *Server) handleWODiff(c echo.Context) error {
-	d, err := s.Factory.Diff(c.Request().Context(), woFrom(c))
-	if err != nil {
-		d = model.WODiff{Reason: "Could not read the diff.", Files: []model.WODiffFile{}}
-	}
-	return c.JSON(http.StatusOK, d)
 }
 
 func (s *Server) handleListQuality(c echo.Context) error {

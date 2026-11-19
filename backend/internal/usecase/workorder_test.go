@@ -16,23 +16,28 @@ type cloneSandbox struct {
 	dataDir   string
 	files     map[string]string
 	destroyed []string
+	baseAsked string
+	dirty     bool
 }
 
-func (s *cloneSandbox) Prepare(_ context.Context, woID, _ string, _ *model.GitAuth) (string, error) {
-	dir := filepath.Join(s.dataDir, "workspaces", woID)
+func (s *cloneSandbox) Prepare(_ context.Context, projectID, woID, _, baseBranch string) (string, string, error) {
+	s.baseAsked = baseBranch
+	dir := model.WorktreeDir(s.dataDir, projectID, woID)
 	for name, body := range s.files {
 		p := filepath.Join(dir, name)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return "", err
+			return "", "", err
 		}
 		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
-	return dir, nil
+	return dir, "main", nil
 }
 
-func (s *cloneSandbox) Destroy(_ context.Context, woID string) error {
+func (s *cloneSandbox) Dirty(context.Context, string) bool { return s.dirty }
+
+func (s *cloneSandbox) Cleanup(_ context.Context, _, woID, _ string) error {
 	s.destroyed = append(s.destroyed, woID)
 	return nil
 }
@@ -61,7 +66,7 @@ func TestCreateFreezesCheckProfileFromFreshClone(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []model.Check{{Name: "go-test", Command: "go test ./..."}, {Name: "go-vet", Command: "go vet ./..."}}
-	if err := os.Remove(filepath.Join(f.workspaceDir(wo.ID), "go.mod")); err != nil {
+	if err := os.Remove(filepath.Join(f.workspaceDir(wo), "go.mod")); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := f.WO.Get(ctx, wo.ID)

@@ -16,7 +16,7 @@ export interface Project {
   language: string;
   git_connection_id?: string;
   remote_repo?: string;
-  publish_via?: "connection" | "gh" | "none";
+  publish_via?: "remote" | "gh" | "none";
   github_repo?: string;
   kb_include?: string[];
   kb_exclude?: string[];
@@ -140,6 +140,8 @@ export interface WorkOrder {
   builder_model: string;
   inspector_model: string;
   source_chat_id?: string;
+  base_branch?: string;
+  warning?: string;
   clarif_question?: string;
   clarif_answer?: string;
   revision: number;
@@ -438,27 +440,6 @@ export interface WOEvent {
   message: string;
   payload?: Record<string, unknown>;
   created_at: string;
-}
-
-export interface WODiffFile {
-  path: string;
-  old_path?: string;
-  status: "added" | "modified" | "deleted" | "renamed";
-  additions: number;
-  deletions: number;
-  binary: boolean;
-  patch: string;
-  truncated: boolean;
-}
-
-export interface WODiff {
-  available: boolean;
-  reason?: string;
-  base?: string;
-  head?: string;
-  revision?: number;
-  files: WODiffFile[];
-  truncated?: boolean;
 }
 
 export type Provider = "github" | "gitlab" | "bitbucket" | "jira";

@@ -170,7 +170,7 @@ func newSmokeRig(t *testing.T, changed []string, tree map[string]string) *smokeR
 	r := &smokeRig{wo: &model.WorkOrder{ID: "wo_1", ProjectID: "prj_1", Revision: 2}, envs: map[string][]string{}, deaf: map[string]bool{}}
 	data := t.TempDir()
 	r.f = &Factory{DataDir: data, PlaywrightDir: t.TempDir(), Sandbox: changedSandbox{files: changed}}
-	writeTree(t, r.f.workspaceDir(r.wo.ID), tree)
+	writeTree(t, r.f.workspaceDir(r.wo), tree)
 	r.f.smoke = smokeDeps{
 		start: func(_ context.Context, dir, command string, env []string) (smokeProc, error) {
 			name := strings.Fields(command)[0]
@@ -418,7 +418,7 @@ func TestSmokeSQLParamQueriesTheRunDatabaseAndKeepsStackEnvOut(t *testing.T) {
 	p := smokeProfile()
 	p.Services, p.Database, p.Sources, p.Env, p.Setup = sp.Services, sp.Database, sp.Sources, map[string]string{"SMOKE_USER": "u", "SMOKE_PASSWORD": "p", "DATABASE_URL": "x/{{db}}"}, nil
 	p.Smoke.Params = map[string]string{"id": "sql:SELECT id FROM tryouts"}
-	writeTree(t, r.f.workspaceDir(r.wo.ID), map[string]string{"docker-compose.yml": "services: {}\n"})
+	writeTree(t, r.f.workspaceDir(r.wo), map[string]string{"docker-compose.yml": "services: {}\n"})
 	r.f.Docker = queryDocker{d}
 	r.browser = `{"results":[{"path":"/student/tryout/id-42","status":200,"ok":true,"problems":[]}]}`
 	_, res := r.f.runSmoke(context.Background(), r.wo, p)

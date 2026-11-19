@@ -92,18 +92,18 @@ type SettingsReader interface {
 	Get(ctx context.Context) (*model.Settings, error)
 }
 
-// Sandbox owns work-order workspaces: preparing them (cloning with auth when
-// given), running checks, committing verified changes locally (returning the
-// SHA, "" when not under version control) and pushing a branch to origin.
+// Sandbox owns work-order workspaces: git worktrees of the project's own repository. It prepares
+// and cleans them up, runs checks, commits verified changes locally (returning the SHA, "" when
+// not under version control) and pushes a branch to origin.
 type Sandbox interface {
-	Prepare(ctx context.Context, woID, repoURL string, auth *model.GitAuth) (string, error)
-	Destroy(ctx context.Context, woID string) error
+	Prepare(ctx context.Context, projectID, woID, repo, baseBranch string) (dir, base string, err error)
+	Cleanup(ctx context.Context, projectID, woID, repo string) error
+	Dirty(ctx context.Context, repo string) bool
 	RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration, env []string) model.CheckResult
 	Commit(ctx context.Context, dir, message string) (string, error)
-	PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (base string, err error)
+	PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) error
 	ChangedFiles(ctx context.Context, dir string) ([]string, error)
 	Diff(ctx context.Context, dir string) ([]model.FileDiff, error)
-	CommitDiff(ctx context.Context, dir, sha string) (model.WODiff, error)
 	TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (ok bool, err error)
 	MergeTask(ctx context.Context, woDir, branch, message string) (conflict bool, err error)
 	SyncTask(ctx context.Context, woDir, taskDir string) (conflicted []string, err error)

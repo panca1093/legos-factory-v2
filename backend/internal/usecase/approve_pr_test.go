@@ -59,11 +59,11 @@ func TestApproveOpensPRForGHModeProject(t *testing.T) {
 	}
 }
 
-func TestApproveSkipsPRForUnboundProject(t *testing.T) {
+func TestApproveEnqueuesPRForAFolderWithoutARemote(t *testing.T) {
 	repo := filepath.Join(t.TempDir(), "r")
 	gitInit(t, repo)
 	in := &Integrations{Host: &realGit{fakeHost{repos: map[string]string{}}}, GH: func(string, string) GitProvider { return deniedGH{} }}
-	if got := approveEnqueued(t, in, repo); queuedOpenPR(got) {
-		t.Fatalf("local-only approve must not enqueue %s, got %v", JobOpenPR, got)
+	if got := approveEnqueued(t, in, repo); !queuedOpenPR(got) {
+		t.Fatalf("approve must enqueue %s so a missing remote is reported, got %v", JobOpenPR, got)
 	}
 }
