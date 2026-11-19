@@ -2,6 +2,8 @@
 
 Status: **parked 2026-11-19**. The design is being reworked. These are code facts found while writing `docs/review-pr/SPEC.md` and `docs/editor/SPEC.md`. Whatever the new design becomes, they must be settled before Review PR or the Editor is built.
 
+**2026-11-19:** the local workspace model (`docs/local-workspace/PLAN.md`) settles #1, #10 and #19 and changes #7 and #9. See that plan's "Effect on parked prerequisites".
+
 ✓ = checked in code by hand. ~ = reported by the spec agent, not yet checked by hand.
 
 ## Identity and accounts
@@ -28,6 +30,8 @@ Status: **parked 2026-11-19**. The design is being reworked. These are code fact
 | 8 ✓ | ACP sets `fs.writeTextFile: false`, so Legos never sees individual agent writes | `backend/internal/agent/acp.go:529` | Who changed a file has to be inferred from the path (folder → work order/task → running run), unless ACP file writes are turned on |
 | 9 ~ | Task worktrees are deleted after merge | builder | Every view of a worktree needs a "folder no longer exists" state |
 | 10 ~ | A local-folder project stores its absolute path in `projects.repo_url` | store | Opening "the project's code" works directly only for local projects. Remote-only projects need a clone/choose-folder step |
+
+| 19 ✓ | Factory commits (task commit, task merge, sync) are hardcoded to `legos-factory <factory@localhost>`. The user wants them authored as the git identity configured for that repo | `backend/internal/sandbox/workspace.go:248, :497, :518` | Resolve `user.name`/`user.email` from the project's own checkout (`git -C <project> config`, so repo-local beats global), pass it to those calls, and fall back to the host's global identity for remote-only projects. Decide whether `commit.gpgsign=false` stays |
 
 ## Navigation
 
