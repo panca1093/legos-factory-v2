@@ -67,10 +67,10 @@ const tailOf = (s: CheckStep) =>
 </script>
 
 <template>
-  <section class="pc" data-test="project-checks" aria-label="Checks">
-    <div class="row between wrap">
-      <strong>Checks</strong>
-      <span v-if="session.canWrite" class="row wrap">
+  <section class="pk" data-test="project-checks" aria-label="Checks">
+    <div class="pk-head">
+      <h4>Project checks</h4>
+      <span v-if="session.canWrite" class="pk-actions">
         <button
           v-if="hasServices"
           class="lg-btn small ghost"
@@ -140,7 +140,7 @@ const tailOf = (s: CheckStep) =>
       <div class="small muted">
         Proposed from {{ proposal.base_sha.slice(0, 7) }} · {{ proposal.model }}
       </div>
-      <div class="pc-list" data-test="proposal">
+      <div class="pk-list" data-test="proposal">
         <p
           v-if="leaseError && firstPerRun < 0"
           class="notice"
@@ -151,7 +151,7 @@ const tailOf = (s: CheckStep) =>
         </p>
         <template v-for="(s, i) in draft.setup ?? []" :key="'s' + i">
           <div
-            class="pc-item"
+            class="pk-item"
             :data-test="s.per_run ? `per-run-${s.name}` : `setup-${s.name}`"
           >
             <p
@@ -191,7 +191,7 @@ const tailOf = (s: CheckStep) =>
         <div
           v-for="(s, i) in draft.checks"
           :key="'c' + i"
-          class="pc-item"
+          class="pk-item"
           :data-test="`check-${s.name}`"
         >
           <div class="row between wrap">
@@ -237,12 +237,12 @@ const tailOf = (s: CheckStep) =>
           <div v-if="proposal.notes?.[s.name]" class="small muted">
             {{ proposal.notes[s.name] }}
           </div>
-          <pre v-if="failsOnMain(proposal.results, s)" class="pc-out">{{
+          <pre v-if="failsOnMain(proposal.results, s)" class="pk-out">{{
             tailOf(s)
           }}</pre>
         </div>
       </div>
-      <div class="pc-item" data-test="smoke-edit">
+      <div class="pk-item" data-test="smoke-edit">
         <label class="switch-row">
           <span class="grow"
             ><strong>Browser smoke test</strong>
@@ -281,7 +281,7 @@ const tailOf = (s: CheckStep) =>
           <div
             v-for="(p, i) in smoke.start"
             :key="i"
-            class="pc-item"
+            class="pk-item"
             :data-test="`smoke-proc-${i}`"
           >
             <div class="row between wrap">
@@ -425,31 +425,31 @@ const tailOf = (s: CheckStep) =>
     </template>
 
     <template v-else-if="approved">
-      <div class="pc-list" data-test="approved">
+      <div class="pk-list" data-test="approved">
         <div
           v-for="(s, i) in approved.setup ?? []"
           :key="'s' + i"
-          class="pc-item"
+          class="pk-item"
           :data-test="s.per_run ? `per-run-${s.name}` : `setup-${s.name}`"
         >
           <div class="row between wrap">
             <strong>{{ s.name }}</strong>
             <span class="pill">{{ s.per_run ? "per run" : "setup" }}</span>
           </div>
-          <div class="mono small">{{ s.command }}</div>
-          <div class="small muted">in {{ target(s) }}</div>
+          <div class="pk-cmd">{{ s.command }}</div>
+          <div class="pk-meta">in {{ target(s) }}</div>
         </div>
-        <div v-for="(s, i) in approved.checks" :key="i" class="pc-item">
+        <div v-for="(s, i) in approved.checks" :key="i" class="pk-item">
           <div class="row between wrap">
             <strong>{{ s.name }}</strong>
             <span v-if="s.optional" class="pill">optional</span>
           </div>
-          <div class="mono small">{{ s.command }}</div>
-          <div class="small muted">
+          <div class="pk-cmd">{{ s.command }}</div>
+          <div class="pk-meta">
             in {{ target(s) }}<template v-if="s.source"> · {{ s.source }}</template>
           </div>
         </div>
-        <div v-if="approved.smoke" class="pc-item" data-test="approved-smoke">
+        <div v-if="approved.smoke" class="pk-item" data-test="approved-smoke">
           <div class="row between wrap">
             <strong>Browser smoke test</strong>
             <span class="pill">{{

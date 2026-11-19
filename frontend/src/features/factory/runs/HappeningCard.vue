@@ -17,6 +17,7 @@ const props = withDefaults(
     runs: Run[];
     tasks?: Task[];
     hasMore?: boolean;
+    bare?: boolean;
     steer?: (runID: string, message: string) => Promise<unknown>;
   }>(),
   { tasks: () => [], steer: undefined, hasMore: false },
@@ -64,9 +65,9 @@ const taskTitle = computed(
 );
 </script>
 <template>
-  <section class="fx-card fx-happening">
+  <section :class="{ 'fx-card': !bare }" class="fx-happening">
     <div class="section-head">
-      <h2>What’s happening</h2>
+      <h2 v-if="!bare">What’s happening</h2>
       <span class="tiny muted" data-test="activity-count"
         >{{ shown.length }} of {{ history.length }} past events</span
       >

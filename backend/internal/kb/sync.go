@@ -23,7 +23,10 @@ const (
 
 var skipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true}
 
-type SyncStats struct{ Docs, Changed, Removed int }
+type SyncStats struct {
+	Docs, Changed, Removed int
+	Skipped                []string
+}
 
 type file struct {
 	rel     string

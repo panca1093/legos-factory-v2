@@ -255,9 +255,8 @@ describe("project rail", () => {
     const { w } = await mountRail("/projects/p1");
     expect(w.text()).toContain("Name p1");
     expect(w.text()).toContain("github.com/o/p1");
-    expect(w.find('[data-test="rail-factory"]').text()).toBe(
-      "Factory · 2 open",
-    );
+    expect(w.find('[data-test="rail-factory"]').text()).toBe("Factory");
+    expect(w.find(".pr-count").text()).toBe("2 open work orders");
     const rows = w.findAll('[data-test="rail-wo"]');
     expect(rows[0].text()).toContain("Title b");
     expect(rows[0].text()).toContain("you");
@@ -504,8 +503,9 @@ describe("project workspace", () => {
     const { w } = await mountWorkspace("/projects/atlas/wo/LF-127");
     const state = (role: string) =>
       w.find(`[data-role="${role}"] .pc-state`).text();
-    expect(state("builder")).toBe("active");
-    expect(state("architect")).toBe("idle");
+    expect(state("builder")).toBe("working");
+    expect(state("architect")).toBe("finished");
+    expect(state("foreman")).toBe("idle");
     expect(w.findAll("[data-role]")).toHaveLength(4);
     expect(w.text()).toContain("legos/LF-127");
     expect(

@@ -8,6 +8,7 @@ const props = defineProps<{
   runs: Run[];
   canRetry: boolean;
   revision?: number;
+  bare?: boolean;
 }>();
 const emit = defineEmits<{ retry: [taskID: string]; retryRemediation: [] }>();
 const label: Record<string, string> = {
@@ -43,9 +44,9 @@ const done = computed(
 );
 </script>
 <template>
-  <section class="fx-card pp" data-test="plan-progress">
+  <section :class="{ 'fx-card': !bare }" class="pp" data-test="plan-progress">
     <div class="section-head">
-      <h2>Plan progress</h2>
+      <h2 v-if="!bare">Plan progress</h2>
       <span class="pill">{{ done }} / {{ tasks.length }} merged</span>
     </div>
     <div

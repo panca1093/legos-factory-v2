@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { FolderPlus, Plus } from "lucide-vue-next";
+import { FolderPlus, Plus, Search } from "lucide-vue-next";
 import "./projects.css";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
@@ -13,6 +13,7 @@ import {
   isShipped,
 } from "../../composables/presentation";
 import { isOpenOrder, repoLabel, woPath } from "./rail";
+import "../factory/factory.css";
 import type { Project } from "../../types/api";
 
 const factory = useFactory(),
@@ -24,6 +25,8 @@ const adding = ref(false),
   loading = ref(true);
 const showNew = computed(() => route.query.new === "1");
 
+const sort = ref<"attention" | "az">("attention"),
+  search = ref("");
 const filter = computed(() =>
   route.query.filter === "attention" || route.query.filter === "shipped"
     ? route.query.filter
@@ -36,7 +39,34 @@ interface Card {
   running: number;
   lastActivity: string;
   shipped: number;
+  shippedRecent: number;
 }
+const MONTH = 30 * 24 * 3600 * 1000;
+const initials = (name: string) =>
+  name
+    .split(/[^a-zA-Z0-9]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0].toUpperCase())
+    .join("") || "?";
+const tone = (name: string) =>
+  [...name].reduce((n, c) => n + c.charCodeAt(0), 0) % 4;
+const provider = (p: Project) =>
+  p.github_repo || /github/i.test(p.remote_repo ?? "")
+    ? "GitHub"
+    : /bitbucket/i.test(p.remote_repo ?? "")
+      ? "Bitbucket"
+      : p.remote_repo || p.git_connection_id
+        ? "Remote"
+        : "Local folder";
+const footStatus = (c: Card) =>
+  c.needsYou
+    ? "Waiting on you"
+    : c.running
+      ? "Crew working"
+      : c.shipped
+        ? "All shipped"
+        : "Idle";
 const cards = computed<Card[]>(() =>
   factory.projects
     .map((project) => {
@@ -48,6 +78,11 @@ const cards = computed<Card[]>(() =>
         needsYou: open.filter(isNeedsYou).length,
         running: open.filter(isRunning).length,
         shipped: own.filter(isShipped).length,
+        shippedRecent: own.filter(
+          (w) =>
+            isShipped(w) &&
+            Date.now() - Date.parse(w.pr_merged_at ?? w.updated_at) < MONTH,
+        ).length,
         lastActivity: own.reduce(
           (m, w) => (w.updated_at > m ? w.updated_at : m),
           "",
@@ -61,11 +96,19 @@ const cards = computed<Card[]>(() =>
           ? c.shipped > 0
           : true,
     )
-    .sort(
-      (a, b) =>
-        b.needsYou - a.needsYou ||
-        b.lastActivity.localeCompare(a.lastActivity) ||
-        a.project.name.localeCompare(b.project.name),
+    .filter(
+      (c) =>
+        !search.value.trim() ||
+        `${c.project.name} ${repoLabel(c.project)}`
+          .toLowerCase()
+          .includes(search.value.trim().toLowerCase()),
+    )
+    .sort((a, b) =>
+      sort.value === "az"
+        ? a.project.name.localeCompare(b.project.name)
+        : b.needsYou - a.needsYou ||
+          b.lastActivity.localeCompare(a.lastActivity) ||
+          a.project.name.localeCompare(b.project.name),
     ),
 );
 function ago(iso: string) {
@@ -103,10 +146,10 @@ onMounted(async () => {
   <div class="fx-page">
     <div class="page-heading">
       <div>
-        <div class="eyebrow">Every repository you build in</div>
         <h1>Projects</h1>
         <p class="subtitle">
-          Open a project to see its factory, pull requests and code.
+          Each project is one door: its Factory, its pull requests and its
+          code.
         </p>
       </div>
       <div class="row">
@@ -125,6 +168,36 @@ onMounted(async () => {
           <Plus class="icon" />New work order
         </button>
       </div>
+    </div>
+    <div v-if="factory.projects.length" class="pj-tools">
+      <div class="fx-chips" role="group" aria-label="Sort projects">
+        <button
+          class="fx-chip"
+          :class="{ on: sort === 'attention' }"
+          :aria-pressed="sort === 'attention'"
+          data-test="sort-attention"
+          @click="sort = 'attention'"
+        >
+          Needs attention first
+        </button>
+        <button
+          class="fx-chip"
+          :class="{ on: sort === 'az' }"
+          :aria-pressed="sort === 'az'"
+          data-test="sort-az"
+          @click="sort = 'az'"
+        >
+          A–Z
+        </button>
+      </div>
+      <label class="pj-search"
+        ><Search class="icon" /><input
+          v-model="search"
+          type="search"
+          placeholder="Search projects"
+          aria-label="Search projects"
+          data-test="project-search"
+      /></label>
     </div>
     <p v-if="filter" class="notice row between" data-test="projects-filter">
       <span
@@ -153,6 +226,9 @@ onMounted(async () => {
         Add project
       </button>
     </div>
+    <p v-else-if="!cards.length" class="muted section-gap" data-test="projects-no-match">
+      No projects match “{{ search.trim() }}”.
+    </p>
     <ul v-else class="pj-grid" aria-label="Projects">
       <li v-for="c in cards" :key="c.project.id">
         <RouterLink
@@ -161,23 +237,37 @@ onMounted(async () => {
           data-test="project-card"
         >
           <div class="pj-top">
-            <strong>{{ c.project.name }}</strong>
+            <span class="pj-avatar" :class="`t${tone(c.project.name)}`">{{
+              initials(c.project.name)
+            }}</span>
+            <div class="pj-id">
+              <strong>{{ c.project.name }}</strong>
+              <small class="mono muted">{{ repoLabel(c.project) }}</small>
+            </div>
             <span v-if="c.needsYou" class="fx-pill orange"
               >{{ c.needsYou }} needs you</span
             >
           </div>
-          <small class="muted">{{ repoLabel(c.project) }}</small>
           <dl class="pj-stats">
             <div>
-              <dt>Open</dt>
-              <dd>{{ c.open }}</dd>
+              <dd>{{ c.running }}</dd>
+              <dt>WO running</dt>
             </div>
             <div>
-              <dt>Running</dt>
-              <dd>{{ c.running }}</dd>
+              <dd>—</dd>
+              <dt>PRs for you</dt>
+            </div>
+            <div>
+              <dd>{{ c.shippedRecent }}</dd>
+              <dt>shipped · 30d</dt>
             </div>
           </dl>
-          <small class="muted">Last activity {{ ago(c.lastActivity) }}</small>
+          <div class="pj-foot">
+            <small class="muted"
+              >{{ footStatus(c) }} · {{ ago(c.lastActivity) }}</small
+            >
+            <span class="fx-pill purple">{{ provider(c.project) }}</span>
+          </div>
         </RouterLink>
       </li>
     </ul>

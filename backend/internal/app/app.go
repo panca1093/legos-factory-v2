@@ -66,7 +66,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		return nil, err
 	}
 	emb := kb.HashEmbedder{}
-	know := &usecase.KB{Bundle: bundle, Idx: &store.KBRepo{DB: db, Embedder: emb.Name()}, Emb: emb, Log: log}
+	know := &usecase.KB{Bundle: bundle, Idx: &store.KBRepo{DB: db, Embedder: emb.Name()}, Emb: emb, Log: log, Projects: projRepo}
 	if _, err := know.SyncFactory(context.Background()); err != nil {
 		log.Warn("factory knowledge indexing incomplete", "err", err)
 	}

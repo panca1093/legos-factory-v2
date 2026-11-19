@@ -85,7 +85,7 @@ it("filter chips replace the query and keep other params", async () => {
 });
 it("draws five stage segments per row", async () => {
   const { w } = await render("/projects/atlas");
-  expect(w.find(".fx-segs").findAll("i")).toHaveLength(5);
+  expect(w.find(".fx-stages").findAll("i")).toHaveLength(5);
   w.unmount();
 });
 it("New work order sets ?new=1 on the current route", async () => {

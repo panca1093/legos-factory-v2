@@ -408,6 +408,7 @@ function download() {
       <div v-else-if="tab === 'progress'" class="fx-progress">
         <TaskGraph :tasks="tasks" :runs="runs" />
         <ActivityPanel
+          in-panel
           :events="factory.events"
           :runs="runs"
           :tasks="tasks"
@@ -527,15 +528,6 @@ function download() {
 </template>
 <style scoped>
 .fx-progress {
-  display: grid;
-  grid-template-columns: minmax(0, 4fr) minmax(240px, 1fr);
-  gap: 24px;
   min-width: 0;
-  align-items: start;
-}
-@media (max-width: 1080px) {
-  .fx-progress {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 </style>
