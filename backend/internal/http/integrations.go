@@ -82,18 +82,6 @@ func (s *Server) handleTestConnection(c echo.Context) error {
 	return c.JSON(http.StatusOK, conn)
 }
 
-func (s *Server) handleBindProject(c echo.Context) error {
-	var req model.ProjectBindingRequest
-	if err := c.Bind(&req); err != nil {
-		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
-	}
-	p, err := s.Integrations.Bind(c.Request().Context(), currentUser(c), c.Param("id"), req)
-	if err != nil {
-		return integrationError(c, err)
-	}
-	return c.JSON(http.StatusOK, p)
-}
-
 func (s *Server) handleJiraLookup(c echo.Context) error {
 	var req model.IssueLookupRequest
 	if err := c.Bind(&req); err != nil {

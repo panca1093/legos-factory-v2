@@ -44,15 +44,15 @@ func TestConnectionVisibilityAndVerification(t *testing.T) {
 		}
 	}
 	repo := &ConnectionRepo{DB: db}
-	shared := &model.Connection{Provider: "github", Name: "org", Scope: model.ScopeShared, OwnerID: "u1", BaseURL: "https://api.github.com"}
+	shared := &model.Connection{Provider: "github", Name: "org", Scope: model.ScopePersonal, OwnerID: "u1", BaseURL: "https://api.github.com"}
 	mine := &model.Connection{Provider: "jira", Name: "mine", Scope: model.ScopePersonal, OwnerID: "u1", BaseURL: "https://x.atlassian.net", Username: "u1@t"}
 	for _, c := range []*model.Connection{shared, mine} {
 		if err := repo.Create(ctx, c, []byte("sealed")); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if got, _ := repo.Visible(ctx, "u2"); len(got) != 1 || got[0].ID != shared.ID {
-		t.Fatalf("u2 sees only the shared connection, got %+v", got)
+	if got, _ := repo.Visible(ctx, "u2"); len(got) != 0 {
+		t.Fatalf("u2 sees none of u1's connections, got %+v", got)
 	}
 	if got, _ := repo.Visible(ctx, "u1"); len(got) != 2 || !got[0].HasCredential {
 		t.Fatalf("owner sees both with credential flag, got %+v", got)

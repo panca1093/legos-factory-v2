@@ -131,9 +131,13 @@ func TestIntegrationsPullRequestAndJiraImport(t *testing.T) {
 	}
 	jiraConn := decode[struct{ ID string }](t, body)
 
-	// ownership rules: every connection is personal to its owner
+	// role and ownership rules
+	if status, _ := ta.doAs(t, eng, "POST", "/api/v1/connections",
+		`{"provider":"github","name":"x","scope":"shared","token":"t"}`); status != 400 {
+		t.Fatalf("shared connections must be rejected, got %d", status)
+	}
 	if status, body := ta.doAs(t, eng, "GET", "/api/v1/connections", ""); status != 200 || strings.Contains(body, jiraConn.ID) || strings.Contains(body, ghConn.ID) {
-		t.Fatalf("an engineer sees none of another user's personal connections: %d %s", status, body)
+		t.Fatalf("engineer must not see others' connections: %d %s", status, body)
 	}
 	if status, _ := ta.doAs(t, eng, "POST", "/api/v1/integrations/jira/lookup",
 		fmt.Sprintf(`{"connection_id":%q,"key":"PAY-7"}`, jiraConn.ID)); status != 404 {

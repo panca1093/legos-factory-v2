@@ -43,7 +43,7 @@ async function fixture(page: Page, role: string = user.role) {
                 id: "conn-gh",
                 provider: "github",
                 name: "Atlas GitHub",
-                scope: "shared",
+                scope: "personal",
                 owner_id: "admin",
                 base_url: "https://api.github.com",
                 status: "active",
