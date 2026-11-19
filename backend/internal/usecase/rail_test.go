@@ -127,7 +127,7 @@ func TestRailPullsPartIsNoIdentityStub(t *testing.T) {
 	if res.WorkOrders != nil {
 		t.Fatal("part=pulls must omit work orders")
 	}
-	if res.Pulls == nil || res.Pulls.Error != "no_identity" || res.Pulls.Count != 0 || res.Pulls.Identity != nil || res.Pulls.Stale {
+	if res.Pulls == nil || res.Pulls.Error == nil || res.Pulls.Error.Code != "no_identity" || res.Pulls.Count != 0 || res.Pulls.Identity != nil || res.Pulls.Stale {
 		t.Fatalf("pulls = %+v", res.Pulls)
 	}
 

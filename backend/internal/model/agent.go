@@ -15,6 +15,8 @@ const (
 	AgentInspector AgentRole = "inspector"
 	AgentCataloger AgentRole = "cataloger"
 	AgentChat      AgentRole = "chat"
+	// AgentPRReviewer is the Inspector reading someone else's pull request: read and search only, on every agent.
+	AgentPRReviewer AgentRole = "pr_reviewer"
 )
 
 // AgentRequest is one logical agent invocation.

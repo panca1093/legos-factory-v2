@@ -356,6 +356,36 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		RepoFacts: factory.RepoFacts,
 	}
 
+	reviews := &usecase.Reviews{
+		Store: &store.ReviewRepo{DB: db}, Projects: projects, Integrations: integrations, WO: woRepo,
+		NewReviewer: newPRReviewer, Bus: bus, Usage: usageTracker, KB: know, Workspace: box, Log: log,
+		Agent: func(ctx context.Context, userID string) (usecase.ReviewAgent, error) {
+			h := resolve(model.AgentInspector, nil)
+			if !acpMode {
+				p, m := modelFor(model.AgentInspector, &model.WorkOrder{})
+				return usecase.ReviewAgent{Harness: h, Agent: h.Name(), Provider: p, Model: m}, nil
+			}
+			id := roleAgent(model.AgentInspector, nil)
+			env, args, err := agents.RunEnv(ctx, id, userID, model.AgentInspector)
+			if err != nil {
+				return usecase.ReviewAgent{}, err
+			}
+			s, _ := ws.Get(ctx)
+			var cat []string
+			if agents.Ready(ctx, id) == nil {
+				ms, _ := cats.list(ctx, agents, id, userID, false)
+				cat = refs(ms)
+			}
+			p, m := usecase.SplitModelRef(usecase.ResolveAgentModel(model.AgentInspector, &model.WorkOrder{}, s, cat))
+			return usecase.ReviewAgent{Harness: h, Agent: id, Provider: p, Model: m, Env: env, Args: args}, nil
+		},
+	}
+	if cfg.AuthMode == "dev" {
+		reviews.CLI = integration.NewGHAuth(nil, nil)
+	}
+	srv.Reviews = reviews
+	srv.Rail.Reviews = reviews
+
 	srv.Checks = &usecase.CheckSuggester{
 		Projects: projects, Proj: projRepo, Store: &store.CheckProposalRepo{DB: db}, Usage: usageTracker, KB: know, Log: log,
 		DryRun: factory.DryRunChecks, StopStack: factory.StopStack,
@@ -443,6 +473,11 @@ func (a *App) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	if a.Server.Reviews != nil {
+		if err := a.Server.Reviews.Recover(ctx); err != nil {
+			return err
+		}
+	}
 	if a.Server.Chat != nil {
 		if err := a.Server.Chat.CollectFiles(ctx); err != nil {
 			a.log.Warn("chat file cleanup failed", "err", err)
@@ -489,6 +524,18 @@ func newGitProvider(c model.Connection, token string) (usecase.GitProvider, erro
 		return integration.NewBitbucket(c.BaseURL, c.Username, token, nil), nil
 	}
 	return nil, fmt.Errorf("%s is not a git provider", c.Provider)
+}
+
+func newPRReviewer(provider, baseURL, username, token string) usecase.PRReviewer {
+	switch provider {
+	case model.ProviderGitHub:
+		return integration.NewGitHub(baseURL, token, nil)
+	case model.ProviderGitLab:
+		return integration.NewGitLab(baseURL, token, nil)
+	case model.ProviderBitbucket:
+		return integration.NewBitbucket(baseURL, username, token, nil)
+	}
+	return nil
 }
 
 func newIssueTracker(c model.Connection, token string) (usecase.IssueTracker, error) {

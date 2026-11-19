@@ -33,9 +33,11 @@ var (
 // ProviderError is a non-2xx response from a provider API. Status 401/403/404
 // are not retried: they mean bad credentials, missing scope or wrong repo.
 type ProviderError struct {
-	Provider string
-	Status   int
-	Message  string
+	Provider    string
+	Status      int
+	Message     string
+	RateLimited bool          // 429, or GitHub 403 for an exhausted primary/secondary limit
+	RetryAfter  time.Duration // zero when the provider gave no hint
 }
 
 func (e *ProviderError) Error() string {
@@ -43,6 +45,9 @@ func (e *ProviderError) Error() string {
 }
 
 func (e *ProviderError) Permanent() bool {
+	if e.RateLimited {
+		return false
+	}
 	return e.Status == 400 || e.Status == 401 || e.Status == 403 || e.Status == 404 || e.Status == 422
 }
 

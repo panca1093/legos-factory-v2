@@ -46,7 +46,7 @@ func TestProjectRailEndpoint(t *testing.T) {
 			Identity *struct{}
 			Count    int
 			Rows     []any
-			Error    string
+			Error    struct{ Code string }
 		}
 	}
 	if err := json.Unmarshal([]byte(body), &res); err != nil {
@@ -55,7 +55,7 @@ func TestProjectRailEndpoint(t *testing.T) {
 	if res.WorkOrders.Open != 2 || len(res.WorkOrders.Rows) != 2 || res.WorkOrders.Rows[0].ID != "wo_ask" || !res.WorkOrders.Rows[0].WaitingOnYou {
 		t.Fatalf("work orders: %s", body)
 	}
-	if res.Pulls.Error != "no_identity" || res.Pulls.Count != 0 || res.Pulls.Identity != nil || res.Pulls.Rows == nil {
+	if res.Pulls.Error.Code != "no_identity" || res.Pulls.Count != 0 || res.Pulls.Identity != nil || res.Pulls.Rows == nil {
 		t.Fatalf("pulls: %s", body)
 	}
 	if res.Project.ID != "p1" {

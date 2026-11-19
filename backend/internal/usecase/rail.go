@@ -14,6 +14,7 @@ type Rail struct {
 	Projects     *Projects
 	WO           WorkOrderStore
 	Integrations *Integrations
+	Reviews      *Reviews // nil: the pull request part reports no identity
 }
 
 const (
@@ -61,7 +62,11 @@ func (r *Rail) Get(ctx context.Context, u *model.User, projectID, part string) (
 		res.WorkOrders = wos
 	}
 	if part != RailPartWO {
-		res.Pulls = &model.RailPulls{Rows: []struct{}{}, Error: "no_identity"}
+		if r.Reviews != nil {
+			res.Pulls = r.Reviews.RailPulls(ctx, u, p)
+		} else {
+			res.Pulls = &model.RailPulls{Rows: []model.RailPullRow{}, Error: &model.ProviderErr{Code: model.ErrCodeNoIdentity, Message: ErrNoReviewIdentity.Error()}}
+		}
 	}
 	return res, nil
 }

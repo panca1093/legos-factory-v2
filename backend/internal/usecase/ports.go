@@ -135,6 +135,46 @@ type GitProvider interface {
 	GitAuth() model.GitAuth
 }
 
+// PRReviewer reads pull requests and posts reviews as the credential's owner.
+// The GitHub, GitLab and Bitbucket REST structs implement it next to GitProvider.
+type PRReviewer interface {
+	Me(ctx context.Context) (model.HostUser, error)
+	TokenInfo(ctx context.Context) (model.TokenInfo, error)
+	ListPullRequests(ctx context.Context, repo string, f model.PRFilter) ([]model.PRSummary, error)
+	GetPullRequest(ctx context.Context, repo string, number int) (model.PRDetail, error)
+	PullRequestFiles(ctx context.Context, repo string, number int) ([]model.PRFile, error)
+	PostReview(ctx context.Context, repo string, number int, r model.ReviewSubmission) (model.PostedReview, error)
+}
+
+type ReviewStore interface {
+	Upsert(ctx context.Context, r *model.PRReview) error
+	Get(ctx context.Context, userID, provider, host, repo string, number int) (*model.PRReview, error)
+	ListForUser(ctx context.Context, userID string, keys []model.PRKey) ([]model.PRReview, error)
+	SetDecision(ctx context.Context, id, summary, verdict string) error
+	MarkPosted(ctx context.Context, id, headSHA, verdict, ref, postedAs string, at time.Time) error
+	StartRun(ctx context.Context, run model.PRReviewRun) error
+	FinishRun(ctx context.Context, id string, res model.AgentResult, costMicros int64, summary, errMsg string) error
+	LatestRun(ctx context.Context, reviewID string) (*model.PRReviewRun, error)
+	FailRunning(ctx context.Context, reason string) (int, error) // boot recovery
+	AddDrafts(ctx context.Context, reviewID, runID string, ds []model.PRDraft) error
+	Drafts(ctx context.Context, reviewID string) ([]model.PRDraft, error)
+	UpdateDraft(ctx context.Context, reviewID, id string, status, body *string) (*model.PRDraft, error)
+	SupersedePending(ctx context.Context, reviewID, keepRunID string) error
+	MarkOutdated(ctx context.Context, reviewID string, paths []string) error
+	SetPosted(ctx context.Context, draftID, ref, errMsg string) error
+	SetViewed(ctx context.Context, reviewID, path, patchHash string, viewed bool) error
+	Viewed(ctx context.Context, reviewID string) (map[string]string, error) // path → patch hash
+	Identity(ctx context.Context, userID, provider, host string) (*model.ReviewIdentity, error)
+	PinIdentity(ctx context.Context, id model.ReviewIdentity) error
+}
+
+// CLIAuth borrows a token from an installed CLI (gh, glab); the token is never stored.
+type CLIAuth interface {
+	Status(ctx context.Context, host string) ([]string, error)    // logged-in users on host
+	Token(ctx context.Context, host, user string) (string, error) // per request
+	StartLogin(ctx context.Context, host string) (<-chan model.CLILoginStep, error)
+}
+
 // IssueTracker reads issues; it never modifies them.
 type IssueTracker interface {
 	CheckAuth(ctx context.Context) (account string, err error)

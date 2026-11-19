@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -14,6 +15,9 @@ import (
 
 // SSE streams. Events are both replayed from the persistent log (after
 // Last-Event-ID) and pushed live from the event bus.
+
+// userEventSeq numbers user events downward (-1, -2, ...): WO event ids are positive, so the two never collide in a client that dedupes by id.
+var userEventSeq atomic.Int64
 
 func (s *Server) handleWOEvents(c echo.Context) error {
 	return s.stream(c, woFrom(c).ID)
@@ -66,6 +70,12 @@ func (s *Server) stream(c echo.Context, woID string) error {
 		}
 	}
 
+	var userCh <-chan model.LiveEvent
+	if u := currentUser(c); woID == "" && u != nil {
+		var unsubUser func()
+		userCh, unsubUser = s.Bus.SubscribeUser(u.ID)
+		defer unsubUser()
+	}
 	visible := s.liveFilter(c, woID)
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
@@ -77,6 +87,13 @@ func (s *Server) stream(c echo.Context, woID string) error {
 			if _, err := fmt.Fprint(res.Writer, ": ping\n\n"); err != nil {
 				return nil
 			}
+			flusher.Flush()
+		case ev, open := <-userCh:
+			if !open {
+				return nil
+			}
+			b, _ := json.Marshal(map[string]any{"id": -userEventSeq.Add(1), "work_order_id": "", "actor": ev.Actor, "kind": ev.Kind, "message": ev.Message, "payload": ev.Payload})
+			fmt.Fprintf(res.Writer, "data: %s\n\n", b)
 			flusher.Flush()
 		case ev, open := <-sub:
 			if !open {

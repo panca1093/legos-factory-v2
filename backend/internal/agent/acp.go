@@ -1084,6 +1084,15 @@ func (c *acpConn) answerPermission(m acpMsg) {
 		go c.askTool(m.ID, p.Options, model.RepoToolServer, name, p.ToolCall.RawInput, onPerm)
 		return
 	}
+	if c.role == model.AgentPRReviewer {
+		tool := p.ToolCall.Meta.ClaudeCode.ToolName
+		allow := (p.ToolCall.Kind == "read" || p.ToolCall.Kind == "search" || p.ToolCall.Kind == "think") && !strings.HasPrefix(tool, "mcp__") && !repoWriteCall(p.ToolCall.Kind, tool)
+		for _, l := range p.ToolCall.Locations {
+			allow = allow && within(c.workspace, l.Path)
+		}
+		c.reply(m.ID, p.Options, allow)
+		return
+	}
 	if c.agent == "codex" && !codexWrites(c.role) {
 		c.reply(m.ID, p.Options, false)
 		return
