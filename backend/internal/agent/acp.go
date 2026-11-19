@@ -93,6 +93,9 @@ var acpChatDeny = []string{"read", "grep", "glob", "list", "webfetch", "websearc
 // acpRepoChatTools are the chat denials a repo chat lifts.
 var acpRepoChatTools = map[string]bool{"read": true, "grep": true, "glob": true, "list": true}
 
+// acpRepoChatAsk are the shell and write tools a repo chat sends to the user's approval instead of being denied.
+var acpRepoChatAsk = []string{"edit", "write", "patch", "apply_patch", "bash"}
+
 // acpRoleConfig is the OpenCode config for a role: every role is kept inside
 // its workspace, and every role but the builder is read-only. Deny (not ask)
 // keeps turns alive: a rejected permission request cancels the whole turn.
@@ -114,6 +117,11 @@ func acpConfig(role model.AgentRole, repoAccess bool) string {
 				continue
 			}
 			perm[t] = "deny"
+		}
+		if repoAccess {
+			for _, t := range acpRepoChatAsk {
+				perm[t] = "ask"
+			}
 		}
 	}
 	b, _ := json.Marshal(map[string]any{"permission": perm})
@@ -146,13 +154,14 @@ var claudeChatMeta = map[string]any{"claudeCode": map[string]any{"options": map[
 	"strictMcpConfig": true,
 }}}
 
-// claudeRepoChatMeta is claudeReadOnlyMeta for a chat reading its project checkout, minus the common secret files;
-// Claude Code reads any host path without asking, so the ask rule routes every read through answerPermission.
+// claudeRepoChatMeta is for a chat in its project folder, minus the common secret files. Claude Code reads any host path
+// without asking, so the ask rule routes every read through answerPermission; shell and file-writing tools are ask too,
+// and answerPermission hands them to the user's approval.
 var claudeRepoChatMeta = map[string]any{"claudeCode": map[string]any{"options": map[string]any{
-	"tools": []string{"Read", "Grep", "Glob"},
-	"disallowedTools": []string{"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "Agent", "Task",
+	"tools": []string{"Read", "Grep", "Glob", "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"},
+	"disallowedTools": []string{"Agent", "Task",
 		"Read(./.env)", "Read(./.env.*)", "Read(./**/.env)", "Read(./**/*.pem)", "Read(./**/*.key)", "Read(./.git/**)", "Read(./**/.env.*)"},
-	"extraArgs":       map[string]any{"settings": `{"permissions":{"ask":["Read","Grep","Glob"]}}`},
+	"extraArgs":       map[string]any{"settings": `{"permissions":{"ask":["Read","Grep","Glob","Bash","Edit","Write","MultiEdit","NotebookEdit"]}}`},
 	"settingSources":  []string{},
 	"strictMcpConfig": true,
 }}}
@@ -224,7 +233,7 @@ func (h *ACPHarness) Start(ctx context.Context, req model.AgentRequest) (model.A
 		return nil, err
 	}
 	conn.role, conn.repo, conn.workspace, conn.onStep, conn.onText, conn.onPerm = req.Role, repo, req.WorkspaceDir, req.OnStep, req.OnText, req.OnPermission
-	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder
+	claudeReadOnly := h.Provider == "claude" && req.Role != model.AgentBuilder && !repo // plan mode would refuse the shell and edit calls a repo chat sends for approval
 	var meta map[string]any
 	var servers []model.MCPServer // OpenCode and Codex get none: per-tool removal was only verified on claude-agent-acp
 	if h.Provider == "claude" {
@@ -1059,6 +1068,22 @@ func (c *acpConn) answerPermission(m acpMsg) {
 		} `json:"options"`
 	}
 	_ = json.Unmarshal(m.Params, &p)
+	if c.role == model.AgentChat && c.repo && repoWriteCall(p.ToolCall.Kind, p.ToolCall.Meta.ClaudeCode.ToolName) {
+		name := p.ToolCall.Meta.ClaudeCode.ToolName
+		if name == "" {
+			name = p.ToolCall.Kind
+		}
+		// a write must stay inside the folder; a shell command only runs once the user (or the read-only allowlist) says so
+		if p.ToolCall.Kind != "execute" && name != "Bash" && !c.repoPathsAllowed("edit", p.ToolCall.Locations, p.ToolCall.RawInput) {
+			c.reply(m.ID, p.Options, false)
+			return
+		}
+		c.mu.Lock()
+		onPerm := c.onPerm
+		c.mu.Unlock()
+		go c.askTool(m.ID, p.Options, model.RepoToolServer, name, p.ToolCall.RawInput, onPerm)
+		return
+	}
 	if c.agent == "codex" && !codexWrites(c.role) {
 		c.reply(m.ID, p.Options, false)
 		return
@@ -1100,6 +1125,15 @@ func (c *acpConn) answerPermission(m acpMsg) {
 	c.reply(m.ID, p.Options, allow)
 }
 
+// repoWriteCall is a shell or file-changing call, which a repo chat puts to the user instead of deciding itself.
+func repoWriteCall(kind, tool string) bool {
+	switch kind {
+	case "execute", "edit", "delete", "move":
+		return true
+	}
+	return slices.Contains([]string{"Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"}, tool)
+}
+
 func codexWrites(r model.AgentRole) bool {
 	return r == model.AgentBuilder || r == model.AgentInspector
 }
@@ -1131,6 +1165,16 @@ func (c *acpConn) reply(id json.RawMessage, options []acpPermOption, allow bool)
 
 // askPermission lets onPerm decide a call to a writing MCP tool; without one the call is rejected.
 func (c *acpConn) askPermission(id json.RawMessage, options []acpPermOption, tool string, input map[string]any, onPerm func(context.Context, model.PermissionRequest) bool) {
+	parts := strings.SplitN(strings.TrimPrefix(tool, "mcp__"), "__", 2)
+	if len(parts) != 2 {
+		c.reply(id, options, false)
+		return
+	}
+	c.askTool(id, options, parts[0], parts[1], input, onPerm)
+}
+
+// askTool lets onPerm decide a call to server's tool; without one the call is rejected.
+func (c *acpConn) askTool(id json.RawMessage, options []acpPermOption, server, tool string, input map[string]any, onPerm func(context.Context, model.PermissionRequest) bool) {
 	allow := false
 	if onPerm != nil {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -1142,10 +1186,7 @@ func (c *acpConn) askPermission(id json.RawMessage, options []acpPermOption, too
 			case <-ctx.Done():
 			}
 		}()
-		parts := strings.SplitN(strings.TrimPrefix(tool, "mcp__"), "__", 2)
-		if len(parts) == 2 {
-			allow = onPerm(ctx, model.PermissionRequest{ID: strings.Trim(string(id), `"`), Server: parts[0], Tool: parts[1], Input: input})
-		}
+		allow = onPerm(ctx, model.PermissionRequest{ID: strings.Trim(string(id), `"`), Server: server, Tool: tool, Input: input})
 	}
 	c.reply(id, options, allow)
 }

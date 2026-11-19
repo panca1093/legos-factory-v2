@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -46,6 +47,30 @@ func TestACPCodexRefusesEveryRequestOfReadOnlyRoles(t *testing.T) {
 		if res.Text != c.want {
 			t.Fatalf("%s %s: answered %q, want %q", c.role, c.kind, res.Text, c.want)
 		}
+	}
+}
+
+func TestACPCodexRepoChatWritesWaitForApproval(t *testing.T) {
+	ws := t.TempDir()
+	for _, kind := range []string{"edit", "delete", "move", "execute"} {
+		for _, approve := range []bool{false, true} {
+			var asked int
+			res, err := runFake(t, fakeCodex(t, "permission", "ACP_FAKE_KIND="+kind, "ACP_FAKE_PATH="+ws+"/a.go"),
+				model.AgentRequest{Role: model.AgentChat, WorkspaceDir: ws, RepoAccess: true, Prompt: "go", Env: []string{"CODEX_HOME=" + t.TempDir()},
+					OnPermission: func(context.Context, model.PermissionRequest) bool { asked++; return approve }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[bool]string{true: "yes", false: "no"}[approve]
+			if res.Text != want || asked != 1 {
+				t.Fatalf("codex repo chat %s approve=%v: answered %q after %d asks", kind, approve, res.Text, asked)
+			}
+		}
+	}
+	res, err := runFake(t, fakeCodex(t, "permission", "ACP_FAKE_KIND=edit", "ACP_FAKE_PATH="+ws+"/a.go"),
+		model.AgentRequest{Role: model.AgentChat, WorkspaceDir: ws, RepoAccess: true, Prompt: "go", Env: []string{"CODEX_HOME=" + t.TempDir()}})
+	if err != nil || res.Text != "no" {
+		t.Fatalf("with no one to ask a write is denied: %q %v", res.Text, err)
 	}
 }
 

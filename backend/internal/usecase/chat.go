@@ -343,7 +343,7 @@ func (c *Chat) askUser(ctx, turn context.Context, gone <-chan struct{}, chatID s
 		}
 	}
 	allowed := decision == "allow" || decision == "allow_all"
-	if decision == "allow_all" {
+	if decision == "allow_all" && req.Server != model.RepoToolServer { // shell and edits are approved one call at a time
 		c.mu.Lock()
 		if c.allowAll == nil {
 			c.allowAll = map[string]map[string]struct{}{}
@@ -736,6 +736,9 @@ func (c *Chat) answer(ctx context.Context, gone <-chan struct{}, ch *model.Chat,
 		emit(ChatEvent{Kind: "step", Tools: s.Tools})
 	}
 	req.OnPermission = func(hctx context.Context, p model.PermissionRequest) bool {
+		if p.Server == model.RepoToolServer && repoShellReadOnly(p) {
+			return true
+		}
 		return c.askUser(hctx, ctx, gone, ch.ID, p, announced, emit)
 	}
 	h, env, args := c.Harness, []string(nil), []string(nil)
@@ -848,7 +851,7 @@ const chatPreamble = "You are an assistant in the Legos factory app, in a genera
 
 const chatRepoUnreadable = "This chat is bound to a project, but its repository could not be read for this conversation; tell the user so before you answer.\n\n"
 
-const chatRepoPreamble = "You are an assistant in the Legos factory app, in a conversation about this project. Your working directory is a checkout of the project's repository: you may read and search it, and you should whenever a question is about the code. Cite every claim about the code as path:line. You cannot run commands or change local files; the MCP tools you are offered are the only way to act. When you describe code you have not read, say so.\n\n" + chatMCPNote + chatTone
+const chatRepoPreamble = "You are an assistant in the Legos factory app, in a conversation about this project. Your working directory is the project's own folder, exactly as it is on disk now (current branch, uncommitted changes included): you may read and search it, and you should whenever a question is about the code. Cite every claim about the code as path:line. Read-only commands (git status/log/diff, go test, ls, cat, grep and similar) run on their own; any other command and any change to a file waits for the user's approval, so do not change files unless asked to, and if the user denies a call, do not retry it. The MCP tools you are offered are the only other way to act. When you describe code you have not read, say so.\n\n" + chatMCPNote + chatTone
 
 // RepoFacts is Chat.RepoFacts: the checkout's repository facts, then the project's Code Map lines.
 func (f *Factory) RepoFacts(ctx context.Context, projectID, dir string) string {
