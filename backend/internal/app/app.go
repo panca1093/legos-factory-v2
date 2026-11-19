@@ -238,6 +238,9 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Integrations = integrations
 	srv.MCP = mcpServers
 	srv.Local = localProjects
+	if cfg.AuthMode == "dev" {
+		srv.EditorLive = newEditorLive(db, runRepo)
+	}
 	srv.Catalog = catalog
 	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo, WO: woRepo, DataDir: cfg.DataDir}
 	srv.Factory = factory
@@ -484,6 +487,9 @@ func (a *App) Start(ctx context.Context) error {
 		}
 	}
 	a.Sched.Start(ctx)
+	if a.Server.EditorLive != nil {
+		go func() { <-ctx.Done(); a.Server.EditorLive.KillAll() }()
+	}
 	go a.warm()
 	a.Server.Factory.RemoveLegacyWorkspaces(ctx)
 	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {

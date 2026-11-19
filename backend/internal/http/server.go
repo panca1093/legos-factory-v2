@@ -35,6 +35,7 @@ type Server struct {
 	Integrations *usecase.Integrations
 	MCP          *usecase.MCPServers
 	Local        *usecase.Local
+	EditorLive   *usecase.EditorLive
 	Catalog      *usecase.Cataloger
 	KBDocs       *usecase.KBDocs
 	Chat         *usecase.Chat
@@ -274,6 +275,7 @@ func (s *Server) routes() {
 	api.POST("/local/clone", s.local(s.handleLocalClone))
 	api.POST("/local/init", s.local(s.handleLocalInit))
 	api.GET("/local/gh", s.local(s.handleLocalGH))
+	s.editorLiveRoutes(api)
 
 	api.GET("/kb/docs", s.handleKBList)
 	api.GET("/kb/doc", s.handleKBGet)
