@@ -8,11 +8,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"legos-factory/backend/internal/kb"
 	"legos-factory/backend/internal/model"
 )
+
+var reviewRunSeq atomic.Int64
 
 const (
 	maxPRFindings   = 20
@@ -355,7 +358,7 @@ func (r *Reviews) StartRun(ctx context.Context, u *model.User, projectID string,
 	if ag.Provider != "" {
 		modelRef = ag.Provider + "/" + ag.Model
 	}
-	run := model.PRReviewRun{ID: fmt.Sprintf("prrun_%d", r.now().UnixNano()), ReviewID: rev.ID, HeadSHA: d.HeadSHA,
+	run := model.PRReviewRun{ID: fmt.Sprintf("prrun_%d_%d", r.now().UnixNano(), reviewRunSeq.Add(1)), ReviewID: rev.ID, HeadSHA: d.HeadSHA,
 		State: model.ReviewRunRunning, Agent: ag.Agent, Harness: ag.Harness.Name(), Model: modelRef, StartedAt: r.now()}
 	if err := r.Store.StartRun(ctx, run); err != nil {
 		return nil, err
@@ -415,11 +418,13 @@ func (r *Reviews) runBody(ctx context.Context, rc *reviewCtx, rev *model.PRRevie
 		defer release(0)
 	}
 	repoDir := expandPath(rc.project.RepoURL)
-	dir, sha, err := r.Workspace.PrepareReview(ctx, rc.project.ID, rev.Number, repoDir, prRef(rc.provider, rev.Number, d.Head), rc.gitAuth())
+	dir, sha, err := r.Workspace.PrepareReview(ctx, rc.project.ID, rev.Number, run.ID, repoDir, prRef(rc.provider, rev.Number, d.Head), rc.gitAuth())
 	if err != nil {
 		return "", fmt.Errorf("could not check out the pull request: %w", err)
 	}
-	defer func() { _ = r.Workspace.RemoveReview(context.WithoutCancel(ctx), rc.project.ID, rev.Number, repoDir) }()
+	defer func() {
+		_ = r.Workspace.RemoveReview(context.WithoutCancel(ctx), rc.project.ID, rev.Number, run.ID, repoDir)
+	}()
 	if sha != "" && sha != d.HeadSHA {
 		return "", errors.New("the pull request was updated while the review started: run it again")
 	}
@@ -452,6 +457,14 @@ func (r *Reviews) runBody(ctx context.Context, rc *reviewCtx, rev *model.PRRevie
 		}
 		prompt += "\n\nYour previous reply was rejected: " + derr.Error() + "\nReply again with ONLY the JSON object."
 	}
+	outdated := model.DraftOutdated
+	for _, pd := range prior {
+		if pd.Status == model.DraftAccepted && pd.HeadSHA != d.HeadSHA {
+			if _, err := r.Store.UpdateDraft(ctx, rev.ID, pd.ID, &outdated, nil); err != nil {
+				return "", err
+			}
+		}
+	}
 	now := r.now()
 	if err := r.Store.AddDrafts(ctx, rev.ID, run.ID, buildDrafts(rev.ID, run.ID, d.HeadSHA, files, out, now)); err != nil {
 		return "", err
@@ -476,7 +489,7 @@ func (r *Reviews) runBody(ctx context.Context, rc *reviewCtx, rev *model.PRRevie
 
 // ask runs the Inspector once on the user's own agent account and records its cost to that user.
 func (r *Reviews) ask(ctx context.Context, ag ReviewAgent, userID, dir, prompt string) (model.AgentResult, error) {
-	ses, err := ag.Harness.Start(ctx, model.AgentRequest{Role: model.AgentInspector, Prompt: prompt, ProviderID: ag.Provider, ModelID: ag.Model,
+	ses, err := ag.Harness.Start(ctx, model.AgentRequest{Role: model.AgentPRReviewer, Prompt: prompt, ProviderID: ag.Provider, ModelID: ag.Model,
 		WorkspaceDir: dir, Env: ag.Env, Args: ag.Args, OnText: func(string) {}})
 	if err != nil {
 		return model.AgentResult{}, err

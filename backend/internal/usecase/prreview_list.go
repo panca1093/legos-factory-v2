@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -217,7 +218,7 @@ func rowLabel(role string, rev *model.PRReview, pending int, running bool, headS
 		return model.LabelYours
 	case rev == nil:
 		return model.LabelNew
-	case rev.PostedAt == nil || rev.PostedHeadSHA != headSHA:
+	case rev.PostedAt == nil || !sameHead(rev.PostedHeadSHA, headSHA):
 		return model.LabelApprove
 	}
 	return model.LabelNone
@@ -291,6 +292,11 @@ func (r *Reviews) projectList(ctx context.Context, userID string, p *model.Proje
 	}
 	rc, err := r.resolve(rctx, userID, p, false)
 	if err != nil {
+		if !block && errors.Is(err, context.DeadlineExceeded) {
+			// who the user is is still being learned: finish it in the background so the next call has rows
+			r.warm(userID, p, filter)
+			return &model.PRListView{Rows: []model.PRRow{}, Stale: true}, nil
+		}
 		return &model.PRListView{Rows: []model.PRRow{}, Error: r.providerErr(err)}, nil
 	}
 	e, stale := r.pulls(ctx, rc, filter, block)
@@ -299,6 +305,19 @@ func (r *Reviews) projectList(ctx context.Context, userID string, p *model.Proje
 		return nil, err
 	}
 	return &model.PRListView{Identity: r.identityView(rctx, rc), Rows: rows, Stale: stale, Error: e.err}, nil
+}
+
+// warm resolves the identity and loads the list in the background after a rail call gave up waiting.
+func (r *Reviews) warm(userID string, p *model.Project, filter string) {
+	r.bg.Add(1)
+	go func() {
+		defer r.bg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if rc, err := r.resolve(ctx, userID, p, false); err == nil {
+			r.pulls(ctx, rc, filter, false)
+		}
+	}()
 }
 
 // AllReviews is the cross-project inbox over every project the user can see.

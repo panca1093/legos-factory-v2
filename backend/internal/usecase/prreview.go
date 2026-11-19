@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ var (
 	ErrReviewNotFound    = errors.New("review not found")
 	ErrCLIUnavailable    = errors.New("CLI login is available only in local development mode")
 	ErrReadOnlyToken     = errors.New("this account's token cannot post reviews")
+	ErrPostInFlight      = errors.New("a post for this review is already in progress")
 )
 
 // PostConflict is returned when the client's view of the review no longer matches the server's.
@@ -39,8 +41,9 @@ type NewReviewerFunc func(provider, baseURL, username, token string) PRReviewer
 
 // ReviewWorkspace gives the AI reviewer a detached checkout of a pull request's head.
 type ReviewWorkspace interface {
-	PrepareReview(ctx context.Context, projectID string, number int, repoDir, ref string, auth *model.GitAuth) (dir, sha string, err error)
-	RemoveReview(ctx context.Context, projectID string, number int, repoDir string) error
+	PrepareReview(ctx context.Context, projectID string, number int, runID, repoDir, ref string, auth *model.GitAuth) (dir, sha string, err error)
+	RemoveReview(ctx context.Context, projectID string, number int, runID, repoDir string) error
+	CleanReviews(ctx context.Context, projectID, repoDir string) error
 }
 
 // ReviewAgent is the harness, model and account an AI review runs on, resolved for one user.
@@ -76,6 +79,7 @@ type Reviews struct {
 	refreshing map[string]bool
 	cache      sync.Map // string → cacheEntry
 	running    sync.Map // review id → struct{}
+	posting    sync.Map // review id → struct{} while a post is in flight
 	bg         sync.WaitGroup
 }
 
@@ -88,7 +92,6 @@ const (
 	defaultListTTL = 60 * time.Second
 	meTTL          = 5 * time.Minute
 	infoTTL        = 5 * time.Minute
-	railResolve    = 3 * time.Second
 )
 
 func (r *Reviews) now() time.Time {
@@ -125,10 +128,9 @@ func (r *Reviews) memo(key string, ttl time.Duration, fresh bool, fn func() (any
 	return v, nil
 }
 
-// missing reports a store lookup that found no row; the store contract does not pin how it says so.
+// missing reports a store lookup that found no row (store.ErrReviewNotFound wraps sql.ErrNoRows).
 func missing(err error) bool {
-	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrReviewNotFound) ||
-		(err != nil && strings.Contains(strings.ToLower(err.Error()), "not found"))
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, ErrReviewNotFound)
 }
 
 // reviewCtx is one user's resolved access to one project's repository on its host.
@@ -402,6 +404,9 @@ func (r *Reviews) providerErr(err error) *model.ProviderErr {
 	return &model.ProviderErr{Code: model.ErrCodeProvider, Message: err.Error()}
 }
 
+// railResolve bounds how long the rail waits to learn who the user is; it is a var so tests can shorten it.
+var railResolve = 3 * time.Second
+
 var retrySleep = func(ctx context.Context, d time.Duration) {
 	select {
 	case <-ctx.Done():
@@ -439,6 +444,17 @@ func (r *Reviews) Recover(ctx context.Context) error {
 	n, err := r.Store.FailRunning(ctx, "interrupted by restart")
 	if err == nil && n > 0 {
 		r.log().Warn("failed AI reviews left running by a dead process", "count", n)
+	}
+	if r.Workspace != nil && r.Projects != nil {
+		if ps, perr := r.Projects.Store.List(ctx); perr == nil {
+			for _, p := range ps {
+				if dir := expandPath(p.RepoURL); filepath.IsAbs(dir) {
+					if cerr := r.Workspace.CleanReviews(ctx, p.ID, dir); cerr != nil {
+						r.log().Warn("cleaning review checkouts failed", "project", p.ID, "err", cerr)
+					}
+				}
+			}
+		}
 	}
 	return err
 }

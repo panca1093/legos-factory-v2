@@ -346,7 +346,9 @@ func (r *Reviews) UpdateReview(ctx context.Context, u *model.User, projectID str
 }
 
 // Post sends the accepted drafts, summary and verdict as one review under the user's own name. It posts
-// only when the client confirmed what the server still holds, and never retries.
+// only when the client confirmed what the server still holds, and never retries on its own. When the
+// review was already posted at this head, a post sends only the accepted drafts still waiting (the ones
+// that failed before), without the summary and verdict again.
 func (r *Reviews) Post(ctx context.Context, u *model.User, projectID string, number int, req model.PostRequest) (*model.PostedReview, error) {
 	if !req.Confirm {
 		return nil, fmt.Errorf("%w: confirm must be true to post", ErrInvalid)
@@ -359,6 +361,10 @@ func (r *Reviews) Post(ctx context.Context, u *model.User, projectID string, num
 	if err != nil {
 		return nil, err
 	}
+	if _, busy := r.posting.LoadOrStore(rev.ID, struct{}{}); busy {
+		return nil, ErrPostInFlight
+	}
+	defer r.posting.Delete(rev.ID)
 	d, err := r.detail(ctx, rc, number, true)
 	if err != nil {
 		return nil, err
@@ -378,6 +384,7 @@ func (r *Reviews) Post(ctx context.Context, u *model.User, projectID string, num
 			general = append(general, dr)
 		}
 	}
+	retry := rev.PostedAt != nil && sameHead(rev.PostedHeadSHA, d.HeadSHA)
 	current := model.PostExpect{Login: rc.me.Login, HeadSHA: d.HeadSHA, Comments: len(inline) + len(general), Verdict: rev.Verdict}
 	conflict := func(reason string) error { return &PostConflict{Reason: reason, Current: current} }
 	switch {
@@ -388,66 +395,97 @@ func (r *Reviews) Post(ctx context.Context, u *model.User, projectID string, num
 	case req.Expect.Comments != current.Comments || req.Expect.Verdict != current.Verdict:
 		return nil, conflict("the review changed since you confirmed it")
 	}
+	var stale []string
 	for _, dr := range slices.Concat(inline, general) {
 		if dr.HeadSHA != d.HeadSHA {
-			return nil, conflict("the pull request was updated since these comments were drafted: re-run the review")
+			stale = append(stale, fmt.Sprintf("%q on %s", dr.Title, dr.Path))
 		}
 	}
-	vd := r.verdicts(rc, d)
-	if rev.Verdict == model.VerdictApprove && !vd.Approve.OK {
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, vd.Approve.Reason)
+	if len(stale) > 0 {
+		return nil, conflict(fmt.Sprintf("the pull request was updated since %d accepted comment(s) were drafted (%s): re-run the review or discard them", len(stale), strings.Join(stale, ", ")))
 	}
-	if rev.Verdict == model.VerdictRequestChanges && !vd.RequestChanges.OK {
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, vd.RequestChanges.Reason)
+	verdict, summary := rev.Verdict, rev.Summary
+	if retry {
+		verdict, summary = model.VerdictComment, ""
+	} else {
+		vd := r.verdicts(rc, d)
+		if verdict == model.VerdictApprove && !vd.Approve.OK {
+			return nil, fmt.Errorf("%w: %s", ErrInvalid, vd.Approve.Reason)
+		}
+		if verdict == model.VerdictRequestChanges && !vd.RequestChanges.OK {
+			return nil, fmt.Errorf("%w: %s", ErrInvalid, vd.RequestChanges.Reason)
+		}
 	}
 	if info, err := r.tokenInfo(ctx, rc); err == nil && info.CanWrite == model.TriNo {
 		return nil, ErrReadOnlyToken
 	}
-	body := postBody(rev.Summary, general)
-	if body == "" && len(inline) == 0 && rev.Verdict != model.VerdictApprove {
+	body := postBody(summary, general)
+	if body == "" && len(inline) == 0 && verdict != model.VerdictApprove {
 		return nil, fmt.Errorf("%w: nothing to post: accept a comment or write a summary", ErrInvalid)
 	}
-	if body == "" && rev.Verdict == model.VerdictRequestChanges {
+	if body == "" && verdict == model.VerdictRequestChanges {
 		return nil, fmt.Errorf("%w: requesting changes needs a summary", ErrInvalid)
 	}
-	sub := model.ReviewSubmission{HeadSHA: d.HeadSHA, Body: body, Verdict: rev.Verdict}
+	sub := model.ReviewSubmission{HeadSHA: d.HeadSHA, Body: body, Verdict: verdict}
 	for _, dr := range inline {
 		sub.Comments = append(sub.Comments, model.InlineComment{DraftID: dr.ID, Path: dr.Path, OldPath: dr.OldPath, Side: dr.Side,
 			Line: dr.Line, OldLine: dr.OldLine, Body: dr.Body, PostedRef: dr.PostedRef})
 	}
-	posted, err := rc.rv.PostReview(ctx, rc.repo, number, sub)
-	if err != nil {
-		return nil, err
-	}
-	for _, dr := range inline {
-		if ref, ok := posted.Comments[dr.ID]; ok {
-			err = r.Store.SetPosted(ctx, dr.ID, ref, "")
-		} else {
-			msg := posted.Failed[dr.ID]
-			if msg == "" {
-				msg = "the provider did not confirm this comment"
+	posted, perr := rc.rv.PostReview(ctx, rc.repo, number, sub)
+	// a provider that posts comment by comment may fail midway: what it did post is recorded before the error returns
+	partial := len(posted.Comments)+len(posted.Failed) > 0
+	if perr == nil || partial {
+		for _, dr := range inline {
+			var err error
+			if ref, ok := posted.Comments[dr.ID]; ok {
+				err = r.Store.SetPosted(ctx, dr.ID, ref, "")
+			} else {
+				msg := posted.Failed[dr.ID]
+				if msg == "" {
+					msg = "the provider did not confirm this comment"
+					if perr != nil {
+						msg = perr.Error()
+					}
+				}
+				err = r.Store.SetPosted(ctx, dr.ID, "", msg)
 			}
-			err = r.Store.SetPosted(ctx, dr.ID, "", msg)
-		}
-		if err != nil {
-			return &posted, err
+			if err != nil {
+				return &posted, err
+			}
 		}
 	}
-	if posted.Ref != "" || len(posted.Comments) > 0 {
+	verdictDone := perr == nil && verdict != model.VerdictComment && posted.VerdictErr == ""
+	if posted.Ref != "" || len(posted.Comments) > 0 || verdictDone {
 		for _, dr := range general {
 			if err := r.Store.SetPosted(ctx, dr.ID, posted.Ref, ""); err != nil {
 				return &posted, err
 			}
 		}
-		verdict := rev.Verdict
-		if posted.VerdictErr != "" {
-			verdict = model.VerdictComment
-		}
-		if err := r.Store.MarkPosted(ctx, rev.ID, d.HeadSHA, verdict, posted.Ref, rc.me.Login, r.now()); err != nil {
-			return &posted, err
+		if !retry {
+			recorded := verdict
+			if posted.VerdictErr != "" || perr != nil {
+				recorded = model.VerdictComment
+			}
+			if err := r.Store.MarkPosted(ctx, rev.ID, d.HeadSHA, recorded, posted.Ref, rc.me.Login, r.now()); err != nil {
+				return &posted, err
+			}
 		}
 	}
-	return &posted, nil
+	return &posted, perr
+}
+
+// sameHead compares commit ids where one side may be a short hash (Bitbucket lists carry 12 characters).
+func sameHead(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	return len(a) >= 7 && strings.HasPrefix(b, a)
 }
 
 // postBody is the review summary followed by the accepted comments that could not be anchored in the diff.

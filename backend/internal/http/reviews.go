@@ -1,6 +1,7 @@
 package http
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 	"strconv"
@@ -33,6 +34,10 @@ func (s *Server) reviewError(c echo.Context, err error) error {
 		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "not found")
 	case errors.Is(err, usecase.ErrInvalid):
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
+	case errors.Is(err, sql.ErrNoRows):
+		return errorJSON(c, http.StatusNotFound, "NOT_FOUND", "not found")
+	case errors.Is(err, usecase.ErrPostInFlight):
+		return errorJSON(c, http.StatusConflict, "POST_IN_PROGRESS", err.Error())
 	case errors.Is(err, usecase.ErrReviewRunning):
 		return errorJSON(c, http.StatusConflict, "RUN_IN_PROGRESS", err.Error())
 	case errors.Is(err, usecase.ErrAIUnavailable):

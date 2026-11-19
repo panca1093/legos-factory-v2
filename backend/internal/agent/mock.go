@@ -109,6 +109,9 @@ func (h *MockHarness) execute(ctx context.Context, req model.AgentRequest) (mode
 		return h.builder(req, res)
 	case model.AgentInspector:
 		return h.inspector(req, res)
+	case model.AgentPRReviewer:
+		res.Text = `{"summary":"Scripted mock review: this is not a real model output.","findings":[]}`
+		return res, nil
 	case model.AgentChat:
 		res.Text = "Scripted mock reply: this is not a real model output."
 		if req.OnText != nil {

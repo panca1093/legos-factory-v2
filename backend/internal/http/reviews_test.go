@@ -71,6 +71,7 @@ func TestEventsStreamCarriesOnlyTheCallersUserEvents(t *testing.T) {
 
 	srv.Bus.Publish(model.LiveEvent{UserID: "bob", Kind: "cli_login.code", Payload: map[string]any{"login_id": "l1", "code": "X"}})
 	srv.Bus.Publish(model.LiveEvent{UserID: "ana", Kind: "pr_review.run_finished", Payload: map[string]any{"number": 7}})
+	srv.Bus.Publish(model.LiveEvent{UserID: "ana", Kind: "pr_review.run_failed", Payload: map[string]any{"number": 8}})
 
 	next := func(sc *bufio.Scanner) map[string]any {
 		for sc.Scan() {
@@ -85,8 +86,17 @@ func TestEventsStreamCarriesOnlyTheCallersUserEvents(t *testing.T) {
 		t.Fatal("stream ended")
 		return nil
 	}
-	if m := next(ana); m["kind"] != "pr_review.run_finished" || m["payload"].(map[string]any)["number"] != float64(7) {
-		t.Fatalf("ana: %v", m)
+	firstM := next(ana)
+	if firstM["kind"] != "pr_review.run_finished" || firstM["payload"].(map[string]any)["number"] != float64(7) {
+		t.Fatalf("ana: %v", firstM)
+	}
+	firstID := firstM["id"]
+	second := next(ana)
+	if second["kind"] != "pr_review.run_failed" || second["id"] == nil || second["id"].(float64) >= 0 {
+		t.Fatalf("user events carry their own negative ids: %v", second)
+	}
+	if first := firstID; first == second["id"] {
+		t.Fatalf("ids must differ (a client dedupes by id): %v", first)
 	}
 	if m := next(bob); m["kind"] != "cli_login.code" || m["payload"].(map[string]any)["login_id"] != "l1" {
 		t.Fatalf("bob: %v", m)

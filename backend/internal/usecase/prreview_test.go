@@ -235,23 +235,34 @@ func (m *memReviews) PinIdentity(_ context.Context, id model.ReviewIdentity) err
 }
 
 type fakeReviewer struct {
-	mu        sync.Mutex
-	who       string
-	me        model.HostUser
-	authored  []model.PRSummary
-	reviewing []model.PRSummary
-	all       []model.PRSummary
-	detail    model.PRDetail
-	files     []model.PRFile
-	info      model.TokenInfo
-	listCalls int
-	listErr   error
-	post      model.PostedReview
-	postErr   error
-	posted    []model.ReviewSubmission
+	meGate, postGate chan struct{}
+	entered          chan struct{}
+	mu               sync.Mutex
+	who              string
+	me               model.HostUser
+	authored         []model.PRSummary
+	reviewing        []model.PRSummary
+	all              []model.PRSummary
+	detail           model.PRDetail
+	files            []model.PRFile
+	info             model.TokenInfo
+	listCalls        int
+	listErr          error
+	post             model.PostedReview
+	postErr          error
+	posted           []model.ReviewSubmission
 }
 
-func (f *fakeReviewer) Me(context.Context) (model.HostUser, error) { return f.me, nil }
+func (f *fakeReviewer) Me(ctx context.Context) (model.HostUser, error) {
+	if f.meGate != nil {
+		select {
+		case <-f.meGate:
+		case <-ctx.Done():
+			return model.HostUser{}, ctx.Err()
+		}
+	}
+	return f.me, nil
+}
 func (f *fakeReviewer) TokenInfo(context.Context) (model.TokenInfo, error) {
 	return f.info, nil
 }
@@ -279,6 +290,10 @@ func (f *fakeReviewer) PullRequestFiles(context.Context, string, int) ([]model.P
 	return append([]model.PRFile(nil), f.files...), nil
 }
 func (f *fakeReviewer) PostReview(_ context.Context, _ string, _ int, s model.ReviewSubmission) (model.PostedReview, error) {
+	if f.postGate != nil {
+		f.entered <- struct{}{}
+		<-f.postGate
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.posted = append(f.posted, s)
@@ -290,7 +305,7 @@ type fakeCLI struct {
 	tok   string
 }
 
-func (c fakeCLI) Status(context.Context, string) ([]string, error)    { return c.users, nil }
+func (c fakeCLI) Status(context.Context, string) ([]string, error)      { return c.users, nil }
 func (c fakeCLI) Token(context.Context, string, string) (string, error) { return c.tok, nil }
 func (c fakeCLI) StartLogin(context.Context, string) (<-chan model.CLILoginStep, error) {
 	ch := make(chan model.CLILoginStep, 3)
@@ -322,12 +337,14 @@ type scriptedAgent struct {
 	gate    chan struct{}
 	prompts []string
 	starts  int
+	roles   []model.AgentRole
 }
 
 func (a *scriptedAgent) Name() string { return "script" }
 func (a *scriptedAgent) Start(_ context.Context, req model.AgentRequest) (model.AgentSession, error) {
 	a.mu.Lock()
 	a.prompts = append(a.prompts, req.Prompt)
+	a.roles = append(a.roles, req.Role)
 	a.starts++
 	a.mu.Unlock()
 	return sess("s"), nil
@@ -351,18 +368,30 @@ type sess string
 func (s sess) ID() string { return string(s) }
 
 type fakeWS struct {
-	mu      sync.Mutex
-	sha     string
-	removed int
-	err     error
+	mu                    sync.Mutex
+	prepared, removedRuns []string
+	cleaned               int
+	sha                   string
+	removed               int
+	err                   error
 }
 
-func (w *fakeWS) PrepareReview(_ context.Context, _ string, _ int, _, ref string, _ *model.GitAuth) (string, string, error) {
+func (w *fakeWS) PrepareReview(_ context.Context, _ string, _ int, runID, _, ref string, _ *model.GitAuth) (string, string, error) {
+	w.mu.Lock()
+	w.prepared = append(w.prepared, runID)
+	w.mu.Unlock()
 	return "/tmp/review", w.sha, w.err
 }
-func (w *fakeWS) RemoveReview(context.Context, string, int, string) error {
+func (w *fakeWS) RemoveReview(_ context.Context, _ string, _ int, runID, _ string) error {
 	w.mu.Lock()
 	w.removed++
+	w.removedRuns = append(w.removedRuns, runID)
+	w.mu.Unlock()
+	return nil
+}
+func (w *fakeWS) CleanReviews(context.Context, string, string) error {
+	w.mu.Lock()
+	w.cleaned++
 	w.mu.Unlock()
 	return nil
 }
@@ -441,8 +470,8 @@ func newRvRig(t *testing.T) *rvRig {
 	}}
 	host := &fakeHost{repos: map[string]string{"/work/alpha": "git@github.com:acme/app.git"}}
 	g.r = &Reviews{
-		Store: g.st,
-		Projects: &Projects{Store: rvProjects{p: model.Project{ID: "p1", Name: "Alpha", RepoURL: "/work/alpha"}}, Members: rvMembers{ok: map[string]bool{"ana": true, "bob": true}}},
+		Store:        g.st,
+		Projects:     &Projects{Store: rvProjects{p: model.Project{ID: "p1", Name: "Alpha", RepoURL: "/work/alpha"}}, Members: rvMembers{ok: map[string]bool{"ana": true, "bob": true}}},
 		Integrations: &Integrations{Store: g.conns, Secrets: plainSealer{}, Host: host},
 		NewReviewer: func(provider, baseURL, username, token string) PRReviewer {
 			key := username
