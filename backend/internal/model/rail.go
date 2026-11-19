@@ -23,13 +23,20 @@ type RailWorkOrders struct {
 	Rows []RailWorkOrder `json:"rows"`
 }
 
-// RailPulls is a stub until the Review PR backend lands: rows are always empty.
+type RailPullRow struct {
+	Number        int    `json:"number"`
+	Title         string `json:"title"`
+	Label         string `json:"label"`
+	PendingDrafts int    `json:"pending_drafts"`
+	Running       bool   `json:"running"`
+}
+
 type RailPulls struct {
-	Identity any        `json:"identity"`
-	Count    int        `json:"count"`
-	Rows     []struct{} `json:"rows"`
-	Stale    bool       `json:"stale"`
-	Error    string     `json:"error,omitempty"`
+	Identity *IdentityView `json:"identity"`
+	Count    int           `json:"count"`
+	Rows     []RailPullRow `json:"rows"`
+	Stale    bool          `json:"stale"`
+	Error    *ProviderErr  `json:"error,omitempty"`
 }
 
 // RailResponse parts are pointers so a partial request omits the others.
