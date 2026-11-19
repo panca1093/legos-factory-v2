@@ -15,7 +15,9 @@ type Event struct {
 
 // LiveEvent is the in-process fan-out shape delivered to SSE subscribers.
 type LiveEvent struct {
-	WOID    string
+	WOID string
+	// UserID, when set, limits delivery to that user (review runs, CLI login); WOID is empty then.
+	UserID  string
 	Actor   string
 	Kind    string
 	Message string
