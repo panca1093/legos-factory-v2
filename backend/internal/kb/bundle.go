@@ -266,6 +266,37 @@ func (b *Bundle) Remove(p, message string) (string, error) {
 	return b.commit(message)
 }
 
+var projectIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// RemoveProject deletes projects/<projectID> and everything under it in one commit; a missing folder is a no-op.
+func (b *Bundle) RemoveProject(projectID, message string) (string, error) {
+	if !projectIDPattern.MatchString(projectID) {
+		return "", fmt.Errorf("invalid project id %q", projectID)
+	}
+	rel := "projects/" + projectID
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	abs := filepath.Join(b.root, filepath.FromSlash(rel))
+	if _, err := os.Stat(abs); errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err := os.RemoveAll(abs); err != nil {
+		return "", err
+	}
+	for d := path.Dir(rel); ; d = path.Dir(d) {
+		if err := b.regenIndex(d); err != nil {
+			return "", err
+		}
+		if d == "." {
+			break
+		}
+	}
+	if err := b.logEntry(message); err != nil {
+		return "", err
+	}
+	return b.commit(message)
+}
+
 func (b *Bundle) writeRaw(rel string, data []byte, message string) (string, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

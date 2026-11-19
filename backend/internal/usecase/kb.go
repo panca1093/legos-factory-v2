@@ -26,6 +26,10 @@ type KB struct {
 	Idx    kb.Index
 	Emb    kb.Embedder
 	Log    *slog.Logger
+	// Projects lists the live projects; factory folders of other projects are not indexed. Nil indexes all.
+	Projects interface {
+		List(ctx context.Context) ([]model.Project, error)
+	}
 
 	mu     sync.Mutex
 	locks  map[string]*sync.Mutex
@@ -59,7 +63,29 @@ func (k *KB) RemoveFactory(ctx context.Context, rel, message string) error {
 }
 
 func (k *KB) SyncFactory(ctx context.Context) (kb.SyncStats, error) {
-	return kb.SyncFactory(ctx, k.Idx, k.Emb, k.Bundle)
+	var live func(string) bool
+	if k.Projects != nil {
+		ps, err := k.Projects.List(ctx)
+		if err != nil {
+			return kb.SyncStats{}, err
+		}
+		ids := make(map[string]bool, len(ps))
+		for _, p := range ps {
+			ids[p.ID] = true
+		}
+		live = func(id string) bool { return ids[id] }
+	}
+	st, err := kb.SyncFactory(ctx, k.Idx, k.Emb, k.Bundle, live)
+	if len(st.Skipped) > 0 && k.Log != nil {
+		k.Log.Warn("factory knowledge of deleted projects not indexed", "projects", st.Skipped)
+	}
+	return st, err
+}
+
+// RemoveProject deletes a deleted project's factory knowledge folder; its index rows go with the project.
+func (k *KB) RemoveProject(projectID string) error {
+	_, err := k.Bundle.RemoveProject(projectID, "Remove knowledge of deleted project "+projectID)
+	return err
 }
 
 // SyncRepo indexes the repository checkout in dir for a project. Unless force

@@ -3,10 +3,15 @@ package usecase
 import (
 	"context"
 	"errors"
+	"io/fs"
+	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 
+	"legos-factory/backend/internal/kb"
 	"legos-factory/backend/internal/model"
 	"legos-factory/backend/internal/sandbox"
 	"legos-factory/backend/internal/store"
@@ -317,5 +322,41 @@ func TestDeleteProjectDropsItsSearchIndex(t *testing.T) {
 	var n int
 	if err := wos.DB.QueryRow(`SELECT COUNT(*) FROM kb_fts WHERE kb_fts MATCH 'quokka'`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("fts rows left: %d %v", n, err)
+	}
+}
+
+func TestDeleteProjectRemovesItsKnowledgeAndStartupSkipsOrphans(t *testing.T) {
+	ctx := context.Background()
+	f, wos := deleteFixture(t, model.StateCancelled)
+	bundle, err := kb.OpenBundle(t.TempDir(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	know := &KB{Bundle: bundle, Idx: &store.KBRepo{DB: wos.DB}, Emb: kb.HashEmbedder{}, Log: slog.Default(), Projects: &store.ProjectRepo{DB: wos.DB}}
+	f.KB = know
+	if _, err := bundle.WriteMany([]kb.File{
+		{Path: "projects/p1/reviewer-routing.md", Front: map[string]any{"type": "Note"}, Body: "# Routing\n"},
+		{Path: "projects/gone/reviewer-routing.md", Front: map[string]any{"type": "Note"}, Body: "# Orphan\n"},
+	}, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := know.SyncFactory(ctx)
+	if err != nil {
+		t.Fatalf("orphan folder must not fail the sync: %v", err)
+	}
+	if !slices.Equal(st.Skipped, []string{"gone"}) {
+		t.Fatalf("skipped %v", st.Skipped)
+	}
+	if err := f.DeleteProject(ctx, "p1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(bundle.Root(), "projects", "p1")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("project knowledge folder left: %v", err)
+	}
+	if out, err := exec.Command("git", "-C", bundle.Root(), "status", "--porcelain").Output(); err != nil || len(out) != 0 {
+		t.Fatalf("removal not committed: %q %v", out, err)
+	}
+	if _, err := know.SyncFactory(ctx); err != nil {
+		t.Fatalf("sync after delete: %v", err)
 	}
 }

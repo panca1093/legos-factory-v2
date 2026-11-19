@@ -286,6 +286,11 @@ func (f *Factory) DeleteProject(ctx context.Context, projectID string) error {
 		f.cleanupWorktreesIn(ctx, &own[i], proj.RepoURL, false, false)
 	}
 	f.removeStack(ctx, projectID)
+	if f.KB != nil {
+		if err := f.KB.RemoveProject(projectID); err != nil {
+			f.Log.Warn("project knowledge cleanup failed", "project", projectID, "err", err)
+		}
+	}
 	f.Log.Info("project deleted", "project", projectID, "work_orders", len(own))
 	return nil
 }

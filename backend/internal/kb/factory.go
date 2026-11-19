@@ -23,7 +23,8 @@ func ProjectOf(rel string) string {
 
 // SyncFactory indexes the whole bundle, one project at a time. A project that
 // fails (for example one the database does not know) does not stop the others.
-func SyncFactory(ctx context.Context, idx Index, emb Embedder, b *Bundle) (SyncStats, error) {
+// A project folder whose project is not live (live returns false) is skipped and listed in Skipped; nil live keeps all.
+func SyncFactory(ctx context.Context, idx Index, emb Embedder, b *Bundle, live func(projectID string) bool) (SyncStats, error) {
 	files, err := collect(b.root, true)
 	if err != nil {
 		return SyncStats{}, err
@@ -52,6 +53,10 @@ func SyncFactory(ctx context.Context, idx Index, emb Embedder, b *Bundle) (SyncS
 	var first error
 	commit := b.Head()
 	for _, pid := range pids {
+		if pid != "" && live != nil && !live(pid) {
+			total.Skipped = append(total.Skipped, pid)
+			continue
+		}
 		st, err := syncFiles(ctx, idx, emb, model.KBSourceFactory, pid, groups[pid], commit)
 		total.Docs += st.Docs
 		total.Changed += st.Changed

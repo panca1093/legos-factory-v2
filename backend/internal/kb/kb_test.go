@@ -364,7 +364,7 @@ func TestSyncPlainDir(t *testing.T) {
 	ctx := context.Background()
 
 	st, err := Sync(ctx, idx, HashEmbedder{}, "repo", "p", root, "c1")
-	if err != nil || st != (SyncStats{Docs: 3, Changed: 3}) {
+	if err != nil || !reflect.DeepEqual(st, SyncStats{Docs: 3, Changed: 3}) {
 		t.Fatalf("%+v %v", st, err)
 	}
 	a := idx.docs["repo:p:a.md"]
@@ -374,7 +374,7 @@ func TestSyncPlainDir(t *testing.T) {
 	put(t, root, "docs/b.md", "# B2\n")
 	os.Remove(filepath.Join(root, "index.md"))
 	st, err = Sync(ctx, idx, HashEmbedder{}, "repo", "p", root, "c2")
-	if err != nil || st != (SyncStats{Docs: 2, Changed: 1, Removed: 1}) || len(idx.touched) != 1 || idx.touched[0] != "repo:p:a.md" {
+	if err != nil || !reflect.DeepEqual(st, SyncStats{Docs: 2, Changed: 1, Removed: 1}) || len(idx.touched) != 1 || idx.touched[0] != "repo:p:a.md" {
 		t.Fatalf("%+v %v %v", st, err, idx.touched)
 	}
 }
@@ -421,7 +421,7 @@ func TestSyncFactoryNeverIndexesJournal(t *testing.T) {
 	stale("p1", "projects/p1/journal/wo_1/001-plan.md")
 	stale("p2", "projects/p2/journal/wo_2/001-plan.md")
 	stale("p3", "projects/p3/journal/wo_3/001-plan.md")
-	if _, err := SyncFactory(ctx, idx, HashEmbedder{}, b); err != nil {
+	if _, err := SyncFactory(ctx, idx, HashEmbedder{}, b, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := idx.docs["factory:p2:projects/p2/notes/n.md"]; !ok || len(idx.docs) != 1 {
@@ -559,5 +559,39 @@ func TestGitPlaybookPathsFindsQuotedTypesAndUnusualPathsButSkipsVendor(t *testin
 	}
 	if want := []string{"docs/café.md", "docs/tab rules.md"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestBundleRemoveProject(t *testing.T) {
+	b, err := OpenBundle(filepath.Join(t.TempDir(), "kb"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.WriteMany([]File{
+		{Path: "projects/p1/notes/n.md", Front: map[string]any{"type": "Note"}, Body: "# N\n"},
+		{Path: "projects/p2/notes/n.md", Front: map[string]any{"type": "Note"}, Body: "# N\n"},
+	}, "seed"); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"", "..", "p1/../p2", "../x", "."} {
+		if _, err := b.RemoveProject(bad, "x"); err == nil {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+	if sha, err := b.RemoveProject("p1", "remove p1"); err != nil || sha == "" {
+		t.Fatalf("remove: %q %v", sha, err)
+	}
+	if _, err := os.Stat(filepath.Join(b.Root(), "projects", "p1")); !os.IsNotExist(err) {
+		t.Fatalf("p1 left: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(b.Root(), "projects", "p2", "notes", "n.md")); err != nil {
+		t.Fatalf("p2 touched: %v", err)
+	}
+	idx, _ := os.ReadFile(filepath.Join(b.Root(), "projects", "index.md"))
+	if strings.Contains(string(idx), "p1") {
+		t.Fatalf("projects index still lists p1:\n%s", idx)
+	}
+	if sha, err := b.RemoveProject("p1", "again"); err != nil || sha != "" {
+		t.Fatalf("missing folder must be a no-op: %q %v", sha, err)
 	}
 }
