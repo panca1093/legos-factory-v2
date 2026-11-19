@@ -7,6 +7,7 @@ import { api, type McpServer } from "../../types/api";
 import McpAddForm from "./McpAddForm.vue";
 import McpServerRow from "./McpServerRow.vue";
 import ProviderRow from "./ProviderRow.vue";
+import ReviewIdentities from "./ReviewIdentities.vue";
 
 defineProps<{ credentialsConfigured: boolean }>();
 const factory = useFactory(),
@@ -113,6 +114,8 @@ async function mcpAdded() {
         <p v-if="!g.providers.length" class="help">None yet.</p>
       </div>
     </div>
+
+    <ReviewIdentities @error="error = $event" />
 
     <div class="conn-group">
       <h3 class="sub">
