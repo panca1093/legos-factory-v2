@@ -7,7 +7,11 @@ import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
 import AddProjectDialog from "../factory/work-orders/AddProjectDialog.vue";
 import NewWorkOrderDrawer from "../factory/work-orders/NewWorkOrderDrawer.vue";
-import { isNeedsYou, isRunning } from "../../composables/presentation";
+import {
+  isNeedsYou,
+  isRunning,
+  isShipped,
+} from "../../composables/presentation";
 import { isOpenOrder, repoLabel, woPath } from "./rail";
 import type { Project } from "../../types/api";
 
@@ -20,12 +24,18 @@ const adding = ref(false),
   loading = ref(true);
 const showNew = computed(() => route.query.new === "1");
 
+const filter = computed(() =>
+  route.query.filter === "attention" || route.query.filter === "shipped"
+    ? route.query.filter
+    : "",
+);
 interface Card {
   project: Project;
   open: number;
   needsYou: number;
   running: number;
   lastActivity: string;
+  shipped: number;
 }
 const cards = computed<Card[]>(() =>
   factory.projects
@@ -37,12 +47,20 @@ const cards = computed<Card[]>(() =>
         open: open.length,
         needsYou: open.filter(isNeedsYou).length,
         running: open.filter(isRunning).length,
+        shipped: own.filter(isShipped).length,
         lastActivity: own.reduce(
           (m, w) => (w.updated_at > m ? w.updated_at : m),
           "",
         ),
       };
     })
+    .filter((c) =>
+      filter.value === "attention"
+        ? c.needsYou > 0
+        : filter.value === "shipped"
+          ? c.shipped > 0
+          : true,
+    )
     .sort(
       (a, b) =>
         b.needsYou - a.needsYou ||
@@ -108,6 +126,14 @@ onMounted(async () => {
         </button>
       </div>
     </div>
+    <p v-if="filter" class="notice row between" data-test="projects-filter">
+      <span
+        >Showing projects with
+        {{
+          filter === "attention" ? "decisions waiting on you" : "shipped work"
+        }}.</span
+      ><RouterLink to="/projects">Show all projects</RouterLink>
+    </p>
     <div v-if="error" class="error-state" role="alert">{{ error }}</div>
     <div
       v-else-if="loading && !factory.projects.length"

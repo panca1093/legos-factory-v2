@@ -128,7 +128,7 @@ onMounted(() => {
     >
   </div>
   <section class="kpis" aria-label="Workspace summary">
-    <RouterLink class="lg-card lg-stat" to="/projects"
+    <RouterLink class="lg-card lg-stat" to="/projects?filter=attention"
       ><div class="label"><ShieldCheck class="icon" />Needs you</div>
       <div class="value">{{ approvals.length }}</div>
       <div class="note">decisions waiting</div></RouterLink
@@ -138,7 +138,7 @@ onMounted(() => {
       <div class="value">{{ inMaking.length }}</div>
       <div class="note">active work orders</div></RouterLink
     >
-    <RouterLink class="lg-card lg-stat" to="/projects"
+    <RouterLink class="lg-card lg-stat" to="/projects?filter=shipped"
       ><div class="label"><Rocket class="icon" />Shipped</div>
       <div class="value">{{ shipped }}</div>
       <div class="note">pull requests opened</div></RouterLink

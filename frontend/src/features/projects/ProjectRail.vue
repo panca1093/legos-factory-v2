@@ -93,6 +93,12 @@ watch(
   { immediate: true },
 );
 watch(
+  () => factory.workOrders.map((w) => w.id),
+  (now, old) => {
+    if (old.some((id) => !now.includes(id))) void load("wo");
+  },
+);
+watch(
   () => factory.liveEvents[0],
   (ev) => {
     if (!ev) return;

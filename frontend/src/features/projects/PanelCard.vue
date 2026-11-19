@@ -1,11 +1,17 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { ChevronDown } from "lucide-vue-next";
 import { readFlags, writeStored } from "./rail";
 
-const props = defineProps<{ id: string; title: string }>();
+const props = defineProps<{ id: string; title: string; reveal?: boolean }>();
 const key = "legos-project-panel-cards";
-const closed = ref(!!readFlags(key)[props.id]);
+const closed = ref(!!readFlags(key)[props.id] && !props.reveal);
+watch(
+  () => props.reveal,
+  (r) => {
+    if (r) closed.value = false;
+  },
+);
 function toggle() {
   closed.value = !closed.value;
   writeStored(

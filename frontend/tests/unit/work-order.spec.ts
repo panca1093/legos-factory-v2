@@ -51,6 +51,8 @@ it("changes the order identity without retaining the old stream or data", async 
   await router.push("/projects/atlas/wo/LF-127");
   await flushPromises();
   expect(w.find("h1").text()).toBe("Add accessible product search");
+  expect(useFactory().loadDetail).toHaveBeenLastCalledWith("LF-127");
+  expect(useFactory().loadDetail).toHaveBeenCalledTimes(2);
   expect(closed).toBe(1);
   w.unmount();
   expect(closed).toBe(2);

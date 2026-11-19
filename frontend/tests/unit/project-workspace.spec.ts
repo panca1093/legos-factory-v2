@@ -12,6 +12,7 @@ import {
   filterOrders,
   isOpenOrder,
   legacyTabPath,
+  readFlags,
   railDot,
   repoLabel,
   sortRail,
@@ -91,6 +92,16 @@ describe("rail helpers", () => {
     expect(legacyTabPath("p", "pull-requests")).toBe("/projects/p/pulls");
     expect(legacyTabPath("p", "code")).toBe("/projects/p/code");
     expect(legacyTabPath("p", "nope")).toBeNull();
+  });
+});
+
+describe("stored flags", () => {
+  it("ignores stored JSON that is not a plain object", () => {
+    for (const v of ["null", "[1]", "3", "oops"]) {
+      vi.stubGlobal("localStorage", { getItem: () => v });
+      expect(readFlags("k")).toEqual({});
+    }
+    vi.unstubAllGlobals();
   });
 });
 
@@ -300,11 +311,32 @@ describe("project rail", () => {
     expect(router.currentRoute.value.path).toBe(
       w.findAll('[data-test="rail-wo"]')[1].attributes("href"),
     );
-    const second = router.currentRoute.value.path;
+    expect(router.currentRoute.value.path).toBe("/projects/p1/wo/b");
     router.back();
     await flushPromises();
-    expect(router.currentRoute.value.path).not.toBe(second);
-    expect(router.currentRoute.value.path).toMatch(/^\/projects\/p1\/wo\//);
+    expect(router.currentRoute.value.path).toBe("/projects/p1/wo/a");
+    expect(
+      w.findAll(".pr-row.active").map((r) => r.attributes("href")),
+    ).toEqual(["/projects/p1/wo/a"]);
+    router.forward();
+    await flushPromises();
+    expect(router.currentRoute.value.path).toBe("/projects/p1/wo/b");
+    w.unmount();
+  });
+
+  it("drops a deleted work order from the rail", async () => {
+    rail.p1 = railJSON([row("a"), row("b")]);
+    const f = useFactory();
+    f.workOrders = [
+      { ...(orders[1] as WorkOrder), id: "a", project_id: "p1" },
+      { ...(orders[1] as WorkOrder), id: "b", project_id: "p1" },
+    ];
+    const { w } = await mountRail("/projects/p1");
+    expect(titles(w)).toEqual(["Title a", "Title b"]);
+    rail.p1 = railJSON([row("a")]);
+    await f.deleteWorkOrder("b");
+    await flushPromises();
+    expect(titles(w)).toEqual(["Title a"]);
     w.unmount();
   });
 
@@ -504,6 +536,81 @@ describe("project workspace", () => {
     await flushPromises();
     expect(router.currentRoute.value.fullPath).toBe(
       "/projects/atlas/wo/LF-127?tab=review",
+    );
+    w.unmount();
+  });
+
+  const stubApi = (handler: (url: string) => unknown) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const body = handler(url);
+        return typeof body === "number"
+          ? { ok: false, status: body, text: async () => "{}" }
+          : { ok: true, status: 200, text: async () => JSON.stringify(body) };
+      }),
+    );
+
+  it("redirects a work order deep link to its own project when the project is missing", async () => {
+    useFactory().projects = [];
+    stubApi((url) =>
+      url.includes("/work-orders/LF-127")
+        ? { work_order: { id: "LF-127", project_id: "atlas" } }
+        : {},
+    );
+    const { w, router } = await mountWorkspace(
+      "/projects/ghost/wo/LF-127?tab=review",
+    );
+    expect(router.currentRoute.value.fullPath).toBe(
+      "/projects/atlas/wo/LF-127?tab=review",
+    );
+    w.unmount();
+  });
+
+  it("redirects the same way when the projects fetch fails", async () => {
+    const f = useFactory();
+    f.projects = [];
+    vi.mocked(f.refreshProjects).mockRejectedValue(new Error("boom"));
+    stubApi(() => ({ work_order: { id: "LF-127", project_id: "atlas" } }));
+    const { w, router } = await mountWorkspace("/projects/ghost/wo/LF-127");
+    expect(router.currentRoute.value.path).toBe("/projects/atlas/wo/LF-127");
+    w.unmount();
+  });
+
+  it("shows a missing project when the work order is not found either", async () => {
+    useFactory().projects = [];
+    stubApi(() => 404);
+    const { w, router } = await mountWorkspace("/projects/ghost/wo/nope");
+    expect(router.currentRoute.value.path).toBe("/projects/ghost/wo/nope");
+    expect(w.find('[data-test="project-missing"]').exists()).toBe(true);
+    w.unmount();
+  });
+
+  it("shows a load error with Retry instead of the missing state", async () => {
+    const f = useFactory();
+    f.projects = [];
+    vi.mocked(f.refreshProjects).mockRejectedValueOnce(new Error("db down"));
+    const { w } = await mountWorkspace("/projects/atlas");
+    expect(w.find('[data-test="project-missing"]').exists()).toBe(false);
+    expect(w.find('[data-test="project-error"]').text()).toContain("db down");
+    vi.mocked(f.refreshProjects).mockImplementation(async () => {
+      f.projects = projects;
+    });
+    await w.find('[data-test="project-retry"]').trigger("click");
+    await flushPromises();
+    expect(w.find('[data-test="project-error"]').exists()).toBe(false);
+    expect(w.find(".pw").exists()).toBe(true);
+    w.unmount();
+  });
+
+  it("?checks=1 opens a hidden panel and an expanded Details card", async () => {
+    store["legos-project-panel"] = "0";
+    store["legos-project-panel-cards"] = JSON.stringify({ details: true });
+    vi.stubGlobal("innerWidth", 1100);
+    const { w } = await mountWorkspace("/projects/atlas?checks=1");
+    expect(w.find("#pw-panel").exists()).toBe(true);
+    expect(w.find("#pc-details").attributes("style") ?? "").not.toContain(
+      "display: none",
     );
     w.unmount();
   });

@@ -87,8 +87,10 @@ export function writeStored(key: string, value: string) {
 
 export function readFlags(key: string): Record<string, boolean> {
   try {
-    const v = JSON.parse(readStored(key) ?? "{}");
-    return v && typeof v === "object" ? v : {};
+    const v: unknown = JSON.parse(readStored(key) ?? "{}");
+    return v && typeof v === "object" && !Array.isArray(v)
+      ? (v as Record<string, boolean>)
+      : {};
   } catch {
     return {};
   }

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
+import { api, type WorkOrder } from "../../types/api";
 import { PanelRight, PanelRightClose } from "lucide-vue-next";
 import "./projects.css";
 import { useFactory } from "../../stores/factory";
@@ -17,7 +18,8 @@ const projectId = computed(() => String(route.params.id));
 const project = computed(() =>
   factory.projects.find((p) => p.id === projectId.value),
 );
-const ready = ref(false);
+const ready = ref(false),
+  loadError = ref("");
 const kind = computed(() =>
   route.name === "project-wo"
     ? "wo"
@@ -49,6 +51,17 @@ function togglePanel() {
   panelOpen.value = !panelOpen.value;
   if (!narrow()) writeStored(panelKey, panelOpen.value ? "1" : "0");
 }
+initPanel();
+const revealChecks = computed(
+  () => kind.value === "overview" && route.query.checks === "1",
+);
+watch(
+  revealChecks,
+  (r) => {
+    if (r) panelOpen.value = true;
+  },
+  { immediate: true },
+);
 const showPanel = computed(() => hasPanel.value && panelOpen.value);
 const showNew = computed(() => route.query.new === "1");
 
@@ -84,18 +97,55 @@ watch(
     if (narrow() && panelOpen.value) panelOpen.value = false;
   },
 );
-onMounted(async () => {
-  initPanel();
+async function settle() {
+  ready.value = false;
+  loadError.value = "";
   try {
     await Promise.all([factory.refreshProjects(), factory.refreshWorkOrders()]);
-  } catch {
-    /* The rail and the page report their own load errors. */
+  } catch (e) {
+    loadError.value = e instanceof Error ? e.message : String(e);
+  }
+  if (kind.value === "wo" && !project.value) {
+    try {
+      const res = await api.get<{ work_order: WorkOrder }>(
+        `/api/v1/work-orders/${encodeURIComponent(String(route.params.wo))}`,
+      );
+      if (res.work_order.project_id !== projectId.value) {
+        void router.replace({
+          path: woPath(res.work_order.project_id, res.work_order.id),
+          query: route.query,
+        });
+        return;
+      }
+    } catch {
+      /* Not found: fall through to the project state below. */
+    }
   }
   ready.value = true;
+}
+watch(projectId, () => {
+  if (!project.value) void settle();
 });
+onMounted(settle);
 </script>
 <template>
-  <div v-if="ready && !project" class="panel empty" data-test="project-missing">
+  <div
+    v-if="ready && !project && loadError"
+    class="error-state"
+    role="alert"
+    data-test="project-error"
+  >
+    <h2>We couldn’t load this project.</h2>
+    <p class="small">{{ loadError }}</p>
+    <button class="btn" data-test="project-retry" @click="settle">
+      Try again
+    </button>
+  </div>
+  <div
+    v-else-if="ready && !project"
+    class="panel empty"
+    data-test="project-missing"
+  >
     <h2>We couldn’t find that project.</h2>
     <p class="help">
       It may have been deleted, or you may not have access to it.
@@ -132,7 +182,11 @@ onMounted(async () => {
       class="pw-panel"
       aria-label="Context"
     >
-      <ProjectDetailsCard v-if="kind === 'overview'" :project="project" />
+      <ProjectDetailsCard
+        v-if="kind === 'overview'"
+        :project="project"
+        :reveal="revealChecks"
+      />
       <WorkOrderPanel v-else />
     </aside>
   </div>

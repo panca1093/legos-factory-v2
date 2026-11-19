@@ -105,6 +105,21 @@ it("project cards put the project that needs you first", async () => {
   expect(cards[2].text()).not.toContain("needs you");
   w.unmount();
 });
+it("filters project cards from the home links", async () => {
+  const f = useFactory();
+  f.workOrders.find((o) => o.id === "LF-121")!.pr_url = "https://x/pr/1";
+  const attention = await render("/projects?filter=attention", ProjectsView);
+  expect(attention.w.findAll('[data-test="project-card"]')).toHaveLength(2);
+  expect(attention.w.find('[data-test="projects-filter"]').exists()).toBe(true);
+  attention.w.unmount();
+  const shipped = await render("/projects?filter=shipped", ProjectsView);
+  expect(
+    shipped.w
+      .findAll('[data-test="project-card"]')
+      .map((c) => c.attributes("href")),
+  ).toEqual(["/projects/loan"]);
+  shipped.w.unmount();
+});
 it("opens the new work order drawer from the projects page", async () => {
   const { w } = await render("/projects?new=1", ProjectsView);
   expect(w.findComponent(NewWorkOrderDrawer).exists()).toBe(true);
