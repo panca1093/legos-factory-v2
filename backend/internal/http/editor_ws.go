@@ -117,9 +117,9 @@ func (s *Server) preUpgrade(c echo.Context) (model.EditorFolder, error) {
 	if !s.editorOrigin(r) {
 		return model.EditorFolder{}, errorJSON(c, http.StatusForbidden, "FORBIDDEN_ORIGIN", "WebSocket Origin is missing or not allowed")
 	}
-	f, err := s.EditorLive.OwnedFolder(r.Context(), currentUser(c).ID, c.Param("fid"))
+	f, err := s.EditorLive.OwnedFolder(r.Context(), currentUser(c), c.Param("fid"))
 	switch {
-	case errors.Is(err, usecase.ErrEditorFolderNotFound):
+	case errors.Is(err, model.ErrEditorFolderNotFound), usecase.IsNotFound(err):
 		return f, errorJSON(c, http.StatusNotFound, "NOT_FOUND", "folder not found")
 	case errors.Is(err, model.ErrFolderGone):
 		return f, errorJSON(c, http.StatusGone, "FOLDER_GONE", "this folder no longer exists")
@@ -156,7 +156,7 @@ func (s *Server) handleEditorControlWS(c echo.Context) error {
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(controlFrameLimit)
-	sess, err := s.EditorLive.OpenControl(c.Request().Context(), user.ID, f.ID)
+	sess, err := s.EditorLive.OpenControl(c.Request().Context(), user, f.ID)
 	if err != nil {
 		_ = conn.Close(websocket.StatusInternalError, "cannot watch this folder")
 		return nil
@@ -234,7 +234,7 @@ func (s *Server) handleEditorLSPWS(c echo.Context) error {
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(lspFrameLimit)
-	client, err := s.EditorLive.OpenLSP(c.Request().Context(), user.ID, f.ID, c.Param("server"))
+	client, err := s.EditorLive.OpenLSP(c.Request().Context(), user, f.ID, c.Param("server"))
 	if err != nil {
 		code, reason := lspCloseFor(err)
 		_ = conn.Close(websocket.StatusCode(code), reason)

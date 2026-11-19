@@ -135,12 +135,17 @@ func (f *fakeEditorFS) GitStatus(context.Context, string) (model.GitStatus, erro
 
 type fakeFolders map[string]*model.EditorFolder
 
-func (f fakeFolders) Folder(_ context.Context, user, id string) (*model.EditorFolder, error) {
-	if x, ok := f[user+"/"+id]; ok {
+func (f fakeFolders) Folder(_ context.Context, u *model.User, id string) (*model.EditorFolder, error) {
+	if x, ok := f[u.ID+"/"+id]; ok {
+		if st, err := os.Stat(x.Path); err != nil || !st.IsDir() {
+			return nil, model.ErrFolderGone
+		}
 		return x, nil
 	}
-	return nil, errors.New("no rows")
+	return nil, model.ErrEditorFolderNotFound
 }
+
+func usr(id string) *model.User { return &model.User{ID: id} }
 
 type fakePaths struct {
 	mu sync.Mutex
@@ -232,7 +237,7 @@ func always[T any](T) bool { return true }
 
 func TestControlSessionReportsOpenFileChangesWithHashAndActor(t *testing.T) {
 	l, fs, _, root := newLive(t, true)
-	s, err := l.OpenControl(context.Background(), "u1", "f1")
+	s, err := l.OpenControl(context.Background(), usr("u1"), "f1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +265,7 @@ func TestControlSessionReportsOpenFileChangesWithHashAndActor(t *testing.T) {
 
 func TestControlSessionAttributesGitCheckoutAndIgnoresUnopenedFiles(t *testing.T) {
 	l, fs, _, root := newLive(t, true)
-	s, _ := l.OpenControl(context.Background(), "u1", "f1")
+	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644)
 	s.Watch(nil, []string{"a.txt"})
@@ -275,7 +280,7 @@ func TestControlSessionAttributesGitCheckoutAndIgnoresUnopenedFiles(t *testing.T
 
 func TestControlSessionDirChangedRootIsEmptyString(t *testing.T) {
 	l, fs, _, _ := newLive(t, true)
-	s, _ := l.OpenControl(context.Background(), "u1", "f1")
+	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	fs.w.ev <- model.FSEvent{Path: ".", Kind: "dir"}
 	fs.w.ev <- model.FSEvent{Path: "pkg/x", Kind: "dir"}
@@ -289,7 +294,7 @@ func TestControlSessionDirChangedRootIsEmptyString(t *testing.T) {
 
 func TestControlSessionGitStatusIsDebouncedAndRateLimited(t *testing.T) {
 	l, fs, _, _ := newLive(t, true)
-	s, _ := l.OpenControl(context.Background(), "u1", "f1")
+	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	first := nextEvent(t, s, always[GitStatusMsg])
 	if first.Type != "git_status" || first.Branch != "b1" {
@@ -314,7 +319,7 @@ func TestControlSessionGitStatusIsDebouncedAndRateLimited(t *testing.T) {
 
 func TestControlSessionWatchSetOrderingAndCap(t *testing.T) {
 	l, fs, _, _ := newLive(t, true)
-	s, _ := l.OpenControl(context.Background(), "u1", "f1")
+	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	var dirs []string
 	for i := 0; i < 300; i++ {
@@ -340,7 +345,7 @@ func TestControlSessionWatchSetOrderingAndCap(t *testing.T) {
 func TestControlSessionReportsFolderGoneAndClosesWatcher(t *testing.T) {
 	l, fs, _, root := newLive(t, true)
 	l.GoneEvery = 20 * time.Millisecond
-	s, _ := l.OpenControl(context.Background(), "u1", "f1")
+	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	os.RemoveAll(root)
 	nextEvent(t, s, always[FolderGoneMsg])
 	s.Close()
@@ -354,7 +359,7 @@ func TestControlSessionReportsFolderGoneAndClosesWatcher(t *testing.T) {
 func TestControlSessionSendsServerStatesIncludingOutdatedGopls(t *testing.T) {
 	l, _, host, _ := newLive(t, true)
 	host.outdated = true
-	s, _ := l.OpenControl(context.Background(), "u1", "f1")
+	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	g := nextEvent(t, s, func(m ServerStateMsg) bool { return m.Server == "gopls" })
 	if g.State != model.LSPOutdated || g.Error == "" {
@@ -368,18 +373,18 @@ func TestControlSessionSendsServerStatesIncludingOutdatedGopls(t *testing.T) {
 
 func TestOpenControlRejectsOtherUsersAndMissingFolders(t *testing.T) {
 	l, _, _, root := newLive(t, true)
-	if _, err := l.OpenControl(context.Background(), "u2", "f1"); !errors.Is(err, ErrEditorFolderNotFound) {
+	if _, err := l.OpenControl(context.Background(), usr("u2"), "f1"); !errors.Is(err, model.ErrEditorFolderNotFound) {
 		t.Fatalf("other user's folder: %v", err)
 	}
 	os.RemoveAll(root)
-	if _, err := l.OpenControl(context.Background(), "u1", "f1"); !errors.Is(err, model.ErrFolderGone) {
+	if _, err := l.OpenControl(context.Background(), usr("u1"), "f1"); !errors.Is(err, model.ErrFolderGone) {
 		t.Fatalf("gone folder: %v", err)
 	}
 }
 
 func TestNoteWriteReachesTheWatcherOfThatFolderOnly(t *testing.T) {
 	l, fs, _, _ := newLive(t, true)
-	s, _ := l.OpenControl(context.Background(), "u1", "f1")
+	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	l.NoteWrite("u1", "f1", "a.go", "abc")
 	l.NoteWrite("u2", "f1", "b.go", "def")
@@ -392,22 +397,22 @@ func TestNoteWriteReachesTheWatcherOfThatFolderOnly(t *testing.T) {
 
 func TestOpenLSPRefusesUntrustedUnknownAndMissingServers(t *testing.T) {
 	l, _, _, _ := newLive(t, false)
-	if _, err := l.OpenLSP(context.Background(), "u1", "f1", "gopls"); !errors.Is(err, model.ErrUntrusted) {
+	if _, err := l.OpenLSP(context.Background(), usr("u1"), "f1", "gopls"); !errors.Is(err, model.ErrUntrusted) {
 		t.Fatalf("untrusted: %v", err)
 	}
 	l, _, _, _ = newLive(t, true)
-	if _, err := l.OpenLSP(context.Background(), "u1", "f1", "rust-analyzer"); !errors.Is(err, ErrLSPUnknown) {
+	if _, err := l.OpenLSP(context.Background(), usr("u1"), "f1", "rust-analyzer"); !errors.Is(err, ErrLSPUnknown) {
 		t.Fatalf("outside the allowlist: %v", err)
 	}
-	if _, err := l.OpenLSP(context.Background(), "u2", "f1", "gopls"); !errors.Is(err, ErrEditorFolderNotFound) {
+	if _, err := l.OpenLSP(context.Background(), usr("u2"), "f1", "gopls"); !errors.Is(err, model.ErrEditorFolderNotFound) {
 		t.Fatalf("other user's folder: %v", err)
 	}
 	t.Setenv("NO_TSLS", "1")
 	l.disc = nil
-	if _, err := l.OpenLSP(context.Background(), "u1", "f1", "tsls"); !errors.Is(err, ErrLSPNotFound) {
+	if _, err := l.OpenLSP(context.Background(), usr("u1"), "f1", "tsls"); !errors.Is(err, ErrLSPNotFound) {
 		t.Fatalf("not installed: %v", err)
 	}
-	c, err := l.OpenLSP(context.Background(), "u1", "f1", "gopls")
+	c, err := l.OpenLSP(context.Background(), usr("u1"), "f1", "gopls")
 	if err != nil {
 		t.Fatal(err)
 	}

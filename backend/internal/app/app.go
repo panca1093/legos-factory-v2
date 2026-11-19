@@ -238,9 +238,6 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Integrations = integrations
 	srv.MCP = mcpServers
 	srv.Local = localProjects
-	if cfg.AuthMode == "dev" {
-		srv.EditorLive = newEditorLive(db, runRepo)
-	}
 	srv.Catalog = catalog
 	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo, WO: woRepo, DataDir: cfg.DataDir}
 	srv.Factory = factory
@@ -387,6 +384,13 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		reviews.CLI = integration.NewGHAuth(nil, nil)
 	}
 	srv.Reviews = reviews
+	if cfg.AuthMode == "dev" {
+		srv.Editor = &usecase.Editor{
+			Store: &store.EditorRepo{DB: db}, FS: sandbox.EditorFS{}, Projects: projects,
+			Proj: projRepo, WO: woRepo, DataDir: cfg.DataDir,
+		}
+		srv.EditorLive = newEditorLive(srv.Editor, runRepo)
+	}
 	srv.Rail.Reviews = reviews
 
 	srv.Checks = &usecase.CheckSuggester{

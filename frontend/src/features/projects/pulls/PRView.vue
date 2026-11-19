@@ -244,7 +244,23 @@ const ciLabel = (ci: string) =>
                 <span class="dv-mark">{{
                   l.t === "add" ? "+" : l.t === "del" ? "−" : " "
                 }}</span>
-                <span class="dv-code">{{ l.s }}</span>
+                <span class="dv-code"
+                  >{{ l.s
+                  }}<RouterLink
+                    v-if="l.n !== undefined"
+                    class="dv-open"
+                    :to="{
+                      path: `/projects/${projectId}/code`,
+                      query: {
+                        file: file.path,
+                        line: String(l.n),
+                        pr_head: pr.head,
+                      },
+                    }"
+                    data-test="open-in-code"
+                    >Open in Code</RouterLink
+                  ></span
+                >
               </div>
               <div v-if="anchored.map.get(`${hi}:${li}`)" class="dv-slot">
                 <DraftCard

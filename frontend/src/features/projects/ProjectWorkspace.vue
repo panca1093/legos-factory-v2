@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
+import {
+  onBeforeRouteLeave,
+  onBeforeRouteUpdate,
+  RouterLink,
+  RouterView,
+  useRoute,
+  useRouter,
+} from "vue-router";
 import { api, type WorkOrder } from "../../types/api";
 import { PanelRight, PanelRightClose } from "lucide-vue-next";
 import "./projects.css";
@@ -11,9 +18,13 @@ import WorkOrderPanel from "./WorkOrderPanel.vue";
 import PRPanel from "./pulls/PRPanel.vue";
 import { useReviews } from "../../stores/reviews";
 import { readStored, woPath, writeStored } from "./rail";
+import CodePanel from "../editor/CodePanel.vue";
+import EditorDialogs from "../editor/EditorDialogs.vue";
+import { useEditor } from "../editor/editorStore";
 
 const factory = useFactory(),
   reviews = useReviews(),
+  editor = useEditor(),
   route = useRoute(),
   router = useRouter();
 const panelKey = "legos-project-panel";
@@ -46,7 +57,10 @@ const label = computed(
 );
 const hasPanel = computed(
   () =>
-    kind.value === "overview" || kind.value === "wo" || kind.value === "pull",
+    kind.value === "overview" ||
+    kind.value === "wo" ||
+    kind.value === "pull" ||
+    kind.value === "code",
 );
 const narrow = () => window.innerWidth <= 1280;
 const narrowQuery = window.matchMedia?.("(max-width: 1280px)");
@@ -61,7 +75,26 @@ function togglePanel() {
 }
 initPanel();
 narrowQuery?.addEventListener("change", initPanel);
-onBeforeUnmount(() => narrowQuery?.removeEventListener("change", initPanel));
+const showPanelEvent = () => {
+  if (!panelOpen.value) panelOpen.value = true;
+};
+function warnUnsaved(e: BeforeUnloadEvent) {
+  if (!editor.dirtyPaths().length) return;
+  e.preventDefault();
+  e.returnValue = "";
+}
+window.addEventListener("legos:show-panel", showPanelEvent);
+window.addEventListener("beforeunload", warnUnsaved);
+onBeforeUnmount(() => {
+  narrowQuery?.removeEventListener("change", initPanel);
+  window.removeEventListener("legos:show-panel", showPanelEvent);
+  window.removeEventListener("beforeunload", warnUnsaved);
+  editor.detach();
+});
+onBeforeRouteLeave(() => editor.confirmLeave());
+onBeforeRouteUpdate((to) =>
+  String(to.params.id) === projectId.value ? true : editor.confirmLeave(),
+);
 const revealChecks = computed(
   () => kind.value === "overview" && route.query.checks === "1",
 );
@@ -133,7 +166,9 @@ async function settle() {
   }
   ready.value = true;
 }
-watch(projectId, () => {
+editor.attach(projectId.value);
+watch(projectId, (id) => {
+  editor.attach(id);
   if (!project.value) void settle();
 });
 onMounted(settle);
@@ -204,9 +239,11 @@ onMounted(settle);
         :reveal="revealChecks"
       />
       <PRPanel v-else-if="kind === 'pull'" />
+      <CodePanel v-else-if="kind === 'code'" />
       <WorkOrderPanel v-else />
     </aside>
   </div>
+  <EditorDialogs />
   <NewWorkOrderDrawer
     v-if="showNew"
     :open="showNew"

@@ -3,7 +3,6 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -32,11 +31,14 @@ func (wsFS) GitStatus(context.Context, string) (model.GitStatus, error) {
 
 type wsFolders map[string]*model.EditorFolder
 
-func (f wsFolders) Folder(_ context.Context, user, id string) (*model.EditorFolder, error) {
-	if x, ok := f[user+"/"+id]; ok {
+func (f wsFolders) Folder(_ context.Context, u *model.User, id string) (*model.EditorFolder, error) {
+	if x, ok := f[u.ID+"/"+id]; ok {
+		if st, err := os.Stat(x.Path); err != nil || !st.IsDir() {
+			return nil, model.ErrFolderGone
+		}
 		return x, nil
 	}
-	return nil, errors.New("no rows")
+	return nil, model.ErrEditorFolderNotFound
 }
 
 type wsPaths struct {

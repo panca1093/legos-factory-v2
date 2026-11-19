@@ -17,10 +17,8 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
-var ErrEditorFolderNotFound = errors.New("editor folder not found")
-
 type editorFolders interface {
-	Folder(ctx context.Context, userID, id string) (*model.EditorFolder, error)
+	Folder(ctx context.Context, u *model.User, id string) (*model.EditorFolder, error)
 }
 
 type editorServerPaths interface {
@@ -65,26 +63,20 @@ func (l *EditorLive) now() time.Time {
 	return time.Now()
 }
 
-func (l *EditorLive) folder(ctx context.Context, userID, id string) (model.EditorFolder, error) {
-	f, err := l.Folders.Folder(ctx, userID, id)
+func (l *EditorLive) folder(ctx context.Context, u *model.User, id string) (model.EditorFolder, error) {
+	f, err := l.Folders.Folder(ctx, u, id)
 	if err != nil {
-		if ctx.Err() != nil {
-			return model.EditorFolder{}, ctx.Err()
-		}
-		return model.EditorFolder{}, fmt.Errorf("%w: %v", ErrEditorFolderNotFound, err)
+		return model.EditorFolder{}, err
 	}
 	if f == nil {
-		return model.EditorFolder{}, ErrEditorFolderNotFound
-	}
-	if st, err := os.Stat(f.Path); err != nil || !st.IsDir() {
-		return *f, model.ErrFolderGone
+		return model.EditorFolder{}, model.ErrEditorFolderNotFound
 	}
 	return *f, nil
 }
 
 // OwnedFolder resolves a folder the user opened; another user's folder looks like a missing one.
-func (l *EditorLive) OwnedFolder(ctx context.Context, userID, folderID string) (model.EditorFolder, error) {
-	return l.folder(ctx, userID, folderID)
+func (l *EditorLive) OwnedFolder(ctx context.Context, u *model.User, folderID string) (model.EditorFolder, error) {
+	return l.folder(ctx, u, folderID)
 }
 
 // ---- language servers ----
@@ -167,8 +159,9 @@ func (l *EditorLive) SetServerPath(ctx context.Context, userID, id, binPath stri
 }
 
 // OpenLSP attaches the caller to a language server for a trusted folder, starting it when needed.
-func (l *EditorLive) OpenLSP(ctx context.Context, userID, folderID, server string) (*LSPClient, error) {
-	f, err := l.folder(ctx, userID, folderID)
+func (l *EditorLive) OpenLSP(ctx context.Context, u *model.User, folderID, server string) (*LSPClient, error) {
+	userID := u.ID
+	f, err := l.folder(ctx, u, folderID)
 	if err != nil {
 		return nil, err
 	}
@@ -377,8 +370,9 @@ type ControlSession struct {
 }
 
 // OpenControl starts watching the folder for the user.
-func (l *EditorLive) OpenControl(ctx context.Context, userID, folderID string) (*ControlSession, error) {
-	f, err := l.folder(ctx, userID, folderID)
+func (l *EditorLive) OpenControl(ctx context.Context, u *model.User, folderID string) (*ControlSession, error) {
+	userID := u.ID
+	f, err := l.folder(ctx, u, folderID)
 	if err != nil {
 		return nil, err
 	}
