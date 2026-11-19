@@ -57,8 +57,7 @@ export const router = createRouter({
             {
               path: "code/:folder?",
               name: "project-code",
-              component: () =>
-                import("../../features/projects/ProjectPlaceholder.vue"),
+              component: () => import("../../features/editor/CodeView.vue"),
             },
           ],
         },

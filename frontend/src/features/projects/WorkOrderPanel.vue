@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount } from "vue";
-import { RouterLink } from "vue-router";
+import { computed, onBeforeUnmount, ref } from "vue";
+import { RouterLink, useRouter } from "vue-router";
 import ActorBadge from "../factory/ActorBadge.vue";
 import { groupActivity } from "../factory/runs/agentActivity";
 import { woPanelSlots } from "./woPanelSlots";
@@ -8,6 +8,9 @@ import { crew } from "../../composables/presentation";
 import { useFactory } from "../../stores/factory";
 import PanelCard from "./PanelCard.vue";
 import { pullPath } from "../../types/review";
+import { useToast } from "../../composables/useToast";
+import { useEditor } from "../editor/editorStore";
+import { ApiError } from "../../types/api";
 
 const prNumber = computed(() => {
   const o = order.value;
@@ -19,6 +22,32 @@ const prNumber = computed(() => {
 });
 
 const factory = useFactory();
+const router = useRouter(),
+  editor = useEditor(),
+  { toast } = useToast();
+const opening = ref(false);
+async function openInCode() {
+  const o = order.value;
+  if (!o || opening.value) return;
+  opening.value = true;
+  try {
+    const folder = await editor.openWorktree(o.id);
+    await router.push(`/projects/${o.project_id}/code/${folder.id}`);
+  } catch (e) {
+    const gone =
+      e instanceof ApiError &&
+      (e.code === "FOLDER_GONE" || e.status === 404 || e.status === 410);
+    toast(
+      gone
+        ? "This work order's worktree no longer exists."
+        : e instanceof Error
+          ? e.message
+          : String(e),
+    );
+  } finally {
+    opening.value = false;
+  }
+}
 const order = computed(() => factory.detail?.work_order);
 const runs = computed(() => factory.detail?.runs ?? []);
 const groups = computed(() => groupActivity(factory.events));
@@ -111,8 +140,9 @@ const date = (iso: string) =>
       <button
         type="button"
         class="lg-btn small"
-        disabled
-        title="The editor is not available yet"
+        data-test="wo-open-code"
+        :disabled="opening"
+        @click="openInCode"
       >
         Open in Code
       </button>
