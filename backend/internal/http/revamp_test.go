@@ -123,9 +123,9 @@ func TestConnectionsGroupedPerProvider(t *testing.T) {
 	srv, db := bootRevamp(t)
 	ctx := context.Background()
 	conns := &store.ConnectionRepo{DB: db}
-	gh := &model.Connection{Provider: model.ProviderGitHub, Name: "Acme", Scope: model.ScopeShared, OwnerID: "adm"}
-	gh2 := &model.Connection{Provider: model.ProviderGitHub, Name: "Personal", Scope: model.ScopeShared, OwnerID: "adm"}
-	jira := &model.Connection{Provider: model.ProviderJira, Name: "Jira", Scope: model.ScopeShared, OwnerID: "adm"}
+	gh := &model.Connection{Provider: model.ProviderGitHub, Name: "Acme", Scope: model.ScopePersonal, OwnerID: "adm"}
+	gh2 := &model.Connection{Provider: model.ProviderGitHub, Name: "Personal", Scope: model.ScopePersonal, OwnerID: "adm"}
+	jira := &model.Connection{Provider: model.ProviderJira, Name: "Jira", Scope: model.ScopePersonal, OwnerID: "adm"}
 	for _, c := range []*model.Connection{gh, gh2, jira} {
 		if err := conns.Create(ctx, c, []byte("sealed")); err != nil {
 			t.Fatal(err)

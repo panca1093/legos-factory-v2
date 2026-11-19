@@ -69,11 +69,11 @@ func (f *Factory) handleImplement(ctx context.Context, job model.Job) error {
 // A plan task in a git workspace runs in its own worktree and counts as done
 // only once merged back.
 func (f *Factory) runBuilder(ctx context.Context, wo *model.WorkOrder, job model.Job, provider, modelID string) (model.AgentResult, string, error) {
-	woDir := f.workspaceDir(wo.ID)
+	woDir := f.workspaceDir(wo)
 	opts := runOpts{Dir: woDir, Hold: true}
 	branch := ""
 	if job.TaskID != "" {
-		taskDir, b := f.taskDir(wo.ID, job.TaskID), "legos/task/"+job.TaskID
+		taskDir, b := f.taskDir(wo, job.TaskID), "legos/"+wo.ID+".tasks/"+job.TaskID
 		ok, err := f.Sandbox.TaskWorktree(ctx, woDir, taskDir, b)
 		if err != nil {
 			return model.AgentResult{}, "", err
@@ -279,7 +279,7 @@ func (f *Factory) askBack(ctx context.Context, wo *model.WorkOrder, job model.Jo
 		f.event(wo.ID, "architect", "clarification_escalated", r.Reason, map[string]any{"run_id": runID})
 		actor, note = "architect", "\n(A Builder asked the Architect, who escalated: "+r.Reason+")"
 	}
-	r, runID, err := f.askForeman(ctx, wo, actor, question, note, repoFacts(ctx, f.workspaceDir(wo.ID)), false)
+	r, runID, err := f.askForeman(ctx, wo, actor, question, note, repoFacts(ctx, f.workspaceDir(wo)), false)
 	if err != nil {
 		return false, err
 	}
@@ -391,37 +391,95 @@ func (f *Factory) requireChanges(ctx context.Context, wo *model.WorkOrder, job m
 // workspace. On a conflict the builder resolves it once in its worktree
 // against the latest workspace HEAD; it returns the runs that resolution used.
 func (f *Factory) integrateTask(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, branch, provider, modelID string) ([]heldRun, error) {
-	woDir := f.workspaceDir(wo.ID)
-	msg := fmt.Sprintf("legos-factory: %s task %s", wo.ID, job.TaskID)
-	if _, err := f.Sandbox.Commit(ctx, dir, msg); err != nil {
-		return nil, err
-	}
-	conflict, err := f.mergeTask(ctx, wo.ID, woDir, branch, msg)
+	woDir := f.workspaceDir(wo)
+	msg := fmt.Sprintf("chore(legos): %s task %s", wo.ID, job.TaskID)
+	mergeMsg := fmt.Sprintf("chore(legos): merge %s", job.TaskID)
+	var conflict bool
+	runs, err := f.withHookFeedback(ctx, wo, job, dir, provider, modelID, func() error {
+		if _, err := f.Sandbox.Commit(ctx, dir, msg); err != nil {
+			return err
+		}
+		var err error
+		conflict, err = f.mergeTask(ctx, wo.ID, woDir, branch, mergeMsg)
+		return err
+	})
 	if err != nil || !conflict {
-		return nil, f.afterMerge(ctx, wo, job, woDir, dir, branch, err)
+		return runs, f.afterMerge(ctx, wo, job, woDir, dir, branch, err)
 	}
-	files, err := f.Sandbox.SyncTask(ctx, woDir, dir)
+	var files []string
+	more, err := f.withHookFeedback(ctx, wo, job, dir, provider, modelID, func() error {
+		var err error
+		files, err = f.Sandbox.SyncTask(ctx, woDir, dir)
+		return err
+	})
+	runs = append(runs, more...)
 	if err != nil {
-		return nil, err
+		return runs, err
 	}
 	f.event(wo.ID, "builder", "task_conflict",
 		fmt.Sprintf("Task %s conflicts with merged work in %s; builder resolving", job.TaskID, strings.Join(files, ", ")), nil)
 	res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, resolvePrompt(wo, job, files), nil, job.TaskID, runOpts{Dir: dir, Hold: true})
 	if err != nil {
-		return nil, err
+		return runs, err
 	}
-	runs := []heldRun{{runID, res}}
+	runs = append(runs, heldRun{runID, res})
 	if left := withConflictMarkers(dir, files); len(left) > 0 {
 		return runs, fmt.Errorf("%w: task %s still has conflict markers in %s", model.ErrPermanent, job.TaskID, strings.Join(left, ", "))
 	}
-	if _, err := f.Sandbox.Commit(ctx, dir, msg+" (conflicts resolved)"); err != nil {
-		return runs, err
-	}
-	conflict, err = f.mergeTask(ctx, wo.ID, woDir, branch, msg)
+	more, err = f.withHookFeedback(ctx, wo, job, dir, provider, modelID, func() error {
+		if _, err := f.Sandbox.Commit(ctx, dir, msg+" (conflicts resolved)"); err != nil {
+			return err
+		}
+		var err error
+		conflict, err = f.mergeTask(ctx, wo.ID, woDir, branch, mergeMsg)
+		return err
+	})
+	runs = append(runs, more...)
 	if err == nil && conflict {
 		err = fmt.Errorf("%w: task %s still conflicts after the builder resolved it", model.ErrPermanent, job.TaskID)
 	}
 	return runs, f.afterMerge(ctx, wo, job, woDir, dir, branch, err)
+}
+
+// withHookFeedback runs op and, when a repository hook rejects it, hands the hook's output to the
+// Builder in the task worktree and tries again, like a failed check; the retries are capped by
+// MaxRevisionCycles. It returns the runs the fixes used.
+func (f *Factory) withHookFeedback(ctx context.Context, wo *model.WorkOrder, job model.Job, dir, provider, modelID string, op func() error) ([]heldRun, error) {
+	var runs []heldRun
+	for attempt := 1; ; attempt++ {
+		err := op()
+		var he *model.HookError
+		if !errors.As(err, &he) {
+			var se *model.SigningError
+			if errors.As(err, &se) {
+				f.event(wo.ID, "factory", "commit_signing_failed", se.Error(), map[string]any{"task_id": job.TaskID})
+			}
+			return runs, err
+		}
+		if he.Hook == "commit-msg" {
+			// the Builder cannot change the factory's commit message, so looping it would only burn revisions
+			f.event(wo.ID, "factory", "hook_rejected_message", fmt.Sprintf("The repository's commit-msg hook rejected the factory's commit message (%s): adjust the hook or the message rules", he.Output),
+				map[string]any{"task_id": job.TaskID, "output": lastBytes(he.Output, 2000)})
+			return runs, fmt.Errorf("%w: task %s: %v", model.ErrPermanent, job.TaskID, he)
+		}
+		if attempt > MaxRevisionCycles {
+			return runs, fmt.Errorf("%w: task %s: %v", model.ErrPermanent, job.TaskID, he)
+		}
+		f.event(wo.ID, "factory", "hook_rejected", fmt.Sprintf("A repository hook rejected the %s of task %s; returning to the builder (attempt %d of %d)", he.Op, job.TaskID, attempt, MaxRevisionCycles),
+			map[string]any{"task_id": job.TaskID, "output": lastBytes(he.Output, 2000)})
+		res, runID, err := f.runAgent(ctx, wo, model.AgentBuilder, provider, modelID, hookPrompt(wo, job, he), nil, job.TaskID, runOpts{Dir: dir, Hold: true})
+		if err != nil {
+			return runs, err
+		}
+		runs = append(runs, heldRun{runID, res})
+	}
+}
+
+func lastBytes(s string, n int) string {
+	if len(s) > n {
+		return s[len(s)-n:]
+	}
+	return s
 }
 
 func (f *Factory) mergeTask(ctx context.Context, woID, woDir, branch, msg string) (bool, error) {
@@ -459,8 +517,8 @@ func (f *Factory) failRuns(ctx context.Context, woID string, runs []heldRun, err
 	}
 }
 
-func (f *Factory) taskDir(woID, taskID string) string {
-	return filepath.Join(f.DataDir, "workspaces", woID+".tasks", filepath.Base(taskID))
+func (f *Factory) taskDir(wo *model.WorkOrder, taskID string) string {
+	return filepath.Join(f.workspaceDir(wo)+".tasks", filepath.Base(taskID))
 }
 
 func (f *Factory) profile(ctx context.Context, wo *model.WorkOrder) (model.Profile, error) {
@@ -475,7 +533,7 @@ func (f *Factory) profile(ctx context.Context, wo *model.WorkOrder) (model.Profi
 		return model.ParseProfile(wo.CheckProfile, proj.Language)
 	}
 	// orders created before the profile was stored at creation
-	return repoProfile(f.workspaceDir(wo.ID))
+	return repoProfile(f.workspaceDir(wo))
 }
 
 // runSetup installs dependencies in dir. A failure is reported, not fatal:
@@ -569,8 +627,8 @@ func (f *Factory) recordBaseline(ctx context.Context, wo *model.WorkOrder) error
 		return nil
 	}
 	f.event(wo.ID, "builder", "baseline_started", "Recording baseline verification (pre-change)", nil)
-	f.runSetup(ctx, wo, profile, f.workspaceDir(wo.ID), "builder")
-	results, err := f.runProfileChecks(ctx, wo.ProjectID, "run_"+wo.ID+"_baseline", f.workspaceDir(wo.ID), profile)
+	f.runSetup(ctx, wo, profile, f.workspaceDir(wo), "builder")
+	results, err := f.runProfileChecks(ctx, wo.ProjectID, "run_"+wo.ID+"_baseline", f.workspaceDir(wo), profile)
 	if err != nil {
 		return err
 	}

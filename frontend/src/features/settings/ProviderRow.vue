@@ -55,15 +55,13 @@ const open = ref(false),
   busy = ref("");
 const form = reactive({
   token: "",
-  scope: "personal" as "shared" | "personal",
   base: "",
   username: "",
 });
 const edit = reactive({ id: "", name: "", token: "" });
 const menus = reactive<Record<string, boolean>>({});
 
-const canManage = (c: Connection) =>
-  c.scope === "shared" ? session.isAdmin : c.owner_id === session.user?.id;
+const canManage = (c: Connection) => c.owner_id === session.user?.id;
 
 async function run(key: string, action: () => Promise<unknown>) {
   busy.value = key;
@@ -94,19 +92,13 @@ async function connect() {
     factory.createConnection({
       provider: id.value,
       name: uniqueName(),
-      scope: form.scope,
       base_url: baseUrl(),
       username: form.username.trim(),
       token: form.token.trim(),
     }),
   );
   if (ok) {
-    Object.assign(form, {
-      token: "",
-      base: "",
-      username: "",
-      scope: "personal",
-    });
+    Object.assign(form, { token: "", base: "", username: "" });
     open.value = more.value = false;
   }
 }
@@ -167,9 +159,8 @@ const state = (c: Connection) =>
       <div class="grow">
         <b>{{ c.account || c.name }}</b>
         <span class="help">
-          {{ c.scope === "shared" ? "Shared" : "Personal" }}
-          <template v-if="c.used_by?.length">
-            · used by {{ c.used_by.map((u) => u.name).join(", ") }}</template
+          <template v-if="c.used_by?.length"
+            >Used by {{ c.used_by.map((u) => u.name).join(", ") }}</template
           ></span
         >
         <span v-if="c.last_error" class="form-error">{{ c.last_error }}</span>
@@ -296,15 +287,6 @@ const state = (c: Connection) =>
           autocomplete="new-password"
         />
         <p class="help">{{ meta.help }}</p>
-      </div>
-      <div class="form-group">
-        <label :for="`f-scope-${id}`">Who can use it</label>
-        <select :id="`f-scope-${id}`" v-model="form.scope">
-          <option value="personal">Only me</option>
-          <option value="shared" :disabled="!session.isAdmin">
-            Everyone in the workspace{{ session.isAdmin ? "" : " (admin)" }}
-          </option>
-        </select>
       </div>
       <template v-if="id !== 'jira'">
         <button

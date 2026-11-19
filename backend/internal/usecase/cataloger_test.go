@@ -160,7 +160,7 @@ func TestProjectAccessRule(t *testing.T) {
 	if scope, _ := fx.projects.Scope(ctx, &admin); scope != nil {
 		t.Fatalf("admin scope must be unrestricted, got %v", scope)
 	}
-	created := &model.Project{Name: "mine"}
+	created := &model.Project{Name: "mine", RepoURL: t.TempDir()}
 	if err := fx.projects.Create(ctx, &eng, created); err != nil {
 		t.Fatal(err)
 	}

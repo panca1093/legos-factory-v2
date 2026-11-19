@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"legos-factory/backend/internal/model"
+	"legos-factory/backend/internal/sandbox"
 	"legos-factory/backend/internal/store"
 	"legos-factory/backend/internal/usecase"
 )
@@ -39,7 +41,7 @@ func bootDelete(t *testing.T) (*Server, *store.WorkOrderRepo, string) {
 	srv.WORepo = wos
 	srv.Projects = &usecase.Projects{Store: projRepo, Members: members, Users: &store.UserRepo{DB: db}}
 	data := t.TempDir()
-	srv.Factory = &usecase.Factory{WO: wos, Proj: projRepo, Sched: jobQueue{&store.JobRepo{DB: db}}, DataDir: data, Log: slog.Default()}
+	srv.Factory = &usecase.Factory{WO: wos, Proj: projRepo, Sched: jobQueue{&store.JobRepo{DB: db}}, DataDir: data, Sandbox: sandbox.Local{DataDir: data}, Log: slog.Default()}
 	return srv, wos, data
 }
 
@@ -48,7 +50,7 @@ func mkWO(t *testing.T, wos *store.WorkOrderRepo, data, id, project string, stat
 	if err := wos.Create(context.Background(), &model.WorkOrder{ID: id, ProjectID: project, Title: "t", Objective: "o", State: state, CreatedBy: "ana"}); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(data, "workspaces", id)
+	dir := model.WorktreeDir(data, project, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -155,5 +157,18 @@ func TestDeleteProjectAccessCheckFailureIs500(t *testing.T) {
 	srv.Projects.Members = brokenMembers{srv.Projects.Members}
 	if code, body := chatDo(srv, "ana", "DELETE", "/api/v1/projects/p1", ""); code != http.StatusInternalServerError {
 		t.Fatalf("db error: %d %s", code, body)
+	}
+}
+
+func TestCreateProjectRejectsRemoteURLs(t *testing.T) {
+	srv, _, _ := bootDelete(t)
+	for _, repo := range []string{"https://github.com/acme/greeter.git", "git@gitlab.com:acme/greeter.git"} {
+		code, body := chatDo(srv, "ana", "POST", "/api/v1/projects", `{"name":"x","repo_url":"`+repo+`"}`)
+		if code != http.StatusBadRequest || !strings.Contains(body, "clone") {
+			t.Fatalf("%s: %d %s", repo, code, body)
+		}
+	}
+	if code, body := chatDo(srv, "ana", "POST", "/api/v1/projects", `{"name":"x","repo_url":"`+t.TempDir()+`"}`); code != http.StatusCreated {
+		t.Fatalf("a local folder: %d %s", code, body)
 	}
 }

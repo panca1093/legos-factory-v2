@@ -414,7 +414,7 @@ func unverified(format string, a ...any) model.CheckResult {
 
 func (f *Factory) smokeRun(ctx context.Context, wo *model.WorkOrder, p model.Profile) model.CheckResult {
 	s := p.Smoke
-	dir := f.workspaceDir(wo.ID)
+	dir := f.workspaceDir(wo)
 	changed, err := f.Sandbox.ChangedFiles(ctx, dir)
 	if err != nil {
 		return unverified("could not list the changed files: %v", err)

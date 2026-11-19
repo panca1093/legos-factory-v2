@@ -130,7 +130,7 @@ func (r *rig) workspace(t *testing.T, files map[string]string) string {
 
 func (r *rig) workspaceFor(t *testing.T, woID string, files map[string]string) string {
 	t.Helper()
-	dir := r.f.workspaceDir(woID)
+	dir := model.WorktreeDir(r.f.DataDir, r.wo.ProjectID, woID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestImplementationDoesNotReindexBuilderOutput(t *testing.T) {
 	if err := r.f.handlePlan(ctx, model.Job{WOID: r.wo.ID}); err != nil {
 		t.Fatal(err)
 	}
-	dir := r.f.workspaceDir(r.wo.ID)
+	dir := r.f.workspaceDir(r.wo)
 	if err := os.WriteFile(filepath.Join(dir, "routing.md"), []byte(routingBody), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +455,7 @@ func playbookDoc(title, role, specialty, rule string) string {
 }
 
 func (r *rig) ctxFor(wo *model.WorkOrder, role, specialty, query string) (string, map[string]any) {
-	return r.know.Context(context.Background(), wo.ProjectID, role, specialty, query, r.f.workspaceDir(wo.ID), wo.KBBaseSHA)
+	return r.know.Context(context.Background(), wo.ProjectID, role, specialty, query, r.f.workspaceDir(wo), wo.KBBaseSHA)
 }
 
 func TestRepoPlaybooksAreInlinedBeforeFactoryOnes(t *testing.T) {
@@ -469,7 +469,7 @@ func TestRepoPlaybooksAreInlinedBeforeFactoryOnes(t *testing.T) {
 		"docs/odd-role.md":       pb("Odd role rules", "security-bot", "", "Money must be audited."),
 	})
 	r.f.syncRepo(ctx, r.wo, true)
-	if err := os.WriteFile(filepath.Join(r.f.workspaceDir(r.wo.ID), "docs/review-backend.md"), []byte(pb("Backend review rules", "inspector", "backend", "Anything goes.")), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(r.f.workspaceDir(r.wo), "docs/review-backend.md"), []byte(pb("Backend review rules", "inspector", "backend", "Anything goes.")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -520,7 +520,7 @@ func TestRepoPlaybooksSurviveARestart(t *testing.T) {
 	if err != nil || wo.KBBaseSHA == "" {
 		t.Fatalf("planning base not persisted: %+v %v", wo, err)
 	}
-	text, audit := fresh.Context(ctx, wo.ProjectID, string(model.AgentInspector), "backend", "money", r.f.workspaceDir(wo.ID), wo.KBBaseSHA)
+	text, audit := fresh.Context(ctx, wo.ProjectID, string(model.AgentInspector), "backend", "money", r.f.workspaceDir(wo), wo.KBBaseSHA)
 	if !strings.Contains(text, "Money is int64 rupiah.") || audit["kb_repo_commit"] != wo.KBBaseSHA {
 		t.Fatalf("repo playbook lost after restart (%v):\n%s", audit, text)
 	}

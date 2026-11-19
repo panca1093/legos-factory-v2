@@ -19,10 +19,10 @@ func TestFailedVerificationLoopIsBounded(t *testing.T) {
 	db := wos.DB
 	q := &fakeQueue{}
 	f.Sched, f.Sandbox, f.DataDir = q, failSandbox{}, t.TempDir()
-	if err := os.MkdirAll(f.workspaceDir(wo.ID), 0o755); err != nil {
+	if err := os.MkdirAll(f.workspaceDir(wo), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.workspaceDir(wo.ID), "go.mod"), []byte("module x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(f.workspaceDir(wo), "go.mod"), []byte("module x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	f.Proj, f.Quality, f.Findings = &store.ProjectRepo{DB: db}, &store.QualityRepo{DB: db}, &store.FindingRepo{DB: db}
@@ -58,10 +58,10 @@ func TestHumanRevisionResetsVerifyBudget(t *testing.T) {
 	ctx := context.Background()
 	f, wo, wos := monitorFactory(t, nil)
 	f.Sched, f.Sandbox, f.DataDir = &fakeQueue{}, failSandbox{}, t.TempDir()
-	if err := os.MkdirAll(f.workspaceDir(wo.ID), 0o755); err != nil {
+	if err := os.MkdirAll(f.workspaceDir(wo), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.workspaceDir(wo.ID), "go.mod"), []byte("module x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(f.workspaceDir(wo), "go.mod"), []byte("module x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	f.Proj, f.Quality, f.Findings = &store.ProjectRepo{DB: wos.DB}, &store.QualityRepo{DB: wos.DB}, &store.FindingRepo{DB: wos.DB}
@@ -90,7 +90,7 @@ func TestNoChecksEmitsSkippedNotPassed(t *testing.T) {
 	ctx := context.Background()
 	f, wo, wos := monitorFactory(t, nil)
 	f.Sched, f.Sandbox, f.DataDir = &fakeQueue{}, dirSandbox{}, t.TempDir()
-	if err := os.MkdirAll(f.workspaceDir(wo.ID), 0o755); err != nil {
+	if err := os.MkdirAll(f.workspaceDir(wo), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	f.Proj, f.Quality, f.Findings = &store.ProjectRepo{DB: wos.DB}, &store.QualityRepo{DB: wos.DB}, &store.FindingRepo{DB: wos.DB}
@@ -130,10 +130,10 @@ func TestFailedVerificationPayloadCarriesCheckTail(t *testing.T) {
 	q := &fakeQueue{}
 	f.Sched, f.DataDir = q, t.TempDir()
 	f.Sandbox = failingSandbox{output: "\x1b[31mFAIL\x1b[0m TestThing: expected 1, got 2\n"}
-	if err := os.MkdirAll(f.workspaceDir(wo.ID), 0o755); err != nil {
+	if err := os.MkdirAll(f.workspaceDir(wo), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(f.workspaceDir(wo.ID), "go.mod"), []byte("module x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(f.workspaceDir(wo), "go.mod"), []byte("module x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	f.Proj, f.Quality, f.Findings = &store.ProjectRepo{DB: wos.DB}, &store.QualityRepo{DB: wos.DB}, &store.FindingRepo{DB: wos.DB}
@@ -250,10 +250,10 @@ func TestVerificationWritesNoKnowledgeButKeepsRevisionHistory(t *testing.T) {
 	r := newRig(t)
 	passing := false
 	r.f.Sandbox = flipSandbox{passing: &passing}
-	if err := os.MkdirAll(r.f.workspaceDir(r.wo.ID), 0o755); err != nil {
+	if err := os.MkdirAll(r.f.workspaceDir(r.wo), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(r.f.workspaceDir(r.wo.ID), "go.mod"), []byte("module x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(r.f.workspaceDir(r.wo), "go.mod"), []byte("module x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for rev := 0; rev <= 1; rev++ {

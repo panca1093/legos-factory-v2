@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -276,7 +275,7 @@ func (s *KBDocs) readRepoDoc(ctx context.Context, d *model.KBDoc) (map[string]an
 		sort.SliceStable(wos, func(a, b int) bool { return wos[a].CreatedAt.After(wos[b].CreatedAt) })
 		for _, wo := range wos {
 			if wo.ProjectID == d.ProjectID {
-				roots = append(roots, filepath.Join(s.DataDir, "workspaces", wo.ID))
+				roots = append(roots, model.WorktreeDir(s.DataDir, wo.ProjectID, wo.ID))
 			}
 		}
 	}

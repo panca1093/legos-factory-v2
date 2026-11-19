@@ -51,10 +51,10 @@ func (r *ConnectionRepo) Secret(ctx context.Context, id string) ([]byte, error) 
 	return sealed, err
 }
 
-// Visible lists shared connections plus userID's personal ones.
+// Visible lists the connections userID owns.
 func (r *ConnectionRepo) Visible(ctx context.Context, userID string) ([]model.Connection, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT `+cCols+` FROM connections
-		WHERE scope = 'shared' OR owner_id = ? ORDER BY created_at`, userID)
+		WHERE owner_id = ? ORDER BY created_at`, userID)
 	if err != nil {
 		return nil, err
 	}

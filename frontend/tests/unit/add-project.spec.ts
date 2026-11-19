@@ -309,37 +309,6 @@ it("keeps the failed repos selected when adding several fails midway, and refres
   expect(f.refreshProjects).toHaveBeenCalledTimes(1);
   w.unmount();
 });
-it("reports a bind failure, then Close finishes with the created project", async () => {
-  const f = useFactory();
-  f.connections = [
-    {
-      id: "c1",
-      name: "Atlas",
-      provider: "github",
-      scope: "shared",
-      status: "active",
-    },
-  ] as never;
-  const w = await render();
-  await browse(repo());
-  const select = document.querySelector("#prj-conn") as HTMLSelectElement;
-  select.value = "c1";
-  select.dispatchEvent(new Event("change", { bubbles: true }));
-  await flushPromises();
-  expect(body()).toContain("via connection Atlas");
-  expect(body()).not.toContain("via your gh login");
-  await click("Add project");
-  expect(body()).toContain("Remote repository must look like owner/repo");
-  await set("#prj-remote", "acme/app");
-  vi.spyOn(f, "createProject").mockResolvedValue(projects[0]);
-  vi.spyOn(f, "bindProject").mockRejectedValue(new Error("bad token"));
-  await click("Add project");
-  expect(body()).toContain("Project created without a repository connection");
-  expect(w.emitted("created")).toBeUndefined();
-  await click("Close");
-  expect(w.emitted("created")?.[0]).toEqual([projects[0].id]);
-  w.unmount();
-});
 it("shows an inspect error on the current step instead of the paste form", async () => {
   const w = await render();
   routes["/api/v1/local/pick-folder"] = () => json({ path: "/root" });

@@ -1,9 +1,9 @@
 import { mount, flushPromises } from "@vue/test-utils";
 import { expect, it } from "vitest";
 import ReviewPanel from "../../src/features/factory/reviews/ReviewPanel.vue";
-import ChangesPanel from "../../src/features/factory/reviews/ChangesPanel.vue";
+import NowCard from "../../src/features/factory/work-orders/NowCard.vue";
 import ActivityPanel from "../../src/features/factory/runs/ActivityPanel.vue";
-import { checks, findings, runs, events } from "../fixtures/workspace";
+import { checks, findings, runs, events, orders, tasks } from "../fixtures/workspace";
 it("separates historical passing evidence from current failures and opens real evidence", async () => {
   const evidence = [
     { ...checks[0], outcome: "PASS" as const },
@@ -22,31 +22,32 @@ it("separates historical passing evidence from current failures and opens real e
   expect(detail).toContain("go test ./...");
   w.unmount();
 });
-it("labels mock output and does not permit viewer PR decisions", () => {
-  const w = mount(ChangesPanel, {
+const nowCard = (canWrite: boolean, state = "NEEDS_HUMAN_REVIEW") =>
+  mount(NowCard, {
     props: {
+      order: { ...orders[0], state } as never,
+      tasks,
       runs,
-      state: "NEEDS_HUMAN_REVIEW",
-      canWrite: false,
+      events,
+      canWrite,
+      canClarify: canWrite,
       busy: false,
     },
   });
-  expect(w.text()).toContain("mock");
-  expect(w.text()).toContain("Builder output");
+it("does not permit viewer PR decisions", () => {
+  const w = nowCard(false);
   expect(
     w.find('[data-test="pr-approve"]').attributes("disabled"),
   ).toBeDefined();
   w.unmount();
 });
+it("offers decisions only at NEEDS_HUMAN_REVIEW", () => {
+  expect(nowCard(true, "BLOCKED").find('[data-test="pr-decline"]').exists()).toBe(
+    false,
+  );
+});
 it("emits all supported dispositions for an authorized reviewer", async () => {
-  const w = mount(ChangesPanel, {
-    props: {
-      runs,
-      state: "NEEDS_HUMAN_REVIEW",
-      canWrite: true,
-      busy: false,
-    },
-  });
+  const w = nowCard(true);
   for (const [id, decision] of [
     ["pr-approve", "approve"],
     ["pr-changes", "request_changes"],

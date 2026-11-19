@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,11 +28,8 @@ type Workspace struct {
 	Dir string
 }
 
-// Prepare creates a workspace for a work order: a git clone for local
-// repositories (shared objects, cheap), an authenticated clone for remote
-// repositories when auth is given, or an empty directory when there is no
-// repository. A remote repository without auth is an error.
-func Prepare(ctx context.Context, dataDir, woID, repoURL string, auth *model.GitAuth) (*Workspace, error) {
+// prepareClone creates a clone under workspaces/<id> for Checkout.
+func prepareClone(ctx context.Context, dataDir, woID, repoURL string, auth *model.GitAuth) (*Workspace, error) {
 	root := filepath.Join(dataDir, "workspaces", woID)
 	if err := os.MkdirAll(filepath.Dir(root), 0o755); err != nil {
 		return nil, err
@@ -87,30 +85,9 @@ func isRemoteURL(u string) bool {
 	return at > 0 && colon > at && !strings.Contains(u[:at], "/")
 }
 
-// Destroy removes the workspace.
-func Destroy(_ context.Context, woID, dataDir string) error {
-	return os.RemoveAll(filepath.Join(dataDir, "workspaces", woID))
-}
-
 func isLocalGitRepo(path string) bool {
 	info, err := os.Stat(filepath.Join(path, ".git"))
 	return err == nil && (info.IsDir() || info.Mode().IsRegular())
-}
-
-// Local prepares, checks, commits and (only via PushBranch) publishes
-// isolated workspaces on this host.
-type Local struct{ DataDir string }
-
-func (l Local) Prepare(ctx context.Context, woID, repoURL string, auth *model.GitAuth) (string, error) {
-	ws, err := Prepare(ctx, l.DataDir, woID, repoURL, auth)
-	if err != nil {
-		return "", err
-	}
-	return ws.Dir, nil
-}
-
-func (l Local) Destroy(ctx context.Context, woID string) error {
-	return Destroy(ctx, woID, l.DataDir)
 }
 
 var checkoutLocks sync.Map // checkout id → *sync.Mutex
@@ -126,7 +103,7 @@ func (l Local) Checkout(ctx context.Context, id, repoURL string, auth *model.Git
 		if err := os.RemoveAll(dir); err != nil {
 			return "", "", err
 		}
-		if _, err := Prepare(ctx, l.DataDir, id, repoURL, auth); err != nil {
+		if _, err := prepareClone(ctx, l.DataDir, id, repoURL, auth); err != nil {
 			return "", "", err
 		}
 		if !isLocalGitRepo(dir) {
@@ -199,31 +176,20 @@ func refreshCheckout(ctx context.Context, dir string, auth *model.GitAuth) error
 	return nil
 }
 
-// PushBranch pushes the workspace HEAD to branch on origin and returns the
-// remote default branch the change should merge into.
-func (Local) PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) (string, error) {
+// Destroy removes a read-only clone made by Checkout.
+func (l Local) Destroy(_ context.Context, id string) error {
+	return os.RemoveAll(filepath.Join(l.DataDir, "workspaces", id))
+}
+
+// PushBranch pushes the worktree HEAD to branch on the repository's origin.
+func (Local) PushBranch(ctx context.Context, dir, branch string, auth *model.GitAuth) error {
 	if !isLocalGitRepo(dir) {
-		return "", fmt.Errorf("workspace is not a git checkout; nothing to push")
+		return fmt.Errorf("workspace is not a git checkout; nothing to push")
 	}
-	target, base := "origin", ""
-	if auth != nil && auth.RemoteURL != "" {
-		// the workspace's origin may still be the user's folder, so push to the remote itself
-		if !isRemoteURL(auth.RemoteURL) || auth.DefaultBranch == "" {
-			return "", fmt.Errorf("refusing to push: %q is not a remote URL or its default branch is unknown", auth.RemoteURL)
-		}
-		target, base = auth.RemoteURL, auth.DefaultBranch
-	} else if out, err := git(ctx, dir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
-		base = strings.TrimPrefix(strings.TrimSpace(out), "origin/")
-	} else if out, err := git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		base = strings.TrimSpace(out)
+	if out, err := gitAuthed(ctx, dir, auth, "push", "--quiet", "origin", "HEAD:refs/heads/"+branch); err != nil {
+		return fmt.Errorf("git push: %v: %s", err, redact(out, auth))
 	}
-	if base == "" || base == "HEAD" {
-		return "", fmt.Errorf("cannot determine the default branch of origin")
-	}
-	if out, err := gitAuthed(ctx, dir, auth, "push", "--quiet", target, "HEAD:refs/heads/"+branch); err != nil {
-		return "", fmt.Errorf("git push: %v: %s", err, redact(out, auth))
-	}
-	return base, nil
+	return nil
 }
 
 func (Local) RunCheck(ctx context.Context, dir string, check model.Check, timeout time.Duration, env []string) model.CheckResult {
@@ -231,7 +197,7 @@ func (Local) RunCheck(ctx context.Context, dir string, check model.Check, timeou
 }
 
 // Commit records all workspace changes as a local commit and returns its
-// SHA. A non-git workspace returns "" without error; a clean tree returns
+// SHA with the repository's own identity and hooks. A non-git workspace returns "" without error; a clean tree returns
 // the current HEAD.
 func (Local) Commit(ctx context.Context, dir, message string) (string, error) {
 	if !isLocalGitRepo(dir) {
@@ -245,9 +211,11 @@ func (Local) Commit(ctx context.Context, dir, message string) (string, error) {
 		return "", fmt.Errorf("git status: %v: %s", err, status)
 	}
 	if strings.TrimSpace(status) != "" {
-		if out, err := git(ctx, dir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
-			"commit", "--quiet", "--no-verify", "-m", message); err != nil {
-			return "", fmt.Errorf("git commit: %v: %s", err, out)
+		if err := requireIdentity(ctx, dir); err != nil {
+			return "", err
+		}
+		if out, err := gitSigned(ctx, dir, "commit", "--quiet", "-m", message); err != nil {
+			return "", rejection(ctx, dir, "commit", out)
 		}
 	}
 	sha, err := git(ctx, dir, "rev-parse", "HEAD")
@@ -261,16 +229,51 @@ func (Local) Commit(ctx context.Context, dir, message string) (string, error) {
 // GIT_CONFIG_* environment variables, so it never lands in argv, the remote
 // URL or .git/config. Local remotes ignore it.
 func gitAuthed(ctx context.Context, dir string, auth *model.GitAuth, args ...string) (string, error) {
+	timeout := 2 * time.Minute
+	if len(args) > 0 && args[0] == "clone" {
+		timeout = 10 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "SSH_ASKPASS_REQUIRE=never")
+	if os.Getenv("GIT_SSH_COMMAND") == "" {
+		if out, err := git(ctx, dir, "config", "--get", "core.sshCommand"); err != nil || strings.TrimSpace(out) == "" {
+			cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes")
+		}
+	}
 	if auth != nil && auth.Password != "" {
-		token := base64.StdEncoding.EncodeToString([]byte(auth.Username + ":" + auth.Password))
-		cmd.Env = append(cmd.Env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http.extraHeader",
-			"GIT_CONFIG_VALUE_0=Authorization: Basic "+token)
+		if u := authScope(ctx, dir, args); u != "" {
+			token := base64.StdEncoding.EncodeToString([]byte(auth.Username + ":" + auth.Password))
+			cmd.Env = append(cmd.Env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=http."+u+".extraHeader",
+				"GIT_CONFIG_VALUE_0=Authorization: Basic "+token)
+		}
 	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// authScope is the URL the credential may be sent to: the clone URL, or origin's. An unscoped
+// http.extraHeader would also go to any other host a hook or submodule contacts. "" means no header.
+func authScope(ctx context.Context, dir string, args []string) string {
+	target := ""
+	for _, a := range args {
+		if strings.HasPrefix(a, "https://") || strings.HasPrefix(a, "http://") {
+			target = a
+		}
+	}
+	if target == "" && slices.Contains(args, "origin") {
+		if out, err := git(ctx, dir, "remote", "get-url", "origin"); err == nil {
+			target = strings.TrimSpace(out)
+		}
+	}
+	u, err := url.Parse(target)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return ""
+	}
+	u.User = nil
+	return u.String()
 }
 
 func isRemote(repoURL string) bool {
@@ -319,9 +322,19 @@ func (Local) ChangedFiles(ctx context.Context, dir string) ([]string, error) {
 	return files, nil
 }
 
+// diffBase is the commit the work order branched from, recorded by Prepare; a task branch
+// reads its work order's. Without one the diff is against HEAD.
 func diffBase(ctx context.Context, dir string) string {
-	if out, err := git(ctx, dir, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/HEAD"); err == nil && strings.TrimSpace(out) != "" {
-		return "refs/remotes/origin/HEAD"
+	out, err := git(ctx, dir, "symbolic-ref", "--short", "HEAD")
+	if err != nil {
+		return "HEAD"
+	}
+	branch := strings.TrimSpace(out)
+	if i := strings.Index(branch, ".tasks/"); i >= 0 {
+		branch = branch[:i]
+	}
+	if sha, err := git(ctx, dir, "config", "--get", baseConfigKey(branch)); err == nil && strings.TrimSpace(sha) != "" {
+		return strings.TrimSpace(sha)
 	}
 	return "HEAD"
 }
@@ -477,11 +490,12 @@ func (Local) TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (b
 	if !isLocalGitRepo(woDir) {
 		return false, nil
 	}
+	defer lockRepo(ctx, woDir)()
 	_, _ = git(ctx, woDir, "worktree", "remove", "--force", taskDir)
 	if err := os.RemoveAll(taskDir); err != nil {
 		return false, err
 	}
-	_, _ = git(ctx, woDir, "worktree", "prune")
+	forgetWorktree(woDir, taskDir)
 	if err := os.MkdirAll(filepath.Dir(taskDir), 0o755); err != nil {
 		return false, err
 	}
@@ -492,10 +506,14 @@ func (Local) TaskWorktree(ctx context.Context, woDir, taskDir, branch string) (b
 }
 
 // MergeTask merges branch into the work order workspace. A conflicting merge
-// is aborted, leaving the workspace untouched, and reported as conflict.
+// is aborted, leaving the workspace untouched, and reported as conflict. Any
+// other failure (a merge hook rejecting the commit) is a *model.HookError.
 func (Local) MergeTask(ctx context.Context, woDir, branch, message string) (conflict bool, err error) {
-	out, err := git(ctx, woDir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
-		"merge", "--no-ff", "--no-verify", "-m", message, branch)
+	defer lockRepo(ctx, woDir)()
+	if err := requireIdentity(ctx, woDir); err != nil {
+		return false, err
+	}
+	out, err := gitSigned(ctx, woDir, "merge", "--no-ff", "-m", message, branch)
 	if err == nil {
 		return false, nil
 	}
@@ -505,7 +523,8 @@ func (Local) MergeTask(ctx context.Context, woDir, branch, message string) (conf
 		}
 		return true, nil
 	}
-	return false, fmt.Errorf("git merge %s: %v: %s", branch, err, out)
+	_, _ = git(ctx, woDir, "merge", "--abort")
+	return false, rejection(ctx, woDir, "merge", out)
 }
 
 // SyncTask merges the work order workspace HEAD into the task worktree and
@@ -515,8 +534,10 @@ func (Local) SyncTask(ctx context.Context, woDir, taskDir string) ([]string, err
 	if err != nil {
 		return nil, fmt.Errorf("git rev-parse: %v: %s", err, head)
 	}
-	out, err := git(ctx, taskDir, "-c", "user.name=legos-factory", "-c", "user.email=factory@localhost", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null",
-		"merge", "--no-edit", "--no-verify", strings.TrimSpace(head))
+	if err := requireIdentity(ctx, taskDir); err != nil {
+		return nil, err
+	}
+	out, err := gitSigned(ctx, taskDir, "merge", "--no-edit", "-m", "chore(legos): sync with the work order", strings.TrimSpace(head))
 	unmerged, uerr := git(ctx, taskDir, "diff", "--name-only", "--diff-filter=U")
 	if uerr != nil {
 		return nil, fmt.Errorf("git diff: %v: %s", uerr, unmerged)
@@ -528,13 +549,15 @@ func (Local) SyncTask(ctx context.Context, woDir, taskDir string) ([]string, err
 		}
 	}
 	if err != nil && len(files) == 0 {
-		return nil, fmt.Errorf("git merge: %v: %s", err, out)
+		_, _ = git(ctx, taskDir, "merge", "--abort")
+		return nil, rejection(ctx, taskDir, "merge", out)
 	}
 	return files, nil
 }
 
 // RemoveTaskWorktree deletes a merged task's worktree and branch.
 func (Local) RemoveTaskWorktree(ctx context.Context, woDir, taskDir, branch string) error {
+	defer lockRepo(ctx, woDir)()
 	if out, err := git(ctx, woDir, "worktree", "remove", "--force", taskDir); err != nil {
 		return fmt.Errorf("git worktree remove: %v: %s", err, out)
 	}

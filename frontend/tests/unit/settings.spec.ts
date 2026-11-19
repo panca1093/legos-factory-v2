@@ -19,8 +19,8 @@ const gh: Connection = {
   id: "c1",
   provider: "github",
   name: "Acme GitHub",
-  scope: "shared",
-  owner_id: "someone",
+  scope: "personal",
+  owner_id: "usr-test",
   base_url: "https://api.github.com",
   status: "active",
   verified_at: "2026-10-24T00:00:00Z",
@@ -502,8 +502,7 @@ it("connections are grouped by provider with accounts, used-by and inline Connec
   expect(groups[1]).toContain("Work tools");
   expect(groups[2]).toContain("MCP servers");
   const github = w.find('[data-connection="github"]');
-  expect(github.text()).toContain("used by POS");
-  expect(github.text()).toContain("Shared");
+  expect(github.text()).toContain("Used by POS");
   expect(w.find('[data-connection="jira"]').text()).toContain("Connect");
 
   await click(w, "Connect Jira");
@@ -515,7 +514,6 @@ it("connections are grouped by provider with accounts, used-by and inline Connec
   expect(sent("POST", "/api/v1/connections")[0].body).toEqual({
     provider: "jira",
     name: "Jira",
-    scope: "personal",
     base_url: "https://acme.atlassian.net",
     username: "me@acme.com",
     token: "tok",
@@ -857,7 +855,7 @@ it("shows a failed discovery's last_error on the server", async () => {
   w.unmount();
 });
 
-it("Add project dialog still binds a connection and offers no contract tests", async () => {
+it("Add project dialog offers no contract tests or connection binding", async () => {
   const f = useFactory();
   f.connections = [gh];
   const d = mount(AddProjectDialog, {
@@ -866,7 +864,7 @@ it("Add project dialog still binds a connection and offers no contract tests", a
   });
   await flushPromises();
   const dialogText = document.body.textContent ?? "";
-  expect(document.querySelector("#prj-conn")).toBeTruthy();
+  expect(document.querySelector("#prj-conn")).toBeNull();
   expect(dialogText).not.toContain("Contract tests");
   expect(document.querySelector('[data-test^="contract-tests"]')).toBeNull();
   d.unmount();

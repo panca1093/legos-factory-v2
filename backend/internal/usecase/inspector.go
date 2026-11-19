@@ -31,12 +31,12 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		fmt.Sprintf("Running %d deterministic checks (revision %d)", len(profile.Checks), wo.Revision), nil)
 	mu := f.wsLock(wo.ID)
 	mu.Lock()
-	f.runSetup(ctx, wo, profile, f.workspaceDir(wo.ID), "inspector")
+	f.runSetup(ctx, wo, profile, f.workspaceDir(wo), "inspector")
 	mu.Unlock()
 	failed := ""
 	var failedResults []model.CheckResult
 	baseline := f.baselineChecks(ctx, wo.ID)
-	results, infra := f.runChecks(ctx, wo.ProjectID, fmt.Sprintf("run_%s_%d", wo.ID, wo.Revision), f.workspaceDir(wo.ID), profile)
+	results, infra := f.runChecks(ctx, wo.ProjectID, fmt.Sprintf("run_%s_%d", wo.ID, wo.Revision), f.workspaceDir(wo), profile)
 	checks := profile.Checks
 	if infra == nil && profile.Smoke != nil && !requiredFailed(profile.Checks, results) {
 		sc, sr := f.runSmoke(ctx, wo, profile)
@@ -62,32 +62,7 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		}
 	}
 	if failed != "" {
-		if wo.VerifyFailures >= MaxRevisionCycles {
-			f.event(wo.ID, "factory", "escalated", "Verification failed after max revision cycles; blocking", nil)
-			if err := f.step(ctx, wo, model.StateVerifying, model.StateSpecialistReview, "factory", "Final evaluation after exhausted retries"); err != nil {
-				return err
-			}
-			if err := f.step(ctx, wo, model.StateSpecialistReview, model.StatePRPreparation, "factory", "Preparing change summary"); err != nil {
-				return err
-			}
-			if err := f.step(ctx, wo, model.StatePRPreparation, model.StateMergeReadiness, "factory", "Evaluating merge readiness"); err != nil {
-				return err
-			}
-			return f.evaluateReadiness(ctx, wo, true, nil)
-		}
-		newRev, failures := wo.Revision+1, wo.VerifyFailures+1
-		if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": failures}); err != nil {
-			return err
-		}
-		wo.Revision, wo.CommitSHA, wo.VerifyFailures = newRev, "", failures
-		if err := f.step(ctx, wo, model.StateVerifying, model.StateImplementing, "factory",
-			fmt.Sprintf("Check %q failed; returning to builder (attempt %d of %d)", failed, failures, MaxRevisionCycles)); err != nil {
-			return err
-		}
-		_, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, "", map[string]any{
-			"reason": "fix_failed_verification", "failed_checks": failedChecksSection(failedResults),
-		})
-		return err
+		return f.sendBackToBuilder(ctx, wo, failed, failedResults)
 	}
 	switch {
 	case infra != nil:
@@ -100,6 +75,17 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		f.event(wo.ID, "inspector", "verification_passed", "No required checks passed (optional only)", nil)
 	}
 	if err := f.commitVerified(ctx, wo); err != nil {
+		var he *model.HookError
+		var se *model.SigningError
+		switch {
+		case errors.As(err, &he) && he.Hook == "commit-msg":
+			f.event(wo.ID, "factory", "hook_rejected_message", fmt.Sprintf("The repository's commit-msg hook rejected the factory's commit message (%s): adjust the hook or the message rules", he.Output), nil)
+			return fmt.Errorf("%w: %v", model.ErrPermanent, he)
+		case errors.As(err, &he):
+			return f.sendBackToBuilder(ctx, wo, "git "+he.Op+" hook", []model.CheckResult{{Name: "git " + he.Op + " hook", Command: "git " + he.Op, Outcome: model.Fail, Output: he.Output}})
+		case errors.As(err, &se):
+			f.event(wo.ID, "factory", "commit_signing_failed", se.Error(), nil)
+		}
 		return err
 	}
 	if err := f.step(ctx, wo, model.StateVerifying, model.StateSpecialistReview, "factory", "Verification passed; specialist review"); err != nil {
@@ -108,6 +94,38 @@ func (f *Factory) handleVerify(ctx context.Context, job model.Job) error {
 		}
 	}
 	return f.enqueue(ctx, JobInspect, wo.ID, "")
+}
+
+// sendBackToBuilder returns a failed verification to the Builder with the failing output, or
+// escalates once MaxRevisionCycles is used up.
+func (f *Factory) sendBackToBuilder(ctx context.Context, wo *model.WorkOrder, failed string, failedResults []model.CheckResult) error {
+	if wo.VerifyFailures >= MaxRevisionCycles {
+		f.event(wo.ID, "factory", "escalated", "Verification failed after max revision cycles; blocking", nil)
+		if err := f.step(ctx, wo, model.StateVerifying, model.StateSpecialistReview, "factory", "Final evaluation after exhausted retries"); err != nil {
+			return err
+		}
+		if err := f.step(ctx, wo, model.StateSpecialistReview, model.StatePRPreparation, "factory", "Preparing change summary"); err != nil {
+			return err
+		}
+		if err := f.step(ctx, wo, model.StatePRPreparation, model.StateMergeReadiness, "factory", "Evaluating merge readiness"); err != nil {
+			return err
+		}
+		return f.evaluateReadiness(ctx, wo, true, nil)
+	}
+	newRev, failures := wo.Revision+1, wo.VerifyFailures+1
+	if err := f.WO.UpdateFields(ctx, wo.ID, map[string]any{"revision": newRev, "commit_sha": "", "verify_failures": failures}); err != nil {
+		return err
+	}
+	wo.Revision, wo.CommitSHA, wo.VerifyFailures = newRev, "", failures
+	if err := f.step(ctx, wo, model.StateVerifying, model.StateImplementing, "factory",
+		fmt.Sprintf("Check %q failed; returning to builder (attempt %d of %d)", failed, failures, MaxRevisionCycles)); err != nil {
+		return err
+	}
+	_, err := f.Sched.Enqueue(ctx, JobImplement, wo.ID, "", map[string]any{
+		"reason": "fix_failed_verification", "failed_checks": failedChecksSection(failedResults),
+	})
+	return err
+
 }
 
 // baselineChecks is each check's pre-change baseline run; without one, no failure is tolerated.
@@ -277,7 +295,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
-	files, err := f.Sandbox.ChangedFiles(ctx, f.workspaceDir(wo.ID))
+	files, err := f.Sandbox.ChangedFiles(ctx, f.workspaceDir(wo))
 	if err != nil {
 		f.event(wo.ID, "inspector", "changed_files_unavailable", err.Error(), nil)
 	}
@@ -332,7 +350,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	for _, p := range picks {
 		var out findingsReply
 		kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentInspector), p.Specialty,
-			woQuery(wo)+" "+strings.Join(files, " ")+" "+p.Specialty, f.workspaceDir(wo.ID), wo.KBBaseSHA)
+			woQuery(wo)+" "+strings.Join(files, " ")+" "+p.Specialty, f.workspaceDir(wo), wo.KBBaseSHA)
 		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files, builderNotes, f.earlierFindingTitles(ctx, wo.ID, p.Specialty))+kbText,
 			map[string]string{"specialty": p.Specialty}, "", &out, runOpts{Audit: audit})
 		if err != nil {
@@ -425,7 +443,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 // commitVerified records the verified workspace as a local commit (never
 // pushed) and stamps the work order and this revision's checks with its SHA.
 func (f *Factory) commitVerified(ctx context.Context, wo *model.WorkOrder) error {
-	sha, err := f.Sandbox.Commit(ctx, f.workspaceDir(wo.ID), fmt.Sprintf("legos-factory: %s revision %d (%s)", wo.ID, wo.Revision, wo.Title))
+	sha, err := f.Sandbox.Commit(ctx, f.workspaceDir(wo), fmt.Sprintf("chore(legos): %s verified revision %d", wo.ID, wo.Revision))
 	if err != nil {
 		return err
 	}
@@ -487,7 +505,7 @@ func (f *Factory) convergeAppends(ctx context.Context, woID string) (int, error)
 // stores the gaps for the converge gate; round is 0 unless the caller knows it (a converge-only job). A failure is reported, not fatal: the
 // gate then has no report for this revision.
 func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []string, round int, builderNotes string) error {
-	dir := f.workspaceDir(wo.ID)
+	dir := f.workspaceDir(&wo)
 	diff, err := f.Sandbox.Diff(ctx, dir)
 	if err != nil {
 		f.event(wo.ID, "architect", "diff_unavailable", err.Error(), nil)

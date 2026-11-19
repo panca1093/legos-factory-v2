@@ -229,7 +229,7 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	}
 	dir := opts.Dir
 	if dir == "" {
-		dir = f.workspaceDir(wo.ID)
+		dir = f.workspaceDir(wo)
 	}
 	req := model.AgentRequest{
 		Role: role, Prompt: prompt, ProviderID: provider, ModelID: modelID,
@@ -497,8 +497,8 @@ func (f *Factory) eventLive(woID, actor, kind, message string, payload, live map
 
 // ---- helpers ----
 
-func (f *Factory) workspaceDir(woID string) string {
-	return f.DataDir + "/workspaces/" + woID
+func (f *Factory) workspaceDir(wo *model.WorkOrder) string {
+	return model.WorktreeDir(f.DataDir, wo.ProjectID, wo.ID)
 }
 
 // baselineIDPrefix marks the pre-change baseline rows, the only runs verify compares a failure against.

@@ -477,6 +477,20 @@ Respond with ONLY a JSON object:
 		wo.Title, wo.Acceptance, briefSection(wo)+specSection(wo), clarification(wo), scopedTaskList(tasks), question)
 }
 
+func hookPrompt(wo *model.WorkOrder, job model.Job, he *model.HookError) string {
+	return fmt.Sprintf(`You are the Builder. Your task %q of work order %q is implemented, but the repository's own git hook rejected the %s of it.
+Hook output:
+%s
+
+Fix what the hook complains about in your working copy (formatting, lint, tests, commit message rules), without bypassing the hook,
+and make sure the project still builds and its tests pass. Do not commit; the factory commits again after you.
+
+Objective: %s
+%s
+Work only within the assigned workspace. When done, reply with one line describing the fix.`,
+		job.TaskID, wo.Title, he.Op, lastBytes(he.Output, 4000), wo.Objective, clarification(wo))
+}
+
 func resolvePrompt(wo *model.WorkOrder, job model.Job, files []string) string {
 	return fmt.Sprintf(`You are the Builder. Your task %q of work order %q was implemented, but other tasks were merged
 into the work order first. Their changes are now merged into your working copy and conflict in:

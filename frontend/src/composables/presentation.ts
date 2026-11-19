@@ -97,7 +97,7 @@ export const stageTabs = [
   "activity",
   "progress",
   "review",
-  "changes",
+  "activity",
 ];
 const stageByState: Partial<Record<WorkOrderState, number>> = {
   CREATED: 0,
@@ -260,38 +260,30 @@ export function taskState(
 export const publishLabel = (p: {
   publish_via?: string;
   github_repo?: string;
-  remote_repo?: string;
 }) =>
   p.publish_via === "gh"
     ? p.github_repo
       ? `gh · ${p.github_repo}`
       : "GitHub"
-    : p.publish_via === "connection" || (!p.publish_via && p.remote_repo)
-      ? p.remote_repo || p.github_repo
-        ? `Connection · ${p.remote_repo || p.github_repo}`
-        : "Connection"
+    : p.publish_via === "remote"
+      ? "Personal connection"
       : "Local only";
 
 // What Approve does for a project, by how it publishes.
 export function publishNote(
-  p?: Pick<
-    Project,
-    "publish_via" | "github_repo" | "remote_repo" | "git_connection_id"
-  >,
+  p?: Pick<Project, "publish_via" | "github_repo">,
 ): { text: string; remote: boolean } {
-  const via = p?.publish_via ?? (p?.git_connection_id ? "connection" : "none");
+  const via = p?.publish_via ?? "none";
   if (via === "gh")
     return {
       text: `Approving pushes the branch and opens a pull request on GitHub${p?.github_repo ? ` (${p.github_repo})` : ""} with your gh login.`,
       remote: true,
     };
-  if (via === "connection") {
-    const repo = p?.remote_repo || p?.github_repo;
+  if (via === "remote")
     return {
-      text: `Approving pushes the branch and opens a pull request${repo ? ` on ${repo}` : ""} through the project's connection.`,
+      text: "Approving pushes the branch and opens a pull request on the folder's remote through your personal connection for that host.",
       remote: true,
     };
-  }
   return {
     text: p
       ? "This records a local decision. No pull request is created for this project."

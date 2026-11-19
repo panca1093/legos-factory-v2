@@ -49,20 +49,6 @@ func (r *ProjectRepo) SetQualityProfile(ctx context.Context, id, profile string)
 	return nil
 }
 
-// SetBinding points the project at a git connection and provider repo slug;
-// an empty connection id unbinds it.
-func (r *ProjectRepo) SetBinding(ctx context.Context, id, connectionID, remoteRepo string) error {
-	res, err := r.DB.ExecContext(ctx, `UPDATE projects SET git_connection_id = ?, remote_repo = ? WHERE id = ?`,
-		nullStr(connectionID), remoteRepo, id)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return model.ErrProjectNotFound
-	}
-	return nil
-}
-
 // SetKBScope stores the globs that narrow which repo documents the Knowledge list shows.
 func (r *ProjectRepo) SetKBScope(ctx context.Context, id string, include, exclude []string) error {
 	inc, _ := json.Marshal(nonNil(include))

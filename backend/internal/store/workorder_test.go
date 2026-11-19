@@ -75,3 +75,21 @@ func TestLatestEventsReturnsNewestAscendingWithHasMore(t *testing.T) {
 		t.Fatalf("exact fit: more=%v len=%d", more, len(got))
 	}
 }
+
+func TestBaseBranchRoundTrips(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	seedProject(t, db, "p1")
+	if err := (&UserRepo{DB: db}).EnsureUser(ctx, model.User{ID: "u1", Email: "u1@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	repo := &WorkOrderRepo{DB: db}
+	wo := &model.WorkOrder{ProjectID: "p1", Title: "t", State: model.StateCreated, CreatedBy: "u1", BaseBranch: "release/1.2"}
+	if err := repo.Create(ctx, wo); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.Get(ctx, wo.ID)
+	if err != nil || got.BaseBranch != "release/1.2" {
+		t.Fatalf("base branch = %q, err %v", got.BaseBranch, err)
+	}
+}

@@ -51,7 +51,7 @@ func newPRRig(t *testing.T) *prRig {
 	}
 	wos := &store.WorkOrderRepo{DB: db}
 	return &prRig{
-		f:   &Factory{WO: wos, Proj: projs, Bus: nopBus{}, Log: slog.Default()},
+		f:   &Factory{WO: wos, Proj: projs, Sandbox: dirSandbox{}, Bus: nopBus{}, Log: slog.Default()},
 		wos: wos,
 		git: &statusGit{status: map[string]model.PRStatus{}},
 		at:  time.Date(2026, 11, 6, 1, 2, 3, 0, time.UTC),
@@ -72,8 +72,8 @@ func (r *prRig) order(t *testing.T, id, project, state, ref string) {
 }
 
 func (r *prRig) poll() {
-	r.f.pollPRs(context.Background(), func(_ context.Context, p *model.Project) (GitProvider, bool, error) {
-		return r.git, p.ID != "unbound", nil
+	r.f.pollPRs(context.Background(), func(_ context.Context, p *model.Project, _ string) (GitProvider, string, bool, error) {
+		return r.git, "", p.ID != "unbound", nil
 	})
 }
 

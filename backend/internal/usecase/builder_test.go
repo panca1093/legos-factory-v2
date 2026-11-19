@@ -16,17 +16,18 @@ import (
 // dirSandbox reports every file under the workspace as changed.
 type dirSandbox struct{}
 
-func (dirSandbox) Prepare(context.Context, string, string, *model.GitAuth) (string, error) {
-	return "", nil
+func (dirSandbox) Prepare(context.Context, string, string, string, string) (string, string, error) {
+	return "", "", nil
 }
-func (dirSandbox) Destroy(context.Context, string) error { return nil }
+func (dirSandbox) Cleanup(context.Context, string, string, string, bool) ([]string, error) {
+	return nil, nil
+}
+func (dirSandbox) Dirty(context.Context, string) bool                    { return false }
 func (dirSandbox) RunCheck(context.Context, string, model.Check, time.Duration, []string) model.CheckResult {
 	return model.CheckResult{}
 }
-func (dirSandbox) Commit(context.Context, string, string) (string, error) { return "", nil }
-func (dirSandbox) PushBranch(context.Context, string, string, *model.GitAuth) (string, error) {
-	return "", nil
-}
+func (dirSandbox) Commit(context.Context, string, string) (string, error)           { return "", nil }
+func (dirSandbox) PushBranch(context.Context, string, string, *model.GitAuth) error { return nil }
 func (dirSandbox) ChangedFiles(_ context.Context, dir string) ([]string, error) {
 	var files []string
 	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
@@ -41,9 +42,6 @@ func (dirSandbox) ChangedFiles(_ context.Context, dir string) ([]string, error) 
 }
 
 func (dirSandbox) Diff(context.Context, string) ([]model.FileDiff, error) { return nil, nil }
-func (dirSandbox) CommitDiff(context.Context, string, string) (model.WODiff, error) {
-	return model.WODiff{}, nil
-}
 
 func (dirSandbox) TaskWorktree(context.Context, string, string, string) (bool, error) {
 	return false, nil
@@ -104,7 +102,7 @@ func TestRunBuilderRequiresFileChanges(t *testing.T) {
 			}
 			f.Sandbox = dirSandbox{}
 			f.DataDir = t.TempDir()
-			dir = f.workspaceDir(wo.ID)
+			dir = f.workspaceDir(wo)
 			for name, content := range tc.seed {
 				if err := os.MkdirAll(dir, 0o755); err != nil {
 					t.Fatal(err)
@@ -141,7 +139,7 @@ func TestRemediationWithoutChangesFailsItsRun(t *testing.T) {
 	f, wo, wos := monitorFactory(t, writeOnStart{writingHarness{}, &dir})
 	f.Sandbox = dirSandbox{}
 	f.DataDir = t.TempDir()
-	dir = f.workspaceDir(wo.ID)
+	dir = f.workspaceDir(wo)
 	_, runID, err := f.runBuilder(context.Background(), wo, model.Job{}, "p", "m")
 	if !errors.Is(err, model.ErrPermanent) {
 		t.Fatalf("err = %v; want permanent failure", err)

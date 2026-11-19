@@ -22,6 +22,8 @@ func TestGitCommitRecordsWorkspaceChange(t *testing.T) {
 		}
 	}
 	run("init", "-q")
+	run("config", "user.email", "t@t")
+	run("config", "user.name", "t")
 	run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base")
 	base, err := Local{}.Commit(context.Background(), dir, "noop")
 	if err != nil {
@@ -49,24 +51,12 @@ func TestGitCommitNonRepoIsUnversioned(t *testing.T) {
 	}
 }
 
-func TestPushBranchPublishesHeadAndReportsBase(t *testing.T) {
-	origin := t.TempDir()
-	run := func(dir string, args ...string) string {
-		cmd := exec.Command("git", args...)
-		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			t.Fatalf("%v: %s", args, out)
-		}
-		return string(out)
-	}
-	run(origin, "init", "-q", "-b", "main")
-	run(origin, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base")
-
+func TestPushBranchPublishesHeadToOrigin(t *testing.T) {
+	r := newRig(t)
 	l := Local{DataDir: t.TempDir()}
-	dir, err := l.Prepare(context.Background(), "wo_1", origin, &model.GitAuth{Username: "u", Password: "s3cret"})
-	if err != nil {
-		t.Fatal(err)
+	dir, base, err := l.Prepare(context.Background(), "p1", "wo_1", r.folder, "")
+	if err != nil || base != "main" {
+		t.Fatalf("prepare: base=%q err=%v", base, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "f.go"), []byte("package f\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -75,38 +65,27 @@ func TestPushBranchPublishesHeadAndReportsBase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base, err := l.PushBranch(context.Background(), dir, "legos-factory/wo_1", &model.GitAuth{Username: "u", Password: "s3cret"})
-	if err != nil || base != "main" {
-		t.Fatalf("push: base=%q err=%v", base, err)
+	auth := &model.GitAuth{Username: "u", Password: "s3cret"}
+	if err := l.PushBranch(context.Background(), dir, "legos/wo_1", auth); err != nil {
+		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(run(origin, "rev-parse", "refs/heads/legos-factory/wo_1")); got != sha {
+	if got := gitIn(t, r.remote, "rev-parse", "refs/heads/legos/wo_1"); got != sha {
 		t.Fatalf("origin branch %s != workspace commit %s", got, sha)
 	}
-	if strings.TrimSpace(run(origin, "rev-parse", "main")) == sha {
+	if gitIn(t, r.remote, "rev-parse", "main") == sha {
 		t.Fatal("push must not touch the default branch")
 	}
-	cfg, _ := os.ReadFile(filepath.Join(dir, ".git", "config"))
+	cfg, _ := os.ReadFile(filepath.Join(r.folder, ".git", "config"))
 	if strings.Contains(string(cfg), "s3cret") || strings.Contains(string(cfg), "extraHeader") {
-		t.Fatal("credentials must not be persisted in the workspace git config")
+		t.Fatal("credentials must not be persisted in the git config")
 	}
-	if _, err := l.PushBranch(context.Background(), dir, "legos-factory/wo_1", nil); err != nil {
+	if err := l.PushBranch(context.Background(), dir, "legos/wo_1", nil); err != nil {
 		t.Fatalf("re-push of the same commit must be a no-op: %v", err)
 	}
 }
 
-func TestRemoteWithoutAuthIsRejected(t *testing.T) {
-	data := t.TempDir()
-	_, err := Local{DataDir: data}.Prepare(context.Background(), "wo_2", "https://example.invalid/acme/greeter.git", nil)
-	if err == nil || !strings.Contains(err.Error(), "needs a git connection") || !strings.Contains(err.Error(), "https://example.invalid/acme/greeter.git") {
-		t.Fatalf("expected an actionable git-connection error, got %v", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(data, "workspaces", "wo_2")); statErr == nil {
-		t.Fatal("no empty workspace must be left behind")
-	}
-}
-
-func TestEmptyRepoURLGivesEmptyWorkspace(t *testing.T) {
-	dir, err := Local{DataDir: t.TempDir()}.Prepare(context.Background(), "wo_3", "", nil)
+func TestEmptyRepoGivesEmptyWorkspace(t *testing.T) {
+	dir, _, err := Local{DataDir: t.TempDir()}.Prepare(context.Background(), "p1", "wo_3", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +96,7 @@ func TestEmptyRepoURLGivesEmptyWorkspace(t *testing.T) {
 
 func TestChangedFilesSinceClone(t *testing.T) {
 	origin := t.TempDir()
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"}} {
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = origin
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -125,7 +104,7 @@ func TestChangedFilesSinceClone(t *testing.T) {
 		}
 	}
 	l := Local{DataDir: t.TempDir()}
-	dir, err := l.Prepare(context.Background(), "wo_c", origin, nil)
+	dir, _, err := l.Prepare(context.Background(), "p1", "wo_c", origin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +124,7 @@ func TestDiffReportsCountsAndHunksSinceClone(t *testing.T) {
 	origin := t.TempDir()
 	os.WriteFile(filepath.Join(origin, "keep.txt"), []byte("one\ntwo\nthree\n"), 0o644)
 	os.WriteFile(filepath.Join(origin, "my file.txt"), []byte("a\n"), 0o644)
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base"}} {
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base"}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = origin
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -153,7 +132,7 @@ func TestDiffReportsCountsAndHunksSinceClone(t *testing.T) {
 		}
 	}
 	l := Local{DataDir: t.TempDir()}
-	dir, err := l.Prepare(context.Background(), "wo_d", origin, nil)
+	dir, _, err := l.Prepare(context.Background(), "p1", "wo_d", origin, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +167,7 @@ func TestDiffReportsCountsAndHunksSinceClone(t *testing.T) {
 func TestDiffNeverReadsSecretsSymlinksOrHugeFiles(t *testing.T) {
 	origin := t.TempDir()
 	os.WriteFile(filepath.Join(origin, "a.txt"), []byte("a\n"), 0o644)
-	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base"}} {
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"config", "user.email", "t@t"}, {"config", "user.name", "t"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "base"}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = origin
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -196,7 +175,7 @@ func TestDiffNeverReadsSecretsSymlinksOrHugeFiles(t *testing.T) {
 		}
 	}
 	l := Local{DataDir: t.TempDir()}
-	dir, err := l.Prepare(context.Background(), "wo_s", origin, nil)
+	dir, _, err := l.Prepare(context.Background(), "p1", "wo_s", origin, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -55,6 +55,8 @@ func fixtureRepo(t *testing.T) string {
 		t.Fatal(err)
 	}
 	run(t, dir, "git", "init", "-q")
+	run(t, dir, "git", "config", "user.email", "t@example.com")
+	run(t, dir, "git", "config", "user.name", "t")
 	run(t, dir, "git", "add", "-A")
 	run(t, dir, "git", "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "fixture")
 	return dir
@@ -196,6 +198,9 @@ func (ta *testApp) awaitState(t *testing.T, woID string, want string, timeout ti
 			var doc map[string]any
 			if err := json.Unmarshal([]byte(lastBody), &doc); err == nil {
 				if wo := doc["work_order"].(map[string]any); wo["state"] == want {
+					if want == "READY" { // the cataloger writes the task summary right after; let it finish before the test dirs go
+						awaitLogLine(t, ta, wo["project_id"].(string), "`"+woID+"` **work_order_completed**")
+					}
 					return doc
 				}
 				continue
@@ -275,7 +280,7 @@ func TestFullLifecycleMockHarnessRealChecks(t *testing.T) {
 	if status != 202 {
 		t.Fatalf("approve plan: %d %s", status, body)
 	}
-	doc = ta.awaitState(t, wo.ID, "NEEDS_HUMAN_REVIEW", 60*time.Second)
+	doc = ta.awaitState(t, wo.ID, "READY", 60*time.Second)
 
 	// revision identity: scripted inspector regression → fix on revision 1
 	if rev := int(doc["work_order"].(map[string]any)["revision"].(float64)); rev != 1 {
@@ -310,15 +315,13 @@ func TestFullLifecycleMockHarnessRealChecks(t *testing.T) {
 		t.Fatalf("expected usage records, got %d %s", status, body)
 	}
 
-	// 5. human PR decision → READY (no publish/merge happens)
-	status, body = ta.do(t, "POST", fmt.Sprintf("/api/v1/work-orders/%s/pr-decision", wo.ID), `{"decision":"approve","reason":"evidence complete"}`)
-	if status != 202 {
-		t.Fatalf("pr decision: %d %s", status, body)
+	// 5. the clean converge shipped the order; the project folder has no remote, so no PR could open
+	if kinds := ta.eventKinds(t, wo.ID); !hasEvent(kinds, "pr_auto_approved") || hasEvent(kinds, "pr_approved") {
+		t.Fatalf("the factory, not a human, approves a clean order: %v", kinds)
 	}
-	ta.awaitState(t, wo.ID, "READY", 5*time.Second)
 
 	// workspace produced the real implementation file
-	ta.assertWorkspaceImpl(t, wo.ID, "greeter/greeter.go")
+	ta.assertWorkspaceImpl(t, proj.ID, wo.ID, "greeter/greeter.go")
 }
 
 func TestClarificationPath(t *testing.T) {
@@ -376,9 +379,9 @@ func TestClarificationPath(t *testing.T) {
 	}
 }
 
-func (ta *testApp) assertWorkspaceImpl(t *testing.T, woID, relPath string) {
+func (ta *testApp) assertWorkspaceImpl(t *testing.T, projectID, woID, relPath string) {
 	t.Helper()
-	dir := filepath.Join(ta.a.Cfg.DataDir, "workspaces", woID, filepath.FromSlash(relPath))
+	dir := filepath.Join(model.WorktreeDir(ta.a.Cfg.DataDir, projectID, woID), filepath.FromSlash(relPath))
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("workspace implementation missing: %v", err)
 	}

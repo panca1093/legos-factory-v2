@@ -156,11 +156,9 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		}
 		f.recordPRDecision(ctx, wo, "PR approved", reason)
 		f.completeWO(ctx, wo, "READY")
-		// approval authorizes publishing; handleOpenPR does the gh auth check, so no network here
-		if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil && f.Integrations.Bound(ctx, proj) {
-			if err := f.enqueueOpenPR(ctx, woID); err != nil { // enqueueOpenPR detaches from a cancelled request so READY never loses the job
-				f.Log.Error("open PR enqueue failed", "wo", woID, "err", err)
-			}
+		// approval authorizes publishing; handleOpenPR resolves the provider and reports why it cannot open one
+		if err := f.enqueueOpenPR(ctx, woID); err != nil { // enqueueOpenPR detaches from a cancelled request so READY never loses the job
+			f.Log.Error("open PR enqueue failed", "wo", woID, "err", err)
 		}
 		return nil
 	case "request_changes":
@@ -187,20 +185,11 @@ func (f *Factory) HumanPRDecision(ctx context.Context, woID, decision, reason st
 		}
 		f.recordPRDecision(ctx, wo, "PR declined", reason)
 		f.completeWO(ctx, wo, "DECLINED")
+		f.cleanupWorktrees(ctx, wo, false)
 		return nil
 	default:
 		return fmt.Errorf("unknown PR decision %q", decision)
 	}
-}
-
-// Diff returns the work order's committed change. It compares two commits and
-// never touches the index or worktree, so it takes no workspace lock.
-func (f *Factory) Diff(ctx context.Context, wo *model.WorkOrder) (model.WODiff, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	d, err := f.Sandbox.CommitDiff(ctx, f.workspaceDir(wo.ID), wo.CommitSHA)
-	d.Revision = wo.Revision
-	return d, err
 }
 
 // Cancel stops pending jobs and transitions the WO to CANCELLED.
@@ -224,6 +213,7 @@ func (f *Factory) Cancel(ctx context.Context, woID string) error {
 	}
 	f.event(woID, "human", "cancelled", "Work order cancelled", map[string]any{"from": string(wo.State)})
 	f.completeWO(ctx, wo, "CANCELLED")
+	f.cleanupWorktrees(ctx, wo, false)
 	return nil
 }
 
@@ -254,14 +244,15 @@ func (f *Factory) DeleteWorkOrder(ctx context.Context, woID string) error {
 	if err := f.WO.Delete(ctx, wo); err != nil {
 		return err
 	}
-	f.removeWorkspaces(woID)
+	f.cleanupWorktreesIn(ctx, wo, f.repoOf(ctx, wo), false, false)
 	f.Log.Info("work order deleted", "wo", woID, "project", wo.ProjectID, "state", string(wo.State))
 	return nil
 }
 
 // DeleteProject removes a project whose work orders are all finished, together with those orders.
 func (f *Factory) DeleteProject(ctx context.Context, projectID string) error {
-	if _, err := f.Proj.Get(ctx, projectID); err != nil {
+	proj, err := f.Proj.Get(ctx, projectID)
+	if err != nil {
 		return err
 	}
 	all, err := f.WO.List(ctx)
@@ -291,21 +282,95 @@ func (f *Factory) DeleteProject(ctx context.Context, projectID string) error {
 	if err := f.Proj.DeleteWithOrders(ctx, projectID, own); err != nil {
 		return err
 	}
-	for _, wo := range own {
-		f.removeWorkspaces(wo.ID)
+	for i := range own {
+		f.cleanupWorktreesIn(ctx, &own[i], proj.RepoURL, false, false)
 	}
-	f.removeWorkspaces("chat-" + projectID)
-	f.removeWorkspaces("checks-src-" + projectID)
 	f.removeStack(ctx, projectID)
 	f.Log.Info("project deleted", "project", projectID, "work_orders", len(own))
 	return nil
 }
 
-func (f *Factory) removeWorkspaces(woID string) {
+// cleanupWorktrees removes the order's worktrees and legos/ branches from the project's repository.
+// The order's branch survives unless its PR is merged or closed (prDone) or origin has its tip.
+func (f *Factory) cleanupWorktrees(ctx context.Context, wo *model.WorkOrder, prDone bool) {
+	repo := ""
+	if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil {
+		repo = proj.RepoURL
+	}
+	f.cleanupWorktreesIn(ctx, wo, repo, prDone, true)
+}
+
+func (f *Factory) cleanupWorktreesIn(ctx context.Context, wo *model.WorkOrder, repo string, prDone, emit bool) {
+	if f.Sandbox == nil {
+		return
+	}
+	prDone = prDone || wo.PRMergedAt != nil || wo.PRClosedAt != nil
+	kept, err := f.Sandbox.Cleanup(context.WithoutCancel(ctx), wo.ProjectID, wo.ID, repo, prDone)
+	if err != nil {
+		f.Log.Warn("worktree cleanup failed", "wo", wo.ID, "err", err)
+	}
+	if len(kept) > 0 {
+		msg := fmt.Sprintf("Kept local branch %s in %s: its commits are not on the remote and no pull request was merged or closed. Delete it yourself when you no longer need it.", strings.Join(kept, ", "), repo)
+		f.Log.Info("branches kept", "wo", wo.ID, "branches", kept)
+		if emit {
+			f.event(wo.ID, "factory", "branch_kept", msg, map[string]any{"branches": kept})
+		}
+	}
+}
+
+// RemoveLegacyWorkspaces cleans the old clone-based <DataDir>/workspaces tree without losing unpublished
+// work. A work order's old clone is only dropped when the order is cancelled or has a pull request
+// (opened, merged or closed); the chat and check-suggestion clones always go. Anything else stays and is logged.
+func (f *Factory) RemoveLegacyWorkspaces(ctx context.Context) {
 	root := filepath.Join(f.DataDir, "workspaces")
-	for _, dir := range []string{f.workspaceDir(woID), filepath.Join(root, woID+".tasks")} {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	all, err := f.WO.List(ctx)
+	if err != nil {
+		f.Log.Warn("legacy workspace cleanup skipped", "err", err)
+		return
+	}
+	var keep []string
+	droppable := map[string]bool{}
+	for _, wo := range all {
+		if wo.State == model.StateCancelled || wo.PRRef != "" || wo.PRURL != "" {
+			droppable[wo.ID] = true
+		} else {
+			keep = append(keep, wo.ID)
+		}
+	}
+	if len(keep) == 0 {
+		if err := os.RemoveAll(root); err != nil {
+			f.Log.Warn("legacy workspace cleanup failed", "dir", root, "err", err)
+			return
+		}
+		f.Log.Info("removed the old clone-based workspaces", "dir", root)
+		return
+	}
+	var used []string
+	for _, e := range entries {
+		name := e.Name()
+		id := strings.TrimSuffix(name, ".tasks")
+		switch {
+		case strings.HasPrefix(name, "chat-"), strings.HasPrefix(name, "checks-src-"), strings.HasPrefix(name, "suggest-"), droppable[id]:
+			if err := removeInside(root, filepath.Join(root, name)); err != nil {
+				f.Log.Warn("legacy workspace cleanup failed", "dir", name, "err", err)
+			}
+		default:
+			used = append(used, name)
+		}
+	}
+	f.Log.Info("old clone-based workspaces kept: their work orders have no pull request yet", "work_orders", keep, "dirs", used)
+}
+
+// removeWorkspaces deletes a read-only clone (chat, check suggestions) by its folder name.
+func (f *Factory) removeWorkspaces(name string) {
+	root := filepath.Join(f.DataDir, "workspaces")
+	for _, dir := range []string{filepath.Join(root, name), filepath.Join(root, name+".tasks")} {
 		if err := removeInside(root, dir); err != nil {
-			f.Log.Warn("workspace cleanup failed", "wo", woID, "dir", dir, "err", err)
+			f.Log.Warn("workspace cleanup failed", "name", name, "dir", dir, "err", err)
 		}
 	}
 }
@@ -346,24 +411,27 @@ func (f *Factory) handleOpenPR(ctx context.Context, job model.Job) error {
 	if err != nil {
 		return err
 	}
-	g, bound, err := f.Integrations.GitFor(ctx, proj)
+	branch := "legos/" + wo.ID
+	g, repo, bound, err := f.Integrations.GitFor(ctx, proj, wo.CreatedBy)
 	if !bound {
-		return nil
+		return f.prFailed(ctx, wo, fmt.Errorf("%w: the project folder %s has no origin remote, so no pull request can be opened; the work stays on the local branch %s", model.ErrPermanent, proj.RepoURL, branch))
 	}
 	if err != nil {
 		return f.prFailed(ctx, wo, fmt.Errorf("%w: %v", model.ErrPermanent, err))
 	}
 	auth := g.GitAuth()
-	branch := "legos-factory/" + wo.ID
-	base, err := f.Sandbox.PushBranch(ctx, f.workspaceDir(wo.ID), branch, &auth)
-	if err != nil {
+	base := wo.BaseBranch
+	if base == "" {
+		return f.prFailed(ctx, wo, fmt.Errorf("%w: this work order has no base branch recorded", model.ErrPermanent))
+	}
+	if err := f.Sandbox.PushBranch(ctx, f.workspaceDir(wo), branch, &auth); err != nil {
 		return f.prFailed(ctx, wo, err)
 	}
 	auto, err := f.WO.LatestEvent(ctx, wo.ID, "pr_auto_approved")
 	if err != nil {
 		return f.prFailed(ctx, wo, err)
 	}
-	pr, err := g.OpenPullRequest(ctx, model.PRRequest{Repo: proj.RemoteRepo, Head: branch, Base: base, Title: wo.Title, Body: prBody(wo, auto == nil)})
+	pr, err := g.OpenPullRequest(ctx, model.PRRequest{Repo: repo, Head: branch, Base: base, Title: wo.Title, Body: prBody(wo, auto == nil)})
 	if err != nil {
 		var pe *model.ProviderError
 		if errors.As(err, &pe) && pe.Permanent() {
@@ -446,4 +514,11 @@ func (f *Factory) DecideFinding(ctx context.Context, woID, findingID, actorID st
 		}
 	}
 	return f.Findings.Get(ctx, woID, findingID)
+}
+
+func (f *Factory) repoOf(ctx context.Context, wo *model.WorkOrder) string {
+	if proj, err := f.Proj.Get(ctx, wo.ProjectID); err == nil {
+		return proj.RepoURL
+	}
+	return ""
 }

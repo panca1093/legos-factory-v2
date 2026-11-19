@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -341,7 +342,7 @@ func (c *Chat) sessionProject(ctx context.Context, p *model.Project, msgs []mode
 			}
 			ws := ""
 			if c.DataDir != "" {
-				ws = filepath.Join(c.DataDir, "workspaces", r.WOID)
+				ws = model.WorktreeDir(c.DataDir, p.ID, r.WOID)
 			}
 			sp.Running = append(sp.Running, SessionRunning{
 				WorkOrderID: r.WOID, Title: r.WOTitle, State: string(r.WOState), Role: r.Kind, TaskID: r.TaskID,
@@ -361,6 +362,23 @@ func localDir(repoURL string) string {
 		return ""
 	}
 	return repoURL
+}
+
+// ProjectFolder validates a project's repo_url as an existing absolute git folder and returns it with its HEAD.
+func ProjectFolder(ctx context.Context, repoURL string) (dir, sha string, err error) {
+	if repoURL == "" || strings.Contains(repoURL, "://") || !filepath.IsAbs(repoURL) {
+		return "", "", fmt.Errorf("project folder %q is not an absolute path", repoURL)
+	}
+	if fi, err := os.Stat(repoURL); err != nil || !fi.IsDir() {
+		return "", "", fmt.Errorf("project folder %q does not exist or is not a directory", repoURL)
+	}
+	if gitOut(ctx, repoURL, "rev-parse", "--git-dir") == "" {
+		return "", "", fmt.Errorf("project folder %q is not a git repository", repoURL)
+	}
+	if sha = gitOut(ctx, repoURL, "rev-parse", "HEAD"); sha == "" {
+		return "", "", fmt.Errorf("project folder %q has no commits", repoURL)
+	}
+	return repoURL, sha, nil
 }
 
 // gitOut runs one read-only git command in dir without a shell; the repo's own config must not run commands. A failure gives "".

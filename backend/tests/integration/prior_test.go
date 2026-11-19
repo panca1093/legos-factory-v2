@@ -34,10 +34,7 @@ func TestArchitectReceivesPriorWorkOrderSummaryFromSameProjectOnly(t *testing.T)
 	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+wo1+"/plan/decisions", `{"decision":"approve"}`); status != 202 {
 		t.Fatalf("approve: %d %s", status, body)
 	}
-	ta.awaitState(t, wo1, "NEEDS_HUMAN_REVIEW", 60*time.Second)
-	if status, body := ta.do(t, "POST", "/api/v1/work-orders/"+wo1+"/pr-decision", `{"decision":"approve","reason":"evidence complete"}`); status != 202 {
-		t.Fatalf("pr decision: %d %s", status, body)
-	}
+	ta.awaitState(t, wo1, "READY", 60*time.Second)
 	ta.awaitState(t, wo1, "READY", 5*time.Second)
 	awaitLogLine(t, ta, p1, "`"+wo1+"` **work_order_completed**")
 

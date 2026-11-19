@@ -32,6 +32,7 @@ const emit = defineEmits<{
   resume: [];
   cancel: [];
   goto: [string];
+  decision: ["approve" | "request_changes" | "decline"];
 }>();
 const paused = computed(() => !!props.order.paused_at),
   finished = computed(
@@ -64,6 +65,9 @@ const paused = computed(() => !!props.order.paused_at),
       props.tasks.filter((t) => taskState(t.id, props.runs) === "completed")
         .length,
   );
+const openFailure = computed(
+  () => [...props.events].reverse().find((e) => e.kind === "pr_open_failed")?.message ?? "",
+);
 const asking = computed(
   () =>
     props.order.state === "WAITING_FOR_HUMAN" &&
@@ -247,9 +251,30 @@ const headline = computed(() => {
             reason || 'The checks passed and the done gate handed this to you.'
           "
         />
-        <button class="lg-btn primary small" @click="emit('goto', 'changes')">
-          Review changes &amp; PR
-        </button>
+        <div class="fx-actions">
+          <button
+            class="lg-btn primary small"
+            data-test="pr-approve"
+            :disabled="busy || !canWrite"
+            @click="emit('decision', 'approve')"
+          >
+            Approve and open PR</button
+          ><button
+            class="lg-btn small"
+            data-test="pr-changes"
+            :disabled="busy || !canWrite"
+            @click="emit('decision', 'request_changes')"
+          >
+            Request changes</button
+          ><button
+            class="lg-btn small"
+            data-test="pr-decline"
+            :disabled="busy || !canWrite"
+            @click="emit('decision', 'decline')"
+          >
+            Decline
+          </button>
+        </div>
       </template>
       <template v-else-if="order.state === 'READY' && ship">
         <p class="small">
@@ -270,9 +295,9 @@ const headline = computed(() => {
           The factory can no longer read this pull request; check it on the
           provider.
         </p>
-        <button class="lg-btn small" @click="emit('goto', 'changes')">
-          Changes &amp; PR
-        </button>
+        <p v-if="ship.key === 'open_failed' && openFailure" class="small muted" data-test="open-failure">
+          {{ openFailure }}
+        </p>
       </template>
       <p
         v-else-if="order.state === 'IMPLEMENTING' || order.state === 'QUEUED'"

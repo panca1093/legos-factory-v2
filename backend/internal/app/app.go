@@ -343,18 +343,14 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		Repo: func(ctx context.Context, projectID string, refresh bool) (dir, sha string, err error) {
 			defer func() {
 				if err != nil {
-					log.Warn("chat checkout failed", "project", projectID, "err", err)
+					log.Warn("chat project folder unusable", "project", projectID, "err", err)
 				}
 			}()
 			p, err := projRepo.Get(ctx, projectID)
 			if err != nil {
 				return "", "", err
 			}
-			auth, err := integrations.GitAuth(ctx, p)
-			if err != nil {
-				return "", "", err
-			}
-			return box.Checkout(ctx, "chat-"+projectID, p.RepoURL, auth, refresh)
+			return usecase.ProjectFolder(ctx, p.RepoURL)
 		},
 		RepoFacts: factory.RepoFacts,
 	}
@@ -385,11 +381,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			if err != nil {
 				return "", err
 			}
-			auth, err := integrations.GitAuth(ctx, p)
-			if err != nil {
-				return "", err
-			}
-			dir, _, err := box.Checkout(ctx, "checks-src-"+projectID, p.RepoURL, auth, true)
+			dir, _, err := usecase.ProjectFolder(ctx, p.RepoURL)
 			return dir, err
 		},
 		Agent: func(ctx context.Context, userID, dir, prompt string) (string, model.AgentResult, error) {
@@ -457,6 +449,7 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	a.Sched.Start(ctx)
 	go a.warm()
+	a.Server.Factory.RemoveLegacyWorkspaces(ctx)
 	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {
 		return err
 	}

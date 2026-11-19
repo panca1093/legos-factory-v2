@@ -48,10 +48,10 @@ func TestVerifyToleratesFailuresTheBaselineAlreadyHad(t *testing.T) {
 			f.Sched, f.DataDir = q, t.TempDir()
 			f.Sandbox = outputSandbox{out: map[string]model.CheckResult{"go-test": tc.now, "go-vet": pass}}
 			f.Proj, f.Quality, f.Findings = &store.ProjectRepo{DB: wos.DB}, &store.QualityRepo{DB: wos.DB}, &store.FindingRepo{DB: wos.DB}
-			if err := os.MkdirAll(f.workspaceDir(wo.ID), 0o755); err != nil {
+			if err := os.MkdirAll(f.workspaceDir(wo), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(f.workspaceDir(wo.ID), "go.mod"), []byte("module x"), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(f.workspaceDir(wo), "go.mod"), []byte("module x"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			for _, c := range []model.QualityCheck{

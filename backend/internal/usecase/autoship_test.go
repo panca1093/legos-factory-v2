@@ -11,12 +11,6 @@ import (
 
 func bindRig(t *testing.T, r *rig) {
 	t.Helper()
-	if _, err := r.db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.db.Exec(`UPDATE projects SET git_connection_id = 'conn1', remote_repo = 'acme/x' WHERE id = ?`, r.wo.ProjectID); err != nil {
-		t.Fatal(err)
-	}
 	r.f.Integrations = &Integrations{}
 }
 
@@ -34,11 +28,14 @@ func TestCleanConvergeOnBoundProjectOpensPRAutomatically(t *testing.T) {
 	}
 }
 
-func TestCleanConvergeOnUnboundProjectWaitsForHuman(t *testing.T) {
+func TestCleanConvergeOpensPRWithoutAHumanEvenWithoutARemote(t *testing.T) {
 	r := convergeRig(t, &fakeJudge{}, cleanReport)
 	r.f.Integrations = &Integrations{}
-	if wo := r.evaluate(t); wo.State != model.StateNeedsHumanReview || queuedOpenPR(r.q.enqueued) {
-		t.Fatalf("state %s, enqueued %v", wo.State, r.q.enqueued)
+	if wo := r.evaluate(t); wo.State != model.StateReady || !queuedOpenPR(r.q.enqueued) {
+		t.Fatalf("state %s, enqueued %v: open_pr reports a missing remote itself", wo.State, r.q.enqueued)
+	}
+	if len(r.events(t, "pr_auto_approved")) != 1 || len(r.events(t, "pr_approved")) != 0 {
+		t.Fatal("expected one factory approval and no human approval")
 	}
 }
 

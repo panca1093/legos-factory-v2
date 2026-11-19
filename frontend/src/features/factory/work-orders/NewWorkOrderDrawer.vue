@@ -5,6 +5,7 @@ import AppDialog from "../../../components/ui/AppDialog.vue";
 import BrickBot from "../../../components/agents/BrickBot.vue";
 import { useFactory } from "../../../stores/factory";
 import { useSession } from "../../../stores/session";
+import { useToast } from "../../../composables/useToast";
 import type { ModelInfo, Settings } from "../../../types/api";
 const props = defineProps<{
   open: boolean;
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   created: [{ id: string; planningError: string }];
   edit: [{ title: string; objective: string; acceptance: string }];
 }>();
+const { toast } = useToast();
 const factory = useFactory(),
   session = useSession(),
   step = ref(1),
@@ -31,6 +33,7 @@ const form = reactive({
   builder_model: "",
   inspector_model: "",
   source_ref: "",
+  base_branch: "",
 });
 const jira = reactive({ connection: "", key: "", busy: false, error: "" });
 const jiraConnections = computed(() =>
@@ -75,6 +78,7 @@ watch(
         builder_model: "",
         inspector_model: "",
         source_ref: "",
+        base_branch: "",
       });
       Object.assign(jira, { key: "", error: "" });
       factory
@@ -151,6 +155,7 @@ async function create() {
         ? { source_chat_id: props.sourceChatID }
         : {}),
     });
+    if (order.warning) toast(order.warning);
     let planningError = "";
     try {
       await factory.planGenerate(order.id);
@@ -251,6 +256,20 @@ async function create() {
             {{ project?.language || "detected from the repository" }}
           </p>
         </div>
+      </div>
+      <div class="form-group">
+        <label for="wo-base">Base branch (optional)</label
+        ><input
+          id="wo-base"
+          v-model="form.base_branch"
+          data-test="wo-base-branch"
+          placeholder="Default: the remote's default branch"
+        />
+        <p class="help">
+          The work starts from this branch as it is on the remote, and the pull
+          request targets it. Uncommitted changes in your folder are not part of
+          it.
+        </p>
       </div>
       <div class="form-group">
         <label for="wo-objective">Describe the outcome</label
