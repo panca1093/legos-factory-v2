@@ -37,7 +37,9 @@ type HookError struct {
 	Hook   string // the hook that rejected it when only one could have ("commit-msg"), else ""
 }
 
-func (e *HookError) Error() string { return "git " + e.Op + " was rejected by a repository hook: " + e.Output }
+func (e *HookError) Error() string {
+	return "git " + e.Op + " was rejected by a repository hook: " + e.Output
+}
 
 // SigningError is a commit or merge that failed because git could not sign it (the repository sets
 // commit.gpgsign). The Builder cannot fix it: the user must make the signing key available.
@@ -60,3 +62,18 @@ func WorktreeDir(dataDir, projectID, woID string) string {
 // ErrStateConflict marks domain rejections that indicate an invalid
 // operation for the current state (mapped to HTTP 409).
 var ErrStateConflict = errors.New("STATE_CONFLICT")
+
+// Editor errors; the HTTP layer maps each to its code (SPEC §HTTP API).
+var (
+	ErrOutsideFolder = errors.New("path is outside this folder")
+	ErrTooLarge      = errors.New("file is too large to open")
+	ErrBinary        = errors.New("binary file")
+	ErrFolderGone    = errors.New("folder no longer exists")
+	ErrUntrusted     = errors.New("folder is not trusted")
+	ErrTooManyLSP    = errors.New("too many language servers running")
+)
+
+// EditorConflict is returned by a write whose base hash no longer matches the disk.
+type EditorConflict struct{ Current FileStat }
+
+func (e *EditorConflict) Error() string { return "file changed on disk" }
