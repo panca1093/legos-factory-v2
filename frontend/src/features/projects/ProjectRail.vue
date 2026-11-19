@@ -4,6 +4,19 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ArrowLeft, ChevronRight, PanelLeftClose, Plus } from "lucide-vue-next";
 import "./projects.css";
 import { api, ApiError, type ProjectRail } from "../../types/api";
+import {
+  chipText,
+  connectionsPath,
+  errCode,
+  errMessage,
+  pullPath,
+  type RailPulls,
+} from "../../types/review";
+import {
+  eventTarget,
+  isPRReviewEvent,
+  usePRRefresh,
+} from "../../stores/reviews";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
 import IconButton from "../../components/ui/IconButton.vue";
@@ -33,6 +46,7 @@ const rail = ref<ProjectRail | null>(null),
   more = ref<Record<string, boolean>>({}),
   collapsed = ref<Record<string, boolean>>(readFlags(sectionsKey));
 let seq = 0,
+  pullsSeq = 0,
   timer: ReturnType<typeof setTimeout> | undefined;
 
 const project = computed(() =>
@@ -65,6 +79,24 @@ const needsYou = computed(() => rows.value.some((r) => r.waiting_on_you));
 const factoryRows = computed(() =>
   capRail(rows.value, !!more.value.factory, selectedWO.value),
 );
+const selectedPull = computed(() => Number(route.params.number ?? 0));
+const pulls = computed(
+  () => rail.value?.pulls as unknown as RailPulls | undefined,
+);
+const pullsCode = computed(() => errCode(pulls.value?.error));
+const noIdentity = computed(() => pullsCode.value === "no_identity");
+const pullsWarn = computed(() =>
+  pullsCode.value && pullsCode.value !== "no_identity"
+    ? errMessage(pulls.value?.error)
+    : "",
+);
+const pullRows = computed(() =>
+  capRail(
+    (pulls.value?.rows ?? []).map((r) => ({ ...r, id: String(r.number) })),
+    !!more.value.pulls,
+    String(selectedPull.value),
+  ),
+);
 const isOpen = (key: string) => !collapsed.value[key];
 function toggle(key: string) {
   collapsed.value = { ...collapsed.value, [key]: isOpen(key) };
@@ -91,6 +123,26 @@ async function load(part: "all" | "wo" = "all") {
     if (missing.value) rail.value = null;
   }
 }
+async function loadPulls() {
+  const id = projectId.value,
+    mine = ++pullsSeq;
+  try {
+    const res = await api.get<ProjectRail>(
+      `/api/v1/projects/${id}/rail?part=pulls`,
+    );
+    if (mine !== pullsSeq || !rail.value) return;
+    rail.value = { ...rail.value, pulls: res.pulls };
+  } catch {
+    /* The cached rows stay; the next refetch retries. */
+  }
+}
+usePRRefresh(
+  () => void loadPulls(),
+  (ev) => {
+    const t = eventTarget(ev);
+    return !t.project || t.project === projectId.value;
+  },
+);
 function schedule() {
   clearTimeout(timer);
   timer = setTimeout(() => void load("wo"), 1000);
@@ -99,6 +151,7 @@ watch(
   projectId,
   () => {
     clearTimeout(timer);
+    pullsSeq++;
     rail.value = null;
     missing.value = failed.value = false;
     more.value = {};
@@ -115,7 +168,7 @@ watch(
 watch(
   () => factory.liveEvents[0],
   (ev) => {
-    if (!ev) return;
+    if (!ev || isPRReviewEvent(ev)) return;
     const wo = factory.workOrders.find((w) => w.id === ev.work_order_id);
     if (!wo || wo.project_id === projectId.value) schedule();
   },
@@ -123,6 +176,7 @@ watch(
 onBeforeUnmount(() => {
   clearTimeout(timer);
   seq++;
+  pullsSeq++;
 });
 const newOrder = () =>
   void router.replace({ query: { ...route.query, new: "1" } });
@@ -233,12 +287,77 @@ const newOrder = () =>
             >
               <ChevronRight class="icon" />
             </button>
-            <RouterLink :to="`/projects/${projectId}/pulls`" class="pr-title"
+            <RouterLink
+              :to="`/projects/${projectId}/pulls`"
+              class="pr-title"
+              data-test="rail-pulls-title"
               >Pull requests</RouterLink
-            >
+            ><span v-if="pulls && !noIdentity" class="pr-count"
+              >{{ pulls.count
+              }}<span class="sr-only"> pull requests related to you</span></span
+            ><i
+              v-if="pullsWarn"
+              class="pr-warn"
+              role="img"
+              :title="pullsWarn"
+              :aria-label="pullsWarn"
+              data-test="rail-pulls-warn"
+            ></i>
           </div>
-          <div v-if="isOpen('pulls')" class="pr-rows">
-            <p class="pr-muted" data-test="rail-pulls">Coming soon</p>
+          <div v-if="isOpen('pulls')" class="pr-rows" data-test="rail-pulls">
+            <RouterLink
+              v-if="noIdentity"
+              :to="connectionsPath"
+              class="pr-row"
+              data-test="rail-connect"
+              ><span class="t">Connect an account</span></RouterLink
+            >
+            <template v-else>
+              <RouterLink
+                v-for="r in pullRows.shown"
+                :key="r.number"
+                :to="pullPath(projectId, r.number)"
+                class="pr-row"
+                :class="{
+                  active: r.number === selectedPull,
+                  quiet: r.label === 'none' && !r.running,
+                }"
+                :aria-current="r.number === selectedPull ? 'page' : undefined"
+                data-test="rail-pr"
+                ><span class="mono pr-num">#{{ r.number }}</span
+                ><span class="t">{{ r.title }}</span
+                ><span
+                  v-if="chipText(r)"
+                  class="pr-label"
+                  :class="[r.label, { running: r.running }]"
+                  >{{ chipText(r) }}</span
+                ></RouterLink
+              >
+              <p v-if="!pulls" class="empty-note">
+                {{ failed ? "Could not load pull requests." : "Loading…" }}
+              </p>
+              <p
+                v-else-if="!pulls.rows?.length && !pullsWarn"
+                class="empty-note"
+              >
+                No pull requests need you.
+              </p>
+              <button
+                v-if="pullRows.hidden || more.pulls"
+                type="button"
+                class="rt-more"
+                @click="more = { ...more, pulls: !more.pulls }"
+              >
+                {{ more.pulls ? "Show less" : `Show ${pullRows.hidden} more` }}
+              </button>
+              <RouterLink
+                v-if="pulls"
+                :to="`/projects/${projectId}/pulls`"
+                class="pr-all"
+                data-test="rail-pulls-all"
+                >All pull requests</RouterLink
+              >
+            </template>
           </div>
         </section>
         <section class="pr-sec">
@@ -433,6 +552,51 @@ const newOrder = () =>
   font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+.pr-warn {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-left: var(--space-1);
+  border-radius: 50%;
+  background: var(--warning);
+  box-shadow: 0 0 0 3px var(--warning-soft);
+}
+.pr-num {
+  flex: none;
+  font-size: 11px;
+}
+.pr-row.quiet {
+  opacity: 0.65;
+}
+.pr-label {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+}
+.pr-label.ai,
+.pr-label.running {
+  background: var(--tint);
+  color: var(--accent);
+}
+.pr-label.new,
+.pr-label.approve {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.pr-all {
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.pr-all:hover {
+  text-decoration: underline;
 }
 .pr-muted {
   padding: 6px 12px;
