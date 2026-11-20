@@ -78,10 +78,6 @@
   box-shadow: var(--shadow-pop);
   transform: translateY(-2px);
 }
-.pj-card:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus), var(--shadow-card);
-}
 .pj-card.t0 {
   --tone: var(--warning);
   --tone-soft: var(--warning-soft);
@@ -234,7 +230,8 @@
   .pj-stats > div {
     padding: 10px;
   }
-  .pj-stats dt .icon {
+  .pj-stats dt .icon,
+  .pj-span {
     display: none;
   }
 }
