@@ -4,7 +4,6 @@ import {
   fileMarker,
   flattenTree,
   markerOf,
-  rollupCounts,
   rollupMarkers,
   visibleWindow,
   type TreeEntry,
@@ -99,19 +98,6 @@ describe("git markers", () => {
     expect(fileMarker(m, "new/deep/file.go")).toBe("U");
     expect(dirMarker(m, "new/deep")).toBe("U");
     expect(fileMarker(m, "other.go")).toBeUndefined();
-  });
-  it("rolls error counts up to every ancestor", () => {
-    const c = rollupCounts(
-      new Map([
-        ["a/b/x.go", 2],
-        ["a/y.go", 1],
-        ["clean.go", 0],
-      ]),
-    );
-    expect(c.get("a")).toBe(3);
-    expect(c.get("a/b")).toBe(2);
-    expect(c.get("a/b/x.go")).toBe(2);
-    expect(c.has("clean.go")).toBe(false);
   });
 });
 

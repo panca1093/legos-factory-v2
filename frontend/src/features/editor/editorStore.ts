@@ -1,12 +1,8 @@
 import { defineStore } from "pinia";
-import { computed, markRaw, reactive, ref, shallowRef } from "vue";
+import { markRaw, reactive, ref, shallowRef } from "vue";
 import { useSession } from "../../stores/session";
 import { useToast } from "../../composables/useToast";
-import {
-  rollupCounts,
-  rollupMarkers,
-  type Markers,
-} from "../../components/files/tree";
+import { rollupMarkers, type Markers } from "../../components/files/tree";
 import { buildWatchSet, ControlSocket } from "./control";
 import { conflictOf, FsError, fsApi } from "./fs";
 import { languageOf, loadMonaco, type ITextModel, type Monaco } from "./monaco";
@@ -19,11 +15,9 @@ import {
 import type {
   Actor,
   ControlFrame,
-  Diagnostic,
   EditorFolder,
   GitFrame,
   PersistedTab,
-  ServerState,
   TreeEntryDTO,
 } from "./types";
 
@@ -75,14 +69,6 @@ export interface ProjectState {
   status: "loading" | "ready" | "unavailable" | "needs_folder" | "error";
   message: string;
   folderId: string;
-}
-
-export interface ModelInfo {
-  uri: string;
-  path: string;
-  folderId: string;
-  language: string;
-  model: ITextModel;
 }
 
 export interface RevealTarget {
@@ -147,10 +133,6 @@ export const useEditor = defineStore("editor", () => {
   const currentId = ref("");
   const monaco = shallowRef<Monaco | null>(null);
   const models = markRaw(new Map<string, ITextModel>());
-  const diagnostics = reactive(new Map<string, Diagnostic[]>());
-  const serverStates = reactive<Record<string, Record<string, ServerState>>>(
-    {},
-  );
   const reveal = ref<RevealTarget | null>(null);
   const closeRequest = ref<{ folderId: string; paths: string[] } | null>(null);
   const leavePrompt = ref<{ resolve: (ok: boolean) => void } | null>(null);
@@ -159,9 +141,6 @@ export const useEditor = defineStore("editor", () => {
   const versions = new Map<string, number>();
   const subs = new Map<string, Disposable>();
   const sockets = new Map<string, ControlSocket>();
-  const opened = new Set<(i: ModelInfo) => void>();
-  const closed = new Set<(i: ModelInfo) => void>();
-  const saved = new Set<(uri: string) => void>();
   const watchTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let revealSeq = 0;
@@ -169,71 +148,6 @@ export const useEditor = defineStore("editor", () => {
 
   const userId = () => session.user?.id ?? "";
   const current = () => folders[currentId.value];
-  // The language client's view of the open folder (lsp.ts reads `folder`).
-  const folder = computed(() => {
-    const f = current()?.folder;
-    return f ? { id: f.id, path: f.path } : null;
-  });
-
-  function infoOf(fid: string, path: string, model: ITextModel): ModelInfo {
-    return {
-      uri: model.uri.toString(),
-      path,
-      folderId: fid,
-      language: folders[fid]?.buffers[path]?.language ?? languageOf(path),
-      model,
-    };
-  }
-
-  function onModelOpened(cb: (i: ModelInfo) => void) {
-    opened.add(cb);
-    for (const [fid, st] of Object.entries(folders))
-      for (const [path, b] of Object.entries(st.buffers)) {
-        const m = b.status === "ready" ? modelOf(fid, path) : undefined;
-        if (m) cb(infoOf(fid, path, m));
-      }
-    return () => opened.delete(cb);
-  }
-  function onModelClosed(cb: (i: ModelInfo) => void) {
-    closed.add(cb);
-    return () => closed.delete(cb);
-  }
-
-  function onModelSaved(cb: (uri: string) => void) {
-    saved.add(cb);
-    return () => saved.delete(cb);
-  }
-
-  // 1-based line and column; a uri outside every open folder is ignored.
-  async function openFileAt(
-    uri: string,
-    pos: { line?: number; column?: number } = {},
-  ) {
-    const loc = locate(uri);
-    if (!loc) return;
-    currentId.value = loc.folderId;
-    await openFile(loc.folderId, loc.path, {
-      line: pos.line ?? 1,
-      col: pos.column ?? 1,
-    });
-  }
-
-  // Opens a file of an open folder as a (background) model so workspace edits can touch it.
-  async function ensureModel(uri: string): Promise<ITextModel | null> {
-    const existing = models.get(uri);
-    if (existing) return existing;
-    const loc = locate(uri);
-    if (!loc) return null;
-    const st = folders[loc.folderId];
-    if (!st || st.status !== "ready") return null;
-    if (!st.tabs.some((t) => t.path === loc.path)) {
-      st.tabs.push({ path: loc.path, preview: false });
-      persist(loc.folderId);
-      syncWatch(loc.folderId);
-    }
-    await ensureBuffer(loc.folderId, loc.path);
-    return modelOf(loc.folderId, loc.path) ?? null;
-  }
 
   function uriOf(fid: string, path: string): string {
     const st = folders[fid];
@@ -320,7 +234,6 @@ export const useEditor = defineStore("editor", () => {
     for (const uri of [...models.keys()]) disposeModel(uri);
     for (const k of Object.keys(folders)) delete folders[k];
     for (const k of Object.keys(projects)) delete projects[k];
-    diagnostics.clear();
     currentId.value = "";
     workspaceProject.value = "";
     reveal.value = null;
@@ -532,12 +445,6 @@ export const useEditor = defineStore("editor", () => {
         st.markers = f.too_many ? null : markRaw(rollupMarkers(f.entries));
         if (f.branch) st.folder = { ...st.folder, branch: f.branch };
         break;
-      case "server_state":
-        (serverStates[fid] ??= {})[f.server] = {
-          ...f,
-          version: f.version ?? serverStates[fid][f.server]?.version,
-        };
-        break;
       case "folder_gone":
         markGone(fid);
         break;
@@ -664,21 +571,10 @@ export const useEditor = defineStore("editor", () => {
   function disposeModel(uri: string) {
     const m = models.get(uri);
     if (!m) return;
-    const loc = locate(uri);
     subs.get(uri)?.dispose();
     subs.delete(uri);
     versions.delete(uri);
-    diagnostics.delete(uri);
     models.delete(uri);
-    if (loc)
-      for (const cb of closed)
-        cb({
-          uri,
-          path: loc.path,
-          folderId: loc.folderId,
-          language: languageOf(loc.path),
-          model: m,
-        });
     m.dispose();
   }
 
@@ -710,7 +606,6 @@ export const useEditor = defineStore("editor", () => {
         if (buf.dirty) pin(fid, path);
       }),
     );
-    for (const cb of opened) cb(infoOf(fid, path, model));
     return model;
   }
 
@@ -925,7 +820,6 @@ export const useEditor = defineStore("editor", () => {
       b.banner = null;
       versions.set(model.uri.toString(), sentVersion);
       b.dirty = model.getAlternativeVersionId() !== sentVersion;
-      for (const cb of saved) cb(model.uri.toString());
       return true;
     } catch (e) {
       const c = conflictOf(e);
@@ -1068,27 +962,6 @@ export const useEditor = defineStore("editor", () => {
     syncWatch(fid);
   }
 
-  // ---- diagnostics helpers (the language client fills `diagnostics`) -----
-
-  function errorCounts(fid: string): Map<string, number> {
-    const per = new Map<string, number>();
-    for (const [uri, list] of diagnostics) {
-      const loc = locate(uri);
-      if (!loc || loc.folderId !== fid) continue;
-      const n = list.filter((d) => d.severity === 1).length;
-      if (n) per.set(loc.path, n);
-    }
-    return rollupCounts(per);
-  }
-
-  function setServerState(
-    fid: string,
-    id: string,
-    s: Omit<ServerState, "server">,
-  ) {
-    (serverStates[fid] ??= {})[id] = { server: id, ...s };
-  }
-
   // ---- guards ------------------------------------------------------------
 
   function dirtyPaths(): { folderId: string; path: string }[] {
@@ -1122,19 +995,11 @@ export const useEditor = defineStore("editor", () => {
     workspaceProject,
     monaco,
     models,
-    diagnostics,
-    serverStates,
     reveal,
     closeRequest,
     leavePrompt,
     quickOpen,
     current,
-    folder,
-    onModelOpened,
-    onModelClosed,
-    onModelSaved,
-    openFileAt,
-    ensureModel,
     uriOf,
     modelOf,
     locate,
@@ -1164,8 +1029,6 @@ export const useEditor = defineStore("editor", () => {
     createFile,
     createFolder,
     renamePath,
-    errorCounts,
-    setServerState,
     dirtyPaths,
     confirmLeave,
     answerLeave,

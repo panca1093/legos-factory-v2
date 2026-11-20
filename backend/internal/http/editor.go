@@ -20,7 +20,6 @@ import (
 func (s *Server) editorRoutes(g *echo.Group) {
 	g.GET("/projects/:id/editor", s.edit(s.handleEditorProject, false))
 	g.POST("/editor/folders", s.edit(s.handleEditorWorktree, true))
-	g.POST("/editor/folders/:fid/trust", s.edit(s.handleEditorTrust, true))
 	g.GET("/editor/folders/:fid", s.edit(s.handleEditorFolder, false))
 	g.GET("/editor/folders/:fid/tree", s.edit(s.handleEditorTree, false))
 	g.GET("/editor/folders/:fid/files", s.edit(s.handleEditorFiles, false))
@@ -76,10 +75,6 @@ func editorError(c echo.Context, err error) error {
 		return sizedError(c, http.StatusUnsupportedMediaType, "BINARY", err)
 	case errors.Is(err, model.ErrFolderGone):
 		return errorJSON(c, http.StatusNotFound, "FOLDER_GONE", err.Error())
-	case errors.Is(err, model.ErrUntrusted):
-		return errorJSON(c, http.StatusForbidden, "UNTRUSTED", err.Error())
-	case errors.Is(err, model.ErrTooManyLSP):
-		return errorJSON(c, http.StatusTooManyRequests, "TOO_MANY_SERVERS", err.Error())
 	case errors.Is(err, model.ErrBadPath), errors.Is(err, usecase.ErrInvalid):
 		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
 	case errors.Is(err, fs.ErrExist):
@@ -143,20 +138,6 @@ func (s *Server) handleEditorWorktree(c echo.Context) error {
 		return err
 	}
 	f, err := s.Editor.WorktreeFolder(c.Request().Context(), currentUser(c), req.WOID, req.TaskID)
-	if err != nil {
-		return editorError(c, err)
-	}
-	return c.JSON(http.StatusOK, map[string]any{"folder": f})
-}
-
-func (s *Server) handleEditorTrust(c echo.Context) error {
-	var req struct {
-		Trusted bool `json:"trusted"`
-	}
-	if err := bindEditor(c, &req); err != nil {
-		return err
-	}
-	f, err := s.Editor.SetTrusted(c.Request().Context(), currentUser(c), c.Param("fid"), req.Trusted)
 	if err != nil {
 		return editorError(c, err)
 	}

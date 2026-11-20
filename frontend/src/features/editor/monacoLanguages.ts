@@ -17,7 +17,7 @@ import "monaco-editor/languages/definitions/ini/register";
 import "monaco-editor/languages/definitions/dockerfile/register";
 import "monaco-editor/languages/definitions/protobuf/register";
 
-// JSON's own registration ships with its language service, which would compete with the language servers.
+// JSON's own registration ships with its language service, which is not bundled.
 languages.register({
   id: "json",
   extensions: [".json", ".jsonc"],

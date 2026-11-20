@@ -52,9 +52,9 @@ Status: **parked 2026-11-19**. The design is being reworked. These are code fact
 
 | # | Fact | Prerequisite |
 |---|---|---|
-| 16 ~ | `gopls` v0.16.2 (built with go1.22) is in `~/Documents/go/bin`; GOPATH is not `~/go` | Discover servers through `go env GOPATH` too; show an "outdated" state |
-| 17 ~ | `typescript-language-server` and `vue-language-server` are not installed | The Language servers panel must handle "not found" from day one |
-| 18 ~ | `monaco-languageclient` 11 pins an older `@codingame/monaco-vscode-api` and replaces the plain `monaco-editor` import | Spike: our own thin LSP client vs the library |
+| 16 ~ | `gopls` v0.16.2 (built with go1.22) is in `~/Documents/go/bin`; GOPATH is not `~/go` | Discover servers through `go env GOPATH` too; show an "outdated" state  (moot 2026-11-20: language servers removed) |
+| 17 ~ | `typescript-language-server` and `vue-language-server` are not installed | The Language servers panel must handle "not found" from day one  (moot 2026-11-20: language servers removed) |
+| 18 ~ | `monaco-languageclient` 11 pins an older `@codingame/monaco-vscode-api` and replaces the plain `monaco-editor` import | Spike: our own thin LSP client vs the library  (moot 2026-11-20: language servers removed) |
 
 ## Migrations
 

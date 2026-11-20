@@ -62,13 +62,6 @@ const LABELS: Record<string, string> = {
 export const languageLabel = (id: string) =>
   LABELS[id] ?? id.charAt(0).toUpperCase() + id.slice(1);
 
-// Language servers in the allowlist, by Monaco language id.
-export const SERVER_FOR: Record<string, string> = {
-  go: "gopls",
-  typescript: "tsls",
-  javascript: "tsls",
-};
-
 function hex(v: string, fallback: string): string {
   const s = v.trim();
   const m = /^#([0-9a-f]{3})$/i.exec(s);

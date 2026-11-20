@@ -4,6 +4,8 @@ Status: draft · 2026-11-19 · not built · prototype: https://claude.ai/artifac
 
 Revised 2026-11-19 for the v2 project workspace layout.
 
+**Revised 2026-11-20 — language servers removed.** The factory does not run language servers: no hover, go to definition, references, diagnostics, completion or quick fixes; no Problems card, Language server card, Settings › Editor servers panel, LSP socket or folder trust (`033_editor_drop_lsp.sql` drops `editor_server_paths` and `editor_folders.trusted`). The Code selection is a view-and-quick-edit editor: Monaco syntax highlighting, tabs, Explorer with git markers, quick open, save with conflict check, changed-on-disk banner. Code navigation belongs to the user's own editor. Why: only Go/TS were covered, servers cost RAM per worktree, they run repo code written by agents, and agents never used them. Every LSP, Problems, Language server and trust mention below is superseded by this note.
+
 ## Why
 
 Legos produces code, but to read or touch it the user leaves for another editor: to fix one line before a PR, to check what the Builder wrote, or to look something up while chatting with an agent. The workspace's Code selection puts a real editor on the project's own folder inside Legos — Monaco, git markers and the language servers the user already has installed — so small edits and code reading stay in the same place as the work orders that produce the code.
@@ -11,8 +13,8 @@ Legos produces code, but to read or touch it the user leaves for another editor:
 ## Goals
 
 1. `/projects/:id/code` opens the project's local folder in an editor that can edit and save files, inside the project workspace.
-2. Explorer card with git markers and per-file error counts, file tabs, breadcrumb, Problems card, editor footer, and the files open in the editor listed in the project rail.
-3. LSP in v1: hover, go to definition, find references, diagnostics, completion, quick-fix code actions, served by language servers installed on the user's machine.
+2. Explorer card with git markers, file tabs, breadcrumb, editor footer, and the files open in the editor listed in the project rail.
+3. ~~LSP in v1~~ — removed 2026-11-20 (see the note above).
 4. Edits are never lost silently: saving checks the file did not change on disk, and a file that changes on disk while open shows who changed it.
 5. A work order's worktree opens in the same workspace from the work order's Details card ("Open in Code"). Folders outside projects are added as local projects first.
 
@@ -32,8 +34,8 @@ Legos produces code, but to read or touch it the user leaves for another editor:
 |---|---|
 | D1 | (Revised 2026-11-19, v2 workspace) The Editor is the **Code** selection of the project workspace (`/projects/:id/code`) and opens the project's local folder. Center = editor card; right context panel = **Explorer**, **Problems** and **Language server** cards; the project rail's **Code · N open** section lists the files open in the editor (§Open files). No tabs row on the project page and no shrinking header |
 | D2 | (Revised 2026-11-19) In-app editing is required: Monaco in an editor card with file tabs (unsaved dot), Save button, breadcrumb and footer (language, language server state, Ln/Col, save state); Explorer card with branch, Find files, collapsible tree with git markers (M modified, U untracked/new) and per-file error badges; Problems card; Language server card |
-| D3 | LSP is in v1: hover (signature + docs), go to definition, find references, diagnostics, completion, quick-fix code actions |
-| D4 | Language servers are those installed on the user's machine, never bundled. The backend spawns them per opened folder and proxies JSON-RPC to the browser. A "Language servers" panel shows found / not found per language, a copyable install command and "Check again" |
+| D3 | (Removed 2026-11-20) ~~LSP is in v1: hover (signature + docs), go to definition, find references, diagnostics, completion, quick-fix code actions~~ |
+| D4 | (Removed 2026-11-20) ~~Language servers are those installed on the user's machine, never bundled. The backend spawns them per opened folder and proxies JSON-RPC to the browser. A "Language servers" panel shows found / not found per language, a copyable install command and "Check again"~~ |
 | D5 | Independent of work orders: no locking. A file watcher shows "`<file>` changed on disk · `<who>`" with Reload / Keep mine / Compare when the open file changes underneath |
 | D6 | (Revised 2026-11-19) No "Open a folder" screen. Only project folders (Code selection) and their WO worktrees (from the WO Details card) open; anything else becomes a local project first. The Language servers panel lives in **Settings › Editor**, reachable from the Language server card and the editor footer |
 | D7 | No in-app terminal in v1 |
@@ -76,13 +78,12 @@ Legos produces code, but to read or touch it the user leaves for another editor:
 1. `/projects/:id/code` → `GET /projects/:id/editor` resolves the project's folder:
    - local-folder project (`repo_url` is an absolute path that exists and is a git repo) → that folder;
    - remote-only project → empty state "This project has no local folder" with **Clone to a folder…** (existing `/local/clone`) and **Choose existing folder…**; the choice is stored per user (`editor_project_folders`) (Q6).
-2. Response: `folder_id`, absolute path, branch, trusted. The client opens the control socket, loads the root listing into the Explorer card and restores open files from `localStorage` (§Open files).
-3. If trusted (always for project folders), the client opens one LSP socket per server needed by the open tabs' languages; servers start lazily on the first file of their language.
+2. Response: `folder_id`, absolute path, branch. The client opens the control socket, loads the root listing into the Explorer card and restores open files from `localStorage` (§Open files).
 
 ### F2 Edit and save
 
 1. Open file → `GET …/file?path=` returns `content`, `hash` (sha256), `mtime`, `size`, `eol`. The buffer remembers `base_hash`.
-2. Typing marks the tab dirty (dot) and sends `didChange` to the language server.
+2. Typing marks the tab dirty (dot).
 3. Save → `PUT …/file {path, content, base_hash}`:
    - disk hash = `base_hash` → atomic write → `{hash, mtime}`; `base_hash` := new hash; tab clean.
    - disk hash ≠ `base_hash` → 409 `{current_hash, mtime, actor}` → the changed-on-disk banner (F4) opens in conflict mode; nothing is written.
@@ -90,13 +91,7 @@ Legos produces code, but to read or touch it the user leaves for another editor:
 
 ### F3 LSP interactions
 
-- Hover → `textDocument/hover` → markdown popover (signature block + docs).
-- F12 / Cmd+click → `textDocument/definition`; a target in another file of the folder opens it in a tab (read via the file API) and reveals the range; a target outside the folder (Go module cache, stdlib, `node_modules` outside root) opens **read-only** through `GET …/external?uri=` only if the path is under an allowlisted read-only root (§Path confinement), else a toast "Definition is outside this folder: `<path>`".
-- Shift+F12 → `textDocument/references` → peek list grouped by file.
-- Diagnostics → `textDocument/publishDiagnostics` → squiggles, Problems card, tree badges (error count per file, rolled up to folders).
-- Completion → `textDocument/completion` (+ `completionItem/resolve`).
-- Quick fix → `textDocument/codeAction` on the cursor's diagnostics; applying a `WorkspaceEdit` edits open buffers in place and opens (dirty, unsaved) any other files it touches. Nothing is written to disk until the user saves.
-- Not in v1: rename symbol, formatting, signature help as you type, semantic tokens, inlay hints (Q12).
+Removed 2026-11-20 (language servers removed).
 
 ### F4 File changed on disk
 
@@ -115,14 +110,11 @@ Decided 2026-11-19: there is no "Open a folder" screen, Recent list or Home/Cmd+
 
 - Entry point: work-order selection › **Details** card → **Open in Code** (and per task, in the Progress tab: **Open task worktree**).
 - Open → `POST /editor/folders {wo_id, task_id?}` → `/projects/:id/code/:folder_id`: the same Code selection in the same workspace; the content header shows the WO title + "Back to project code"; the Explorer card shows the worktree's branch. The WO stays selectable in the rail.
-- Worktrees inherit the project's trust; no trust prompt.
 - Info strip "Edits here ship with work order wo_x if it commits them" (the factory commits the workspace as is) (Q11).
 
 ### F6 Missing language server
 
-1. A file of language L opens; the server for L is `not_found` → editor footer "Go: no language server" (warning tone); Language server card shows `not found` with the install command; Problems card empty with the same hint.
-2. Footer item / Language server card link / Problems hint → **Settings › Editor › Language servers**: one row per known server: name, state (`found · <version> · <path>` / `not found` / `found · outdated` / `crashed`), copyable install command, **Check again** (re-runs discovery, no restart of the backend).
-3. "Use a different binary…" → path input → dialog shows the resolved absolute path and file owner and says "Legos will run `<path> version` once to check it"; only after Confirm does the backend run the probe and store the path (§Security).
+Removed 2026-11-20 (language servers removed).
 
 ## UI
 
@@ -307,28 +299,7 @@ Cached per control socket for 2 s per WO to avoid a query per event.
 
 ### Language server manager
 
-Allowlist (code, not config):
-
-| Server id | Languages | Binary | Args | Install command shown | Status |
-|---|---|---|---|---|---|
-| `gopls` | go, go.mod | `gopls` | none (stdio default) ✓ | `go install golang.org/x/tools/gopls@latest` ✓ | v1 |
-| `tsls` | ts, tsx, js, jsx | `typescript-language-server` | `--stdio` ✓ | `npm i -g typescript-language-server typescript` ✓ (6.1.0 on npm 2026-11-19) | v1 |
-| `vuels` | vue | `vue-language-server` | `--stdio` ✓ | `npm i -g @vue/language-server` (3.3.14) | Q1 — v3 runs in "hybrid" mode and needs `tsls` with `@vue/typescript-plugin` configured ? verify |
-
-Discovery (per user, cached until **Check again** or a spawn failure):
-1. Confirmed custom path from `editor_server_paths`.
-2. `exec.LookPath` on an augmented PATH: the process PATH + login-shell PATH (`$SHELL -lic 'printf %s "$PATH"'`, 3 s timeout, once per process — needed when the backend is launched by a GUI app, which gets launchd's minimal PATH ? verify for the Wails build) + `$(go env GOBIN)`, `$(go env GOPATH)/bin` (here `~/Documents/go/bin`, not `~/go/bin`), `/opt/homebrew/bin`, `/usr/local/bin`, `$(npm prefix -g)/bin`, `~/.volta/bin`, `~/.bun/bin`.
-3. Version probe: `gopls version` (parses `golang.org/x/tools/gopls vX` and the `go1.N` it was built with via `go version -m <bin>` ✓); `typescript-language-server --version` ✓. A gopls built with a Go older than the folder's `go.mod` `go` line → state `outdated` with the install command ? verify what gopls 0.16 does on a go 1.26 module (expected: type-check errors or refusal).
-4. Node servers need `node` reachable: the spawned PATH puts the directory of the resolved `node` first; no `node` → `not_found` with "needs Node.js".
-
-Process lifecycle:
-- Key (user, folder, server). Spawn on the first LSP socket attach; `cwd` = folder path; `Setpgid` ✓ so killing the group also kills children (tsserver, gopls workers).
-- Env: `PATH` (augmented), `HOME`, `USER`, `LANG`, `TMPDIR`, Go vars from `go env` (`GOPATH`, `GOMODCACHE`, `GOFLAGS`, `GOPROXY`, `GOPRIVATE`, `GONOSUMDB`, `GOTOOLCHAIN`), `NODE_OPTIONS` unset. Never `FACTORY_*`, `TYPESAFE_*`, `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_*`, `OPENAI_*`.
-- `initialize` from the client is rewritten by the backend: `rootUri`, `rootPath`, `workspaceFolders` := the folder; `processId` := backend pid. The server's `initialize` result is cached so a reconnecting client (same tab after a blip, or a takeover) gets it without restarting the server; the backend then forwards `initialized` once only and the client re-sends `didOpen` for its tabs.
-- Idle: no client attached for 10 min → `shutdown` + `exit`, kill after 5 s.
-- Crash: restart with backoff 1 s, 5 s, 30 s; > 3 crashes in 5 min → state `crashed` with stderr tail (last 4 KB, shown in the Language server card and the Settings panel) and **Restart**.
-- Limits: max 4 server processes per user across folders (LRU idle one is stopped first; if none idle → 429 "Too many language servers running"); max frame 16 MB; stdout reader buffered, a client that stops reading for 30 s is disconnected (server keeps running).
-- Backend shutdown kills all groups.
+Removed 2026-11-20 (language servers removed).
 
 ### WebSocket protocol
 
