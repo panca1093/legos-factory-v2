@@ -37,15 +37,21 @@ const notOpen = computed(
 );
 
 let seq = 0;
+let syncing = 0;
 async function sync() {
   const mine = ++seq;
-  const ok = await store.useFolder(projectId.value, folderParam.value);
-  if (mine !== seq || !ok) return;
-  if (queryFile.value)
-    await store.openFile(store.currentId, queryFile.value, {
-      line: queryLine.value || undefined,
-    });
-  else if (!st.value?.active && !st.value?.tabs.length) return;
+  syncing++;
+  try {
+    const ok = await store.useFolder(projectId.value, folderParam.value);
+    if (mine !== seq || !ok) return;
+    if (queryFile.value)
+      await store.openFile(store.currentId, queryFile.value, {
+        line: queryLine.value || undefined,
+      });
+    else if (!st.value?.active && !st.value?.tabs.length) return;
+  } finally {
+    syncing--;
+  }
   syncUrl();
 }
 watch([projectId, folderParam, queryFile, queryLine], () => void sync(), {
@@ -54,6 +60,8 @@ watch([projectId, folderParam, queryFile, queryLine], () => void sync(), {
 
 // The active tab is mirrored into ?file= with replace, so back keeps going to the previous selection.
 function syncUrl() {
+  // While a sync runs the URL is the source of truth; a restored tab must not overwrite ?file=.
+  if (syncing) return;
   const a = active.value;
   if (!a || a === queryFile.value) return;
   if (st.value?.status !== "ready") return;

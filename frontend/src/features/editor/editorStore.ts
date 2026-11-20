@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { markRaw, reactive, ref, shallowRef } from "vue";
+import { markRaw, reactive, ref, shallowRef, toRaw } from "vue";
 import { useSession } from "../../stores/session";
 import { useToast } from "../../composables/useToast";
 import { rollupMarkers, type Markers } from "../../components/files/tree";
@@ -620,16 +620,22 @@ export const useEditor = defineStore("editor", () => {
   async function ensureBuffer(fid: string, path: string): Promise<boolean> {
     const st = folders[fid];
     if (!st) return false;
-    let b = st.buffers[path];
+    const b = st.buffers[path];
     if (b && (b.status === "ready" || b.status === "placeholder")) return true;
     if (b?.status === "loading" && inflight.has(fid + "\0" + path))
       return inflight.get(fid + "\0" + path)!;
-    b = st.buffers[path] = newBuffer(path);
+    const mine = (st.buffers[path] = newBuffer(path));
+    // A read for a buffer that was released and reopened meanwhile must not fill the new one.
+    const live = () => {
+      const cur = folders[fid]?.buffers[path];
+      return cur && toRaw(cur) === mine ? cur : undefined;
+    };
+    const key = fid + "\0" + path;
     const p = (async () => {
       try {
         monaco.value ??= await loadMonaco();
         const r = await fsApi.read(fid, path);
-        const buf = folders[fid]?.buffers[path];
+        const buf = live();
         if (!buf) return false;
         Object.assign(buf, {
           status: "ready",
@@ -643,7 +649,7 @@ export const useEditor = defineStore("editor", () => {
         makeModel(fid, path, r.content, r.eol);
         return true;
       } catch (e) {
-        const buf = folders[fid]?.buffers[path];
+        const buf = live();
         if (!buf) return false;
         if (e instanceof FsError && (e.status === 413 || e.status === 415)) {
           buf.status = "placeholder";
@@ -662,10 +668,10 @@ export const useEditor = defineStore("editor", () => {
         buf.error = msg(e);
         return false;
       } finally {
-        inflight.delete(fid + "\0" + path);
+        if (live() || !folders[fid]?.buffers[path]) inflight.delete(key);
       }
     })();
-    inflight.set(fid + "\0" + path, p);
+    inflight.set(key, p);
     return p;
   }
   const inflight = new Map<string, Promise<boolean>>();
