@@ -20,13 +20,30 @@ const current = computed(
   () => store.current || (route.query.file as string | undefined) || "",
 );
 type Tab = "changes" | "review";
+// Chosen once per PR load, so deciding the last finding or a polled run never flips the tab.
+const firstTab = ref<Tab>("changes");
+let tabFor = "";
+watch(
+  () =>
+    !store.loading && store.pr ? `${store.projectId}#${store.number}` : "",
+  (key) => {
+    if (!key || key === tabFor) return;
+    tabFor = key;
+    firstTab.value = store.pending.length ? "review" : "changes";
+  },
+  { immediate: true },
+);
 const tab = computed<Tab>(() => {
   const q = route.query.tab;
-  if (q === "changes" || q === "review") return q;
-  return store.pending.length ? "review" : "changes";
+  return q === "changes" || q === "review" ? q : firstTab.value;
 });
 function setTab(t: Tab) {
   void router.replace({ query: { ...route.query, tab: t } });
+}
+function arrow() {
+  const t: Tab = tab.value === "changes" ? "review" : "changes";
+  setTab(t);
+  document.getElementById(`prp-tab-${t}`)?.focus();
 }
 const draftCount = (path: string) =>
   store.drafts.filter(
@@ -44,8 +61,13 @@ function toggleDir(path: string) {
 function pick(path: string) {
   const query: LocationQueryRaw = { ...route.query, file: path };
   delete query.draft;
-  void router.push({ query });
-  store.focusSeq++;
+  jump(query);
+}
+// A jump the URL already holds re-runs through focusSeq; a new one goes through the URL only.
+function jump(query: LocationQueryRaw) {
+  if (route.query.file === query.file && route.query.draft === query.draft)
+    store.focusSeq++;
+  else void router.push({ query });
 }
 async function viewed(path: string, v: boolean) {
   try {
@@ -79,14 +101,7 @@ const where = (d: { path: string; line: number; inline: boolean }) =>
   d.inline ? `${d.path.split("/").pop()}:${d.line}` : "General";
 function goTo(d: { id: string; path: string; inline: boolean }) {
   const known = d.inline && store.files.some((f) => f.path === d.path);
-  store.focusSeq++;
-  void router.push({
-    query: {
-      ...route.query,
-      ...(known ? { file: d.path } : {}),
-      draft: d.id,
-    },
-  });
+  jump({ ...route.query, ...(known ? { file: d.path } : {}), draft: d.id });
 }
 
 const detail = computed(() => store.detail);
@@ -220,12 +235,19 @@ const postedHere = computed(
 <template>
   <template v-if="store.pr">
     <section class="pc prp" data-card="pr">
-      <div class="prp-tabs" role="tablist" aria-label="Pull request panel">
+      <div
+        class="prp-tabs"
+        role="tablist"
+        aria-label="Pull request panel"
+        @keydown.left.prevent="arrow"
+        @keydown.right.prevent="arrow"
+      >
         <button
           id="prp-tab-changes"
           type="button"
           role="tab"
           :aria-selected="tab === 'changes'"
+          :tabindex="tab === 'changes' ? 0 : -1"
           aria-controls="prp-changes"
           data-test="tab-changes"
           @click="setTab('changes')"
@@ -240,6 +262,7 @@ const postedHere = computed(
           type="button"
           role="tab"
           :aria-selected="tab === 'review'"
+          :tabindex="tab === 'review' ? 0 : -1"
           aria-controls="prp-review"
           data-test="tab-review"
           @click="setTab('review')"

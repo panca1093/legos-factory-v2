@@ -51,17 +51,20 @@ onMounted(() => {
 onBeforeUnmount(() => io?.disconnect());
 const shown = computed(() => !props.collapsed && (seen.value || props.force));
 
-const hunks = computed(() => parsePatch(props.file.patch));
+const patch = computed(() => props.file.patch);
+const hunks = computed(() => parsePatch(patch.value));
 const rough = computed(
   () => hunks.value.reduce((n, h) => n + h.lines.length + 1, 0) * 20,
 );
 const tones = ref<Seg[][][] | null>(null);
+// Keyed on the patch text, so a refresh with the same patch does not re-tokenize.
+watch(patch, () => (tones.value = null));
 watch(
-  () => [shown.value, hunks.value] as const,
-  async ([on, hs]) => {
-    if (!on) return;
-    const got = await highlightHunks(props.file.path, hs);
-    if (hs === hunks.value) tones.value = got;
+  () => [shown.value, patch.value] as const,
+  async ([on, p]) => {
+    if (!on || tones.value) return;
+    const got = await highlightHunks(props.file.path, hunks.value);
+    if (p === patch.value) tones.value = got;
   },
   { immediate: true },
 );

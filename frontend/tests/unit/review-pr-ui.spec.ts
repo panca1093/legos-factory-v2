@@ -643,6 +643,39 @@ describe("pull request selection", () => {
     w.unmount();
   });
 
+  it("keeps the tab chosen at load when the last finding is decided", async () => {
+    drafts = [draft("d1")];
+    const { w } = await mountPR();
+    expect(w.find('[data-test="tab-review"]').attributes("aria-selected")).toBe(
+      "true",
+    );
+    await w
+      .find('[data-test="draft-d1"] [data-test="draft-discard"]')
+      .trigger("click");
+    await flushPromises();
+    expect(w.find('[data-test="tab-review-badge"]').exists()).toBe(false);
+    expect(w.find('[data-test="tab-review"]').attributes("aria-selected")).toBe(
+      "true",
+    );
+    w.unmount();
+  });
+
+  it("a new pick never reopens the file picked before", async () => {
+    const { w } = await mountPR("/projects/p1/pulls/7?file=a.go");
+    const section = (p: string) =>
+      w
+        .findAll('[data-test="diff-section"]')
+        .find((x) => x.attributes("data-path") === p)!;
+    await section("a.go").find('[data-test="diff-toggle"]').trigger("click");
+    expect(section("a.go").find(".dv").exists()).toBe(false);
+    const picks = w.findAll('[data-test="file-pick"]');
+    await picks[0].trigger("click");
+    await flushPromises();
+    expect(section("pkg/b.go").find(".dv").exists()).toBe(true);
+    expect(section("a.go").find(".dv").exists()).toBe(false);
+    w.unmount();
+  });
+
   it("selects the file from ?file= and pushes on pick", async () => {
     const { w, router } = await mountPR("/projects/p1/pulls/7?file=pkg%2Fb.go");
     expect(w.find('[data-test="diff-file"]').text()).toBe("pkg/b.go");

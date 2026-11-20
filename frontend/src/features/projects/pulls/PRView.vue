@@ -86,6 +86,7 @@ watch(
       if (!fs.length) return;
       seededFor = key;
       was.clear();
+      forced.value = new Set();
       collapsed.value = new Set(fs.filter((f) => f.viewed).map((f) => f.path));
     } else {
       const next = new Set(collapsed.value);
