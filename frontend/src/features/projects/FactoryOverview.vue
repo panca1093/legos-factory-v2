@@ -12,6 +12,7 @@ import {
   actorOf,
   crew,
   isDeletable,
+  isFinished,
   isNeedsYou,
   orderStatus,
   stageStatuses,
@@ -78,6 +79,11 @@ function statusLine(w: WorkOrder) {
     return `Foreman asks: ${w.clarif_question}`;
   if (isNeedsYou(w)) return orderStatus(w).label;
   return `${actorName(w)} · updated ${ago(w.updated_at)}`;
+}
+function tone(w: WorkOrder) {
+  if (isNeedsYou(w)) return "t-warn";
+  if (w.state === "CANCELLED") return "t-off";
+  return isFinished(w) ? "t-ok" : "t-run";
 }
 const stageLabel = (w: WorkOrder) =>
   stages.map((s, i) => ({ name: s, st: stageStatuses(w)[i] }));
@@ -175,7 +181,7 @@ async function confirmDelete() {
         <RouterLink
           :to="woPath(projectId, w.id)"
           class="fx-order"
-          :class="{ attn: isNeedsYou(w) }"
+          :class="tone(w)"
           data-test="order-row"
           :aria-labelledby="`wo-title-${w.id}`"
           :aria-describedby="`wo-status-${w.id}`"
@@ -196,13 +202,14 @@ async function confirmDelete() {
             <li v-for="s in stageLabel(w)" :key="s.name" :class="s.st">
               <i></i
               ><span
-                >{{ s.name
-                }}<span class="sr-only">: {{ s.st }}</span></span
+                >{{ s.name }}<span class="sr-only">: {{ s.st }}</span></span
               >
             </li>
           </ol>
           <div class="fx-order-foot">
-            <span class="fx-order-line small muted">{{ statusLine(w) }}</span>
+            <span class="fx-order-line small muted"
+              ><span>{{ statusLine(w) }}</span></span
+            >
             <span
               v-if="w.pr_url && prNumber(w)"
               class="fx-prchip"
