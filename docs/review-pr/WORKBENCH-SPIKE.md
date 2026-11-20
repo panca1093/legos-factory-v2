@@ -33,7 +33,7 @@ The proxy was enabled for Bitbucket; the mint was accepted.
 | Latency | 0.7–1.0 s for small calls, 1.5–3.8 s for 50-row PR lists and the 64 KB diff (it goes through workbench, then api.bitbucket.org). |
 | Size | No proxy cap was seen: a 642 KB list page and a 64 KB diff passed through. Our own `bbDiffLimit` (4 MiB) still applies. |
 | Rate limit | The proxy adds no rate-limit headers. Bitbucket's own `x-request-count` is passed through, and Bitbucket's hourly limits apply to the user's OAuth app. |
-| Expiry | Expiry probe result: see "Expiry" below. The token cannot be revoked; it only expires. |
+| Expiry | Hard cut at `exp`: 20 s after expiry the same request got `401 {"error":"Invalid or expired curl session token"}`. With no token: `401 {"error":"Authorization: Bearer <curl-session-token> required"}`. Both are JSON 401s, so the client maps them to a provider 401; the token source should re-mint once on a 401 and retry. The token cannot be revoked; it only expires. |
 | Network | `workbench.amartha.id` must be reachable from wherever the backend runs. It was blocked in the cloud sandbox until allowed. |
 
 #### Gzip quirk (blocker until handled)
