@@ -319,6 +319,28 @@
   border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
   background: color-mix(in srgb, var(--tint) 45%, var(--surface));
 }
+.acct.idle .grow,
+.acct.idle .role-chips {
+  opacity: 0.7;
+}
+.pill.idle-pill {
+  color: var(--muted);
+}
+.auth-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.model-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+.inline-form input,
+.inline-form select {
+  min-width: 0;
+  max-width: 100%;
+}
 .acct .grow {
   flex: 1 1 140px;
   min-width: 0;

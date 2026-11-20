@@ -1218,3 +1218,170 @@ it("roles table checks the account serving the role and shows the API-key host",
   expect(w.find('[data-test="via-foreman"]').exists()).toBe(false);
   w.unmount();
 });
+
+const apiAcct = (over: object = {}) =>
+  dsAcct({
+    api: {
+      provider: "deepseek",
+      base_url: "https://api.deepseek.com/anthropic",
+      host: "api.deepseek.com",
+      models: { opus: "deepseek-flash[1m]", sonnet: "deepseek-v4-pro" },
+      has_key: true,
+    },
+    ...over,
+  });
+const claudeRow = (w: W) => w.find('[data-agent="claude"]');
+const openAddForm = async (w: W) => {
+  await click(w, "More for Claude");
+  await buttonByText(w, "Add account").trigger("click");
+};
+
+it("API key mode: a preset fills the base URL and models, and switching preset drops the old models", async () => {
+  const { w } = await render();
+  await openAddForm(w);
+  const form = w.find('[data-test="add-account"]');
+  expect(form.find("#acct-base-claude").exists()).toBe(false);
+  await buttonByText(form, "API key").trigger("click");
+  const val = (id: string) =>
+    (w.find(`#${id}`).element as HTMLInputElement).value;
+  expect(val("acct-base-claude")).toBe("https://api.deepseek.com/anthropic");
+  expect(val("acct-model-opus-claude")).toBe("deepseek-flash[1m]");
+  expect(val("acct-model-sonnet-claude")).toBe("deepseek-v4-pro");
+  expect(val("acct-model-haiku-claude")).toBe("deepseek-chat");
+  expect(w.find("#acct-key-claude").attributes("type")).toBe("password");
+  await w.find("#acct-provider-claude").setValue("glm");
+  expect(val("acct-base-claude")).toBe("https://api.z.ai/api/anthropic");
+  expect(val("acct-model-sonnet-claude")).toBe("glm-5.3[1m]");
+  await w.find("#acct-provider-claude").setValue("custom");
+  expect(val("acct-base-claude")).toBe("");
+  expect(val("acct-model-opus-claude")).toBe("");
+  expect(val("acct-model-haiku-claude")).toBe("");
+  w.unmount();
+});
+
+it("API key create posts the api body, clears the key and skips the login step", async () => {
+  routes["POST /api/v1/agents/claude/accounts"] = () =>
+    json({ account: apiAcct(), login_command: "" }, 201);
+  const { w } = await render();
+  await openAddForm(w);
+  await w.find("#acct-label-claude").setValue("DeepSeek");
+  await buttonByText(w.find('[data-test="add-account"]'), "API key").trigger(
+    "click",
+  );
+  await w.find("#acct-key-claude").setValue("sk-test");
+  await w.find('[data-test="add-account"]').trigger("submit");
+  await flushPromises();
+  expect(sent("POST", "/api/v1/agents/claude/accounts")[0].body).toEqual({
+    label: "DeepSeek",
+    api: {
+      provider: "deepseek",
+      base_url: "https://api.deepseek.com/anthropic",
+      api_key: "sk-test",
+      models: {
+        opus: "deepseek-flash[1m]",
+        sonnet: "deepseek-v4-pro",
+        haiku: "deepseek-chat",
+      },
+    },
+  });
+  expect(w.find('[data-test="login-steps"]').exists()).toBe(false);
+  expect(w.find('[data-test="add-account"]').exists()).toBe(false);
+  w.unmount();
+});
+
+it("a server 400 shows inline and keeps the form open", async () => {
+  routes["POST /api/v1/agents/claude/accounts"] = () =>
+    fail(400, "INVALID_REQUEST", "base_url must be https");
+  const { w } = await render();
+  await openAddForm(w);
+  await w.find("#acct-label-claude").setValue("X");
+  await buttonByText(w.find('[data-test="add-account"]'), "API key").trigger(
+    "click",
+  );
+  await w.find("#acct-key-claude").setValue("k");
+  await w.find('[data-test="add-account"]').trigger("submit");
+  await flushPromises();
+  expect(w.find('[data-test="add-account"] [role="alert"]').text()).toContain(
+    "base_url must be https",
+  );
+  w.unmount();
+});
+
+it("Edit prefills an API account, keeps the key when blank, and PUTs to the api route", async () => {
+  routes["PUT /api/v1/agents/claude/accounts/ds/api"] = () => json(apiAcct());
+  agentsBody.agents[0].accounts = [acct({ roles: [] }), apiAcct()];
+  const { w } = await render();
+  expect(claudeRow(w).text()).toContain(
+    "api.deepseek.com · opus→deepseek-flash[1m] · sonnet→deepseek-v4-pro",
+  );
+  await click(w, "Edit DeepSeek");
+  const key = w.find("#acct-key-claude");
+  expect((key.element as HTMLInputElement).value).toBe("");
+  expect(key.attributes("placeholder")).toBe(
+    "Leave blank to keep the current key",
+  );
+  expect(
+    (w.find("#acct-model-sonnet-claude").element as HTMLInputElement).value,
+  ).toBe("deepseek-v4-pro");
+  await w.find("#acct-model-sonnet-claude").setValue("deepseek-v5");
+  await w.find('[data-test="add-account"]').trigger("submit");
+  await flushPromises();
+  expect(sent("PUT", "/api/v1/agents/claude/accounts/ds/api")[0].body).toEqual({
+    provider: "deepseek",
+    base_url: "https://api.deepseek.com/anthropic",
+    api_key: "",
+    models: { opus: "deepseek-flash[1m]", sonnet: "deepseek-v5" },
+  });
+  w.unmount();
+});
+
+const stateOf = (w: W, label: string) =>
+  claudeRow(w)
+    .findAll(".acct")
+    .find((a) => a.find("b").text() === label)!;
+
+it("In use vs Idle: an account holding roles is in use even when another is active", async () => {
+  agentsBody.agents[0].accounts = [
+    acct({ roles: ["foreman", "architect", "inspector"] }),
+    dsAcct({ roles: ["builder", "chat"] }),
+  ];
+  const { w } = await render();
+  const ds = stateOf(w, "DeepSeek");
+  expect(ds.attributes("data-state")).toBe("in-use");
+  expect(ds.text()).toContain("In use");
+  expect(ds.text()).not.toContain("Idle");
+  expect(stateOf(w, "System default").attributes("data-state")).toBe("in-use");
+  w.unmount();
+});
+
+it("the active account covering unassigned roles keeps the unassigned wording", async () => {
+  agentsBody.agents[0].accounts = [
+    acct({ roles: [] }),
+    dsAcct({ roles: ["builder"] }),
+  ];
+  const { w } = await render();
+  const sys = stateOf(w, "System default");
+  expect(sys.attributes("data-state")).toBe("in-use");
+  expect(sys.text()).toContain("In use · unassigned roles");
+  w.unmount();
+});
+
+it("an account serving nothing is Idle and keeps its buttons enabled", async () => {
+  agentsBody.agents[0].accounts = [
+    acct({
+      active: true,
+      roles: ["foreman", "architect", "builder", "inspector", "chat"],
+    }),
+    dsAcct({ roles: [] }),
+  ];
+  const { w } = await render();
+  const ds = stateOf(w, "DeepSeek");
+  expect(ds.attributes("data-state")).toBe("idle");
+  expect(ds.text()).toContain("Idle");
+  expect(ds.classes()).toContain("idle");
+  expect(
+    ds.find('[aria-label="Use DeepSeek"]').attributes("disabled"),
+  ).toBeUndefined();
+  expect(stateOf(w, "System default").attributes("data-state")).toBe("in-use");
+  w.unmount();
+});

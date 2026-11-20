@@ -7,6 +7,8 @@ import {
   api,
   type AgentAccount,
   type AgentInfo,
+  type ApiModels,
+  type ApiProvider,
   type NewAccount,
 } from "../../types/api";
 import { resetsIn } from "../../composables/presentation";
@@ -30,6 +32,54 @@ const genericLogin: Record<string, string> = {
 };
 const adding = ref(false),
   label = ref("");
+const isClaude = computed(() => props.agent.id === "claude");
+const presets: Record<
+  ApiProvider,
+  { name: string; base_url: string; models: Required<ApiModels> }
+> = {
+  deepseek: {
+    name: "DeepSeek",
+    base_url: "https://api.deepseek.com/anthropic",
+    models: {
+      opus: "deepseek-flash[1m]",
+      sonnet: "deepseek-v4-pro",
+      haiku: "deepseek-chat",
+    },
+  },
+  glm: {
+    name: "GLM (Z.ai)",
+    base_url: "https://api.z.ai/api/anthropic",
+    models: {
+      opus: "glm-5.3[1m]",
+      sonnet: "glm-5.3[1m]",
+      haiku: "glm-5.3-flash[1m]",
+    },
+  },
+  custom: {
+    name: "Custom",
+    base_url: "",
+    models: { opus: "", sonnet: "", haiku: "" },
+  },
+};
+const modelSlots = ["opus", "sonnet", "haiku"] as const;
+const authMode = ref<"login" | "api">("login");
+const editingId = ref<string | null>(null);
+const provider = ref<ApiProvider>("deepseek");
+const baseUrl = ref("");
+const apiKey = ref("");
+const models = ref<Required<ApiModels>>({ ...presets.deepseek.models });
+const formError = ref("");
+function applyPreset(p: ApiProvider) {
+  provider.value = p;
+  baseUrl.value = presets[p].base_url;
+  models.value = { ...presets[p].models };
+}
+function resetForm() {
+  adding.value = false;
+  editingId.value = null;
+  apiKey.value = "";
+  formError.value = "";
+}
 const login = ref<{ accountId: string; command: string; env: string } | null>(
   null,
 );
@@ -42,7 +92,9 @@ async function run(action: () => Promise<unknown>) {
     emit("changed");
     return true;
   } catch (e) {
-    emit("error", e instanceof Error ? e.message : String(e));
+    const msg = e instanceof Error ? e.message : String(e);
+    if (adding.value) formError.value = msg;
+    else emit("error", msg);
     return false;
   } finally {
     busy.value = false;
@@ -58,14 +110,73 @@ async function toggle(el: HTMLInputElement) {
 async function startAdd() {
   menu.value = false;
   adding.value = true;
+  editingId.value = null;
   login.value = null;
   label.value = "";
+  authMode.value = "login";
+  formError.value = "";
+  apiKey.value = "";
+  applyPreset("deepseek");
   await nextTick();
   document.getElementById(`acct-label-${props.agent.id}`)?.focus();
 }
-async function createAccount() {
+function startEdit(a: AgentAccount) {
+  if (!a.api) return;
+  adding.value = true;
+  editingId.value = a.id;
+  login.value = null;
+  label.value = a.label;
+  authMode.value = "api";
+  formError.value = "";
+  apiKey.value = "";
+  provider.value = a.api.provider;
+  baseUrl.value = a.api.base_url;
+  models.value = {
+    opus: a.api.models.opus ?? "",
+    sonnet: a.api.models.sonnet ?? "",
+    haiku: a.api.models.haiku ?? "",
+  };
+  void nextTick(() =>
+    document.getElementById(`acct-base-${props.agent.id}`)?.focus(),
+  );
+}
+function apiBody() {
+  const m: ApiModels = {};
+  for (const k of modelSlots) {
+    const v = models.value[k].trim();
+    if (v) m[k] = v;
+  }
+  return {
+    provider: provider.value,
+    base_url: baseUrl.value.trim(),
+    api_key: apiKey.value,
+    models: m,
+  };
+}
+async function saveAccount() {
   const name = label.value.trim();
   if (!name) return;
+  formError.value = "";
+  if (editingId.value) {
+    const ok = await run(() =>
+      api.put(`${base.value}/accounts/${editingId.value}/api`, apiBody()),
+    );
+    if (ok) resetForm();
+    return;
+  }
+  if (isClaude.value && authMode.value === "api") {
+    const ok = await run(() =>
+      api.post<NewAccount>(`${base.value}/accounts`, {
+        label: name,
+        api: apiBody(),
+      }),
+    );
+    if (ok) resetForm();
+    return;
+  }
+  await createAccount(name);
+}
+async function createAccount(name: string) {
   await run(async () => {
     const res = await api.post<NewAccount>(`${base.value}/accounts`, {
       label: name,
@@ -116,6 +227,22 @@ const chipRoles = computed(() =>
   ),
 );
 const holds = (a: AgentAccount, r: string) => (a.roles ?? []).includes(r);
+const unassigned = computed(() =>
+  chipRoles.value.filter((r) => !props.agent.accounts.some((x) => holds(x, r))),
+);
+const coversUnassigned = (a: AgentAccount) =>
+  a.active && (chipRoles.value.length === 0 || unassigned.value.length > 0);
+const holdsRole = (a: AgentAccount) => chipRoles.value.some((r) => holds(a, r));
+const inUse = (a: AgentAccount) => holdsRole(a) || coversUnassigned(a);
+const mappedLine = (a: AgentAccount) =>
+  a.api
+    ? [
+        a.api.host,
+        ...modelSlots
+          .filter((k) => a.api!.models[k])
+          .map((k) => `${k}→${a.api!.models[k]}`),
+      ].join(" · ")
+    : "";
 const heldElsewhere = (a: AgentAccount, r: string) =>
   holds(a, r)
     ? undefined
@@ -292,7 +419,8 @@ const showBars = computed(() => {
         v-for="a in agent.accounts"
         :key="a.id"
         class="acct"
-        :class="{ active: a.active }"
+        :class="{ active: a.active, idle: !inUse(a) }"
+        :data-state="inUse(a) ? 'in-use' : 'idle'"
       >
         <div class="grow">
           <b>{{ a.label }}</b>
@@ -303,6 +431,9 @@ const showBars = computed(() => {
               · {{ a.status_note }}</template
             ></span
           >
+          <span v-if="a.api" class="help mono" data-test="mapped-models">{{
+            mappedLine(a)
+          }}</span>
         </div>
         <button
           v-if="canWrite && a.status === 'signed_out' && a !== signInTarget"
@@ -313,17 +444,28 @@ const showBars = computed(() => {
         >
           Sign in
         </button>
-        <span v-if="a.active" class="pill green"
+        <span v-if="!inUse(a)" class="pill idle-pill">Idle</span>
+        <span v-else-if="coversUnassigned(a)" class="pill green"
           >In use · unassigned roles</span
         >
+        <span v-else class="pill green">In use</span>
         <button
-          v-else-if="canWrite"
+          v-if="canWrite && !a.active"
           class="btn small"
           :aria-label="`Use ${a.label}`"
           :disabled="busy"
           @click="use(a)"
         >
           Use
+        </button>
+        <button
+          v-if="canWrite && a.api"
+          class="btn small"
+          :aria-label="`Edit ${a.label}`"
+          :disabled="busy"
+          @click="startEdit(a)"
+        >
+          Edit
         </button>
         <button
           v-if="canWrite && !a.system"
@@ -364,7 +506,7 @@ const showBars = computed(() => {
       v-if="adding"
       class="inline-form"
       data-test="add-account"
-      @submit.prevent="createAccount"
+      @submit.prevent="saveAccount"
     >
       <div class="form-group">
         <label :for="`acct-label-${agent.id}`">Name for this account</label>
@@ -373,14 +515,96 @@ const showBars = computed(() => {
           v-model="label"
           maxlength="60"
           placeholder="Personal"
+          :readonly="!!editingId"
           required
         />
       </div>
+      <div
+        v-if="isClaude && !editingId"
+        class="auth-switch"
+        role="group"
+        aria-label="How this account signs in"
+      >
+        <button
+          type="button"
+          class="role-chip"
+          :aria-pressed="authMode === 'login'"
+          @click="authMode = 'login'"
+        >
+          Subscription login
+        </button>
+        <button
+          type="button"
+          class="role-chip"
+          :aria-pressed="authMode === 'api'"
+          @click="authMode = 'api'"
+        >
+          API key
+        </button>
+      </div>
+      <template v-if="isClaude && authMode === 'api'">
+        <div class="form-group">
+          <label :for="`acct-provider-${agent.id}`">Provider</label>
+          <select
+            :id="`acct-provider-${agent.id}`"
+            :value="provider"
+            @change="
+              applyPreset(
+                ($event.target as HTMLSelectElement).value as ApiProvider,
+              )
+            "
+          >
+            <option v-for="(p, k) in presets" :key="k" :value="k">
+              {{ p.name }}
+            </option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label :for="`acct-base-${agent.id}`">Base URL</label>
+          <input
+            :id="`acct-base-${agent.id}`"
+            v-model="baseUrl"
+            type="url"
+            placeholder="https://api.example.com/anthropic"
+            autocomplete="off"
+            required
+          />
+        </div>
+        <div class="form-group">
+          <label :for="`acct-key-${agent.id}`">API key</label>
+          <input
+            :id="`acct-key-${agent.id}`"
+            v-model="apiKey"
+            type="password"
+            autocomplete="off"
+            :placeholder="
+              editingId
+                ? 'Leave blank to keep the current key'
+                : 'Paste the key'
+            "
+            :required="!editingId"
+          />
+        </div>
+        <div class="model-fields">
+          <div v-for="k in modelSlots" :key="k" class="form-group">
+            <label :for="`acct-model-${k}-${agent.id}`">{{
+              k[0].toUpperCase() + k.slice(1)
+            }}</label>
+            <input
+              :id="`acct-model-${k}-${agent.id}`"
+              v-model="models[k]"
+              autocomplete="off"
+              placeholder="Model name"
+            />
+          </div>
+        </div>
+      </template>
+      <p v-if="formError" class="help bad" role="alert">{{ formError }}</p>
       <div class="row">
         <button class="btn primary small" type="submit" :disabled="busy">
-          Create account
+          {{ editingId ? "Save changes" : "Create account" }}
         </button>
-        <button class="btn small" type="button" @click="adding = false">
+        <button class="btn small" type="button" @click="resetForm">
           Cancel
         </button>
       </div>

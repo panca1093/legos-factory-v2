@@ -12,4 +12,11 @@ type AgentAccount struct {
 	HomeDir   string
 	Active    bool
 	CreatedAt time.Time
+
+	// An API-key account talks to an Anthropic-compatible provider; the key is sealed and never leaves the usecase.
+	APIProvider  string
+	APIBaseURL   string
+	APIKeySealed []byte
+	APIModels    string // JSON {opus,sonnet,haiku}
+	APIKeyHeader string // auth_token | api_key: which env var carries the key
 }

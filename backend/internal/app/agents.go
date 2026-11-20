@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -56,10 +57,14 @@ func (u unavailable) Name() string { return u.name }
 
 // catalogs caches each agent's model list per account, so a run never waits on a probe it has already done.
 type catalogs struct {
-	hs    *harnessSet
-	mu    sync.Mutex
-	m     map[string]*catalogEntry
-	locks map[string]*sync.Mutex
+	hs *harnessSet
+	// probe lists an agent's models under an account env; nil asks the agent itself.
+	probe func(ctx context.Context, id string, env, args []string) ([]agent.Model, error)
+	// allowed lists the workspace's allowed model refs; a folded family prefers one of them.
+	allowed func(ctx context.Context) []string
+	mu      sync.Mutex
+	m       map[string]*catalogEntry
+	locks   map[string]*sync.Mutex
 }
 
 type catalogEntry struct {
@@ -69,21 +74,42 @@ type catalogEntry struct {
 
 const catalogTTL = 10 * time.Minute
 
-func (c *catalogs) key(id, user string) string { return id + "\x00" + user }
+func (c *catalogs) key(id, user, sig string) string { return id + "\x00" + user + "\x00" + sig }
 
 // peek returns the cached list without fetching.
 func (c *catalogs) peek(id, user string) []model.ModelInfo {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if e := c.m[c.key(id, user)]; e != nil {
+	if e := c.m[c.key(id, user, "")]; e != nil {
 		return e.models
 	}
 	return nil
 }
 
-// list returns the agent's models under the user's account, fetching when stale. A failed fetch keeps the stale list.
-func (c *catalogs) list(ctx context.Context, agents *usecase.Agents, id, user string, fresh bool) ([]model.ModelInfo, error) {
-	k := c.key(id, user)
+// list returns the agent's models under the account serving role for the user (the active one when role is empty), fetching
+// when stale. A failed fetch keeps the stale list. The key holds the account and its model map, so switching or editing it
+// never serves the old list.
+func (c *catalogs) list(ctx context.Context, agents *usecase.Agents, id, user string, role model.AgentRole, fresh bool) ([]model.ModelInfo, error) {
+	api, err := agents.RoleAPI(ctx, id, user, role)
+	if err != nil {
+		return nil, err
+	}
+	var allowed map[string]bool
+	if c.allowed != nil && api.Models != nil {
+		allowed = map[string]bool{}
+		for _, a := range c.allowed(ctx) {
+			if a = strings.TrimSpace(a); a != "" {
+				allowed[a] = true
+			}
+		}
+		keys := make([]string, 0, len(allowed))
+		for a := range allowed {
+			keys = append(keys, a)
+		}
+		sort.Strings(keys)
+		api.Sig += "\x00" + strings.Join(keys, "\x00")
+	}
+	k := c.key(id, user, api.Sig)
 	c.mu.Lock()
 	if c.locks == nil {
 		c.locks = map[string]*sync.Mutex{}
@@ -103,17 +129,23 @@ func (c *catalogs) list(ctx context.Context, agents *usecase.Agents, id, user st
 	if e != nil && !fresh && time.Since(e.at) < catalogTTL {
 		return e.models, nil
 	}
-	h, err := c.hs.get(id)
-	if err != nil {
-		return nil, err
+	probe := c.probe
+	if probe == nil {
+		h, err := c.hs.get(id)
+		if err != nil {
+			return nil, err
+		}
+		probe = func(ctx context.Context, _ string, env, args []string) ([]agent.Model, error) {
+			return h.ModelsFor(ctx, env, args)
+		}
 	}
-	env, args, err := agents.RunEnv(ctx, id, user, "")
+	env, args, err := agents.RunEnv(ctx, id, user, role)
 	if err != nil {
 		return nil, err
 	}
 	pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	ms, err := h.ModelsFor(pctx, env, args)
+	ms, err := probe(pctx, id, env, args)
 	if err != nil {
 		if e != nil {
 			return e.models, nil
@@ -123,6 +155,9 @@ func (c *catalogs) list(ctx context.Context, agents *usecase.Agents, id, user st
 	out := make([]model.ModelInfo, 0, len(ms))
 	for _, m := range ms {
 		out = append(out, model.ModelInfo{ProviderID: m.ProviderID, ModelID: m.ModelID, Name: m.Name, Harness: id})
+	}
+	if api.Models != nil {
+		out = usecase.FoldModels(*api.Models, out, allowed)
 	}
 	c.mu.Lock()
 	c.m[k] = &catalogEntry{at: time.Now(), models: out}

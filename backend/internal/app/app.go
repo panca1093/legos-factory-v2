@@ -105,8 +105,19 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		}
 		agents.Commands = map[string][]string{defaultAgent: cfg.ACPCommand}
 	}
+	if secrets != nil {
+		agents.Secrets = secrets
+		if err := agents.MigrateAPIAccounts(context.Background()); err != nil {
+			log.Warn("API-key account migration incomplete", "err", err)
+		}
+	}
 	hs := &harnessSet{agents: agents, probe: filepath.Join(cfg.DataDir, "agent-probe")}
-	cats := &catalogs{hs: hs}
+	cats := &catalogs{hs: hs, allowed: func(ctx context.Context) []string {
+		if s, err := settingsRepo.Get(ctx); err == nil {
+			return s.AllowedModels
+		}
+		return nil
+	}}
 	ws := &usecase.WorkspaceSettings{Store: settingsRepo, EnvJevKey: cfg.TypeSafeKey, DefaultAgent: defaultAgent, DefaultWorkers: cfg.MaxConcurrentRuns}
 	if secrets != nil {
 		ws.Secrets = secrets
@@ -169,7 +180,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		if agents.Ready(context.Background(), id) != nil {
 			return nil
 		}
-		ms, _ := cats.list(context.Background(), agents, id, wo.CreatedBy, false)
+		ms, _ := cats.list(context.Background(), agents, id, wo.CreatedBy, role, false)
 		return refs(ms)
 	}
 	modelFor := func(role model.AgentRole, wo *model.WorkOrder) (string, string) {
@@ -278,7 +289,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	chatAgent := func() string { return roleAgent(model.AgentChat, nil) }
 	if acpMode {
 		listModels = func(ctx context.Context) ([]model.ModelInfo, error) {
-			return cats.list(ctx, agents, chatAgent(), usecase.ChatUser(ctx), false)
+			return cats.list(ctx, agents, chatAgent(), usecase.ChatUser(ctx), model.AgentChat, false)
 		}
 		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) {
 			id := c.QueryParam("agent")
@@ -292,7 +303,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			if err := agents.Ready(c.Request().Context(), id); err != nil {
 				return nil, err
 			}
-			return cats.list(c.Request().Context(), agents, id, uid, false)
+			return cats.list(c.Request().Context(), agents, id, uid, model.AgentRole(c.QueryParam("role")), false)
 		}
 	} else {
 		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) { return listModels(c.Request().Context()) }
@@ -327,7 +338,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		id := chatAgent()
 		var cat []string
 		if agents.Ready(ctx, id) == nil {
-			ms, _ := cats.list(ctx, agents, id, usecase.ChatUser(ctx), false)
+			ms, _ := cats.list(ctx, agents, id, usecase.ChatUser(ctx), model.AgentChat, false)
 			cat = refs(ms)
 		}
 		return usecase.ResolveAgentModel(model.AgentChat, &model.WorkOrder{}, s, cat)
@@ -337,6 +348,13 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		Settings: settingsRepo, Usage: usageTracker, Harness: chatH, MCP: mcpServers,
 		Runs: runRepo, MCPServers: mcpServers.Store, DataDir: cfg.DataDir,
 		Models: listModels,
+		ModelKey: func(ctx context.Context) string {
+			r, _ := agents.RoleAPI(ctx, chatAgent(), usecase.ChatUser(ctx), model.AgentChat)
+			return r.Sig
+		},
+		Served: func(ctx context.Context, userID, modelRef string) (string, string) {
+			return agents.Served(ctx, chatAgent(), userID, model.AgentChat, modelRef)
+		},
 		Default:     func(ctx context.Context) string { return chatModel(ctx, model.AgentArchitect) },
 		RepoDefault: func(ctx context.Context) string { return chatModel(ctx, model.AgentBuilder) },
 		Runner:      chatRunner,
@@ -373,7 +391,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			s, _ := ws.Get(ctx)
 			var cat []string
 			if agents.Ready(ctx, id) == nil {
-				ms, _ := cats.list(ctx, agents, id, userID, false)
+				ms, _ := cats.list(ctx, agents, id, userID, model.AgentInspector, false)
 				cat = refs(ms)
 			}
 			p, m := usecase.SplitModelRef(usecase.ResolveAgentModel(model.AgentInspector, &model.WorkOrder{}, s, cat))
@@ -443,7 +461,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 				s, _ := ws.Get(ctx)
 				var cat []string
 				if agents.Ready(ctx, chatAgent()) == nil {
-					ms, _ := cats.list(ctx, agents, chatAgent(), userID, false)
+					ms, _ := cats.list(ctx, agents, chatAgent(), userID, model.AgentChat, false)
 					cat = refs(ms)
 				}
 				ref = usecase.ResolveAgentModel(model.AgentBuilder, &model.WorkOrder{}, s, cat)
@@ -463,7 +481,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 
 	warm := func() {
 		if acpMode && agents.Ready(context.Background(), defaultAgent) == nil {
-			_, _ = cats.list(context.Background(), agents, defaultAgent, "", false)
+			_, _ = cats.list(context.Background(), agents, defaultAgent, "", "", false)
 		}
 	}
 	return &App{warm: warm, Cfg: cfg, DBCloser: db.Close, Server: srv, Sched: sched, settings: settingsRepo, log: log}, nil

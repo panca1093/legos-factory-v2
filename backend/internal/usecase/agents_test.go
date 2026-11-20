@@ -59,7 +59,7 @@ func TestAgentAccountsAreIsolatedPerUser(t *testing.T) {
 	a, _ := newAgents(t)
 	ctx := context.Background()
 	u1, u2 := &model.User{ID: "u1"}, &model.User{ID: "u2"}
-	n, err := a.CreateAccount(ctx, u1, "claude", "Work")
+	n, err := a.CreateAccount(ctx, u1, "claude", "Work", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestAgentAccountEnvPerAgent(t *testing.T) {
 	ctx := context.Background()
 	u := &model.User{ID: "u1"}
 	for agent, want := range map[string]string{"codex": "CODEX_HOME=", "opencode": "XDG_DATA_HOME="} {
-		n, err := a.CreateAccount(ctx, u, agent, "x")
+		n, err := a.CreateAccount(ctx, u, agent, "x", nil)
 		if err != nil || !strings.Contains(n.EnvHint, want) {
 			t.Fatalf("%s: %v %q", agent, err, n.EnvHint)
 		}
@@ -139,10 +139,10 @@ func TestAgentAccountEnvPerAgent(t *testing.T) {
 			t.Fatalf("codex env %v args %v", env, args)
 		}
 	}
-	if _, err := a.CreateAccount(ctx, u, "nope", "x"); !errors.Is(err, model.ErrAgentUnknown) {
+	if _, err := a.CreateAccount(ctx, u, "nope", "x", nil); !errors.Is(err, model.ErrAgentUnknown) {
 		t.Fatal(err)
 	}
-	if _, err := a.CreateAccount(ctx, u, "claude", "  "); !errors.Is(err, ErrInvalid) {
+	if _, err := a.CreateAccount(ctx, u, "claude", "  ", nil); !errors.Is(err, ErrInvalid) {
 		t.Fatal(err)
 	}
 }
@@ -187,7 +187,7 @@ func TestStatusIsCachedAndEnvScopedToAccount(t *testing.T) {
 	if got := ft.runs.Load(); got != 3 {
 		t.Fatalf("status commands = %d, want 3", got)
 	}
-	n, _ := a.CreateAccount(ctx, u, "claude", "w")
+	n, _ := a.CreateAccount(ctx, u, "claude", "w", nil)
 	acc, err := a.Refresh(ctx, u, "claude", n.Account.ID)
 	if err != nil || acc.Status != "signed_in" || acc.Who != "" || acc.Plan != "max_5x" {
 		t.Fatalf("%+v %v", acc, err)
@@ -289,7 +289,7 @@ func TestClaudeUsageIsReadAndNeverLeaksToken(t *testing.T) {
 	}
 
 	// a scoped account reads the scoped Keychain item
-	n, _ := a.CreateAccount(ctx, u, "claude", "w")
+	n, _ := a.CreateAccount(ctx, u, "claude", "w", nil)
 	_, _ = a.Refresh(ctx, u, "claude", n.Account.ID)
 	scoped := false
 	for svc := range services {
@@ -362,7 +362,7 @@ func apiAccount(t *testing.T, a *Agents, settings string) (*model.User, string) 
 	t.Helper()
 	ctx := context.Background()
 	u := &model.User{ID: "u1"}
-	n, err := a.CreateAccount(ctx, u, "claude", "DeepSeek")
+	n, err := a.CreateAccount(ctx, u, "claude", "DeepSeek", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestClaudeAPIKeyAccountLiftsEnvAndReportsSignedIn(t *testing.T) {
 	u, id := apiAccount(t, a, deepseekSettings)
 
 	env, _, err := a.RunEnv(ctx, "claude", "u1", "")
-	if err != nil || len(env) != 4 || env[1] != "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic" || env[2] != "ANTHROPIC_AUTH_TOKEN=sk-secret-1" || env[3] != "ANTHROPIC_API_KEY=" {
+	if err != nil || len(env) != 7 || env[1] != "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic" || env[2] != "ANTHROPIC_AUTH_TOKEN=sk-secret-1" || env[3] != "ANTHROPIC_API_KEY=" || env[4] != "ANTHROPIC_DEFAULT_OPUS_MODEL=x" {
 		t.Fatalf("env %v err %v", env, err)
 	}
 	list, _ := a.List(ctx, u)
@@ -511,8 +511,8 @@ func TestRunEnvResolvesRoleAccount(t *testing.T) {
 	a, _ := newAgents(t)
 	ctx := context.Background()
 	u := &model.User{ID: "u1"}
-	work, _ := a.CreateAccount(ctx, u, "claude", "Work")
-	api, _ := a.CreateAccount(ctx, u, "claude", "DeepSeek")
+	work, _ := a.CreateAccount(ctx, u, "claude", "Work", nil)
+	api, _ := a.CreateAccount(ctx, u, "claude", "DeepSeek", nil)
 	apiHome := filepath.Join(a.DataDir, "accounts", "u1", "claude", api.Account.ID)
 	if err := os.WriteFile(filepath.Join(apiHome, "settings.json"), []byte(deepseekSettings), 0o600); err != nil {
 		t.Fatal(err)

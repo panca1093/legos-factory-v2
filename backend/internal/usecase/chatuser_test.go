@@ -33,3 +33,23 @@ func TestHarnessTakesMCP(t *testing.T) {
 		t.Fatal("harnesses that start no MCP servers must not be counted as using them")
 	}
 }
+
+func TestChatModelListCacheFollowsModelKey(t *testing.T) {
+	key, fetched := "acc1", 0
+	c := &Chat{ModelKey: func(context.Context) string { return key },
+		Models: func(context.Context) ([]model.ModelInfo, error) {
+			fetched++
+			return []model.ModelInfo{{ProviderID: "p", ModelID: key}}, nil
+		}}
+	ctx := WithChatUser(context.Background(), "u1")
+	for _, k := range []string{"acc1", "acc1", "acc2"} {
+		key = k
+		l, err := c.ModelList(ctx)
+		if err != nil || l.Models[1].ModelID != k {
+			t.Fatalf("%s: %+v %v", k, l, err)
+		}
+	}
+	if fetched != 2 {
+		t.Fatalf("fetched %d times", fetched)
+	}
+}

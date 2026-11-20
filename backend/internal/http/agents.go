@@ -46,12 +46,13 @@ func (s *Server) handleCreateAgentAccount(c echo.Context) error {
 		return s.agentsUnavailable(c)
 	}
 	var req struct {
-		Label string `json:"label"`
+		Label string             `json:"label"`
+		API   *usecase.APIInput `json:"api"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
 	}
-	out, err := s.Agents.CreateAccount(c.Request().Context(), currentUser(c), c.Param("agent"), req.Label)
+	out, err := s.Agents.CreateAccount(c.Request().Context(), currentUser(c), c.Param("agent"), req.Label, req.API)
 	if err != nil {
 		return mapAgentError(c, err)
 	}
@@ -92,6 +93,21 @@ func (s *Server) handleRefreshAgentAccount(c echo.Context) error {
 		return s.agentsUnavailable(c)
 	}
 	acc, err := s.Agents.Refresh(c.Request().Context(), currentUser(c), c.Param("agent"), c.Param("aid"))
+	if err != nil {
+		return mapAgentError(c, err)
+	}
+	return c.JSON(http.StatusOK, acc)
+}
+
+func (s *Server) handleSetAgentAccountAPI(c echo.Context) error {
+	if s.Agents == nil {
+		return s.agentsUnavailable(c)
+	}
+	var req usecase.APIInput
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
+	}
+	acc, err := s.Agents.SetAccountAPI(c.Request().Context(), currentUser(c), c.Param("agent"), c.Param("aid"), req)
 	if err != nil {
 		return mapAgentError(c, err)
 	}

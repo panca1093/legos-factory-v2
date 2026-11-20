@@ -102,6 +102,8 @@ type AgentAccountStore interface {
 	Active(ctx context.Context, userID, agent string) (*model.AgentAccount, error)
 	Activate(ctx context.Context, userID, agent, id string) error
 	Delete(ctx context.Context, userID, agent, id string) error
+	SetAPI(ctx context.Context, userID, agent, id, provider, baseURL string, sealed []byte, models, keyHeader string) error
+	ListAll(ctx context.Context, agent string) ([]model.AgentAccount, error)
 	RoleAccounts(ctx context.Context, userID, agent string) (map[string]string, error)
 	SetRoleAccounts(ctx context.Context, userID, agent, accountID string, roles []string) error
 	Enabled(ctx context.Context, agent string) (bool, error)
@@ -127,6 +129,8 @@ type Agents struct {
 	// CodexLimits reads the rate limits of the codex account whose home is home ("" is the default login).
 	CodexLimits func(ctx context.Context, home string) (CodexLimits, error)
 	Now         func() time.Time
+	// Secrets seals API keys; nil means API-key accounts cannot be stored.
+	Secrets Sealer
 
 	StatusTTL, UsageTTL time.Duration
 	StatusTimeout       time.Duration // 0 means 12s
@@ -185,6 +189,7 @@ type AccountView struct {
 	StatusNote   string        `json:"status_note,omitempty"`
 	LoginCommand string        `json:"login_command"`
 	Roles        []string      `json:"roles"`
+	API          *APIView      `json:"api,omitempty"`
 }
 
 type AgentView struct {
@@ -288,7 +293,7 @@ func (a *Agents) RunEnv(ctx context.Context, id, userID string, role model.Agent
 	}
 	env = spec.accountEnv(acc.HomeDir)
 	if spec.ID == "claude" {
-		lift, _, err := claudeAPIEnv(acc.HomeDir)
+		lift, err := a.claudeAccountEnv(*acc)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w: account %q: %w", model.ErrPermanent, acc.Label, err)
 		}
@@ -349,13 +354,20 @@ func claudeAPIEnv(home string) (env []string, host string, err error) {
 		// an empty value overrides the backend's own key, which os/exec would otherwise hand to this provider
 		env = append(env, k+"="+val(k))
 	}
-	if u, err := url.Parse(base); err == nil {
-		host = u.Host
+	m := APIModels{Opus: val(apiModelVars[0]), Sonnet: val(apiModelVars[1]), Haiku: val(apiModelVars[2])}.filled()
+	for i, v := range []string{m.Opus, m.Sonnet, m.Haiku} {
+		if v != "" {
+			env = append(env, apiModelVars[i]+"="+v)
+		}
 	}
-	if host == "" {
-		host = base[strings.LastIndex(base, "@")+1:]
+	return env, hostOf(base), nil
+}
+
+func hostOf(base string) string {
+	if u, err := url.Parse(base); err == nil && u.Host != "" {
+		return u.Host
 	}
-	return env, host, nil
+	return base[strings.LastIndex(base, "@")+1:]
 }
 
 // apiKeyStatus is the status of a Claude account that talks to an Anthropic-compatible provider; ok is false for a regular login.
@@ -363,13 +375,16 @@ func apiKeyStatus(spec AgentSpec, acc model.AgentAccount) (accountStatus, bool) 
 	if spec.ID != "claude" || acc.ID == SystemAccountID {
 		return accountStatus{}, false
 	}
+	if acc.APIBaseURL != "" {
+		return accountStatus{Status: "signed_in", Plan: "API key · " + hostOf(acc.APIBaseURL), api: true}, true
+	}
 	env, host, err := claudeAPIEnv(acc.HomeDir)
 	if err != nil {
 		return accountStatus{Status: "unknown", Note: strings.TrimPrefix(err.Error(), "the account's "), api: true}, true
 	}
 	keys := 0
-	for _, e := range env[min(1, len(env)):] {
-		if !strings.HasSuffix(e, "=") {
+	for _, e := range env {
+		if (strings.HasPrefix(e, "ANTHROPIC_AUTH_TOKEN=") || strings.HasPrefix(e, "ANTHROPIC_API_KEY=")) && !strings.HasSuffix(e, "=") {
 			keys++
 		}
 	}
@@ -450,6 +465,7 @@ func (a *Agents) view(ctx context.Context, userID string, spec AgentSpec, fresh 
 func (a *Agents) accountView(ctx context.Context, spec AgentSpec, acc model.AgentAccount, installed, fresh bool) AccountView {
 	av := AccountView{ID: acc.ID, Label: acc.Label, System: acc.ID == SystemAccountID, Active: acc.Active, Status: "unknown"}
 	av.LoginCommand, _ = spec.loginLine(a.home(acc))
+	av.API = apiView(acc)
 	if !installed {
 		return av
 	}
@@ -900,8 +916,9 @@ func (s AgentSpec) loginLine(home string) (login, envHint string) {
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
-// CreateAccount makes the account's private home and returns the command that signs it in.
-func (a *Agents) CreateAccount(ctx context.Context, u *model.User, agent, label string) (*NewAccount, error) {
+// CreateAccount makes the account's private home and returns the command that signs it in. With api (claude only) the account
+// is an API-key account and needs no login.
+func (a *Agents) CreateAccount(ctx context.Context, u *model.User, agent, label string, api *APIInput) (*NewAccount, error) {
 	spec, err := a.spec(agent)
 	if err != nil {
 		return nil, err
@@ -911,6 +928,11 @@ func (a *Agents) CreateAccount(ctx context.Context, u *model.User, agent, label 
 		return nil, fmt.Errorf("%w: label is required and at most 60 characters", ErrInvalid)
 	}
 	acc := &model.AgentAccount{ID: "acc_" + uuid.NewString()[:12], UserID: u.ID, Agent: agent, Label: label}
+	if api != nil {
+		if err := a.applyAPI(acc, spec, *api); err != nil {
+			return nil, err
+		}
+	}
 	acc.HomeDir = filepath.Join(a.DataDir, "accounts", safeDirName(u.ID), agent, acc.ID)
 	if err := mkPrivateDirs(a.DataDir, acc.HomeDir); err != nil {
 		return nil, fmt.Errorf("could not create the account directory: %w", err)
@@ -926,6 +948,11 @@ func (a *Agents) CreateAccount(ctx context.Context, u *model.User, agent, label 
 	if err := a.Store.Create(ctx, acc); err != nil {
 		_ = os.RemoveAll(acc.HomeDir)
 		return nil, err
+	}
+	if api != nil {
+		v := a.accountView(ctx, spec, *acc, true, false)
+		v.Roles = []string{}
+		return &NewAccount{Account: v}, nil
 	}
 	login, envHint := spec.loginLine(acc.HomeDir)
 	return &NewAccount{
