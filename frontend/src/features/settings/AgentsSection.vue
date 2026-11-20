@@ -51,9 +51,12 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text);
           Agents found on this machine and the account each one signs in with.
         </p>
       </div>
-      <button class="btn small" type="button" @click="load">
-        <RefreshCw class="icon" aria-hidden="true" /> Refresh
-      </button>
+      <div class="sec-actions">
+        <span class="scope personal">Yours · only you see these</span>
+        <button class="btn small" type="button" @click="load">
+          <RefreshCw class="icon" aria-hidden="true" /> Refresh
+        </button>
+      </div>
     </div>
     <p v-if="error" class="form-error" role="alert">{{ error }}</p>
     <p v-if="loading" class="help" aria-busy="true">Looking for agents…</p>

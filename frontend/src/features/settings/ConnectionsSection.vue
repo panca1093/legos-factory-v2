@@ -70,14 +70,17 @@ async function mcpAdded() {
         <h2>Connections</h2>
         <p>One account per provider. Every project on that provider uses it.</p>
       </div>
-      <button
-        v-if="session.isAdmin && !addingMcp"
-        class="btn small"
-        type="button"
-        @click="addingMcp = true"
-      >
-        Add MCP server
-      </button>
+      <div class="sec-actions">
+        <span class="scope">Workspace</span>
+        <button
+          v-if="session.isAdmin && !addingMcp"
+          class="btn small"
+          type="button"
+          @click="addingMcp = true"
+        >
+          Add MCP server
+        </button>
+      </div>
     </div>
     <p v-if="loadError" class="notice" role="alert">{{ loadError }}</p>
     <p

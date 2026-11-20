@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { useRoute } from "vue-router";
 import { Lock, TriangleAlert } from "lucide-vue-next";
 import { useFactory } from "../../stores/factory";
@@ -39,12 +46,62 @@ const target = computed(() => {
   return hash || legacyTabs[String(route.query.tab ?? "")] || "";
 });
 const current = ref("agents");
+// A chosen section stays highlighted while the jump to it settles, even when it cannot reach the top.
+let pinnedUntil = 0;
+function jumpTo(id: string) {
+  current.value = id;
+  pinnedUntil = performance.now() + 600;
+  document.getElementById(id)?.scrollIntoView?.({ block: "start" });
+}
 async function scrollToTarget() {
   await nextTick();
-  if (!target.value) return;
-  current.value = target.value;
-  document.getElementById(target.value)?.scrollIntoView?.({ block: "start" });
+  if (target.value) jumpTo(target.value);
 }
+function select(id: string) {
+  if (id === target.value) jumpTo(id);
+  else current.value = id;
+}
+
+// The current section is the last one whose top passed a third of the viewport; at the bottom, the last section.
+let frame = 0;
+function spy() {
+  frame = 0;
+  if (performance.now() < pinnedUntil) return;
+  const line = window.innerHeight / 3;
+  const atBottom =
+    window.innerHeight + window.scrollY >=
+    document.documentElement.scrollHeight - 2;
+  let id = sections[0].id;
+  for (const s of sections) {
+    const el = document.getElementById(s.id);
+    if (el && (atBottom || el.getBoundingClientRect().top <= line)) id = s.id;
+  }
+  current.value = id;
+}
+function onScroll() {
+  frame ||= requestAnimationFrame(spy);
+}
+onMounted(() => {
+  window.addEventListener("scroll", onScroll, { passive: true });
+  window.addEventListener("resize", onScroll, { passive: true });
+});
+onBeforeUnmount(() => {
+  window.removeEventListener("scroll", onScroll);
+  window.removeEventListener("resize", onScroll);
+  if (frame) cancelAnimationFrame(frame);
+});
+
+// On narrow screens the nav scrolls sideways; keep the current item in view.
+const navEl = ref<HTMLElement>();
+watch(current, async () => {
+  await nextTick();
+  const nav = navEl.value;
+  const a = nav?.querySelector<HTMLElement>('[aria-current="true"]');
+  if (!nav || !a || nav.scrollWidth <= nav.clientWidth) return;
+  const off = a.getBoundingClientRect().left - nav.getBoundingClientRect().left;
+  if (off < 0 || off + a.offsetWidth > nav.clientWidth)
+    nav.scrollLeft += off - 8;
+});
 
 async function load() {
   loading.value = true;
@@ -63,7 +120,8 @@ async function load() {
     )
     .join(" · ");
   loading.value = false;
-  void scrollToTarget();
+  await scrollToTarget();
+  if (!target.value) spy();
 }
 onMounted(load);
 watch(target, scrollToTarget);
@@ -78,27 +136,24 @@ const credentialsOK = computed(
 );
 </script>
 <template>
-  <div class="page-heading">
-    <div>
-      <h1>Settings</h1>
-      <p class="subtitle">
-        Agents and accounts are yours. Connections and Advanced apply to the
-        whole workspace.
-      </p>
-    </div>
-    <span class="pill purple">{{ session.user?.role }}</span>
-  </div>
   <div class="settings-layout">
-    <nav class="settings-nav" aria-label="Settings sections">
-      <RouterLink
-        v-for="s in sections"
-        :key="s.id"
-        :to="{ hash: `#${s.id}` }"
-        :aria-current="current === s.id ? 'true' : undefined"
-        @click="current = s.id"
-        >{{ s.label }}</RouterLink
-      >
-    </nav>
+    <aside class="settings-side">
+      <h1>Settings</h1>
+      <nav ref="navEl" class="settings-nav" aria-label="Settings sections">
+        <RouterLink
+          v-for="s in sections"
+          :key="s.id"
+          :to="{ hash: `#${s.id}` }"
+          :aria-current="current === s.id ? 'true' : undefined"
+          @click="select(s.id)"
+          >{{ s.label }}</RouterLink
+        >
+      </nav>
+      <p class="settings-who">
+        Signed in as
+        <span class="pill purple">{{ session.user?.role }}</span>
+      </p>
+    </aside>
     <div class="detail-content settings-main">
       <div v-if="loading" class="panel empty" aria-busy="true">
         Loading workspace settings…

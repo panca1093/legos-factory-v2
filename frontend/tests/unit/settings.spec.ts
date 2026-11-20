@@ -286,6 +286,55 @@ it("renders Agents, Connections and Advanced with a section nav and none of the 
   w.unmount();
 });
 
+it("highlights the nav item of the section scrolled into view", async () => {
+  vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+    queueMicrotask(() => cb(0));
+    return 1;
+  });
+  const { w } = await render();
+  vi.spyOn(document.documentElement, "scrollHeight", "get").mockReturnValue(
+    5000,
+  );
+  const tops: Record<string, number> = {
+    agents: -900,
+    connections: 100,
+    advanced: 700,
+  };
+  for (const id of Object.keys(tops))
+    vi.spyOn(
+      document.getElementById(id)!,
+      "getBoundingClientRect",
+    ).mockImplementation(() => ({ top: tops[id] }) as DOMRect);
+  const current = () => w.find('nav a[aria-current="true"]').text();
+
+  window.dispatchEvent(new Event("scroll"));
+  await flushPromises();
+  expect(current()).toBe("Connections");
+
+  tops.connections = 900;
+  window.dispatchEvent(new Event("scroll"));
+  await flushPromises();
+  expect(current()).toBe("Agents");
+
+  vi.spyOn(window, "scrollY", "get").mockReturnValue(5000);
+  window.dispatchEvent(new Event("scroll"));
+  await flushPromises();
+  expect(current()).toBe("Advanced");
+
+  await w
+    .findAll("nav a")
+    .find((x) => x.text() === "Connections")!
+    .trigger("click");
+  await flushPromises();
+  window.dispatchEvent(new Event("scroll"));
+  await flushPromises();
+  expect(current()).toBe("Connections");
+
+  const off = vi.spyOn(window, "removeEventListener");
+  w.unmount();
+  expect(off).toHaveBeenCalledWith("scroll", expect.any(Function));
+});
+
 it("gives every checkbox and select an accessible name", async () => {
   const { w } = await render();
   const controls = w.findAll("input[type=checkbox], select");
