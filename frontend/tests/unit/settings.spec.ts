@@ -491,6 +491,23 @@ it("roles table: changing an agent reloads its models and saves the first one", 
   w.unmount();
 });
 
+it("roles table: each role lists the models of the account serving it", async () => {
+  routes["GET /api/v1/models"] = (_b, url) =>
+    json({
+      models: url.includes("role=chat")
+        ? [{ ...models[0], model_id: "opus", name: "deepseek-flash" }]
+        : models,
+    });
+  const { w } = await render();
+  expect(w.findAll("#model-chat option").map((o) => o.text())).toContain(
+    "deepseek-flash",
+  );
+  expect(w.findAll("#model-builder option").map((o) => o.text())).not.toContain(
+    "deepseek-flash",
+  );
+  w.unmount();
+});
+
 it("roles table: Codex is disabled for Inspector, Builder permission is locked, Chat has a choice", async () => {
   routes["PATCH /api/v1/settings"] = patchEcho;
   const { w } = await render();

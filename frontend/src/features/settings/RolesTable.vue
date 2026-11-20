@@ -33,25 +33,43 @@ const modelOf = (k: RoleKey) => props.settings[modelField(k)] ?? "";
 const refOf = (m: ModelInfo) => `${m.provider_id}/${m.model_id}`;
 const chatPerm = () => props.settings.role_permissions?.chat ?? "ask";
 
-const byAgent = reactive<Record<string, ModelInfo[]>>({});
+const byRole = reactive<Record<string, ModelInfo[]>>({});
+const listKey = (agent: string, k: RoleKey) => `${agent}:${k}`;
+const listOf = (k: RoleKey) => byRole[listKey(agentOf(k), k)] ?? [];
 const busy = reactive(new Set<RoleKey>());
 const error = ref("");
-async function ensureModels(agent: string) {
-  if (byAgent[agent]) return byAgent[agent];
-  const models = await factory.loadModels(agent);
-  if (models.length) byAgent[agent] = models;
+async function ensureModels(agent: string, k: RoleKey) {
+  const key = listKey(agent, k);
+  if (byRole[key]) return byRole[key];
+  const models = await factory.loadModels(agent, k);
+  if (models.length) byRole[key] = models;
   return models;
 }
 const load = () =>
   Promise.all(
-    [...new Set(roles.map((r) => agentOf(r.key)))].map((a) =>
-      ensureModels(a).catch((e) => {
+    roles.map((r) =>
+      ensureModels(agentOf(r.key), r.key).catch((e) => {
         error.value = e instanceof Error ? e.message : String(e);
       }),
     ),
   );
 onMounted(load);
 watch(() => props.settings.role_agents, load);
+// a role moving to another account changes which models it can run
+watch(
+  () =>
+    props.agents
+      .map((a) =>
+        a.accounts
+          .map((x) => `${x.id}:${x.active}:${(x.roles ?? []).join()}`)
+          .join("|"),
+      )
+      .join(";"),
+  () => {
+    for (const key of Object.keys(byRole)) delete byRole[key];
+    void load();
+  },
+);
 
 const info = (id: string) => props.agents.find((a) => a.id === id);
 const API_KEY_PLAN = "API key · ";
@@ -113,7 +131,7 @@ async function changeAgent(k: RoleKey, el: HTMLSelectElement) {
   error.value = "";
   let models: ModelInfo[] = [];
   try {
-    models = await ensureModels(agent);
+    models = await ensureModels(agent, k);
     if (!models.length) throw new Error(`No models found for ${agent}.`);
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -198,16 +216,14 @@ const changePerm = (el: HTMLSelectElement) =>
               <option v-if="!modelOf(r.key)" value="">Default</option>
               <option
                 v-else-if="
-                  !(byAgent[agentOf(r.key)] ?? []).some(
-                    (m) => refOf(m) === modelOf(r.key),
-                  )
+                  !listOf(r.key).some((m) => refOf(m) === modelOf(r.key))
                 "
                 :value="modelOf(r.key)"
               >
                 {{ modelOf(r.key) }} · not currently available
               </option>
               <option
-                v-for="m in byAgent[agentOf(r.key)] ?? []"
+                v-for="m in listOf(r.key)"
                 :key="refOf(m)"
                 :value="refOf(m)"
               >
