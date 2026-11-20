@@ -351,11 +351,19 @@ func put(t *testing.T, root, rel, content string) {
 	}
 }
 
+func syncDir(ctx context.Context, idx Index, root, commitSHA string) (SyncStats, error) {
+	files, err := collect(root)
+	if err != nil {
+		return SyncStats{}, err
+	}
+	return syncFiles(ctx, idx, HashEmbedder{}, "factory", "p", files, commitSHA)
+}
+
 func TestSyncPlainDir(t *testing.T) {
 	root := t.TempDir()
 	put(t, root, "a.md", "# A\n\nsee [[b]]\n")
 	put(t, root, "docs/b.md", "# B\n")
-	put(t, root, "index.md", "# Index\n")
+	put(t, root, "c.md", "# C\n")
 	put(t, root, "node_modules/x/readme.md", "# no\n")
 	put(t, root, "vendor/y.md", "# no\n")
 	put(t, root, "big.md", strings.Repeat("x", 300<<10))
@@ -363,18 +371,18 @@ func TestSyncPlainDir(t *testing.T) {
 	idx := &fakeIndex{docs: map[string]model.KBParsed{}}
 	ctx := context.Background()
 
-	st, err := Sync(ctx, idx, HashEmbedder{}, "repo", "p", root, "c1")
+	st, err := syncDir(ctx, idx, root, "c1")
 	if err != nil || !reflect.DeepEqual(st, SyncStats{Docs: 3, Changed: 3}) {
 		t.Fatalf("%+v %v", st, err)
 	}
-	a := idx.docs["repo:p:a.md"]
-	if a.CommitSHA != "c1" || len(a.Links) != 1 || a.Links[0] != "repo:p:docs/b.md" {
+	a := idx.docs["factory:p:a.md"]
+	if a.CommitSHA != "c1" || len(a.Links) != 1 || a.Links[0] != "factory:p:docs/b.md" {
 		t.Fatalf("a: %+v", a)
 	}
 	put(t, root, "docs/b.md", "# B2\n")
-	os.Remove(filepath.Join(root, "index.md"))
-	st, err = Sync(ctx, idx, HashEmbedder{}, "repo", "p", root, "c2")
-	if err != nil || !reflect.DeepEqual(st, SyncStats{Docs: 2, Changed: 1, Removed: 1}) || len(idx.touched) != 1 || idx.touched[0] != "repo:p:a.md" {
+	os.Remove(filepath.Join(root, "c.md"))
+	st, err = syncDir(ctx, idx, root, "c2")
+	if err != nil || !reflect.DeepEqual(st, SyncStats{Docs: 2, Changed: 1, Removed: 1}) || len(idx.touched) != 1 || idx.touched[0] != "factory:p:a.md" {
 		t.Fatalf("%+v %v %v", st, err, idx.touched)
 	}
 }
@@ -389,14 +397,26 @@ func TestSyncGitFactorySkipsReserved(t *testing.T) {
 	put(t, root, ".gitignore", "ignored/\n")
 	gitOut(t, root, "add", "keep.md", "index.md", "sub/log.md")
 	idx := &fakeIndex{docs: map[string]model.KBParsed{}}
-	st, err := Sync(context.Background(), idx, HashEmbedder{}, "factory", "", root, "s")
-	if err != nil || st.Docs != 1 || idx.docs["factory::keep.md"].Title != "Keep" {
+	st, err := syncDir(context.Background(), idx, root, "s")
+	if err != nil || st.Docs != 1 || idx.docs["factory:p:keep.md"].Title != "Keep" {
 		t.Fatalf("factory: %+v %v", st, err)
 	}
-	idx = &fakeIndex{docs: map[string]model.KBParsed{}}
-	st, _ = Sync(context.Background(), idx, HashEmbedder{}, "repo", "p", root, "s")
-	if st.Docs != 3 {
-		t.Fatalf("repo should index index.md and log.md and skip ignored: %+v", st)
+}
+
+func TestSyncSkipsSymlinks(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "id_ed25519.md")
+	put(t, filepath.Dir(secret), filepath.Base(secret), "PRIVATE KEY\n")
+	root := t.TempDir()
+	if err := os.Symlink(secret, filepath.Join(root, "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+	put(t, root, "a.md", "# A\n")
+	idx := &fakeIndex{docs: map[string]model.KBParsed{}}
+	if _, err := syncDir(context.Background(), idx, root, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.docs) != 1 || idx.docs["factory:p:a.md"].Title != "A" {
+		t.Fatalf("indexed %v; a symlink must be skipped", idx.docs)
 	}
 }
 
@@ -429,39 +449,6 @@ func TestSyncFactoryNeverIndexesJournal(t *testing.T) {
 	}
 	if err := IndexFactoryFile(ctx, idx, HashEmbedder{}, b, "projects/p1/journal/wo_1/001-plan.md"); err != nil || len(idx.docs) != 1 {
 		t.Fatalf("IndexFactoryFile must skip journal: %v", err)
-	}
-}
-
-func TestSyncRepoIndexesTrackedRegularFilesOnly(t *testing.T) {
-	secret := filepath.Join(t.TempDir(), "id_ed25519.md")
-	put(t, filepath.Dir(secret), filepath.Base(secret), "PRIVATE KEY\n")
-	root := t.TempDir()
-	gitOut(t, root, "init", "-q")
-	put(t, root, "tracked.md", "# Tracked\n")
-	if err := os.Symlink(secret, filepath.Join(root, "linked.md")); err != nil {
-		t.Fatal(err)
-	}
-	gitOut(t, root, "add", "-A")
-	put(t, root, "untracked.md", "---\ntype: Reviewer Routing\n---\n# Agent written\n")
-	idx := &fakeIndex{docs: map[string]model.KBParsed{}}
-	if _, err := Sync(context.Background(), idx, HashEmbedder{}, "repo", "p", root, "c"); err != nil {
-		t.Fatal(err)
-	}
-	if len(idx.docs) != 1 || idx.docs["repo:p:tracked.md"].Title != "Tracked" {
-		t.Fatalf("indexed %v; want only the tracked regular file", idx.docs)
-	}
-
-	plain := t.TempDir()
-	if err := os.Symlink(secret, filepath.Join(plain, "linked.md")); err != nil {
-		t.Fatal(err)
-	}
-	put(t, plain, "a.md", "# A\n")
-	idx = &fakeIndex{docs: map[string]model.KBParsed{}}
-	if _, err := Sync(context.Background(), idx, HashEmbedder{}, "repo", "p", plain, ""); err != nil {
-		t.Fatal(err)
-	}
-	if len(idx.docs) != 1 {
-		t.Fatalf("plain dir indexed %v; a symlink must be skipped", idx.docs)
 	}
 }
 

@@ -32,12 +32,12 @@ const mk = (over: Partial<KBDoc>): KBDoc => ({
   ...over,
 });
 const factoryDoc = mk({});
-const repoDoc = mk({
-  id: "repo:prj_1:docs/money.md",
-  source: "repo",
-  path: "docs/money.md",
+const specDoc = mk({
+  id: "factory:prj_1:specs/money.md",
+  path: "specs/money.md",
   type: "Spec",
-  trust: "unverified",
+  read_only: true,
+  meta: { origin: "work_order" },
   title: "Money",
   indexed_at: 200,
 });
@@ -55,7 +55,7 @@ function detailOf(doc: KBDoc, over: Partial<KBDocDetail> = {}): KBDocDetail {
     doc,
     frontmatter: { type: doc.type, role: "foreman" },
     body: "# Heading\n\nSome paragraph.\n\n## Second\n\n```\ncode <b>x</b>\n```",
-    links: [repoDoc],
+    links: [specDoc],
     backlinks: [backlink],
     editable: doc.source === "factory",
     default_available: false,
@@ -99,10 +99,10 @@ beforeEach(() => {
   vi.spyOn(f, "refreshProjects").mockResolvedValue();
   useSession().user = { id: "u", name: "U", email: "u@x", role: "ENGINEER" };
   calls = [];
-  listed = [factoryDoc, repoDoc];
+  listed = [factoryDoc, specDoc];
   details = {
     [factoryDoc.id]: detailOf(factoryDoc),
-    [repoDoc.id]: detailOf(repoDoc),
+    [specDoc.id]: detailOf(specDoc),
     [draftDoc.id]: detailOf(draftDoc),
   };
   fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
@@ -150,10 +150,10 @@ const items = (w: Awaited<ReturnType<typeof render>>) =>
   w.findAll('[data-test="kb-doc"]');
 
 it("opens the doc from ?doc= once, then clears the param", async () => {
-  routeState.query = { doc: repoDoc.id };
+  routeState.query = { doc: specDoc.id };
   const w = await render();
   expect(calls.at(-1)!.url).toBe(
-    `/api/v1/kb/doc?id=${encodeURIComponent(repoDoc.id)}`,
+    `/api/v1/kb/doc?id=${encodeURIComponent(specDoc.id)}`,
   );
   expect(replace).toHaveBeenCalledWith({ query: { doc: undefined } });
   w.unmount();
@@ -178,7 +178,7 @@ it("lists notebooks with counts and opens the newest note in the reader", async 
   expect(rows).toHaveLength(2);
   expect(rows[0].text()).toContain("Escalation");
   expect(rows[0].text()).toContain("Playbook");
-  expect(rows[1].text()).toContain("repo");
+  expect(rows[1].text()).toContain("Spec");
   expect(calls.at(-1)!.url).toBe(
     `/api/v1/kb/doc?id=${encodeURIComponent(factoryDoc.id)}`,
   );
@@ -317,24 +317,6 @@ it("resets a default playbook after confirmation and hides Delete for it", async
   expect(post.url).toBe(
     `/api/v1/kb/doc/reset?id=${encodeURIComponent(factoryDoc.id)}`,
   );
-  w.unmount();
-});
-
-it("shows repo notes read-only with no edit or delete controls", async () => {
-  const w = await render();
-  await items(w)[1].trigger("click");
-  await flushPromises();
-  expect(btn("repo-readonly")!.textContent).toContain(
-    "Changes to repository documents go through the repository.",
-  );
-  for (const t of [
-    "kb-edit",
-    "kb-approve",
-    "kb-discard",
-    "kb-reset",
-    "kb-delete",
-  ])
-    expect(btn(t)).toBeNull();
   w.unmount();
 });
 
@@ -487,7 +469,7 @@ it("drops stale search responses", async () => {
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url.includes("q=slow")) {
       await gate;
-      return new Response(JSON.stringify({ docs: [repoDoc] }));
+      return new Response(JSON.stringify({ docs: [specDoc] }));
     }
     return base(url, init);
   });
@@ -542,7 +524,7 @@ it("opens a linked note that is outside the current search", async () => {
   const base = fetchMock.getMockImplementation()!;
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) =>
     url.includes("q=money")
-      ? new Response(JSON.stringify({ docs: [repoDoc] }))
+      ? new Response(JSON.stringify({ docs: [specDoc] }))
       : base(url, init),
   );
   const w = await render();

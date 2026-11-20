@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -24,7 +22,6 @@ type kbRig struct {
 	srv    *Server
 	db     *sql.DB
 	know   *usecase.KB
-	repo   string
 	cookie map[string]string
 }
 
@@ -37,25 +34,13 @@ func bootKB(t *testing.T) *kbRig {
 	}
 	t.Cleanup(func() { db.Close() })
 	projRepo, users, members := &store.ProjectRepo{DB: db}, &store.UserRepo{DB: db}, &store.MemberRepo{DB: db}
-	repo := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, "docs/money.md"), []byte("# Money\n\nIntegers only.\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "docs"}} {
-		if out, err := exec.Command("git", append([]string{"-C", repo}, args...)...).CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v %s", args, err, out)
-		}
-	}
-	for _, p := range []model.Project{{ID: "p1", Name: "p1", RepoURL: repo}, {ID: "p2", Name: "p2"}} {
+	for _, p := range []model.Project{{ID: "p1", Name: "p1"}, {ID: "p2", Name: "p2"}} {
 		p := p
 		if err := projRepo.Create(ctx, &p); err != nil {
 			t.Fatal(err)
 		}
 	}
-	rig := &kbRig{repo: repo, cookie: map[string]string{}}
+	rig := &kbRig{cookie: map[string]string{}}
 	for id, role := range map[string]model.Role{"owner": model.RoleOwner, "eng": model.RoleEngineer, "viewer": model.RoleViewer, "outsider": model.RoleEngineer} {
 		if err := users.Create(ctx, model.User{ID: id, Email: id + "@t", Name: id, Role: role}); err != nil {
 			t.Fatal(err)
@@ -80,7 +65,7 @@ func bootKB(t *testing.T) *kbRig {
 	srv := New(&model.Config{FrontendOrigin: "http://localhost:5173"}, log)
 	srv.Auth = &usecase.Identity{Users: users, Mode: "dev"}
 	srv.Projects = projects
-	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo, WO: &store.WorkOrderRepo{DB: db}, DataDir: t.TempDir()}
+	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo}
 	rig.srv, rig.know, rig.db = srv, know, db
 	srv.Usage = usecase.NewUsageTracker(&store.UsageRepo{DB: db})
 
@@ -94,7 +79,8 @@ func bootKB(t *testing.T) *kbRig {
 	if err := know.WriteFactory(ctx, "projects/p2/drafts/secret.md", draft, "Secret of p2.", "draft"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, err := know.SyncRepo(ctx, "p1", repo, true); err != nil {
+	note := map[string]any{"type": model.KBTypeNote, "title": "Money", "status": "stable"}
+	if err := know.WriteFactory(ctx, "projects/p1/notes/money.md", note, "Integers only.", "note"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := know.SyncFactory(ctx); err != nil {
@@ -137,7 +123,7 @@ func has(ids []string, id string) bool {
 
 const (
 	d1ID    = "factory:p1:projects/p1/drafts/d1.md"
-	repoID  = "repo:p1:docs/money.md"
+	noteID  = "factory:p1:projects/p1/notes/money.md"
 	fwID    = "factory::playbooks/foreman/escalation.md"
 	secretD = "factory:p2:projects/p2/drafts/secret.md"
 )
@@ -145,11 +131,11 @@ const (
 func TestKBListStatusProjectsAndSearch(t *testing.T) {
 	r := bootKB(t)
 	code, body := r.do(t, "eng", "GET", "/api/v1/kb/docs?project_id=p1", "")
-	if ids := docIDs(t, body); code != 200 || has(ids, d1ID) || !has(ids, repoID) || !has(ids, fwID) {
+	if ids := docIDs(t, body); code != 200 || has(ids, d1ID) || !has(ids, noteID) || !has(ids, fwID) {
 		t.Fatalf("default status is stable only: %d %v", code, ids)
 	}
 	_, body = r.do(t, "eng", "GET", "/api/v1/kb/docs?project_id=p1&status=all", "")
-	if ids := docIDs(t, body); !has(ids, d1ID) || !has(ids, repoID) || !has(ids, fwID) || has(ids, secretD) {
+	if ids := docIDs(t, body); !has(ids, d1ID) || !has(ids, noteID) || !has(ids, fwID) || has(ids, secretD) {
 		t.Fatalf("status=all: %v", ids)
 	}
 	_, body = r.do(t, "eng", "GET", "/api/v1/kb/docs?project_id=p1&status=draft&source=factory", "")
@@ -168,7 +154,7 @@ func TestKBListStatusProjectsAndSearch(t *testing.T) {
 		t.Fatalf("non-member project filter: %d", code)
 	}
 	_, body = r.do(t, "eng", "GET", "/api/v1/kb/docs?project_id=p1&q=integers+money", "")
-	if ids := docIDs(t, body); len(ids) == 0 || ids[0] != repoID {
+	if ids := docIDs(t, body); len(ids) == 0 || ids[0] != noteID {
 		t.Fatalf("search ranks the money doc first: %v", ids)
 	}
 }
@@ -188,10 +174,6 @@ func TestKBDetailEditableFlagsAndAccess(t *testing.T) {
 	if _, m = get("viewer", fwID); m["editable"] != false {
 		t.Fatal("a viewer cannot edit")
 	}
-	code, m = get("eng", repoID)
-	if code != 200 || m["editable"] != false || m["default_available"] != false || !strings.Contains(m["body"].(string), "Integers only.") {
-		t.Fatalf("repo doc is read-only with its body: %d %v", code, m)
-	}
 	if _, m = get("eng", d1ID); m["links"] == nil || m["backlinks"] == nil {
 		t.Fatalf("links must be arrays: %v", m)
 	}
@@ -206,9 +188,6 @@ func TestKBDetailEditableFlagsAndAccess(t *testing.T) {
 func TestKBWritesPutApproveDiscardReset(t *testing.T) {
 	r := bootKB(t)
 	put := `{"frontmatter":{"type":"Playbook","title":"Edited","role":"foreman","status":"stable"},"body":"Edited body."}`
-	if code, _ := r.do(t, "eng", "PUT", "/api/v1/kb/doc?id="+repoID, put); code != 409 {
-		t.Fatalf("PUT on a repo doc: %d", code)
-	}
 	if code, _ := r.do(t, "viewer", "PUT", "/api/v1/kb/doc?id="+fwID, put); code != 403 {
 		t.Fatalf("viewer PUT: %d", code)
 	}
@@ -308,9 +287,6 @@ func TestKBDelete(t *testing.T) {
 	}
 	if code, _ := r.do(t, "outsider", "DELETE", "/api/v1/kb/doc?id="+d1ID, ""); code != 404 {
 		t.Fatalf("DELETE outside the project: %d", code)
-	}
-	if code, _ := r.do(t, "eng", "DELETE", "/api/v1/kb/doc?id="+repoID, ""); code != 409 {
-		t.Fatalf("DELETE of a repo doc: %d", code)
 	}
 	if code, _ := r.do(t, "owner", "DELETE", "/api/v1/kb/doc?id="+fwID, ""); code != 409 {
 		t.Fatalf("DELETE of a default playbook: %d", code)

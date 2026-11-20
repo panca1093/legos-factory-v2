@@ -65,13 +65,6 @@ const note = mk({
   meta: { origin: "manual" },
   indexed_at: 200,
 });
-const repo = mk({
-  id: "repo:prj_1:docs/r.md",
-  source: "repo",
-  type: "Guide",
-  title: "Repo doc",
-  indexed_at: 50,
-});
 const wide = mk({
   id: "factory::playbooks/p.md",
   project_id: undefined,
@@ -93,8 +86,7 @@ const old = mk({
   indexed_at: 20,
 });
 const untyped = mk({
-  id: "repo:prj_1:x.md",
-  source: "repo",
+  id: "factory:prj_1:x.md",
   type: "",
   title: "Untyped doc",
   indexed_at: 40,
@@ -114,7 +106,6 @@ const all = [
   dag,
   summary,
   note,
-  repo,
   wide,
   draft,
   old,
@@ -207,10 +198,10 @@ it("has no status dropdown or drafts notebook, and loads every status once", asy
 it("lists All notes, Factory-wide and every project, even with zero documents", async () => {
   const w = await render();
   expect(w.findAll(".nb-book").map((b) => b.text())).toEqual([
-    "All notes211",
+    "All notes210",
     "Factory-wide12",
     "Empty0",
-    "Greeter19",
+    "Greeter18",
   ]);
   expect(
     w.findAll('[data-test="kb-draft-count"]').map((b) => b.text()),
@@ -226,28 +217,23 @@ it("shows project folders with counts in the documented order", async () => {
     "Spec1",
     "Task2",
     "Notes2",
-    "Repository2",
     "Needs review1",
+    "Other1",
   ]);
   expect(inFolder(w, "brief")).toEqual(["Brief doc"]);
   expect(inFolder(w, "task")).toEqual(["Summary doc", "Dag doc"]);
   expect(inFolder(w, "notes")).toEqual(["Note doc", "Old doc"]);
   expect(inFolder(w, "review")).toEqual(["Draft doc"]);
-  expect(inFolder(w, "repo")).toEqual(["Repo doc", "Untyped doc"]);
+  expect(inFolder(w, "other")).toEqual(["Untyped doc"]);
   w.unmount();
 });
 
-it("expands folders with documents, collapses Repository, and toggles aria state", async () => {
+it("expands folders with documents and toggles aria state", async () => {
   const w = await render();
   await open(w, "Greeter");
   expect(folder("brief").getAttribute("aria-expanded")).toBe("true");
-  expect(folder("repo").getAttribute("aria-expanded")).toBe("false");
-  expect(folder("repo").getAttribute("aria-controls")).toBe("kb-folder-repo");
-  expect(w.find("#kb-folder-repo").isVisible()).toBe(false);
-  folder("repo").click();
-  await flushPromises();
-  expect(folder("repo").getAttribute("aria-expanded")).toBe("true");
-  expect(w.find("#kb-folder-repo").isVisible()).toBe(true);
+  expect(folder("brief").getAttribute("aria-controls")).toBe("kb-folder-brief");
+  expect(w.find("#kb-folder-brief").isVisible()).toBe(true);
   folder("brief").click();
   await flushPromises();
   expect(folder("brief").getAttribute("aria-expanded")).toBe("false");
@@ -259,7 +245,7 @@ it("shows empty folders muted and not expandable", async () => {
   const w = await render();
   await open(w, "Empty");
   const folders = w.findAll(".nb-folder");
-  expect(folders).toHaveLength(6);
+  expect(folders).toHaveLength(5);
   for (const f of folders) {
     expect(f.attributes("disabled")).toBeDefined();
     expect(f.attributes("aria-expanded")).toBe("false");
@@ -294,7 +280,7 @@ it("reviews a draft from its Needs review folder with Approve and Discard", asyn
 it("shows All notes flat, newest first, with draft and deprecated badges", async () => {
   const w = await render();
   expect(w.find(".nb-folder").exists()).toBe(false);
-  expect(titles(w)).toHaveLength(11);
+  expect(titles(w)).toHaveLength(10);
   expect(titles(w)[0]).toBe("Wide draft");
   expect(row(w, "Draft doc").find(".nb-pill").text()).toBe("draft");
   expect(row(w, "Old doc").find(".nb-pill").text()).toBe("deprecated");
@@ -313,14 +299,14 @@ it("shows a flat list in server order while searching", async () => {
   await flushPromises();
   vi.useRealTimers();
   expect(w.find(".nb-folder").exists()).toBe(false);
-  expect(titles(w)).toHaveLength(9);
+  expect(titles(w)).toHaveLength(8);
   expect(titles(w)[0]).toBe("Brief doc");
   w.unmount();
 });
 
 it("labels cards with type or source, never untyped", async () => {
   const w = await render();
-  expect(row(w, "Untyped doc").find(".tag").text()).toBe("repo");
+  expect(row(w, "Untyped doc").find(".tag").text()).toBe("factory");
   expect(row(w, "Brief doc").find(".tag").text()).toBe("Brief");
   expect(w.text()).not.toContain("untyped");
   w.unmount();
@@ -333,7 +319,7 @@ it("labels each card with its origin when present", async () => {
   expect(origin("Brief doc").text()).toBe("Work order");
   expect(origin("Summary doc").text()).toBe("Chat");
   expect(origin("Note doc").text()).toBe("Manual");
-  expect(origin("Repo doc").exists()).toBe(false);
+  expect(origin("Untyped doc").exists()).toBe(false);
   w.unmount();
 });
 
@@ -377,10 +363,8 @@ it("closes a folder whose last document disappeared", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   const w = await render();
   await open(w, "Greeter");
-  folder("repo").click();
-  await flushPromises();
-  expect(folder("repo").getAttribute("aria-expanded")).toBe("true");
-  served = all.filter((d) => d.source !== "repo");
+  expect(folder("other").getAttribute("aria-expanded")).toBe("true");
+  served = all.filter((d) => d !== untyped);
   const input = w.find("input[type=search]");
   for (const v of ["x", ""]) {
     await input.setValue(v);
@@ -388,15 +372,13 @@ it("closes a folder whose last document disappeared", async () => {
     await flushPromises();
   }
   vi.useRealTimers();
-  expect(folder("repo").disabled).toBe(true);
-  expect(folder("repo").getAttribute("aria-expanded")).toBe("false");
+  expect(q("kb-folder-other")).toBeNull();
   w.unmount();
 });
 
 it("moves with j and k over expanded folders only", async () => {
   const w = await render();
   await open(w, "Greeter");
-  folder("repo").click();
   folder("brief").click();
   await flushPromises();
   const sel = () => w.find(".nb-item.on .t").text();
@@ -412,7 +394,7 @@ it("moves with j and k over expanded folders only", async () => {
   expect(sel()).toBe("Spec doc");
   await key("j");
   expect(sel()).toBe("Summary doc");
-  folder("repo").click();
+  folder("other").click();
   await flushPromises();
   for (let i = 0; i < 8; i++) await key("j");
   expect(sel()).toBe("Draft doc");
@@ -435,12 +417,11 @@ it("resets folder state when switching notebooks", async () => {
   const w = await render();
   await open(w, "Greeter");
   folder("brief").click();
-  folder("repo").click();
   await flushPromises();
+  expect(folder("brief").getAttribute("aria-expanded")).toBe("false");
   await open(w, "Factory-wide");
   await open(w, "Greeter");
   expect(folder("brief").getAttribute("aria-expanded")).toBe("true");
-  expect(folder("repo").getAttribute("aria-expanded")).toBe("false");
   w.unmount();
 });
 

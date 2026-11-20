@@ -2,6 +2,8 @@
 
 Status: draft for review · 2026-11-05 · branch `feat/claude-acp-host`
 
+> 2026-11-20: the `repo` source was removed. Repository documents are no longer indexed or listed in Knowledge; repo playbooks are still read from git at the work order's base commit.
+
 ## Why
 
 Agents decide without the team's context. Examples: the specialist picker calls a `.ts` business-logic change "frontend", and the Foreman escalates trivia to a human. The repository already holds most of that context. The factory should **follow the repo by default** and must not copy it. Whatever the factory itself knows (its journal, its default playbooks, what it learned from human decisions) lives as files the factory owns.

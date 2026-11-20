@@ -3,8 +3,6 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"os"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -13,10 +11,7 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
-const (
-	kbListLimit   = 500
-	kbScopedFetch = 2000
-)
+const kbListLimit = 500
 
 var factoryListTypes = map[string]bool{
 	model.KBTypePlaybook: true, model.KBTypeReviewerRoute: true, model.KBTypeBrief: true, model.KBTypeSpec: true,
@@ -25,14 +20,12 @@ var factoryListTypes = map[string]bool{
 
 var ErrKBReadOnly = fmt.Errorf("%w: work-order documents are read-only records", model.ErrStateConflict)
 
-// KBDocs serves the Knowledge page: browsing both sources and editing,
-// approving, discarding or resetting factory documents.
+// KBDocs serves the Knowledge page: browsing and editing, approving,
+// discarding or resetting factory documents.
 type KBDocs struct {
 	KB       *KB
 	Projects *Projects
 	Proj     ProjectStore
-	WO       WorkOrderStore
-	DataDir  string
 }
 
 type KBListParams struct{ ProjectID, Source, Type, Status, Q string }
@@ -88,26 +81,18 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 	}
 	text := strings.TrimSpace(p.Q)
 	seen := map[string]bool{}
-	scopes := map[string]*kbScope{}
 	var hits []model.KBHit
 	for _, pid := range pids {
 		q.ProjectID = pid
-		sc := s.scopeOf(ctx, scopes, pid)
 		var found []model.KBHit
 		if text != "" {
 			q.Limit = 50
-			if sc != nil {
-				q.Limit = 4 * q.Limit
-			}
 			var err error
 			if found, err = s.KB.Idx.Search(ctx, q, s.KB.Emb.Embed(text)); err != nil {
 				return nil, err
 			}
 		} else {
 			q.Limit = kbListLimit
-			if sc != nil {
-				q.Limit = kbScopedFetch
-			}
 			docs, err := s.KB.Idx.List(ctx, q)
 			if err != nil {
 				return nil, err
@@ -118,9 +103,6 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 		}
 		for _, h := range found {
 			if h.Doc.Source == model.KBSourceFactory && !factoryListTypes[h.Doc.Type] {
-				continue
-			}
-			if h.Doc.Source == model.KBSourceRepo && !sc.allows(h.Doc.Path) {
 				continue
 			}
 			if !seen[h.Doc.ID] {
@@ -149,49 +131,6 @@ func (s *KBDocs) List(ctx context.Context, u *model.User, p KBListParams) ([]mod
 		out = out[:kbListLimit]
 	}
 	return out, nil
-}
-
-type kbScope struct{ inc, exc []*regexp.Regexp }
-
-// scopeOf compiles the project's globs once per request; nil means no restriction.
-func (s *KBDocs) scopeOf(ctx context.Context, cache map[string]*kbScope, pid string) *kbScope {
-	if sc, ok := cache[pid]; ok {
-		return sc
-	}
-	var sc *kbScope
-	if pr, err := s.Proj.Get(ctx, pid); err == nil && (len(pr.KBInclude) > 0 || len(pr.KBExclude) > 0) {
-		sc = &kbScope{}
-		for _, g := range pr.KBInclude {
-			if re := kb.CompileGlob(g); re != nil {
-				sc.inc = append(sc.inc, re)
-			}
-		}
-		for _, g := range pr.KBExclude {
-			if re := kb.CompileGlob(g); re != nil {
-				sc.exc = append(sc.exc, re)
-			}
-		}
-		if len(pr.KBInclude) > 0 && len(sc.inc) == 0 {
-			sc.inc = []*regexp.Regexp{regexp.MustCompile(`$^`)}
-		}
-	}
-	cache[pid] = sc
-	return sc
-}
-
-func (sc *kbScope) allows(path string) bool {
-	if sc == nil {
-		return true
-	}
-	any := func(res []*regexp.Regexp) bool {
-		for _, re := range res {
-			if re.MatchString(path) {
-				return true
-			}
-		}
-		return false
-	}
-	return (len(sc.inc) == 0 || any(sc.inc)) && !any(sc.exc)
 }
 
 // Related ranks documents by keyword match alone: factory-wide plus projectID's, stable only.
@@ -245,12 +184,8 @@ func (s *KBDocs) Detail(ctx context.Context, u *model.User, id string) (*KBDetai
 	}
 	det := &KBDetail{Doc: *d, Links: []model.KBDoc{}, Backlinks: []model.KBDoc{},
 		Editable: d.Source == model.KBSourceFactory && !d.ReadOnly && u.Role.CanWrite()}
-	if d.Source == model.KBSourceFactory {
-		det.DefaultAvailable = s.KB.Bundle.HasDefault(d.Path)
-		det.Frontmatter, det.Body, err = s.KB.Bundle.Read(d.Path)
-	} else {
-		det.Frontmatter, det.Body, det.Note, err = s.readRepoDoc(ctx, d)
-	}
+	det.DefaultAvailable = s.KB.Bundle.HasDefault(d.Path)
+	det.Frontmatter, det.Body, err = s.KB.Bundle.Read(d.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -263,37 +198,6 @@ func (s *KBDocs) Detail(ctx context.Context, u *model.User, id string) (*KBDetai
 		det.Backlinks = append(det.Backlinks, back...)
 	}
 	return det, nil
-}
-
-// readRepoDoc reads a repo document as committed at the commit it was indexed
-// from, in the project's newest work order workspace that has it, else in the
-// project's local repository. A document indexed without a commit is read from
-// the working tree, never through a symlink.
-func (s *KBDocs) readRepoDoc(ctx context.Context, d *model.KBDoc) (map[string]any, string, string, error) {
-	var roots []string
-	if wos, err := s.WO.List(ctx); err == nil {
-		sort.SliceStable(wos, func(a, b int) bool { return wos[a].CreatedAt.After(wos[b].CreatedAt) })
-		for _, wo := range wos {
-			if wo.ProjectID == d.ProjectID {
-				roots = append(roots, model.WorktreeDir(s.DataDir, wo.ProjectID, wo.ID))
-			}
-		}
-	}
-	if proj, err := s.Proj.Get(ctx, d.ProjectID); err == nil {
-		if info, err := os.Stat(proj.RepoURL); err == nil && info.IsDir() {
-			roots = append(roots, proj.RepoURL)
-		}
-	}
-	for _, root := range roots {
-		read := func() (map[string]any, string, error) { return kb.ReadMarkdown(root, d.Path) }
-		if d.CommitSHA != "" {
-			read = func() (map[string]any, string, error) { return kb.ReadGitMarkdown(root, d.CommitSHA, d.Path) }
-		}
-		if front, body, err := read(); err == nil {
-			return front, body, "", nil
-		}
-	}
-	return map[string]any{}, "", "The repository checkout holding this document is not available on this server.", nil
 }
 
 func (s *KBDocs) Update(ctx context.Context, u *model.User, id string, front map[string]any, body string) (*model.KBDoc, error) {

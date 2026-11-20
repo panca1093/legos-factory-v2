@@ -225,21 +225,11 @@ func orNone(s string) string {
 	return s
 }
 
-// focus is the reviewer routing for the changed files: the repo's Reviewer Routing doc, then the project's
-// factory doc, else the path heuristics. It never writes a proposal.
+// focus is the reviewer routing for the changed files: the project's factory doc, else the path heuristics. It never writes a proposal.
 func (r *Reviews) focus(ctx context.Context, projectID string, files []string) []SpecialistPick {
 	k := r.KB
 	if k == nil || k.Idx == nil {
 		return SelectSpecialists(files)
-	}
-	docs, err := k.Idx.List(ctx, model.KBQuery{ProjectID: projectID, Sources: []string{model.KBSourceRepo},
-		Types: []string{model.KBTypeReviewerRoute}, Limit: 50})
-	if err == nil {
-		for _, d := range docs {
-			if routes := routesOf(d.Meta); len(routes) > 0 {
-				return MatchReviewers(routes, files)
-			}
-		}
 	}
 	d, err := k.Idx.Get(ctx, kb.DocID(model.KBSourceFactory, projectID, "projects/"+projectID+"/reviewer-routing.md"))
 	if err == nil && d != nil && d.Status != model.KBStatusDeprecated {
@@ -447,7 +437,7 @@ func (r *Reviews) runBody(ctx context.Context, rc *reviewCtx, rev *model.PRRevie
 	}
 	prompt := reviewPrompt(d, files, r.focus(ctx, rc.project.ID, paths), earlierTitles(prior), r.linkedIssue(ctx, rc.userID, d))
 	if r.KB != nil {
-		text, _ := r.KB.Context(ctx, rc.project.ID, string(model.AgentInspector), "", d.Title+" "+strings.Join(paths, " "), dir, d.BaseSHA)
+		text, _ := r.KB.Context(ctx, rc.project.ID, string(model.AgentInspector), "", dir, d.BaseSHA)
 		prompt += text
 	}
 	var out prReviewReply

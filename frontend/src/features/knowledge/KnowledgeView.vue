@@ -123,7 +123,7 @@ const sections = computed(() => {
   return groupFolders(l, isProjectNotebook(nb.value)).map((f) => ({
     ...f,
     folder: true,
-    open: f.docs.length > 0 && (folderOpen.value[f.key] ?? f.key !== "repo"),
+    open: f.docs.length > 0 && (folderOpen.value[f.key] ?? true),
   }));
 });
 const inView = computed(() =>
@@ -377,9 +377,7 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
                     class="nb-pill"
                     :class="d.status"
                     >{{ d.status }}</span
-                  >{{
-                    d.source === "repo" ? "repo" : projectName(d.project_id)
-                  }}
+                  >{{ projectName(d.project_id) }}
                   · {{ when(d.indexed_at) }}</span
                 >
               </button>
@@ -389,7 +387,7 @@ const toChats = (id: string) => router.push(`/chats/${id}`);
             {{
               q
                 ? `No notes match “${q}”.`
-                : "No notes here yet. Index a repository with docs, or let the Cataloger draft some."
+                : "No notes here yet. Let the Cataloger draft some."
             }}
           </div>
         </div>

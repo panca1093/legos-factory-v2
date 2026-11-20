@@ -18,8 +18,6 @@ export interface Project {
   remote_repo?: string;
   publish_via?: "remote" | "gh" | "none";
   github_repo?: string;
-  kb_include?: string[];
-  kb_exclude?: string[];
   created_at: string;
 }
 
@@ -440,7 +438,7 @@ export interface KnowledgeRecord {
 
 export interface KBDoc {
   id: string;
-  source: "repo" | "factory";
+  source: "factory";
   project_id?: string;
   path: string;
   commit_sha: string;

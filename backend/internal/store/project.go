@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -15,7 +14,7 @@ import (
 
 type ProjectRepo struct{ DB *sql.DB }
 
-const pCols = `id, workspace_id, name, description, repo_url, language, quality_profile, git_connection_id, remote_repo, kb_include, kb_exclude, created_at`
+const pCols = `id, workspace_id, name, description, repo_url, language, quality_profile, git_connection_id, remote_repo, created_at`
 
 func (r *ProjectRepo) Create(ctx context.Context, p *model.Project) error {
 	if p.ID == "" {
@@ -47,27 +46,6 @@ func (r *ProjectRepo) SetQualityProfile(ctx context.Context, id, profile string)
 		return model.ErrProjectNotFound
 	}
 	return nil
-}
-
-// SetKBScope stores the globs that narrow which repo documents the Knowledge list shows.
-func (r *ProjectRepo) SetKBScope(ctx context.Context, id string, include, exclude []string) error {
-	inc, _ := json.Marshal(nonNil(include))
-	exc, _ := json.Marshal(nonNil(exclude))
-	res, err := r.DB.ExecContext(ctx, `UPDATE projects SET kb_include = ?, kb_exclude = ? WHERE id = ?`, string(inc), string(exc), id)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return model.ErrProjectNotFound
-	}
-	return nil
-}
-
-func nonNil(s []string) []string {
-	if s == nil {
-		return []string{}
-	}
-	return s
 }
 
 // DeleteWithOrders removes the project and the given orders in one transaction,
@@ -132,9 +110,8 @@ func (r *ProjectRepo) List(ctx context.Context) ([]model.Project, error) {
 func scanP(scan rowScanner) (*model.Project, error) {
 	var p model.Project
 	var conn sql.NullString
-	var inc, exc string
 	var createdAt int64
-	err := scan(&p.ID, &p.WorkspaceID, &p.Name, &p.Description, &p.RepoURL, &p.Language, &p.QualityProfile, &conn, &p.RemoteRepo, &inc, &exc, &createdAt)
+	err := scan(&p.ID, &p.WorkspaceID, &p.Name, &p.Description, &p.RepoURL, &p.Language, &p.QualityProfile, &conn, &p.RemoteRepo, &createdAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.ErrProjectNotFound
 	}
@@ -142,12 +119,6 @@ func scanP(scan rowScanner) (*model.Project, error) {
 		return nil, err
 	}
 	p.GitConnection = conn.String
-	if json.Unmarshal([]byte(inc), &p.KBInclude) != nil || p.KBInclude == nil {
-		p.KBInclude = []string{}
-	}
-	if json.Unmarshal([]byte(exc), &p.KBExclude) != nil || p.KBExclude == nil {
-		p.KBExclude = []string{}
-	}
 	p.CreatedAt = time.Unix(createdAt, 0)
 	return &p, nil
 }

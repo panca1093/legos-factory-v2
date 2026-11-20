@@ -36,7 +36,6 @@ type ProjectStore interface {
 	List(ctx context.Context) ([]model.Project, error)
 	Create(ctx context.Context, p *model.Project) error
 	SetLanguage(ctx context.Context, id, language string) error
-	SetKBScope(ctx context.Context, id string, include, exclude []string) error
 	DeleteWithOrders(ctx context.Context, id string, orders []model.WorkOrder) error
 }
 

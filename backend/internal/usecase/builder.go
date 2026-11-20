@@ -85,7 +85,7 @@ func (f *Factory) runBuilder(ctx context.Context, wo *model.WorkOrder, job model
 			}
 		}
 	}
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentBuilder), "", woQuery(wo)+" "+f.taskText(ctx, wo.ID, job.TaskID), woDir, wo.KBBaseSHA)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentBuilder), "", woDir, wo.KBBaseSHA)
 	opts.Audit = audit
 	tasks, _ := f.WO.Plan(ctx, wo.ID) // without the plan the prompt just omits the task's scope
 	prompt := implementPrompt(wo, job, tasks) + kbText

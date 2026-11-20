@@ -16,10 +16,7 @@ import (
 	"legos-factory/backend/internal/model"
 )
 
-const (
-	maxDocBytes = 256 << 10
-	maxDocs     = 2000
-)
+const maxDocBytes = 256 << 10
 
 var skipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true}
 
@@ -31,15 +28,6 @@ type SyncStats struct {
 type file struct {
 	rel     string
 	content []byte
-}
-
-// Sync brings the index in line with the markdown files under root.
-func Sync(ctx context.Context, idx Index, emb Embedder, source, projectID, root, commitSHA string) (SyncStats, error) {
-	files, err := collect(root, source == model.KBSourceFactory)
-	if err != nil {
-		return SyncStats{}, err
-	}
-	return syncFiles(ctx, idx, emb, source, projectID, files, commitSHA)
 }
 
 func syncFiles(ctx context.Context, idx Index, emb Embedder, source, projectID string, files []file, commitSHA string) (SyncStats, error) {
@@ -95,18 +83,15 @@ func syncFiles(ctx context.Context, idx Index, emb Embedder, source, projectID s
 	return st, nil
 }
 
-func collect(root string, factory bool) ([]file, error) {
-	paths, err := listMD(root, factory)
+func collect(root string) ([]file, error) {
+	paths, err := listMD(root)
 	if err != nil {
 		return nil, err
 	}
 	sort.Strings(paths)
 	var out []file
 	for _, rel := range paths {
-		if len(out) >= maxDocs && !factory {
-			break
-		}
-		if skipped(rel, factory) {
+		if skipped(rel, true) {
 			continue
 		}
 		abs := filepath.Join(root, filepath.FromSlash(rel))
@@ -133,14 +118,8 @@ func skipped(rel string, factory bool) bool {
 	return !strings.HasSuffix(base, ".md") || (factory && (base == "index.md" || base == "log.md"))
 }
 
-// listMD lists markdown files; a repository source indexes tracked files only,
-// so nothing an agent wrote into the workspace reaches the index.
-func listMD(root string, factory bool) ([]string, error) {
-	args := []string{"-C", root, "ls-files", "-z", "*.md"}
-	if factory {
-		args = []string{"-C", root, "ls-files", "-co", "--exclude-standard", "-z", "*.md"}
-	}
-	cmd := exec.Command("git", args...)
+func listMD(root string) ([]string, error) {
+	cmd := exec.Command("git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "*.md")
 	if out, err := cmd.Output(); err == nil && isWorkTree(root) {
 		seen := map[string]bool{}
 		var paths []string
