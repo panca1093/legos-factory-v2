@@ -199,7 +199,11 @@ onMounted(settle);
       >Back to projects</RouterLink
     >
   </div>
-  <div v-else class="pw" :class="{ 'panel-open': showPanel }">
+  <div
+    v-else
+    class="pw"
+    :class="{ 'panel-open': showPanel, 'pw-pull': kind === 'pull' }"
+  >
     <div class="pw-main">
       <div class="pw-bar">
         <span class="lg-kind">{{ label }}</span>
