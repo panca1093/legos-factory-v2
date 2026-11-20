@@ -99,3 +99,12 @@ export function fileTree(files: PRFile[], closed: Set<string>): TreeRow[] {
   walk(root, 0);
   return out;
 }
+
+// Scrolls the draft card into view; false when it is not rendered (yet).
+export function scrollToDraft(id: string): boolean {
+  const el = [
+    ...document.querySelectorAll<HTMLElement>('[data-test^="draft-"]'),
+  ].find((e) => e.dataset.test === `draft-${id}`);
+  el?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+  return !!el;
+}

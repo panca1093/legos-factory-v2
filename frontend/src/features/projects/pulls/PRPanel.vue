@@ -7,7 +7,7 @@ import { useReviews } from "../../../stores/reviews";
 import { useToast } from "../../../composables/useToast";
 import AppDialog from "../../../components/ui/AppDialog.vue";
 import PanelCard from "../PanelCard.vue";
-import { fileTree } from "./diff";
+import { fileTree, scrollToDraft } from "./diff";
 import type { PostConflict } from "../../../stores/reviews";
 import type { PostExpect, Verdict } from "../../../types/review";
 
@@ -18,7 +18,7 @@ const route = useRoute(),
 const closed = ref(new Set<string>());
 const rows = computed(() => fileTree(store.files, closed.value));
 const current = computed(
-  () => (route.query.file as string | undefined) ?? store.files[0]?.path,
+  () => (route.query.file as string | undefined) ?? store.firstFile,
 );
 const draftCount = (path: string) =>
   store.drafts.filter(
@@ -42,6 +42,42 @@ async function viewed(path: string, v: boolean) {
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e));
   }
+}
+
+const ORDER: Record<string, number> = {
+  pending: 0,
+  accepted: 1,
+  outdated: 2,
+  posted: 3,
+  discarded: 4,
+};
+const SEV: Record<string, number> = { blocker: 0, major: 1, minor: 2, info: 3 };
+const findings = computed(() =>
+  store.drafts
+    .filter((d) => d.status !== "superseded")
+    .slice()
+    .sort(
+      (a, b) =>
+        (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9) ||
+        (SEV[a.severity] ?? 9) - (SEV[b.severity] ?? 9) ||
+        a.path.localeCompare(b.path) ||
+        a.line - b.line,
+    ),
+);
+const where = (d: { path: string; line: number; inline: boolean }) =>
+  d.inline ? `${d.path.split("/").pop()}:${d.line}` : "General";
+function goTo(d: { id: string; path: string; inline: boolean }) {
+  if (route.query.draft === d.id) {
+    scrollToDraft(d.id);
+    return;
+  }
+  void router.push({
+    query: {
+      ...route.query,
+      ...(d.inline ? { file: d.path } : {}),
+      draft: d.id,
+    },
+  });
 }
 
 const detail = computed(() => store.detail);
@@ -161,7 +197,7 @@ const titleOf = (id: string) =>
   store.drafts.find((d) => d.id === id)?.title ?? id;
 const counts = computed(() => {
   const c = { blocker: 0, major: 0, minor: 0, info: 0 };
-  for (const d of store.live) c[d.severity]++;
+  for (const d of store.live) if (d.run_id !== "") c[d.severity]++;
   return c;
 });
 const verdictLabel = (v: string) =>
@@ -244,16 +280,55 @@ const postedHere = computed(
       <p v-if="store.running" class="small" data-test="review-running">
         AI review running…
       </p>
-      <p v-else-if="store.run?.summary" class="small muted">
-        {{ counts.blocker }} blocker · {{ counts.major }} major ·
-        {{ counts.minor }} minor · {{ counts.info }} info
+      <p
+        v-else-if="store.run?.summary"
+        class="pr-counts"
+        data-test="review-counts"
+      >
+        <span
+          v-for="k in ['blocker', 'major', 'minor', 'info'] as const"
+          :key="k"
+          class="dc-sev"
+          :data-sev="k"
+          :class="{ zero: !counts[k] }"
+          >{{ counts[k] }} {{ k }}</span
+        >
       </p>
+      <div v-if="findings.length" class="pr-finds" data-test="findings">
+        <p class="pc-lbl">Findings</p>
+        <ul>
+          <li v-for="d in findings" :key="d.id">
+            <button
+              type="button"
+              class="pr-find"
+              :class="d.status"
+              :data-test="`finding-${d.id}`"
+              :title="d.inline ? `${d.path}:${d.line}` : 'General'"
+              @click="goTo(d)"
+            >
+              <span v-if="d.run_id === ''" class="dc-you">You</span>
+              <span v-else class="dc-sev" :data-sev="d.severity">{{
+                d.severity
+              }}</span>
+              <span class="pr-find-t">{{
+                d.run_id === "" ? d.body : d.title
+              }}</span>
+              <span class="pr-find-at mono"
+                >{{ where(d)
+                }}<template v-if="d.status !== 'pending'">
+                  · {{ d.status }}</template
+                ></span
+              >
+            </button>
+          </li>
+        </ul>
+      </div>
       <label class="pc-lbl" for="pr-summary">Summary</label>
       <textarea
         id="pr-summary"
         v-model="summary"
         class="pr-summary"
-        rows="5"
+        rows="8"
         data-test="review-summary"
         @input="touched = true"
         @blur="saveSummary"

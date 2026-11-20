@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
+import { useRoute } from "vue-router";
 import { useReviews } from "../../../stores/reviews";
 import { useToast } from "../../../composables/useToast";
 import { renderMarkdown } from "../../knowledge/notes";
 import type { PRDraft } from "../../../types/review";
 
 const props = defineProps<{ draft: PRDraft }>();
+const route = useRoute();
 const store = useReviews(),
   { toast } = useToast();
 const editing = ref(false),
@@ -52,7 +54,7 @@ function startEdit() {
 <template>
   <article
     class="dc"
-    :class="[d.severity, d.status]"
+    :class="[d.severity, d.status, { flash: route.query.draft === d.id }]"
     :data-test="`draft-${d.id}`"
     :data-status="d.status"
   >

@@ -133,6 +133,18 @@ export const useReviews = defineStore("reviews", {
     general: (s) =>
       s.drafts.filter((d) => !d.inline && d.status !== "superseded"),
     viewedCount: (s) => s.files.filter((f) => f.viewed).length,
+    // With no file picked, open the first one that has something to decide or post.
+    firstFile: (s): string | undefined =>
+      (
+        s.files.find((f) =>
+          s.drafts.some(
+            (d) =>
+              d.inline &&
+              d.path === f.path &&
+              (d.status === "pending" || d.status === "accepted"),
+          ),
+        ) ?? s.files[0]
+      )?.path,
     stale: (s) =>
       !!s.detail?.review?.head_sha &&
       !!s.detail.pr.head_sha &&
