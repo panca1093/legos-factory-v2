@@ -232,8 +232,7 @@ const unassigned = computed(() =>
 );
 const coversUnassigned = (a: AgentAccount) =>
   a.active && (chipRoles.value.length === 0 || unassigned.value.length > 0);
-const holdsRole = (a: AgentAccount) =>
-  chipRoles.value.some((r) => holds(a, r));
+const holdsRole = (a: AgentAccount) => chipRoles.value.some((r) => holds(a, r));
 const inUse = (a: AgentAccount) => holdsRole(a) || coversUnassigned(a);
 const mappedLine = (a: AgentAccount) =>
   a.api
@@ -579,7 +578,9 @@ const showBars = computed(() => {
             type="password"
             autocomplete="off"
             :placeholder="
-              editingId ? 'Leave blank to keep the current key' : 'Paste the key'
+              editingId
+                ? 'Leave blank to keep the current key'
+                : 'Paste the key'
             "
             :required="!editingId"
           />
