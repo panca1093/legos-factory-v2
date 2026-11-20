@@ -61,7 +61,7 @@ func TestChatModelListComesFromTheChatRoleAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	chat, _ = cats.list(ctx, agents, "claude", "u1", model.AgentChat, false)
-	if len(chat) != 2 || chat[0].Name != "deepseek-next" {
+	if len(chat) != 3 || chat[0].Name != "deepseek-next" {
 		t.Fatalf("editing the account must not serve the stale list: %+v", chat)
 	}
 }
