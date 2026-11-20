@@ -459,7 +459,7 @@ describe("project workspace", () => {
     w.unmount();
   });
 
-  it("starts hidden when the choice was Hide, and below 1280px", async () => {
+  it("starts hidden when the choice was Hide, and below 1280px; a panel tab switch keeps the overlay open", async () => {
     store["legos-project-panel"] = "0";
     const hidden = await mountWorkspace("/projects/atlas");
     expect(hidden.w.find("#pw-panel").exists()).toBe(false);
@@ -471,6 +471,12 @@ describe("project workspace", () => {
     await narrow.w.find('[data-test="panel-toggle"]').trigger("click");
     expect(narrow.w.find("#pw-panel").exists()).toBe(true);
     expect(store["legos-project-panel"]).toBe("1");
+    await narrow.router.replace({ query: { side: "review" } });
+    await flushPromises();
+    expect(narrow.w.find("#pw-panel").exists()).toBe(true);
+    await narrow.router.push({ query: { side: "review", file: "a.go" } });
+    await flushPromises();
+    expect(narrow.w.find("#pw-panel").exists()).toBe(false);
     narrow.w.unmount();
   });
 
