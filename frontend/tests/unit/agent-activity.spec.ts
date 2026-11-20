@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
-import ActivityPanel from "../../src/features/factory/runs/ActivityPanel.vue";
+import HappeningCard from "../../src/features/factory/runs/HappeningCard.vue";
+import PlanProgressCard from "../../src/features/factory/runs/PlanProgressCard.vue";
 import {
   duration,
   gateSummary,
@@ -115,7 +116,7 @@ describe("presentation", () => {
   });
 });
 
-describe("ActivityPanel agent runs", () => {
+describe("HappeningCard agent runs", () => {
   const finished = [
     ev("agent_started", { run_id: "f1" }, "foreman"),
     ev(
@@ -127,7 +128,7 @@ describe("ActivityPanel agent runs", () => {
   ];
 
   it("shows the running agent live with its latest steps", () => {
-    const w = mount(ActivityPanel, {
+    const w = mount(HappeningCard, {
       props: {
         runs: [],
         events: [
@@ -157,7 +158,7 @@ describe("ActivityPanel agent runs", () => {
       ev("agent_started", { run_id: "a2" }),
       ev("agent_stalled", { run_id: "a2" }),
     ];
-    const w = mount(ActivityPanel, { props: { runs: [], events: running } });
+    const w = mount(HappeningCard, { props: { runs: [], events: running } });
     expect(w.find('[data-test="agent-stalled"]').exists()).toBe(true);
     expect(w.text()).toContain("Architect is waiting on the model…");
     await w.setProps({
@@ -182,7 +183,7 @@ describe("ActivityPanel agent runs", () => {
 describe("steering and plan progress", () => {
   it("records a steered message in its run and shows every live run", async () => {
     const steer = vi.fn().mockResolvedValue(undefined);
-    const w = mount(ActivityPanel, {
+    const w = mount(HappeningCard, {
       props: {
         runs: [],
         tasks: [
@@ -262,8 +263,8 @@ describe("steering and plan progress", () => {
       run("T1", "completed"),
       run("T2", "failed", "conflict markers left"),
     ];
-    const w = mount(ActivityPanel, {
-      props: { events: [], runs, tasks, canRetry: true },
+    const w = mount(PlanProgressCard, {
+      props: { runs, tasks, canRetry: true },
     });
     expect(w.find('[data-test="plan-progress"]').text()).toContain(
       "1 / 2 merged",
@@ -312,8 +313,8 @@ describe("steering and plan progress", () => {
         "Builder finished remediation without changing any files",
       ),
     ];
-    const w = mount(ActivityPanel, {
-      props: { events: [], runs, tasks, canRetry: true, revision: 2 },
+    const w = mount(PlanProgressCard, {
+      props: { runs, tasks, canRetry: true, revision: 2 },
     });
     const row = w.find('[data-test="remediation"]');
     expect(row.text()).toContain("Remediation (revision 2)");
@@ -329,9 +330,9 @@ describe("steering and plan progress", () => {
   });
 });
 
-describe("ActivityPanel actors", () => {
+describe("HappeningCard actors", () => {
   it("renders non-crew actors with the system avatar instead of the Foreman bot", () => {
-    const w = mount(ActivityPanel, {
+    const w = mount(HappeningCard, {
       props: {
         runs: [],
         events: [
@@ -352,9 +353,9 @@ describe("ActivityPanel actors", () => {
   });
 });
 
-describe("ActivityPanel filter", () => {
+describe("HappeningCard filter", () => {
   it("filters the trail by who acted and reports how many events are shown", async () => {
-    const w = mount(ActivityPanel, {
+    const w = mount(HappeningCard, {
       props: {
         runs: [],
         events: [
@@ -391,7 +392,7 @@ describe("ActivityPanel filter", () => {
     expect(w.findAll("article.event")).toHaveLength(4);
   });
   it("keeps runs you steered under You", async () => {
-    const w = mount(ActivityPanel, {
+    const w = mount(HappeningCard, {
       props: {
         runs: [],
         events: [
@@ -410,7 +411,7 @@ describe("ActivityPanel filter", () => {
     expect(w.findAll("article.event")).toHaveLength(1);
   });
   it("says so when nothing matches the filter", async () => {
-    const w = mount(ActivityPanel, {
+    const w = mount(HappeningCard, {
       props: { runs: [], events: [ev("state_changed", undefined, "factory")] },
     });
     await w
@@ -451,7 +452,7 @@ describe("gate events", () => {
   });
 
   it("shows the gate row in Activity with jev as a system actor", async () => {
-    const w = mount(ActivityPanel, {
+    const w = mount(HappeningCard, {
       props: {
         events: [
           ev(
@@ -512,7 +513,7 @@ describe("runCacheSplit", () => {
   });
 
   it("shows the split on the run row", () => {
-    const w = mount(ActivityPanel, {
+    const w = mount(HappeningCard, {
       props: {
         events: [],
         runs: [
@@ -533,7 +534,7 @@ describe("runCacheSplit", () => {
   });
 
   it("leaves out the dollar estimate when the cost is unknown", () => {
-    const w = mount(ActivityPanel, {
+    const w = mount(HappeningCard, {
       props: {
         events: [],
         runs: [
@@ -561,8 +562,8 @@ describe("Plan progress card", () => {
         deps: [],
       },
     ];
-    const w = mount(ActivityPanel, {
-      props: { events: [], runs: [], tasks, canRetry: true },
+    const w = mount(PlanProgressCard, {
+      props: { runs: [], tasks, canRetry: true },
     });
     const card = w.find('[data-test="plan-progress"]');
     expect(card.text()).toContain("0 / 1 merged");
