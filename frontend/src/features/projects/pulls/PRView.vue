@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
-import { ExternalLink } from "lucide-vue-next";
+import { ExternalLink, MessageSquarePlus } from "lucide-vue-next";
 import "../../factory/factory.css";
 import "./pulls.css";
 import { eventTarget, usePRRefresh, useReviews } from "../../../stores/reviews";
@@ -95,6 +95,64 @@ const anchored = computed(() => {
   return { map, loose };
 });
 const general = computed(() => store.drafts.filter((d) => !d.inline));
+
+// A comment of the user's own on one diff line: removed lines anchor on the old side, the rest on the new.
+type Line = { t: string; o?: number; n?: number };
+const composing = ref<{ side: "new" | "old"; line: number } | null>(null);
+// Placed by line, not row index, so a refreshed patch keeps the composer under its line.
+const composeKey = computed(() => {
+  const c = composing.value;
+  if (!c) return "";
+  for (const [hi, h] of hunks.value.entries())
+    for (const [li, l] of h.lines.entries())
+      if (
+        c.side === "old"
+          ? l.t === "del" && l.o === c.line
+          : l.t !== "del" && l.n === c.line
+      )
+        return `${hi}:${li}`;
+  return "";
+});
+const composeLabel = computed(() =>
+  composing.value
+    ? `Your comment on ${composing.value.side === "old" ? "removed line" : "line"} ${composing.value.line}`
+    : "",
+);
+const lineLabel = (l: Line) =>
+  l.t === "del" ? `removed line ${l.o}` : `line ${l.n}`;
+const text = ref(""),
+  saving = ref(false);
+async function compose(l: Line) {
+  const side = l.t === "del" ? "old" : "new";
+  const line = side === "old" ? l.o : l.n;
+  if (line === undefined) return;
+  composing.value = { side, line };
+  text.value = "";
+  await nextTick();
+  document.querySelector<HTMLTextAreaElement>(".dv-compose textarea")?.focus();
+}
+async function saveComment() {
+  const c = composing.value;
+  if (!c || !file.value || !text.value.trim() || saving.value) return;
+  saving.value = true;
+  try {
+    await store.addComment({
+      path: file.value.path,
+      side: c.side,
+      line: c.line,
+      body: text.value,
+    });
+    composing.value = null;
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e));
+  } finally {
+    saving.value = false;
+  }
+}
+watch(
+  () => file.value?.path,
+  () => (composing.value = null),
+);
 const ciLabel = (ci: string) =>
   ({
     passing: "CI passing",
@@ -239,6 +297,15 @@ const ciLabel = (ci: string) =>
             <div class="dv-hunk mono">{{ h.header }}</div>
             <template v-for="(l, li) in h.lines" :key="li">
               <div class="dv-line mono" :class="l.t">
+                <button
+                  type="button"
+                  class="dv-add"
+                  :aria-label="`Comment on ${lineLabel(l)}`"
+                  data-test="diff-add-comment"
+                  @click="compose(l)"
+                >
+                  <MessageSquarePlus class="icon" aria-hidden="true" />
+                </button>
                 <span class="dv-no">{{ l.o ?? "" }}</span>
                 <span class="dv-no">{{ l.n ?? "" }}</span>
                 <span class="dv-mark">{{
@@ -262,12 +329,51 @@ const ciLabel = (ci: string) =>
                   ></span
                 >
               </div>
-              <div v-if="anchored.map.get(`${hi}:${li}`)" class="dv-slot">
+              <div
+                v-if="
+                  anchored.map.get(`${hi}:${li}`) ||
+                  composeKey === `${hi}:${li}`
+                "
+                class="dv-slot"
+              >
                 <DraftCard
-                  v-for="d in anchored.map.get(`${hi}:${li}`)"
+                  v-for="d in anchored.map.get(`${hi}:${li}`) ?? []"
                   :key="d.id"
                   :draft="d"
                 />
+                <form
+                  v-if="composeKey === `${hi}:${li}`"
+                  class="dv-compose"
+                  data-test="diff-compose"
+                  @submit.prevent="saveComment"
+                >
+                  <textarea
+                    v-model="text"
+                    rows="3"
+                    :aria-label="composeLabel"
+                    placeholder="Leave a comment. It posts with your review."
+                    @keydown.meta.enter.prevent="saveComment"
+                    @keydown.ctrl.enter.prevent="saveComment"
+                    @keydown.esc="composing = null"
+                  ></textarea>
+                  <div class="dc-actions">
+                    <button
+                      type="submit"
+                      class="lg-btn small primary"
+                      data-test="diff-compose-save"
+                      :disabled="saving || !text.trim()"
+                    >
+                      Add comment
+                    </button>
+                    <button
+                      type="button"
+                      class="lg-btn small ghost"
+                      @click="composing = null"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
               </div>
             </template>
           </div>

@@ -223,6 +223,17 @@ func (r *ReviewRepo) AddDrafts(ctx context.Context, reviewID, runID string, ds [
 	return tx.Commit()
 }
 
+// AddUserDraft stores the user's own comment: no run, no AI text, with the status the usecase chose.
+func (r *ReviewRepo) AddUserDraft(ctx context.Context, d model.PRDraft) error {
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO pr_review_drafts
+		(id, review_id, run_id, path, old_path, side, line, old_line, inline, head_sha, severity, title,
+		 body, ai_body, status, created_at, updated_at)
+		VALUES (?,?,'',?,?,?,?,?,?,?,?,?,?,'',?,?,?)`,
+		d.ID, d.ReviewID, d.Path, d.OldPath, d.Side, d.Line, d.OldLine, d.Inline, d.HeadSHA, d.Severity,
+		d.Title, d.Body, d.Status, d.CreatedAt.Unix(), d.UpdatedAt.Unix())
+	return err
+}
+
 func scanDraft(scan func(...any) error) (*model.PRDraft, error) {
 	var d model.PRDraft
 	var created, updated int64

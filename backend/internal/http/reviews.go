@@ -142,6 +142,20 @@ func (s *Server) handlePatchDraft(c echo.Context, n int) error {
 	return s.reply(c, http.StatusOK, v, err)
 }
 
+func (s *Server) handleAddComment(c echo.Context, n int) error {
+	var req struct {
+		Path string `json:"path"`
+		Side string `json:"side"`
+		Line int    `json:"line"`
+		Body string `json:"body"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
+	}
+	v, err := s.Reviews.AddComment(c.Request().Context(), currentUser(c), c.Param("id"), n, req.Path, req.Side, req.Line, req.Body)
+	return s.reply(c, http.StatusCreated, v, err)
+}
+
 func (s *Server) handleSetViewed(c echo.Context, n int) error {
 	var req struct {
 		Path   string `json:"path"`
@@ -199,6 +213,7 @@ func (s *Server) reviewRoutes(api *echo.Group) {
 	api.GET(pr+"/files", s.pr(s.handlePullFiles))
 	api.POST(pr+"/review/runs", write(s.pr(s.handleStartReviewRun)))
 	api.GET(pr+"/review/drafts", s.pr(s.handleReviewDrafts))
+	api.POST(pr+"/review/drafts", write(s.pr(s.handleAddComment)))
 	api.PATCH(pr+"/review/drafts/:draft", write(s.pr(s.handlePatchDraft)))
 	api.PUT(pr+"/review/viewed", write(s.pr(s.handleSetViewed)))
 	api.PATCH(pr+"/review", write(s.pr(s.handlePatchReview)))

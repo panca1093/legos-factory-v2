@@ -196,6 +196,29 @@ func TestReviewDraftsLifecycle(t *testing.T) {
 	}
 }
 
+func TestReviewAddUserDraftKeepsStatusAndNoAIText(t *testing.T) {
+	r := &ReviewRepo{DB: openTestDB(t)}
+	ctx := context.Background()
+	rev := newReview(t, r, "u1", 1)
+	now := time.Unix(1700000000, 0)
+	in := model.PRDraft{ID: "prc_1", ReviewID: rev.ID, Path: "a.go", Side: "new", Line: 4, OldLine: 3, Inline: true, HeadSHA: "h1",
+		Severity: "info", Body: "mine", Status: model.DraftAccepted, CreatedAt: now, UpdatedAt: now}
+	if err := r.AddUserDraft(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.AddDrafts(ctx, rev.ID, "run2", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SupersedePending(ctx, rev.ID, "run2"); err != nil {
+		t.Fatal(err)
+	}
+	d := draftsByPath(t, r, rev.ID)["a.go#"]
+	if d.ID != "prc_1" || d.RunID != "" || d.AIBody != "" || d.Body != "mine" || d.Status != model.DraftAccepted ||
+		d.Line != 4 || d.OldLine != 3 || !d.Inline || !d.CreatedAt.Equal(now) {
+		t.Fatalf("user draft = %+v", d)
+	}
+}
+
 func TestReviewMarkOutdatedSkipsPostedAndOtherPaths(t *testing.T) {
 	r := &ReviewRepo{DB: openTestDB(t)}
 	ctx := context.Background()

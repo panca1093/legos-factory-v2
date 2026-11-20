@@ -130,6 +130,12 @@ func (m *memReviews) AddDrafts(_ context.Context, reviewID, runID string, ds []m
 	}
 	return nil
 }
+func (m *memReviews) AddUserDraft(_ context.Context, d model.PRDraft) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.drafts = append(m.drafts, d)
+	return nil
+}
 func (m *memReviews) Drafts(_ context.Context, reviewID string) ([]model.PRDraft, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1176,5 +1182,112 @@ func TestPinAndCLILoginForwardStepsToTheUser(t *testing.T) {
 	opts, err := g.r.Identities(ctx, g.ana)
 	if err != nil || len(opts) != 1 || opts[0].Pinned == nil || opts[0].CLI == nil || len(opts[0].CLI.Users) != 1 || len(opts[0].Connections) != 1 || opts[0].Connections[0].Readiness != "ready" {
 		t.Fatalf("%v %+v", err, opts)
+	}
+}
+
+func TestAddCommentStoresTheUsersOwnAcceptedCommentOnADiffLine(t *testing.T) {
+	ctx := context.Background()
+	g := newRvRig(t)
+	d, err := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 2, "  why x?  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.RunID != "" || d.AIBody != "" || d.Body != "why x?" || d.Status != model.DraftAccepted || !d.Inline ||
+		d.Side != "new" || d.Line != 2 || d.HeadSHA != "h1" {
+		t.Fatalf("own comment: %+v", d)
+	}
+	old, err := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "old", 3, "removed on purpose?")
+	if err != nil || old.Side != "old" || old.Line != 3 {
+		t.Fatalf("a removed line takes a comment on the old side: %v %+v", err, old)
+	}
+	ctxLine, err := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 3, "ok")
+	if err != nil || ctxLine.Line != 3 || ctxLine.OldLine != 2 {
+		t.Fatalf("a context line records both lines: %v %+v", err, ctxLine)
+	}
+	for name, call := range map[string]func() error{
+		"empty":      func() error { _, e := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 2, "  "); return e },
+		"off diff":   func() error { _, e := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 40, "x"); return e },
+		"other file": func() error { _, e := g.r.AddComment(ctx, g.ana, "p1", 7, "b.go", "new", 2, "x"); return e },
+		"bad side":   func() error { _, e := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "left", 2, "x"); return e },
+	} {
+		if err := call(); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("%s must be refused: %v", name, err)
+		}
+	}
+	ds, err := g.r.Drafts(ctx, g.ana, "p1", 7)
+	if err != nil || len(ds) != 3 {
+		t.Fatalf("the user sees their comments: %v %+v", err, ds)
+	}
+	bob := &model.User{ID: "bob", Role: model.RoleEngineer}
+	if ds, _ := g.r.Drafts(ctx, bob, "p1", 7); len(ds) != 0 {
+		t.Fatalf("another user's review stays private: %+v", ds)
+	}
+}
+
+func TestOwnCommentsDeleteAndRestoreButNeverTurnPending(t *testing.T) {
+	ctx := context.Background()
+	g := newRvRig(t)
+	d, err := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 2, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := g.r.UpdateDraft(ctx, g.ana, "p1", 7, d.ID, strPtr(model.DraftPending), nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("own comment has no pending state: %v %+v", err, got)
+	}
+	if got, err := g.r.UpdateDraft(ctx, g.ana, "p1", 7, d.ID, strPtr(model.DraftDiscarded), nil); err != nil || got.Status != model.DraftDiscarded {
+		t.Fatalf("delete: %v %+v", err, got)
+	}
+	if got, err := g.r.UpdateDraft(ctx, g.ana, "p1", 7, d.ID, strPtr(model.DraftAccepted), nil); err != nil || got.Status != model.DraftAccepted {
+		t.Fatalf("undo: %v %+v", err, got)
+	}
+	if got, err := g.r.UpdateDraft(ctx, g.ana, "p1", 7, d.ID, nil, strPtr("better")); err != nil || got.Body != "better" {
+		t.Fatalf("edit: %v %+v", err, got)
+	}
+}
+
+func TestPostSendsTheUsersOwnCommentInline(t *testing.T) {
+	ctx := context.Background()
+	g := newRvRig(t)
+	d, err := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 2, "mine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rv := g.rv["c1"]
+	rv.post = model.PostedReview{Ref: "rev-1", Comments: map[string]string{d.ID: "c-1"}}
+	req := model.PostRequest{Confirm: true, Expect: model.PostExpect{Login: "ana", HeadSHA: "h1", Comments: 1, Verdict: "comment"}}
+	if _, err := g.r.Post(ctx, g.ana, "p1", 7, req); err != nil {
+		t.Fatal(err)
+	}
+	sub := rv.posted[0]
+	if len(sub.Comments) != 1 || sub.Comments[0].Body != "mine" || sub.Comments[0].Line != 2 || sub.Comments[0].Side != "new" {
+		t.Fatalf("submission: %+v", sub)
+	}
+}
+
+func TestOwnCommentGoesOutdatedOnAPushWithoutAnAIRun(t *testing.T) {
+	ctx := context.Background()
+	g := newRvRig(t)
+	d, err := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 2, "first line\nmore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 2, "again")
+	if err != nil || other.ID == d.ID {
+		t.Fatalf("each comment gets its own id even on the same clock tick: %v %q", err, other.ID)
+	}
+	if got := earlierTitles([]model.PRDraft{*d}); len(got) != 1 || got[0] != "your comment: first line" {
+		t.Fatalf("a re-run hears what the user already said: %v", got)
+	}
+	rv := g.rv["c1"]
+	rv.detail.HeadSHA = "h2"
+	rv.files[0].Patch = patchA + "+more\n"
+	g.now = g.now.Add(2 * time.Minute)
+	if _, err := g.r.Files(ctx, g.ana, "p1", 7); err != nil {
+		t.Fatal(err)
+	}
+	for _, dr := range g.st.drafts {
+		if dr.Status != model.DraftOutdated {
+			t.Fatalf("own comments on a changed file go outdated after a push: %+v", dr)
+		}
 	}
 }

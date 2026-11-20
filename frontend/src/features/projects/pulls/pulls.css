@@ -189,7 +189,7 @@
 }
 .dv-line {
   display: grid;
-  grid-template-columns: 52px 52px 18px 1fr;
+  grid-template-columns: 28px 52px 52px 18px 1fr;
   font-size: 12px;
   line-height: 1.5;
   min-width: max-content;
@@ -224,6 +224,61 @@
 .dv-line:hover .dv-open,
 .dv-open:focus-visible {
   visibility: visible;
+}
+.dv-add {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 18px;
+  margin: 1px 3px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: var(--brand);
+  color: var(--on-brand);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast);
+}
+.dv-add .icon {
+  width: 13px;
+  height: 13px;
+}
+.dv-line:hover .dv-add,
+.dv-add:focus-visible {
+  opacity: 1;
+}
+.dv-add:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.dv-compose {
+  display: grid;
+  gap: var(--space-2);
+}
+.dv-compose textarea {
+  width: 100%;
+  min-height: 72px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font: 13px/1.5 var(--font-sans);
+  resize: vertical;
+}
+.dv-compose textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-focus);
+}
+.dc-you {
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--info-soft);
+  color: var(--info);
+  font-size: 11px;
+  font-weight: 650;
 }
 .dv-slot {
   display: grid;

@@ -125,6 +125,12 @@ func TestReviewRoutesAuthorizeAndAnswerWithoutAnIdentity(t *testing.T) {
 	if code, _ := chatDo(srv, "vic", "POST", "/api/v1/projects/p1/pull-requests/7/review/post", `{}`); code != http.StatusForbidden {
 		t.Fatalf("viewer must not post: %d", code)
 	}
+	if code, _ := chatDo(srv, "vic", "POST", "/api/v1/projects/p1/pull-requests/7/review/drafts", `{"path":"a.go","side":"new","line":2,"body":"x"}`); code != http.StatusForbidden {
+		t.Fatalf("viewer must not comment: %d", code)
+	}
+	if code, _ := chatDo(srv, "bob", "POST", "/api/v1/projects/p1/pull-requests/7/review/drafts", `{"path":"a.go","side":"new","line":2,"body":"x"}`); code != http.StatusNotFound {
+		t.Fatalf("non-member must not comment: %d", code)
+	}
 	if code, _ := chatDo(srv, "ana", "GET", "/api/v1/projects/p1/pull-requests/x", ""); code != http.StatusBadRequest {
 		t.Fatalf("bad number: %d", code)
 	}
