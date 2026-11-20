@@ -135,12 +135,15 @@ watch(
       });
   },
 );
-watch(
-  () => route.fullPath,
-  () => {
-    if (narrow() && panelOpen.value) panelOpen.value = false;
-  },
-);
+// Switching the panel's own tab (?side=) must not close the overlay; any other navigation does.
+const navKey = computed(() => {
+  const rest = { ...route.query };
+  delete rest.side;
+  return `${route.path}?${JSON.stringify(rest)}`;
+});
+watch(navKey, () => {
+  if (narrow() && panelOpen.value) panelOpen.value = false;
+});
 async function settle() {
   ready.value = false;
   loadError.value = "";

@@ -347,6 +347,7 @@
 
 .composer {
   flex-shrink: 0;
+  container: composer / inline-size;
   display: grid;
   gap: var(--space-1);
   padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
@@ -389,6 +390,7 @@
 }
 .composer .ch-bar {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: var(--space-2);
 }
@@ -619,6 +621,14 @@
 @keyframes task-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+@container composer (max-width: 600px) {
+  .composer .ch-hint {
+    display: none;
+  }
+  .composer .ch-end {
+    margin-left: auto;
   }
 }
 @media (prefers-reduced-motion: reduce) {
