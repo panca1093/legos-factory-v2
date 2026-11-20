@@ -136,6 +136,7 @@ test("full work order journey: project → plan → graph → build → quality 
   await page.getByRole("tab", { name: "Progress", exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 900 });
   // The right panel is the same on every work order tab; the graph sits beside it.
+  await expect(page.locator('[data-test="side-panel"]')).toBeVisible();
   const graph = await page.locator(".tg").boundingBox();
   const panel = await page.locator('[data-test="side-panel"]').boundingBox();
   expect(panel!.x).toBeGreaterThanOrEqual(graph!.x + graph!.width);
