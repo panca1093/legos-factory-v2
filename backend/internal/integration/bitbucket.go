@@ -18,8 +18,9 @@ type Bitbucket struct {
 	proxy    bool
 }
 
-// BitbucketTokenFunc returns a bearer token; force asks for a fresh one after the proxy rejected the last.
-type BitbucketTokenFunc func(ctx context.Context, force bool) (string, error)
+// BitbucketTokenFunc returns a bearer token. stale is the token the proxy just rejected ("" on a first try); the
+// func must then return a different token, minting only when it has none newer.
+type BitbucketTokenFunc func(ctx context.Context, stale string) (string, error)
 
 // NewBitbucketProxy talks to Bitbucket through the workbench curl_session proxy (baseURL is <proxyBaseUrl>/atlassian-bitbucket).
 func NewBitbucketProxy(baseURL string, token BitbucketTokenFunc, hc *http.Client) *Bitbucket {
@@ -30,37 +31,51 @@ func NewBitbucketProxy(baseURL string, token BitbucketTokenFunc, hc *http.Client
 	if base == nil {
 		base = http.DefaultTransport
 	}
+	u, _ := url.Parse(baseURL)
 	c := *hc
-	c.Transport = &proxyTransport{base: base, token: token}
+	c.Transport = &proxyTransport{base: base, token: token, host: u.Host}
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	return &Bitbucket{api: newAPI("bitbucket", baseURL, &c, func(*http.Request) {}), proxy: true}
 }
 
-// proxyTransport signs each request and retries once with a fresh token on a 401.
+// proxyTransport signs requests to the proxy host only and retries once with a fresh token on a 401.
 // Accept-Encoding identity: the proxy labels plain JSON as gzip, which Go's transparent decoding turns into an empty body.
 type proxyTransport struct {
 	base  http.RoundTripper
 	token BitbucketTokenFunc
+	host  string
 }
 
 func (t *proxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.send(req, false)
+	if req.Body != nil {
+		defer req.Body.Close()
+	}
+	if req.URL.Host != t.host {
+		return nil, fmt.Errorf("bitbucket proxy: refusing to send a request to %s", req.URL.Host)
+	}
+	tok, err := t.token(req.Context(), "")
+	if err != nil {
+		return nil, err
+	}
+	resp, err := t.send(req, tok)
 	if err != nil || resp.StatusCode != http.StatusUnauthorized || (req.Body != nil && req.GetBody == nil) {
 		return resp, err
 	}
 	resp.Body.Close()
-	return t.send(req, true)
-}
-
-func (t *proxyTransport) send(req *http.Request, force bool) (*http.Response, error) {
-	tok, err := t.token(req.Context(), force)
-	if err != nil {
+	if tok, err = t.token(req.Context(), tok); err != nil {
 		return nil, err
 	}
+	return t.send(req, tok)
+}
+
+func (t *proxyTransport) send(req *http.Request, tok string) (*http.Response, error) {
 	r := req.Clone(req.Context())
 	if req.GetBody != nil {
-		if r.Body, err = req.GetBody(); err != nil {
+		body, err := req.GetBody()
+		if err != nil {
 			return nil, err
 		}
+		r.Body = body
 	}
 	r.Header.Set("Authorization", "Bearer "+tok)
 	r.Header.Set("Accept-Encoding", "identity")

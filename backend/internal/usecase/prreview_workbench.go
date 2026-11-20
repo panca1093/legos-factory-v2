@@ -28,11 +28,18 @@ type Workbench struct {
 	// Call runs one MCP tool call (agent.CallMCPTool).
 	Call func(ctx context.Context, s model.MCPServer, name string, args any) (string, error)
 	// NewReviewer builds the Bitbucket reviewer for the proxy base URL.
-	NewReviewer func(baseURL string, token func(ctx context.Context, force bool) (string, error)) PRReviewer
+	NewReviewer func(baseURL string, token func(ctx context.Context, stale string) (string, error)) PRReviewer
 	Now         func() time.Time
 
-	mu     sync.Mutex
-	tokens map[string]wbToken
+	mu      sync.Mutex
+	tokens  map[string]wbToken
+	flights map[string]*wbFlight
+}
+
+type wbFlight struct {
+	done chan struct{}
+	t    wbToken
+	err  error
 }
 
 type wbToken struct {
@@ -82,13 +89,53 @@ func (w *Workbench) server(ctx context.Context, id string) (model.MCPServer, err
 	return w.MCP.Wire(ctx, id)
 }
 
-// session returns the cached curl_session token for a server, minting one when it is missing, about to expire or force is set.
-func (w *Workbench) session(ctx context.Context, id string, force bool) (wbToken, error) {
+// signIn is the server's current access token, used only to tell sign-ins apart.
+func (w *Workbench) signIn(ctx context.Context, id string) string {
+	srv, err := w.server(ctx, id)
+	if err != nil {
+		return ""
+	}
+	return srv.Secret["Authorization"]
+}
+
+// session returns the cached curl_session token for a server, minting one when it is missing, about to expire,
+// or equal to stale (the token the proxy just rejected). Concurrent callers share one in-flight mint.
+func (w *Workbench) session(ctx context.Context, id, stale string) (wbToken, error) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	if t, ok := w.tokens[id]; ok && !force && w.now().Before(t.until) {
+	if t, ok := w.tokens[id]; ok && w.now().Before(t.until) && t.token != stale {
+		w.mu.Unlock()
 		return t, nil
 	}
+	if f := w.flights[id]; f != nil {
+		w.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.t, f.err
+		case <-ctx.Done():
+			return wbToken{}, ctx.Err()
+		}
+	}
+	f := &wbFlight{done: make(chan struct{})}
+	if w.flights == nil {
+		w.flights = map[string]*wbFlight{}
+	}
+	w.flights[id] = f
+	w.mu.Unlock()
+	f.t, f.err = w.mint(ctx, id)
+	w.mu.Lock()
+	if f.err == nil {
+		if w.tokens == nil {
+			w.tokens = map[string]wbToken{}
+		}
+		w.tokens[id] = f.t
+	}
+	delete(w.flights, id)
+	w.mu.Unlock()
+	close(f.done)
+	return f.t, f.err
+}
+
+func (w *Workbench) mint(ctx context.Context, id string) (wbToken, error) {
 	srv, err := w.server(ctx, id)
 	if err != nil {
 		return wbToken{}, err
@@ -105,18 +152,17 @@ func (w *Workbench) session(ctx context.Context, id string, force bool) (wbToken
 	if json.Unmarshal([]byte(out), &m) != nil || m.Token == "" || m.ExpiresIn <= 0 {
 		return wbToken{}, errors.New("workbench: curl_session answered with an unexpected shape")
 	}
-	if base, perr := url.Parse(m.ProxyBaseURL); perr != nil || (base.Scheme != "https" && !(base.Scheme == "http" && isLoopback(base.Hostname()))) {
-		return wbToken{}, errors.New("workbench: curl_session returned an unusable proxy URL")
+	base, perr := url.Parse(m.ProxyBaseURL)
+	mcpURL, merr := url.Parse(srv.URL)
+	if perr != nil || merr != nil || (base.Scheme != "https" && !(base.Scheme == "http" && isLoopback(base.Hostname()))) ||
+		base.Hostname() == "" || base.Hostname() != mcpURL.Hostname() {
+		return wbToken{}, errors.New("workbench: curl_session returned a proxy URL that is not on the MCP server's host")
 	}
 	ttl := time.Duration(m.ExpiresIn)*time.Second - time.Minute
 	if ttl <= 0 {
 		ttl = time.Duration(m.ExpiresIn) * time.Second / 2
 	}
 	t := wbToken{token: m.Token, base: strings.TrimRight(m.ProxyBaseURL, "/") + "/atlassian-bitbucket", until: w.now().Add(ttl)}
-	if w.tokens == nil {
-		w.tokens = map[string]wbToken{}
-	}
-	w.tokens[id] = t
 	return t, nil
 }
 
@@ -126,12 +172,12 @@ func (w *Workbench) reviewer(ctx context.Context, id string) (PRReviewer, error)
 	if err := w.candidate(ctx, id); err != nil {
 		return nil, err
 	}
-	t, err := w.session(ctx, id, false)
+	t, err := w.session(ctx, id, "")
 	if err != nil {
 		return nil, err
 	}
-	return w.NewReviewer(t.base, func(ctx context.Context, force bool) (string, error) {
-		t, err := w.session(ctx, id, force)
+	return w.NewReviewer(t.base, func(ctx context.Context, stale string) (string, error) {
+		t, err := w.session(ctx, id, stale)
 		return t.token, err
 	}), nil
 }

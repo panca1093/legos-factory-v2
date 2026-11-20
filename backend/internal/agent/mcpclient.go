@@ -68,6 +68,8 @@ func ListMCPTools(ctx context.Context, s model.MCPServer) ([]model.MCPTool, erro
 // CallMCPTool runs one tools/call on s and returns structuredContent when the
 // server sends it, else the text content joined. isError comes back as an error.
 func CallMCPTool(ctx context.Context, s model.MCPServer, name string, args any) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, mcpDiscoverTimeout)
+	defer cancel()
 	t, done, err := connectMCP(ctx, s)
 	if err != nil {
 		return "", err

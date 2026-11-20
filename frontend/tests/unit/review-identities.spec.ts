@@ -288,4 +288,11 @@ it("offers each workbench server for Bitbucket, pins it, and names it once pinne
     "Posting as ana via Amartha workbench (workbench)",
   );
   expect(w.find('[data-workbench-row="m1"] button').text()).toBe("In use");
+
+  bb.workbench = [];
+  await w.find("button.btn").trigger("click");
+  await flushPromises();
+  expect(w.find('[data-test="pinned"]').text()).toBe(
+    "Posting as ana via workbench (server removed)",
+  );
 });

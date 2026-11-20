@@ -146,6 +146,7 @@ type reviewCtx struct {
 	source       string
 	connectionID string
 	cliUser      string
+	signIn       string // workbench: the MCP sign-in, only to key caches
 	token        string // in memory only; never logged, stored or sent to an agent
 	username     string
 	key          string
@@ -323,7 +324,7 @@ func (r *Reviews) bind(ctx context.Context, rc *reviewCtx, source, connectionID,
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrNoReviewIdentity, err)
 		}
-		rc.rv, rc.connectionID = rv, connectionID
+		rc.rv, rc.connectionID, rc.signIn = rv, connectionID, r.Workbench.signIn(ctx, connectionID)
 	default:
 		return fmt.Errorf("%w: unsupported identity source %q", ErrNoReviewIdentity, source)
 	}
@@ -331,7 +332,7 @@ func (r *Reviews) bind(ctx context.Context, rc *reviewCtx, source, connectionID,
 }
 
 func (r *Reviews) me(ctx context.Context, rc *reviewCtx, fresh bool) (model.HostUser, error) {
-	sum := sha256.Sum256([]byte(rc.token))
+	sum := sha256.Sum256([]byte(rc.token + "|" + rc.signIn))
 	key := strings.Join([]string{"me", rc.userID, rc.provider, rc.host, rc.source, rc.connectionID, rc.cliUser, hex.EncodeToString(sum[:6])}, "|")
 	v, err := r.memo(key, meTTL, fresh, func() (any, error) { return rc.rv.Me(ctx) })
 	if err != nil {

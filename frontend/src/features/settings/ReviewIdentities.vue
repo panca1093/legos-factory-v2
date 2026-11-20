@@ -60,9 +60,11 @@ const isPinnedConn = (g: IdentityGroup, id: string) =>
   g.connections.find((c) => c.id === id)?.login === g.pinned.login;
 const isPinnedWb = (g: IdentityGroup, id: string) =>
   g.pinned?.source === "workbench" && g.pinned.connection_id === id;
-const pinnedWbName = (g: IdentityGroup) =>
-  g.workbench?.find((w) => w.id === g.pinned?.connection_id)?.name;
-const isPinnedCli =(g: IdentityGroup, user: string) =>
+const pinnedWbLabel = (g: IdentityGroup) => {
+  const name = g.workbench?.find((w) => w.id === g.pinned?.connection_id)?.name;
+  return name ? `via ${name} (workbench)` : "via workbench (server removed)";
+};
+const isPinnedCli = (g: IdentityGroup, user: string) =>
   g.pinned?.source === "gh" && g.pinned.login === user;
 onMounted(load);
 </script>
@@ -94,9 +96,10 @@ onMounted(load);
             <h3>{{ g.provider }} · {{ g.host }}</h3>
             <p data-test="pinned">
               <template v-if="g.pinned"
-                >Posting as <b>{{ g.pinned.login }}</b
-                ><template v-if="g.pinned.source === 'workbench'">
-                  via {{ pinnedWbName(g) ?? "workbench" }} (workbench)</template
+                >Posting as <b>{{ g.pinned.login }}</b><template
+                  v-if="g.pinned.source === 'workbench'"
+                >
+                  {{ " " + pinnedWbLabel(g) }}</template
                 ></template
               >
               <template v-else>Not set</template>

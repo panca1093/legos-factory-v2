@@ -147,7 +147,7 @@ func bbPage[T any](ctx context.Context, b *Bitbucket, first string, maxItems int
 		}
 		next := page.Next
 		if b.proxy {
-			next = strings.Replace(next, "https://api.bitbucket.org/2.0", "", 1)
+			next, _ = strings.CutPrefix(next, "https://api.bitbucket.org/2.0")
 		}
 		return out, next, nil
 	})

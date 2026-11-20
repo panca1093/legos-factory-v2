@@ -56,7 +56,7 @@ func newWbRig(t *testing.T) *wbRig {
 	g.rv["wb"].me = model.HostUser{Login: "ana", ID: "{ana}"}
 	g.wb = &Workbench{
 		MCP: &MCPServers{Store: wbStore{recs: []model.MCPServerRec{
-			{ID: "m1", Name: "workbench", Transport: model.MCPHTTP, Status: model.MCPActive, Tools: wbTools("curl_session", "execute_tools", "whoami")},
+			{ID: "m1", Name: "workbench", URL: "https://workbench.example/mcp", Transport: model.MCPHTTP, Status: model.MCPActive, Tools: wbTools("curl_session", "execute_tools", "whoami")},
 			{ID: "m2", Name: "stdio", Transport: model.MCPStdio, Status: model.MCPActive, Tools: wbTools("curl_session", "execute_tools")},
 			{ID: "m3", Name: "no-exec", Transport: model.MCPHTTP, Status: model.MCPActive, Tools: wbTools("curl_session")},
 			{ID: "m4", Name: "signed-out", Transport: model.MCPHTTP, Status: model.MCPNeedsSignIn, Tools: wbTools("curl_session", "execute_tools")},
@@ -70,7 +70,7 @@ func newWbRig(t *testing.T) *wbRig {
 			}
 			return g.clone, nil
 		},
-		NewReviewer: func(baseURL string, token func(context.Context, bool) (string, error)) PRReviewer {
+		NewReviewer: func(baseURL string, token func(context.Context, string) (string, error)) PRReviewer {
 			g.built = append(g.built, "wb "+baseURL)
 			return g.rv["wb"]
 		},
@@ -95,7 +95,7 @@ func TestWorkbenchTokenIsCachedMintedOnceAndRemintedOnExpiryOrForce(t *testing.T
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := g.wb.session(ctx, "m1", false); err != nil {
+			if _, err := g.wb.session(ctx, "m1", ""); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -108,18 +108,49 @@ func TestWorkbenchTokenIsCachedMintedOnceAndRemintedOnExpiryOrForce(t *testing.T
 		t.Fatalf("mint call %q", g.calls[0])
 	}
 	g.now = g.now.Add(14*time.Minute - time.Second)
-	if _, err := g.wb.session(ctx, "m1", false); err != nil || g.mints.Load() != 1 {
+	if _, err := g.wb.session(ctx, "m1", ""); err != nil || g.mints.Load() != 1 {
 		t.Fatalf("still valid: %v %d", err, g.mints.Load())
 	}
 	g.now = g.now.Add(2 * time.Second)
-	if tok, err := g.wb.session(ctx, "m1", false); err != nil || tok.token != "jwt-2" || g.mints.Load() != 2 {
+	if tok, err := g.wb.session(ctx, "m1", ""); err != nil || tok.token != "jwt-2" || g.mints.Load() != 2 {
 		t.Fatalf("within 60 s of expiry must re-mint: %v %+v", err, tok)
 	}
-	if tok, err := g.wb.session(ctx, "m1", true); err != nil || tok.token != "jwt-3" {
+	if tok, err := g.wb.session(ctx, "m1", "jwt-2"); err != nil || tok.token != "jwt-3" {
 		t.Fatalf("force must re-mint: %v %+v", err, tok)
 	}
-	if tok, _ := g.wb.session(ctx, "m1", false); tok.base != "https://workbench.example/c/atlassian-bitbucket" {
+	if tok, _ := g.wb.session(ctx, "m1", ""); tok.base != "https://workbench.example/c/atlassian-bitbucket" {
 		t.Fatalf("base %q", tok.base)
+	}
+}
+
+func TestWorkbenchConcurrent401sOnTheSameTokenRemintOnce(t *testing.T) {
+	g := newWbRig(t)
+	ctx := context.Background()
+	first, _ := g.wb.session(ctx, "m1", "")
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tok, err := g.wb.session(ctx, "m1", first.token)
+			if err != nil || tok.token == first.token {
+				t.Errorf("%v %+v", err, tok)
+			}
+		}()
+	}
+	wg.Wait()
+	if g.mints.Load() != 2 {
+		t.Fatalf("one mint at start plus one re-mint, got %d", g.mints.Load())
+	}
+}
+
+func TestWorkbenchProxyHostMustMatchTheMCPServer(t *testing.T) {
+	g := newWbRig(t)
+	g.wb.Call = func(context.Context, model.MCPServer, string, any) (string, error) {
+		return `{"token":"jwt-x","expiresIn":900,"proxyBaseUrl":"https://other.example/c"}`, nil
+	}
+	if _, err := g.wb.session(context.Background(), "m1", ""); err == nil || strings.Contains(err.Error(), "jwt-x") {
+		t.Fatalf("%v", err)
 	}
 }
 
@@ -128,12 +159,12 @@ func TestWorkbenchMintErrorsNeverCarryTheToken(t *testing.T) {
 	g.wb.Call = func(context.Context, model.MCPServer, string, any) (string, error) {
 		return `{"token":"jwt-secret","expiresIn":900,"proxyBaseUrl":"http://evil.example/c"}`, nil
 	}
-	_, err := g.wb.session(context.Background(), "m1", false)
+	_, err := g.wb.session(context.Background(), "m1", "")
 	if err == nil || strings.Contains(err.Error(), "jwt-secret") {
 		t.Fatalf("a non-https proxy URL must be refused without echoing the token: %v", err)
 	}
 	g.wb.Call = func(context.Context, model.MCPServer, string, any) (string, error) { return "not json jwt-secret", nil }
-	if _, err = g.wb.session(context.Background(), "m1", false); err == nil || strings.Contains(err.Error(), "jwt-secret") {
+	if _, err = g.wb.session(context.Background(), "m1", ""); err == nil || strings.Contains(err.Error(), "jwt-secret") {
 		t.Fatalf("%v", err)
 	}
 }
@@ -147,6 +178,10 @@ func TestWorkbenchCloneAuth(t *testing.T) {
 	}
 	if want := `execute_tools map[executions:[map[args:map[repoSlug:app workspace:acme] tool:bitbucket_get_clone_url]]]`; g.calls[len(g.calls)-1] != want {
 		t.Fatalf("call %q", g.calls[len(g.calls)-1])
+	}
+	g.clone = `{"results":[{"result":"{\"url\":\"https://x-token-auth:text-secret@bitbucket.org/acme/app.git\"}"}]}`
+	if auth, err = g.wb.CloneAuth(ctx, "m1", "acme/app"); err != nil || auth.Password != "text-secret" {
+		t.Fatalf("a JSON-string result must parse too: %+v %v", auth, err)
 	}
 	g.clone = `{"results":[{"tool":"bitbucket_get_clone_url","error":"repository not found"}]}`
 	if _, err = g.wb.CloneAuth(ctx, "m1", "acme/app"); err == nil || !strings.Contains(err.Error(), "repository not found") {
