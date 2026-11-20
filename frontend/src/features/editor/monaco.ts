@@ -84,19 +84,26 @@ function defineTheme(monaco: Monaco) {
   const ok = v("--success", "#1d6e4a");
   const bad = v("--danger", "#a83446");
   const tint = v("--tint", "#daf1de");
+  const sx = (kind: string, fb: string) => v(`--sx-${kind}`, fb);
   monaco.editor.defineTheme("legos", {
     base: dark ? "vs-dark" : "vs",
     inherit: true,
     rules: [
-      { token: "comment", foreground: bare(muted), fontStyle: "italic" },
-      { token: "keyword", foreground: bare(accent), fontStyle: "bold" },
-      { token: "string", foreground: bare(ok) },
-      { token: "number", foreground: bare(warn) },
-      { token: "type", foreground: bare(info) },
+      {
+        token: "comment",
+        foreground: bare(sx("comment", muted)),
+        fontStyle: "italic",
+      },
+      { token: "keyword", foreground: bare(sx("keyword", accent)) },
+      { token: "string", foreground: bare(sx("string", ok)) },
+      { token: "number", foreground: bare(sx("number", warn)) },
+      { token: "constant", foreground: bare(sx("number", warn)) },
+      { token: "type", foreground: bare(sx("type", info)) },
+      { token: "predefined", foreground: bare(sx("type", info)) },
+      { token: "attribute", foreground: bare(sx("type", info)) },
       { token: "delimiter", foreground: bare(muted) },
-      { token: "tag", foreground: bare(accent) },
-      { token: "attribute.name", foreground: bare(info) },
-      { token: "regexp", foreground: bare(bad) },
+      { token: "tag", foreground: bare(sx("tag", accent)) },
+      { token: "regexp", foreground: bare(sx("regexp", bad)) },
     ],
     colors: {
       "editor.background": bg,
