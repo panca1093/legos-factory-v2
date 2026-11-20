@@ -890,8 +890,3 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-@media (max-width: 1280px) {
-  .sp {
-    height: 100%;
-  }
-}

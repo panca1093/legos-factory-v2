@@ -643,6 +643,14 @@ describe("pull request selection", () => {
     w.unmount();
   });
 
+  it("falls back to the load-time tab when ?side= names another page's tab", async () => {
+    const { w } = await mountPR("/projects/p1/pulls/7?side=plan");
+    expect(w.find('[data-test="tab-review"]').attributes("aria-selected")).toBe(
+      "true",
+    );
+    w.unmount();
+  });
+
   it("keeps the tab chosen at load when the last finding is decided", async () => {
     drafts = [draft("d1")];
     const { w } = await mountPR();
