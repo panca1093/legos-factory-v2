@@ -487,8 +487,16 @@
   padding: 0;
   list-style: none;
 }
+.ft {
+  grid-template-columns: minmax(0, 1fr);
+}
 .ft li {
+  min-width: 0;
   padding-left: calc(var(--d, 0) * 12px);
+}
+.ft-file > input,
+.ft-cnt {
+  flex-shrink: 0;
 }
 .ft-dir,
 .ft-name {
@@ -548,8 +556,10 @@
 }
 .ft-diff {
   display: flex;
+  flex-shrink: 0;
   gap: 4px;
   font-size: 10px;
+  white-space: nowrap;
 }
 .pc-lbl {
   font-size: 12px;
@@ -770,5 +780,18 @@
 @media (max-width: 1280px) {
   .prp {
     height: 100%;
+  }
+}
+
+/* The PR panel holds a deep file tree; it grows with the screen instead of the shared 320px. */
+.pw.panel-open.pw-pull {
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 26vw, 420px);
+}
+@media (max-width: 1280px) {
+  .pw-pull .pw-panel {
+    width: min(400px, calc(100vw - 24px));
+  }
+  .pw.panel-open.pw-pull {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
