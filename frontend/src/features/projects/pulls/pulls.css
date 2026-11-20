@@ -581,3 +581,190 @@
   font-size: 12px;
   color: var(--danger);
 }
+
+/* Sticky PR header; file headers stick right under it. */
+.prv-head {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+}
+.prv-head details[open] .md {
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.prv-files {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.df {
+  padding: 0;
+  gap: 0;
+  overflow: clip;
+  scroll-margin-top: calc(var(--prv-head-h, 0px) + 12px);
+}
+.df-head {
+  position: sticky;
+  top: var(--prv-head-h, 0px);
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px var(--space-3);
+  background: var(--surface);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+.df-head .prv-h {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+  font-size: 13px;
+}
+.df-toggle {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+.df-toggle:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+.df-toggle .icon {
+  width: 16px;
+  height: 16px;
+}
+.df-head .ft-diff {
+  font-size: 12px;
+}
+.df-viewed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.df-viewed:has(input:checked) {
+  background: var(--success-soft);
+  border-color: transparent;
+  color: var(--success);
+}
+.df-body > .notice,
+.df-body > .prv-loose {
+  margin: var(--space-3) var(--space-4);
+}
+
+/* Syntax colours; token kinds come from the Monaco tokenizer. */
+.prv {
+  --sx-keyword: #cf222e;
+  --sx-string: #0a3069;
+  --sx-number: #0550ae;
+  --sx-comment: #6e7781;
+  --sx-type: #8250df;
+  --sx-tag: #116329;
+  --sx-regexp: #953800;
+}
+[data-theme="dark"] .prv {
+  --sx-keyword: #ff7b72;
+  --sx-string: #a5d6ff;
+  --sx-number: #79c0ff;
+  --sx-comment: #8b949e;
+  --sx-type: #d2a8ff;
+  --sx-tag: #7ee787;
+  --sx-regexp: #ffa657;
+}
+.tk-keyword {
+  color: var(--sx-keyword);
+}
+.tk-string {
+  color: var(--sx-string);
+}
+.tk-number,
+.tk-constant {
+  color: var(--sx-number);
+}
+.tk-comment {
+  color: var(--sx-comment);
+  font-style: italic;
+}
+.tk-type,
+.tk-attribute,
+.tk-predefined {
+  color: var(--sx-type);
+}
+.tk-tag {
+  color: var(--sx-tag);
+}
+.tk-regexp {
+  color: var(--sx-regexp);
+}
+
+/* One panel card, Changes and Review as tabs, each scrolling on its own. */
+.prp {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 24px);
+  min-height: 0;
+}
+.prp-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.prp-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: var(--muted);
+  font: 600 14px var(--font-display);
+  cursor: pointer;
+}
+.prp-tabs button[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.prp-tabs button:hover {
+  color: var(--ink);
+}
+.prp-badge {
+  padding: 0 7px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--muted);
+  font: 700 11px/18px var(--font-mono, monospace);
+}
+.prp-badge.hot {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.prp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  padding: 14px 18px 18px;
+}
+@media (max-width: 1280px) {
+  .prp {
+    height: 100%;
+  }
+}

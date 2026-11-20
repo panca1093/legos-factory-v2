@@ -118,6 +118,10 @@ export const useReviews = defineStore("reviews", {
     posting: false,
     posted: null as PostedReview | null,
     seq: 0,
+    // File at the top of the diff while scrolling; highlights the tree row.
+    current: "",
+    // Bumped to re-run a jump the URL already holds (same file or finding clicked again).
+    focusSeq: 0,
   }),
   getters: {
     pr: (s) => s.detail?.pr ?? null,
@@ -133,18 +137,6 @@ export const useReviews = defineStore("reviews", {
     general: (s) =>
       s.drafts.filter((d) => !d.inline && d.status !== "superseded"),
     viewedCount: (s) => s.files.filter((f) => f.viewed).length,
-    // With no file picked, open the first one that has something to decide or post.
-    firstFile: (s): string | undefined =>
-      (
-        s.files.find((f) =>
-          s.drafts.some(
-            (d) =>
-              d.inline &&
-              d.path === f.path &&
-              (d.status === "pending" || d.status === "accepted"),
-          ),
-        ) ?? s.files[0]
-      )?.path,
     stale: (s) =>
       !!s.detail?.review?.head_sha &&
       !!s.detail.pr.head_sha &&
