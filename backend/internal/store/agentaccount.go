@@ -12,13 +12,13 @@ import (
 // AgentAccountRepo owns agent_accounts and agent_settings.
 type AgentAccountRepo struct{ DB *sql.DB }
 
-const acctCols = `id, user_id, agent, label, home_dir, active, created_at`
+const acctCols = `id, user_id, agent, label, home_dir, active, created_at, api_provider, api_base_url, api_key_sealed, api_models`
 
 func scanAccount(scan rowScanner) (*model.AgentAccount, error) {
 	var a model.AgentAccount
 	var active int
 	var created int64
-	if err := scan(&a.ID, &a.UserID, &a.Agent, &a.Label, &a.HomeDir, &active, &created); err != nil {
+	if err := scan(&a.ID, &a.UserID, &a.Agent, &a.Label, &a.HomeDir, &active, &created, &a.APIProvider, &a.APIBaseURL, &a.APIKeySealed, &a.APIModels); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, model.ErrAgentAccountNotFound
 		}
@@ -30,9 +30,40 @@ func scanAccount(scan rowScanner) (*model.AgentAccount, error) {
 
 func (r *AgentAccountRepo) Create(ctx context.Context, a *model.AgentAccount) error {
 	a.CreatedAt = time.Now()
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO agent_accounts (`+acctCols+`) VALUES (?,?,?,?,?,0,?)`,
-		a.ID, a.UserID, a.Agent, a.Label, a.HomeDir, a.CreatedAt.Unix())
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO agent_accounts (`+acctCols+`) VALUES (?,?,?,?,?,0,?,?,?,?,?)`,
+		a.ID, a.UserID, a.Agent, a.Label, a.HomeDir, a.CreatedAt.Unix(), a.APIProvider, a.APIBaseURL, a.APIKeySealed, a.APIModels)
 	return err
+}
+
+// SetAPI replaces the account's provider settings; a nil sealed key clears it.
+func (r *AgentAccountRepo) SetAPI(ctx context.Context, userID, agent, id, provider, baseURL string, sealed []byte, models string) error {
+	res, err := r.DB.ExecContext(ctx, `UPDATE agent_accounts SET api_provider = ?, api_base_url = ?, api_key_sealed = ?, api_models = ? WHERE id = ? AND user_id = ? AND agent = ?`,
+		provider, baseURL, sealed, models, id, userID, agent)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return model.ErrAgentAccountNotFound
+	}
+	return nil
+}
+
+// ListAll returns every user's accounts of the agent.
+func (r *AgentAccountRepo) ListAll(ctx context.Context, agent string) ([]model.AgentAccount, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT `+acctCols+` FROM agent_accounts WHERE agent = ? ORDER BY created_at, id`, agent)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.AgentAccount
+	for rows.Next() {
+		a, err := scanAccount(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *a)
+	}
+	return out, rows.Err()
 }
 
 // Get returns the user's own account; another user's is "not found".
