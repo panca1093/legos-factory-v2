@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"legos-factory/backend/internal/mcpfake"
 	"legos-factory/backend/internal/model"
 )
 
@@ -241,5 +242,24 @@ func TestMCPClientStdioKillsTheWholeProcessGroup(t *testing.T) {
 			t.Fatalf("the server's child %d outlived the call", pid)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestMCPClientCallsToolAgainstFakeProvider(t *testing.T) {
+	fp := mcpfake.New(t)
+	s := model.MCPServer{Name: "fake", Transport: model.MCPHTTP, URL: fp.MCPURL(), Secret: map[string]string{"Authorization": "Bearer " + fp.Grant()}}
+	ctx := context.Background()
+	if got, err := CallMCPTool(ctx, s, "echo", map[string]any{"q": "x"}); err != nil || got != `echo {"q":"x"}` {
+		t.Fatalf("text result = %q, %v", got, err)
+	}
+	if got, err := CallMCPTool(ctx, s, "structured", map[string]any{"n": 1}); err != nil || got != `{"n":1}` {
+		t.Fatalf("structured result = %q, %v", got, err)
+	}
+	if _, err := CallMCPTool(ctx, s, "fail", map[string]any{}); err == nil || !strings.Contains(err.Error(), "tool fail failed: fail {}") {
+		t.Fatalf("isError must surface as an error, got %v", err)
+	}
+	s.Secret = map[string]string{"Authorization": "Bearer nope"}
+	if _, err := CallMCPTool(ctx, s, "echo", map[string]any{}); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("bad token must fail the handshake, got %v", err)
 	}
 }

@@ -419,7 +419,15 @@ func (r *Reviews) runBody(ctx context.Context, rc *reviewCtx, rev *model.PRRevie
 		defer release(0)
 	}
 	repoDir := expandPath(rc.project.RepoURL)
-	dir, sha, err := r.Workspace.PrepareReview(ctx, rc.project.ID, rev.Number, run.ID, repoDir, prRef(rc.provider, rev.Number, d.Head), rc.gitAuth())
+	auth := rc.gitAuth()
+	var err error
+	if rc.source == model.IdentitySourceWorkbench {
+		auth, err = r.Workbench.CloneAuth(ctx, rc.connectionID, rc.repo)
+	}
+	var dir, sha string
+	if err == nil {
+		dir, sha, err = r.Workspace.PrepareReview(ctx, rc.project.ID, rev.Number, run.ID, repoDir, prRef(rc.provider, rev.Number, d.Head), auth)
+	}
 	if err != nil {
 		return "", fmt.Errorf("could not check out the pull request: %w", err)
 	}

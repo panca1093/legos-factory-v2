@@ -376,14 +376,16 @@ func (s sess) ID() string { return string(s) }
 type fakeWS struct {
 	mu                    sync.Mutex
 	prepared, removedRuns []string
+	auths                 []*model.GitAuth
 	cleaned               int
 	sha                   string
 	removed               int
 	err                   error
 }
 
-func (w *fakeWS) PrepareReview(_ context.Context, _ string, _ int, runID, _, ref string, _ *model.GitAuth) (string, string, error) {
+func (w *fakeWS) PrepareReview(_ context.Context, _ string, _ int, runID, _, ref string, auth *model.GitAuth) (string, string, error) {
 	w.mu.Lock()
+	w.auths = append(w.auths, auth)
 	w.prepared = append(w.prepared, runID)
 	w.mu.Unlock()
 	return "/tmp/review", w.sha, w.err

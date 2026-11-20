@@ -62,6 +62,17 @@ Live events for review runs: `pr_review.run_started|run_finished|run_failed`, pa
 
 Errors use the existing `{error: {code, message}}` envelope of `internal/http`.
 
+## Identity source `workbench` (Bitbucket via workbench)
+
+Source value `workbench`; `ReviewIdentity.connection_id` holds a workbench MCP server id. Spec and measurements: `WORKBENCH-SPIKE.md`.
+
+- Local dev mode only (`FACTORY_AUTH_MODE=dev`, wired in `app.go` beside gh borrowing). MCP servers are workspace-scoped with one OAuth sign-in, so pinning one in a multi-user deployment would post as someone else. Outside dev mode `workbench` is absent from the options, pinning it answers 403, and a stored workbench pin fails to bind (`no_identity`).
+- Only `bitbucket` on `bitbucket.org`. Candidates are active HTTP MCP servers, signed in, whose discovered tools include `curl_session` and `execute_tools`. `GET /review-identities` lists them as `workbench: [{id, name}]` on that host's group (field absent when none or not allowed); `PUT` validates `connection_id` against them. It is never auto-picked: only a pin selects it.
+- REST goes through the `curl_session` proxy (`<proxyBaseUrl>/atlassian-bitbucket`) with a 900 s token minted for exactly `["atlassian-bitbucket"]`, cached in memory per server until 60 s before expiry, and re-minted once on a 401. The token is never stored, logged, put in an event, or given to an agent. Requests send `Accept-Encoding: identity` (the proxy mislabels plain JSON as gzip).
+- For a pinned workbench identity the backend calls `curl_session` and `execute_tools` directly; the per-role MCP tool toggles govern agents only, so the tools need not be enabled.
+- An OAuth token whose `x-oauth-scopes` lists `pullrequest` counts as able to post reviews.
+- Git checkout: the proxy has no git, so right before the one `git fetch` the run asks `execute_tools` for `bitbucket_get_clone_url` and passes the credentials in the URL to `PrepareReview` for that command only (a per-command `GIT_CONFIG` header, never `.git/config`, the DB or events).
+
 ## File ownership during the parallel build
 
 | Builder | Owns |

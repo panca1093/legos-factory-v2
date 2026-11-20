@@ -251,3 +251,48 @@ it("fills PRs for you from the summary and shows a dash for null", async () => {
   const vals = w.findAll('[data-test="prs-for-you"]').map((e) => e.text());
   expect(vals.sort()).toEqual(["3", "—"]);
 });
+
+it("offers each workbench server for Bitbucket, pins it, and names it once pinned", async () => {
+  const bb = {
+    provider: "bitbucket",
+    host: "bitbucket.org",
+    pinned: null as unknown,
+    connections: [],
+    cli: null,
+    workbench: [{ id: "m1", name: "Amartha workbench" }],
+  };
+  routes["GET /api/v1/review-identities"] = () => json([bb]);
+  routes["PUT /api/v1/review-identities"] = () => {
+    bb.pinned = {
+      provider: "bitbucket",
+      host: "bitbucket.org",
+      source: "workbench",
+      connection_id: "m1",
+      login: "ana",
+    };
+    return json({});
+  };
+  const w = mount(ReviewIdentities, { attachTo: document.body });
+  await flushPromises();
+  const row = w.find('[data-workbench-row="m1"]');
+  expect(row.text()).toContain("via Amartha workbench (workbench)");
+  await row.find("button").trigger("click");
+  await flushPromises();
+  expect(calls.find((c) => c.method === "PUT")?.body).toEqual({
+    provider: "bitbucket",
+    host: "bitbucket.org",
+    source: "workbench",
+    connection_id: "m1",
+  });
+  expect(w.find('[data-test="pinned"]').text()).toBe(
+    "Posting as ana via Amartha workbench (workbench)",
+  );
+  expect(w.find('[data-workbench-row="m1"] button').text()).toBe("In use");
+
+  bb.workbench = [];
+  await w.find("button.btn").trigger("click");
+  await flushPromises();
+  expect(w.find('[data-test="pinned"]').text()).toBe(
+    "Posting as ana via workbench (server removed)",
+  );
+});

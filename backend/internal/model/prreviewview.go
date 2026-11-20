@@ -29,6 +29,7 @@ const (
 const (
 	IdentitySourceConnection = "connection"
 	IdentitySourceGH         = "gh"
+	IdentitySourceWorkbench  = "workbench"
 )
 
 const (
@@ -139,6 +140,12 @@ type ConnectionChoice struct {
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 }
 
+// WorkbenchChoice is a workbench MCP server the user could review Bitbucket through.
+type WorkbenchChoice struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type CLIStatus struct {
 	Tool      string   `json:"tool"`
 	Installed bool     `json:"installed"`
@@ -151,6 +158,7 @@ type IdentityOptions struct {
 	Pinned      *ReviewIdentity    `json:"pinned"`
 	Connections []ConnectionChoice `json:"connections"`
 	CLI         *CLIStatus         `json:"cli"`
+	Workbench   []WorkbenchChoice  `json:"workbench,omitempty"`
 }
 
 type PinRequest struct {

@@ -301,6 +301,38 @@ func (m *MCPServers) wire(ctx context.Context, rec *model.MCPServerRec) (model.M
 	return s, err
 }
 
+// Wire is the wire server for id with its OAuth access token refreshed.
+func (m *MCPServers) Wire(ctx context.Context, id string) (model.MCPServer, error) {
+	rec, err := m.Store.Get(ctx, id)
+	if err != nil {
+		return model.MCPServer{}, err
+	}
+	return m.wire(ctx, rec)
+}
+
+// WorkbenchServers lists the signed-in HTTP servers that offer both curl_session and execute_tools.
+func (m *MCPServers) WorkbenchServers(ctx context.Context) ([]model.MCPServerRec, error) {
+	recs, err := m.Store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []model.MCPServerRec
+	for i := range recs {
+		rec := &recs[i]
+		if rec.Transport != model.MCPHTTP || rec.Status != model.MCPActive {
+			continue
+		}
+		var mint, exec bool
+		for _, t := range rec.Tools {
+			mint, exec = mint || t.Name == "curl_session", exec || t.Name == "execute_tools"
+		}
+		if mint && exec && (rec.Auth != model.MCPAuthOAuth || m.view(ctx, rec).SignedIn) {
+			out = append(out, *rec)
+		}
+	}
+	return out, nil
+}
+
 // Discover lists the server's tools. New tools start disabled, tools the server dropped are removed,
 // and the enabled flag of a tool that is still there is kept unless it no longer qualifies.
 // A connection failure is recorded in last_error and returned in the view, not as an error.

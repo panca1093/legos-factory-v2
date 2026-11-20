@@ -4,7 +4,8 @@ export type Readiness =
 export interface ReviewIdentity {
   provider: string;
   host: string;
-  source: "connection" | "gh" | "glab";
+  source: "connection" | "gh" | "glab" | "workbench";
+  connection_id?: string;
   login: string;
   readiness: Readiness;
   expires_at?: string;
@@ -18,12 +19,18 @@ export interface IdentityConnection {
   expires_at?: string;
 }
 
+export interface IdentityWorkbench {
+  id: string;
+  name: string;
+}
+
 export interface IdentityGroup {
   provider: string;
   host: string;
   pinned: ReviewIdentity | null;
   connections: IdentityConnection[];
   cli: { tool: "gh"; installed: boolean; users: string[] } | null;
+  workbench?: IdentityWorkbench[];
 }
 
 export interface CLILoginStep {

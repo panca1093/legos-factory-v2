@@ -23,34 +23,11 @@ const mcpDiscoverTimeout = 20 * time.Second
 func ListMCPTools(ctx context.Context, s model.MCPServer) ([]model.MCPTool, error) {
 	ctx, cancel := context.WithTimeout(ctx, mcpDiscoverTimeout)
 	defer cancel()
-	var t mcpTransport
-	if s.Transport == model.MCPHTTP {
-		t = &mcpHTTP{url: s.URL, headers: s.Secret, client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
-	} else {
-		st, err := startMCPStdio(ctx, s)
-		if err != nil {
-			return nil, err
-		}
-		defer st.close()
-		t = st
-	}
-	raw, err := t.call(ctx, "initialize", map[string]any{
-		"protocolVersion": "2025-03-26", "capabilities": map[string]any{},
-		"clientInfo": map[string]any{"name": "legos-factory", "version": "1"},
-	})
+	t, done, err := connectMCP(ctx, s)
 	if err != nil {
 		return nil, err
 	}
-	var init struct {
-		ProtocolVersion string `json:"protocolVersion"`
-	}
-	_ = json.Unmarshal(raw, &init)
-	if h, ok := t.(*mcpHTTP); ok {
-		h.version = init.ProtocolVersion
-	}
-	if err := t.notify(ctx, "notifications/initialized"); err != nil {
-		return nil, err
-	}
+	defer done()
 	var tools []model.MCPTool
 	cursor := ""
 	for page := 0; page < 50; page++ {
@@ -86,6 +63,81 @@ func ListMCPTools(ctx context.Context, s model.MCPServer) ([]model.MCPTool, erro
 		cursor = res.NextCursor
 	}
 	return nil, fmt.Errorf("mcp: tools/list has more than 50 pages")
+}
+
+// CallMCPTool runs one tools/call on s and returns structuredContent when the
+// server sends it, else the text content joined. isError comes back as an error.
+func CallMCPTool(ctx context.Context, s model.MCPServer, name string, args any) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, mcpDiscoverTimeout)
+	defer cancel()
+	t, done, err := connectMCP(ctx, s)
+	if err != nil {
+		return "", err
+	}
+	defer done()
+	raw, err := t.call(ctx, "tools/call", map[string]any{"name": name, "arguments": args})
+	if err != nil {
+		return "", err
+	}
+	var res struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+		Structured json.RawMessage `json:"structuredContent"`
+		IsError    bool            `json:"isError"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return "", fmt.Errorf("mcp: tools/call %s returned %q: %w", name, truncate(string(raw), 100), err)
+	}
+	var text []string
+	for _, c := range res.Content {
+		if c.Type == "text" {
+			text = append(text, c.Text)
+		}
+	}
+	if res.IsError {
+		return "", fmt.Errorf("mcp: tool %s failed: %s", name, truncate(strings.Join(text, "\n"), 300))
+	}
+	if len(res.Structured) > 0 && string(res.Structured) != "null" {
+		return string(res.Structured), nil
+	}
+	return strings.Join(text, "\n"), nil
+}
+
+// connectMCP opens the transport and runs initialize + notifications/initialized.
+func connectMCP(ctx context.Context, s model.MCPServer) (mcpTransport, func(), error) {
+	var t mcpTransport
+	done := func() {}
+	if s.Transport == model.MCPHTTP {
+		t = &mcpHTTP{url: s.URL, headers: s.Secret, client: &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	} else {
+		st, err := startMCPStdio(ctx, s)
+		if err != nil {
+			return nil, nil, err
+		}
+		t, done = st, st.close
+	}
+	raw, err := t.call(ctx, "initialize", map[string]any{
+		"protocolVersion": "2025-03-26", "capabilities": map[string]any{},
+		"clientInfo": map[string]any{"name": "legos-factory", "version": "1"},
+	})
+	if err != nil {
+		done()
+		return nil, nil, err
+	}
+	var init struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	_ = json.Unmarshal(raw, &init)
+	if h, ok := t.(*mcpHTTP); ok {
+		h.version = init.ProtocolVersion
+	}
+	if err := t.notify(ctx, "notifications/initialized"); err != nil {
+		done()
+		return nil, nil, err
+	}
+	return t, done, nil
 }
 
 func truncate(s string, n int) string {
