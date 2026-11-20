@@ -61,6 +61,77 @@ it("shows navigation, the prototype desktop topbar, search shortcut and theme to
   w.unmount();
   document.body.innerHTML = "";
 });
+it("lists API-key accounts with their last 7 days of usage", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => ({
+      ok: true,
+      text: async () =>
+        JSON.stringify(
+          url.endsWith("/agents")
+            ? {
+                agents: [
+                  {
+                    id: "claude",
+                    name: "Claude",
+                    installed: true,
+                    enabled: true,
+                    accounts: [
+                      {
+                        id: "system",
+                        label: "System default",
+                        active: true,
+                        status: "signed_in",
+                        usage: { session: { used_pct: 2 } },
+                      },
+                      {
+                        id: "ds",
+                        label: "deepseek",
+                        active: false,
+                        status: "signed_in",
+                        api: { host: "api.deepseek.com", models: {} },
+                      },
+                    ],
+                  },
+                ],
+              }
+            : url.includes("/usage/summary")
+              ? {
+                  accounts: [
+                    {
+                      agent: "claude",
+                      account_id: "ds",
+                      tokens_in: 269000,
+                      tokens_out: 625,
+                      runs: 2,
+                    },
+                  ],
+                }
+              : { projects: [], work_orders: [] },
+        ),
+    })),
+  );
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: "/:pathMatch(.*)*", component: { template: "<div />" } }],
+  });
+  await router.push("/");
+  await router.isReady();
+  const f = useFactory();
+  vi.spyOn(f, "refreshProjects").mockResolvedValue();
+  vi.spyOn(f, "refreshWorkOrders").mockResolvedValue();
+  vi.spyOn(f, "refreshOverview").mockResolvedValue();
+  vi.spyOn(f, "refreshUsage").mockResolvedValue();
+  const w = mount(AppShell, { global: { plugins: [router] } });
+  await flushPromises();
+  const row = w.find('[data-api-account="claude/ds"]');
+  expect(row.text()).toContain("deepseek");
+  expect(row.text()).toContain("api.deepseek.com");
+  expect(row.text()).toContain("7d · 270K tokens · 2 runs");
+  expect(row.text()).not.toContain("$");
+  w.unmount();
+});
+
 it("shows compact agent limits and opens the detail panel", async () => {
   vi.stubGlobal(
     "fetch",

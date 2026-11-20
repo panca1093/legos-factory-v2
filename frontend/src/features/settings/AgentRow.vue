@@ -304,12 +304,12 @@ const signInTarget = computed(() =>
       ? undefined
       : props.agent.accounts.find((a) => a.status === "signed_out"),
 );
-const weekLine = computed(() => {
-  const a = active.value;
+function weekOf(a?: AgentAccount) {
   if (!a?.api) return "";
   const w = props.week?.[`${props.agent.id}/${a.id}`] ?? { tokens: 0, runs: 0 };
   return `Last 7 days: ${compact.format(w.tokens)} tokens · ${w.runs} runs`;
-});
+}
+const weekLine = computed(() => weekOf(active.value));
 const compact = new Intl.NumberFormat("en-US", { notation: "compact" });
 const showBars = computed(() => {
   const a = active.value;
@@ -442,6 +442,9 @@ const showBars = computed(() => {
           >
           <span v-if="a.api" class="help mono" data-test="mapped-models">{{
             mappedLine(a)
+          }}</span>
+          <span v-if="a.api" class="help" data-test="account-week-line">{{
+            weekOf(a)
           }}</span>
         </div>
         <button

@@ -7,6 +7,7 @@ import {
   type AgentAccount,
   type AgentInfo,
   type AgentsResponse,
+  type UsageSummary,
   type UsageWindow,
 } from "../../types/api";
 import { resetsIn } from "../../composables/presentation";
@@ -32,6 +33,26 @@ const rows = computed(() =>
       return { agent: a, acc, accounts: list };
     }),
 );
+const week = ref<Record<string, { tokens: number; runs: number }>>({});
+const compact = new Intl.NumberFormat("en-US", { notation: "compact" });
+// API-key accounts have no provider limits, so the card shows their own last-7-days usage instead
+const apiRows = computed(() =>
+  agents.value
+    .filter((a) => a.installed && a.enabled)
+    .flatMap((a) =>
+      a.accounts
+        .filter((x) => x.api && x.status === "signed_in")
+        .map((acc) => {
+          const w = week.value[`${a.id}/${acc.id}`] ?? { tokens: 0, runs: 0 };
+          return {
+            key: `${a.id}/${acc.id}`,
+            label: acc.label,
+            host: acc.api!.host,
+            line: `7d · ${compact.format(w.tokens)} tokens · ${w.runs} runs`,
+          };
+        }),
+    ),
+);
 const opened = computed(() =>
   rows.value.find((r) => r.agent.id === openId.value),
 );
@@ -50,7 +71,26 @@ const updated = computed(() => {
   return m < 1 ? "Updated just now" : `Updated ${m} min ago`;
 });
 
+async function loadWeek() {
+  try {
+    const tz = encodeURIComponent(
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+    const res = await api.get<UsageSummary>(
+      `/api/v1/usage/summary?days=7&tz=${tz}`,
+    );
+    week.value = Object.fromEntries(
+      (res.accounts ?? []).map((a) => [
+        `${a.agent}/${a.account_id}`,
+        { tokens: a.tokens_in + a.tokens_out, runs: a.runs },
+      ]),
+    );
+  } catch {
+    week.value = {};
+  }
+}
 async function load() {
+  void loadWeek();
   try {
     const res = await api.get<AgentsResponse>("/api/v1/agents");
     agents.value = res.agents ?? [];
@@ -170,7 +210,23 @@ onBeforeUnmount(() => {
       </span>
       <ChevronRight class="icon uc-chev" />
     </button>
-    <p v-if="!rows.length" class="num">
+    <RouterLink
+      v-for="r in apiRows"
+      :key="r.key"
+      class="uc-row"
+      to="/settings#agents"
+      :data-api-account="r.key"
+    >
+      <span class="uc-ava" aria-hidden="true">{{ r.label.slice(0, 1) }}</span>
+      <span class="uc-main">
+        <span class="uc-name"
+          >{{ r.label }}<small>{{ r.host }}</small></span
+        >
+        <span class="uc-minis">{{ r.line }}</span>
+      </span>
+      <ChevronRight class="icon uc-chev" />
+    </RouterLink>
+    <p v-if="!rows.length && !apiRows.length" class="num">
       No agent limits yet. Sign in to Claude or Codex in Settings.
     </p>
   </div>
