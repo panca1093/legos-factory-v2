@@ -213,75 +213,85 @@ const ciLabel = (ci: string) =>
       </button>
     </div>
     <template v-else-if="pr && detail">
-      <section ref="head" class="prv-card prv-head" data-test="pr-header">
-        <div class="prv-title">
-          <h1>
-            {{ pr.title }} <span class="mono muted">#{{ pr.number }}</span>
-            <span v-if="pr.draft" class="prs-draft">Draft</span>
-          </h1>
-          <div class="prs-meta small muted">
-            <span>{{ pr.author.login }}</span>
-            <span class="mono">{{ pr.head }} → {{ pr.base }}</span>
-            <span class="prv-ci" :class="pr.ci" data-test="pr-ci">{{
-              ciLabel(pr.ci)
-            }}</span>
-            <span class="prv-add">+{{ pr.additions }}</span>
-            <span class="prv-del">−{{ pr.deletions }}</span>
-            <span>{{ pr.changed_files }} files</span>
-            <a
-              v-if="safeUrl(pr.url)"
-              :href="safeUrl(pr.url)"
-              target="_blank"
-              rel="noopener noreferrer"
-              data-test="pr-host-link"
-              >Open on host<ExternalLink class="icon"
-            /></a>
+      <div ref="head" class="prv-stick">
+        <section class="prv-card prv-head" data-test="pr-header">
+          <div class="prv-title">
+            <h1>
+              {{ pr.title }} <span class="mono muted">#{{ pr.number }}</span>
+              <span v-if="pr.draft" class="prs-draft">Draft</span>
+            </h1>
+            <div class="prs-meta small muted">
+              <span>{{ pr.author.login }}</span>
+              <span class="mono">{{ pr.head }} → {{ pr.base }}</span>
+              <span class="prv-ci" :class="pr.ci" data-test="pr-ci">{{
+                ciLabel(pr.ci)
+              }}</span>
+              <span class="prv-add">+{{ pr.additions }}</span>
+              <span class="prv-del">−{{ pr.deletions }}</span>
+              <span>{{ pr.changed_files }} files</span>
+              <a
+                v-if="safeUrl(pr.url)"
+                :href="safeUrl(pr.url)"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-test="pr-host-link"
+                >Open on host<ExternalLink class="icon"
+              /></a>
+            </div>
+            <p
+              v-if="detail.identity"
+              class="small muted"
+              data-test="pr-identity"
+            >
+              Posting as <strong>{{ detail.identity.login }}</strong> ·
+              {{ detail.identity.host }} ({{
+                detail.identity.source === "connection"
+                  ? "connection"
+                  : detail.identity.source
+              }})
+            </p>
+            <p v-else class="small muted">
+              No review account.
+              <RouterLink :to="connectionsPath">Connect an account</RouterLink>
+            </p>
           </div>
-          <p v-if="detail.identity" class="small muted" data-test="pr-identity">
-            Posting as <strong>{{ detail.identity.login }}</strong> ·
-            {{ detail.identity.host }} ({{
-              detail.identity.source === "connection"
-                ? "connection"
-                : detail.identity.source
-            }})
-          </p>
-          <p v-else class="small muted">
-            No review account.
-            <RouterLink :to="connectionsPath">Connect an account</RouterLink>
-          </p>
-        </div>
-        <div class="prv-run">
-          <button
-            type="button"
-            class="lg-btn primary"
-            data-test="pr-run"
-            :disabled="!canRun"
-            :title="reason || undefined"
-            @click="run"
-          >
-            {{ runLabel }}
-          </button>
-          <p v-if="reason" class="small muted" data-test="pr-run-reason">
-            {{ reason }}
-          </p>
+          <div class="prv-run">
+            <button
+              type="button"
+              class="lg-btn primary"
+              data-test="pr-run"
+              :disabled="!canRun"
+              :title="reason || undefined"
+              @click="run"
+            >
+              {{ runLabel }}
+            </button>
+            <p v-if="reason" class="small muted" data-test="pr-run-reason">
+              {{ reason }}
+            </p>
+            <p
+              v-else-if="store.run?.state === 'failed'"
+              class="small prv-bad"
+              role="alert"
+            >
+              Last run failed: {{ store.run.error }}
+            </p>
+          </div>
           <p
-            v-else-if="store.run?.state === 'failed'"
-            class="small prv-bad"
-            role="alert"
+            v-if="store.stale"
+            class="notice warn prv-wide"
+            data-test="pr-stale"
           >
-            Last run failed: {{ store.run.error }}
+            PR updated since this review. Drafts on changed files are outdated;
+            re-run the AI review.
           </p>
-        </div>
-        <p v-if="store.stale" class="notice warn prv-wide" data-test="pr-stale">
-          PR updated since this review. Drafts on changed files are outdated;
-          re-run the AI review.
-        </p>
-        <details v-if="pr.body" class="prv-wide">
-          <summary>Description</summary>
-          <!-- eslint-disable-next-line vue/no-v-html -->
-          <div class="md" v-html="bodyHtml"></div>
-        </details>
-      </section>
+          <details v-if="pr.body" class="prv-wide">
+            <summary>Description</summary>
+            <!-- eslint-disable-next-line vue/no-v-html -->
+            <div class="md" v-html="bodyHtml"></div>
+          </details>
+        </section>
+      </div>
 
       <section v-if="general.length" class="prv-card" data-test="pr-general">
         <h2 class="prv-h">General</h2>
