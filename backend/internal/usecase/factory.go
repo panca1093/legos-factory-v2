@@ -58,8 +58,8 @@ type Factory struct {
 	Judge        Judge // a fixed judge that overrides JudgeFn; nil when none
 	// JudgeFn, when set, supplies the judge at call time so Jev follows its toggle; it returns nil when Jev is off.
 	JudgeFn func() Judge
-	// RunEnv gives the environment and extra agent arguments for a run: the account of the work order's creator. nil means none.
-	RunEnv func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) (env, args []string, err error)
+	// RunEnv gives the environment, extra agent arguments and serving account for a run: the account of the work order's creator. nil means none.
+	RunEnv func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) (env, args []string, acct RunAccount, err error)
 	DataDir      string
 	Docker       DockerCLI // nil: the docker binary on PATH
 	stacks       *stackMgr
@@ -240,9 +240,10 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	if harnessTakesMCP(h) {
 		mcpAudit = f.applyMCP(ctx, &req)
 	}
+	var acct RunAccount
 	if f.RunEnv != nil {
 		var eerr error
-		if req.Env, req.Args, eerr = f.RunEnv(ctx, role, wo); eerr != nil {
+		if req.Env, req.Args, acct, eerr = f.RunEnv(ctx, role, wo); eerr != nil {
 			return model.AgentResult{}, "", eerr
 		}
 	}
@@ -287,13 +288,16 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	res, err := h.Result(ctx, ses.ID())
 	f.live.Delete(runID)
 	stopWatch()
+	if acct.Host != "" {
+		res.CostMicros = 0
+	}
 	if err != nil {
 		if opts.Planning {
 			f.closePlanning(wo.ID)
 		}
 		f.failRun(ctx, wo.ID, role, runID, err)
 		if errors.Is(err, model.ErrToolCallAsText) {
-			f.recordUsage(ctx, wo, role, provider, modelID, res)
+			f.recordUsage(ctx, wo, role, provider, modelID, acct, res)
 		}
 		return model.AgentResult{}, runID, err
 	}
@@ -302,24 +306,26 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 			return model.AgentResult{}, runID, err
 		}
 	}
-	f.recordUsage(ctx, wo, role, provider, modelID, res)
+	f.recordUsage(ctx, wo, role, provider, modelID, acct, res)
 	if !opts.Hold {
 		f.event(wo.ID, string(role), "agent_completed", fmt.Sprintf("%s agent finished", role), runRef)
 	}
 	return res, runID, nil
 }
 
-func (f *Factory) recordUsage(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID string, res model.AgentResult) {
+func (f *Factory) recordUsage(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID string, acct RunAccount, res model.AgentResult) {
 	if f.Usage == nil {
 		return
 	}
-	_ = f.Usage.Record(ctx, model.UsageRecord{
+	u := model.UsageRecord{
 		WOID: wo.ID, UserID: wo.CreatedBy, Role: string(role),
 		Provider: provider, Model: modelID,
 		TokensIn: res.TokensIn, TokensOut: res.TokensOut,
 		CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
 		CostMicros: res.CostMicros, Source: res.CostSource,
-	})
+	}
+	acct.Stamp(&u)
+	_ = f.Usage.Record(ctx, u)
 }
 
 func (f *Factory) wsLock(woID string) *sync.Mutex       { return lockFor(&f.wsMu, woID) }

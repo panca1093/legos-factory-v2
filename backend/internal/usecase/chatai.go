@@ -83,14 +83,17 @@ func (c *Chat) gen(ctx context.Context, userID, modelRef, prompt string) (model.
 
 // genRecorded is gen plus its cost in usage; the record outlives a cancelled ctx.
 func (c *Chat) genRecorded(ctx context.Context, u *model.User, modelRef, prompt string) (model.AgentResult, error) {
+	acct := c.account(ctx, u.ID)
 	res, err := c.gen(ctx, u.ID, modelRef, prompt)
 	if c.Usage != nil && (res.TokensIn != 0 || res.TokensOut != 0 || res.CostMicros != 0) {
 		provider, modelID := SplitModelRef(modelRef)
-		_ = c.Usage.Record(context.WithoutCancel(ctx), model.UsageRecord{
+		rec := model.UsageRecord{
 			UserID: u.ID, Role: string(model.AgentChat), Provider: provider, Model: modelID,
 			TokensIn: res.TokensIn, TokensOut: res.TokensOut, CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
 			CostMicros: res.CostMicros, Source: res.CostSource,
-		})
+		}
+		acct.Stamp(&rec)
+		_ = c.Usage.Record(context.WithoutCancel(ctx), rec)
 	}
 	return res, err
 }

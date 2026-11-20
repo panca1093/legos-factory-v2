@@ -240,6 +240,21 @@ export interface UsageTotals {
   tokens_in: number;
   tokens_out: number;
   cost_micros: number;
+  cost_partial?: boolean;
+  runs: number;
+}
+export interface UsageAccount {
+  agent: string;
+  account_id: string;
+  label: string;
+  kind: "subscription" | "api";
+  host?: string;
+  deleted?: boolean;
+  untracked?: boolean;
+  served_models: string[];
+  tokens_in: number;
+  tokens_out: number;
+  cost_micros: number | null;
   runs: number;
 }
 export interface UsageSummary {
@@ -248,6 +263,7 @@ export interface UsageSummary {
   to: string;
   activity: UsageDay[];
   roles: (UsageTotals & { role: string })[];
+  accounts: UsageAccount[];
   month_to_date: UsageTotals & { month: string };
 }
 

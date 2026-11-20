@@ -11,10 +11,10 @@ import (
 type UsageRepo struct{ DB *sql.DB }
 
 func (r *UsageRepo) Insert(ctx context.Context, u model.UsageRecord) error {
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO usage_records (id, wo_id, user_id, role, provider, model, tokens_in, tokens_out, cache_read_tokens, cache_write_tokens, cost_micros, source, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO usage_records (id, wo_id, user_id, role, provider, model, tokens_in, tokens_out, cache_read_tokens, cache_write_tokens, cost_micros, source, created_at, agent, account_id, served_model, provider_host)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		u.ID, nullStr(u.WOID), nullStr(u.UserID), u.Role, u.Provider, u.Model,
-		u.TokensIn, u.TokensOut, u.CacheRead, u.CacheWrite, u.CostMicros, u.Source, u.CreatedAt.Unix())
+		u.TokensIn, u.TokensOut, u.CacheRead, u.CacheWrite, u.CostMicros, u.Source, u.CreatedAt.Unix(), u.Agent, u.AccountID, u.ServedModel, u.ProviderHost)
 	return err
 }
 
@@ -33,7 +33,7 @@ func (r *UsageRepo) SpentMicros(ctx context.Context) int64 {
 
 // Since returns a user's usage records created at or after since, oldest first.
 func (r *UsageRepo) Since(ctx context.Context, userID string, since time.Time) ([]model.UsageRecord, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT id, COALESCE(wo_id,''), role, provider, model, tokens_in, tokens_out, cost_micros, source, created_at
+	rows, err := r.DB.QueryContext(ctx, `SELECT id, COALESCE(wo_id,''), role, provider, model, tokens_in, tokens_out, cost_micros, source, created_at, agent, account_id, served_model, provider_host
 		FROM usage_records WHERE user_id = ? AND created_at >= ? ORDER BY created_at`, userID, since.Unix())
 	if err != nil {
 		return nil, err
@@ -43,11 +43,30 @@ func (r *UsageRepo) Since(ctx context.Context, userID string, since time.Time) (
 	for rows.Next() {
 		u := model.UsageRecord{UserID: userID}
 		var at int64
-		if err := rows.Scan(&u.ID, &u.WOID, &u.Role, &u.Provider, &u.Model, &u.TokensIn, &u.TokensOut, &u.CostMicros, &u.Source, &at); err != nil {
+		if err := rows.Scan(&u.ID, &u.WOID, &u.Role, &u.Provider, &u.Model, &u.TokensIn, &u.TokensOut, &u.CostMicros, &u.Source, &at, &u.Agent, &u.AccountID, &u.ServedModel, &u.ProviderHost); err != nil {
 			return nil, err
 		}
 		u.CreatedAt = time.Unix(at, 0)
 		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// AccountLabels maps a user's agent account id to its agent and label; deleted accounts are absent.
+func (r *UsageRepo) AccountLabels(ctx context.Context, userID string) (map[string]model.UsageAccountLabel, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT id, agent, label FROM agent_accounts WHERE user_id = ?`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]model.UsageAccountLabel{}
+	for rows.Next() {
+		var id string
+		var l model.UsageAccountLabel
+		if err := rows.Scan(&id, &l.Agent, &l.Label); err != nil {
+			return nil, err
+		}
+		out[id] = l
 	}
 	return out, rows.Err()
 }

@@ -1115,6 +1115,104 @@ const dsAcct = (over: object = {}) =>
     ...over,
   });
 
+it("an API-key account card shows this week's tokens and runs from the usage summary", async () => {
+  routes["GET /api/v1/usage/summary"] = () =>
+    json({
+      days: 7,
+      accounts: [
+        {
+          agent: "claude",
+          account_id: "ds",
+          tokens_in: 1000,
+          tokens_out: 234,
+          runs: 3,
+        },
+        {
+          agent: "claude",
+          account_id: "other",
+          tokens_in: 9,
+          tokens_out: 9,
+          runs: 9,
+        },
+      ],
+    });
+  agentsBody.agents[0].accounts = [
+    acct({ active: false }),
+    dsAcct({
+      active: true,
+      api: {
+        provider: "deepseek",
+        base_url: "https://api.deepseek.com/anthropic",
+        host: "api.deepseek.com",
+        models: {},
+        has_key: true,
+      },
+    }),
+  ];
+  const { w } = await render();
+  expect(sent("GET", "/api/v1/usage/summary")).toHaveLength(1);
+  const claude = w.find('[data-agent="claude"]');
+  expect(claude.find('[data-test="week-line"]').text()).toBe(
+    "Last 7 days: 1.2K tokens · 3 runs",
+  );
+  expect(w.find('[data-agent="codex"] [data-test="week-line"]').exists()).toBe(
+    false,
+  );
+  w.unmount();
+});
+
+it("a subscription account with bars still renders the usage block, and an API account with usage_error still says unavailable", async () => {
+  routes["GET /api/v1/usage/summary"] = () => json({ days: 7, accounts: [] });
+  agentsBody.agents[0].accounts = [
+    acct({ usage: { session: { used_pct: 58 }, week: { used_pct: 10 } } }),
+  ];
+  let r = await render();
+  expect(r.w.find('[data-meter="session"]').exists()).toBe(true);
+  expect(r.w.find('[data-test="week-line"]').exists()).toBe(false);
+  r.w.unmount();
+
+  agentsBody.agents[0].accounts = [
+    dsAcct({
+      active: true,
+      usage_error: "unavailable",
+      api: {
+        provider: "deepseek",
+        base_url: "https://api.deepseek.com/anthropic",
+        host: "api.deepseek.com",
+        models: {},
+        has_key: true,
+      },
+    }),
+  ];
+  r = await render();
+  expect(r.w.find('[data-test="usage-error"]').text()).toBe(
+    "Usage unavailable",
+  );
+  expect(r.w.find('[data-test="week-line"]').exists()).toBe(true);
+  r.w.unmount();
+});
+
+it("an API-key account with no usage this week says zero", async () => {
+  routes["GET /api/v1/usage/summary"] = () => json({ days: 7, accounts: [] });
+  agentsBody.agents[0].accounts = [
+    dsAcct({
+      active: true,
+      api: {
+        provider: "deepseek",
+        base_url: "https://api.deepseek.com/anthropic",
+        host: "api.deepseek.com",
+        models: {},
+        has_key: true,
+      },
+    }),
+  ];
+  const { w } = await render();
+  expect(w.find('[data-test="week-line"]').text()).toBe(
+    "Last 7 days: 0 tokens · 0 runs",
+  );
+  w.unmount();
+});
+
 it("role chips show only with 2+ accounts and PUT the account's new role list", async () => {
   routes["PUT /api/v1/agents/claude/accounts/ds/roles"] = () =>
     new Response(null, { status: 204 });

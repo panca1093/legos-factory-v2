@@ -66,6 +66,7 @@ type UsageStore interface {
 	Totals(ctx context.Context) (model.UsageTotals, error)
 	SpentMicros(ctx context.Context) int64
 	Since(ctx context.Context, userID string, since time.Time) ([]model.UsageRecord, error)
+	AccountLabels(ctx context.Context, userID string) (map[string]model.UsageAccountLabel, error)
 }
 
 type ChatStore interface {

@@ -946,6 +946,28 @@ const rvReply = `{"summary":"Looks fine overall.","findings":[
  {"severity":"info","path":"a.go","side":"new","line":99,"title":"off diff","body":"general"},
  {"severity":"info","path":"nope.go","side":"new","line":1,"title":"unknown file","body":"general"}]}`
 
+func TestRunOnAnAPIAccountStoresNoCost(t *testing.T) {
+	ctx := context.Background()
+	g := newRvRig(t)
+	g.ag.replies = []string{rvReply}
+	g.r.Agent = func(context.Context, string) (ReviewAgent, error) {
+		return ReviewAgent{Harness: g.ag, Agent: "claude", Provider: "anthropic", Model: "m",
+			Account: RunAccount{Agent: "claude", AccountID: "api1", Host: "api.deepseek.com"}}, nil
+	}
+	if _, err := g.r.StartRun(ctx, g.ana, "p1", 7); err != nil {
+		t.Fatal(err)
+	}
+	g.r.Wait()
+	rev, _ := g.st.Get(ctx, "ana", "github", "github.com", "acme/app", 7)
+	last, _ := g.st.LatestRun(ctx, rev.ID)
+	if last.State != "completed" || last.CostMicros != 0 {
+		t.Fatalf("run row: %+v", last)
+	}
+	if len(g.use.recs) != 1 || g.use.recs[0].CostMicros != 0 || g.use.recs[0].AccountID != "api1" {
+		t.Fatalf("usage: %+v", g.use.recs)
+	}
+}
+
 func TestRunStoresValidatedDraftsRecordsUsageAndCleansUp(t *testing.T) {
 	ctx := context.Background()
 	g := newRvRig(t)

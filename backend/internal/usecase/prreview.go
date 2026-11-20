@@ -54,6 +54,7 @@ type ReviewAgent struct {
 	Model    string
 	Env      []string
 	Args     []string
+	Account  RunAccount
 }
 
 // Reviews owns pull-request review: identity resolution, listing, drafts, posting and AI runs.
