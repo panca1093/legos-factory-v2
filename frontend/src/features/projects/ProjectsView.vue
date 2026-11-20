@@ -1,7 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
-import { FolderPlus, Plus, Search } from "lucide-vue-next";
+import {
+  CircleDot,
+  FolderPlus,
+  GitPullRequest,
+  PackageCheck,
+  Plus,
+  Search,
+} from "lucide-vue-next";
 import "./projects.css";
 import { useFactory } from "../../stores/factory";
 import { useSession } from "../../stores/session";
@@ -60,6 +67,8 @@ const provider = (p: Project) =>
       : p.remote_repo || p.git_connection_id
         ? "Remote"
         : "Local folder";
+const footTone = (c: Card) =>
+  c.needsYou ? "warn" : c.running ? "live" : c.shipped ? "ok" : "idle";
 const footStatus = (c: Card) =>
   c.needsYou
     ? "Waiting on you"
@@ -162,8 +171,7 @@ onMounted(async () => {
       <div>
         <h1>Projects</h1>
         <p class="subtitle">
-          Each project is one door: its Factory, its pull requests and its
-          code.
+          Each project is one door: its Factory, its pull requests and its code.
         </p>
       </div>
       <div class="row">
@@ -240,7 +248,11 @@ onMounted(async () => {
         Add project
       </button>
     </div>
-    <p v-else-if="!cards.length" class="muted section-gap" data-test="projects-no-match">
+    <p
+      v-else-if="!cards.length"
+      class="muted section-gap"
+      data-test="projects-no-match"
+    >
       No projects match “{{ search.trim() }}”.
     </p>
     <ul v-else class="pj-grid" aria-label="Projects">
@@ -248,10 +260,11 @@ onMounted(async () => {
         <RouterLink
           :to="`/projects/${c.project.id}`"
           class="lg-card pj-card"
+          :class="`t${tone(c.project.name)}`"
           data-test="project-card"
         >
           <div class="pj-top">
-            <span class="pj-avatar" :class="`t${tone(c.project.name)}`">{{
+            <span class="pj-avatar" aria-hidden="true">{{
               initials(c.project.name)
             }}</span>
             <div class="pj-id">
@@ -263,21 +276,28 @@ onMounted(async () => {
             >
           </div>
           <dl class="pj-stats">
-            <div>
+            <div class="s-run" :class="{ on: c.running > 0 }">
+              <dt><CircleDot class="icon" aria-hidden="true" />Running</dt>
               <dd>{{ c.running }}</dd>
-              <dt>WO running</dt>
             </div>
-            <div>
+            <div
+              class="s-pr"
+              :class="{ on: Number(prsForYou(c.project.id)) > 0 }"
+            >
+              <dt>
+                <GitPullRequest class="icon" aria-hidden="true" />PRs for you
+              </dt>
               <dd data-test="prs-for-you">{{ prsForYou(c.project.id) }}</dd>
-              <dt>PRs for you</dt>
             </div>
-            <div>
-              <dd>{{ c.shippedRecent }}</dd>
-              <dt>shipped · 30d</dt>
+            <div class="s-ship" :class="{ on: c.shippedRecent > 0 }">
+              <dt><PackageCheck class="icon" aria-hidden="true" />Shipped</dt>
+              <dd>
+                {{ c.shippedRecent }}<small class="pj-span">last 30d</small>
+              </dd>
             </div>
           </dl>
           <div class="pj-foot">
-            <small class="muted"
+            <small class="pj-status" :class="footTone(c)"
               >{{ footStatus(c) }} · {{ ago(c.lastActivity) }}</small
             >
             <span class="fx-pill purple">{{ provider(c.project) }}</span>
