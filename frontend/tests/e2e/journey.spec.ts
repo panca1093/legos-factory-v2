@@ -134,18 +134,12 @@ test("full work order journey: project → plan → graph → build → quality 
   expect(checksBox!.y + checksBox!.height).toBeLessThanOrEqual(left!.y);
   expect(Math.abs(left!.y - right!.y)).toBeLessThan(1);
   await page.getByRole("tab", { name: "Progress", exact: true }).click();
-  await expect(page.getByText("Execution runs", { exact: true })).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 900 });
+  // The right panel is the same on every work order tab; the graph sits beside it.
   const graph = await page.locator(".tg").boundingBox();
-  const rcol = await page.locator(".fx-rcol").boundingBox();
-  expect(graph!.width / rcol!.width).toBeGreaterThan(3.9);
-  expect(graph!.width / rcol!.width).toBeLessThan(4.1);
-  await page.setViewportSize({ width: 1000, height: 900 });
-  const stackedGraph = await page.locator(".tg").boundingBox();
-  const stackedCol = await page.locator(".fx-rcol").boundingBox();
-  expect(stackedCol!.y).toBeGreaterThanOrEqual(
-    stackedGraph!.y + stackedGraph!.height,
-  );
+  const panel = await page.locator('[data-test="side-panel"]').boundingBox();
+  expect(panel!.x).toBeGreaterThanOrEqual(graph!.x + graph!.width);
+  await expect(page.getByText("Execution runs", { exact: true })).toBeVisible();
   await page.getByText("Execution runs", { exact: true }).click();
   await expect(page.getByText("mock", { exact: true }).first()).toBeVisible();
   await page.getByRole("tab", { name: "Review", exact: true }).click();

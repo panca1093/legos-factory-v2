@@ -2,7 +2,7 @@ import { mount, flushPromises } from "@vue/test-utils";
 import { expect, it } from "vitest";
 import ReviewPanel from "../../src/features/factory/reviews/ReviewPanel.vue";
 import NowCard from "../../src/features/factory/work-orders/NowCard.vue";
-import ActivityPanel from "../../src/features/factory/runs/ActivityPanel.vue";
+import HappeningCard from "../../src/features/factory/runs/HappeningCard.vue";
 import {
   checks,
   findings,
@@ -66,7 +66,7 @@ it("emits all supported dispositions for an authorized reviewer", async () => {
   w.unmount();
 });
 it("preserves actor attribution, events and run errors", () => {
-  const w = mount(ActivityPanel, {
+  const w = mount(HappeningCard, {
     props: {
       events,
       runs: [
