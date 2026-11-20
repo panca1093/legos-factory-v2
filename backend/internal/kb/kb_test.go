@@ -403,6 +403,23 @@ func TestSyncGitFactorySkipsReserved(t *testing.T) {
 	}
 }
 
+func TestSyncSkipsSymlinks(t *testing.T) {
+	secret := filepath.Join(t.TempDir(), "id_ed25519.md")
+	put(t, filepath.Dir(secret), filepath.Base(secret), "PRIVATE KEY\n")
+	root := t.TempDir()
+	if err := os.Symlink(secret, filepath.Join(root, "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+	put(t, root, "a.md", "# A\n")
+	idx := &fakeIndex{docs: map[string]model.KBParsed{}}
+	if _, err := syncDir(context.Background(), idx, root, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(idx.docs) != 1 || idx.docs["factory:p:a.md"].Title != "A" {
+		t.Fatalf("indexed %v; a symlink must be skipped", idx.docs)
+	}
+}
+
 func TestSyncFactoryNeverIndexesJournal(t *testing.T) {
 	b, err := OpenBundle(filepath.Join(t.TempDir(), "kb"), false)
 	if err != nil {

@@ -65,7 +65,7 @@ func bootKB(t *testing.T) *kbRig {
 	srv := New(&model.Config{FrontendOrigin: "http://localhost:5173"}, log)
 	srv.Auth = &usecase.Identity{Users: users, Mode: "dev"}
 	srv.Projects = projects
-	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo, WO: &store.WorkOrderRepo{DB: db}, DataDir: t.TempDir()}
+	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo}
 	rig.srv, rig.know, rig.db = srv, know, db
 	srv.Usage = usecase.NewUsageTracker(&store.UsageRepo{DB: db})
 

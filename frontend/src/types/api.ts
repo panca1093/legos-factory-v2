@@ -438,7 +438,7 @@ export interface KnowledgeRecord {
 
 export interface KBDoc {
   id: string;
-  source: "repo" | "factory";
+  source: "factory";
   project_id?: string;
   path: string;
   commit_sha: string;

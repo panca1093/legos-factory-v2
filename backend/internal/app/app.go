@@ -250,7 +250,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.MCP = mcpServers
 	srv.Local = localProjects
 	srv.Catalog = catalog
-	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo, WO: woRepo, DataDir: cfg.DataDir}
+	srv.KBDocs = &usecase.KBDocs{KB: know, Projects: projects, Proj: projRepo}
 	srv.Factory = factory
 	srv.Bus = bus
 	srv.Auth = auth

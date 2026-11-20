@@ -309,7 +309,7 @@ func TestDisputeDraftIsInertUntilApprovedAndDiscardRemovesIt(t *testing.T) {
 	}
 
 	docs := &KBDocs{KB: r.know, Projects: &Projects{Store: r.f.Proj, Members: &store.MemberRepo{DB: r.db}, Users: &store.UserRepo{DB: r.db}},
-		Proj: r.f.Proj, WO: r.wos, DataDir: r.f.DataDir}
+		Proj: r.f.Proj}
 	u := &model.User{ID: "u1", Role: model.RoleOwner}
 	approved, err := docs.Approve(ctx, u, d.ID, "good rule")
 	if err != nil || approved.Status != model.KBStatusStable || approved.Trust != model.KBTrustHuman {

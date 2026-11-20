@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -21,14 +20,12 @@ var factoryListTypes = map[string]bool{
 
 var ErrKBReadOnly = fmt.Errorf("%w: work-order documents are read-only records", model.ErrStateConflict)
 
-// KBDocs serves the Knowledge page: browsing both sources and editing,
-// approving, discarding or resetting factory documents.
+// KBDocs serves the Knowledge page: browsing and editing, approving,
+// discarding or resetting factory documents.
 type KBDocs struct {
 	KB       *KB
 	Projects *Projects
 	Proj     ProjectStore
-	WO       WorkOrderStore
-	DataDir  string
 }
 
 type KBListParams struct{ ProjectID, Source, Type, Status, Q string }
@@ -187,12 +184,8 @@ func (s *KBDocs) Detail(ctx context.Context, u *model.User, id string) (*KBDetai
 	}
 	det := &KBDetail{Doc: *d, Links: []model.KBDoc{}, Backlinks: []model.KBDoc{},
 		Editable: d.Source == model.KBSourceFactory && !d.ReadOnly && u.Role.CanWrite()}
-	if d.Source == model.KBSourceFactory {
-		det.DefaultAvailable = s.KB.Bundle.HasDefault(d.Path)
-		det.Frontmatter, det.Body, err = s.KB.Bundle.Read(d.Path)
-	} else {
-		det.Frontmatter, det.Body, det.Note, err = s.readRepoDoc(ctx, d)
-	}
+	det.DefaultAvailable = s.KB.Bundle.HasDefault(d.Path)
+	det.Frontmatter, det.Body, err = s.KB.Bundle.Read(d.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -205,37 +198,6 @@ func (s *KBDocs) Detail(ctx context.Context, u *model.User, id string) (*KBDetai
 		det.Backlinks = append(det.Backlinks, back...)
 	}
 	return det, nil
-}
-
-// readRepoDoc reads a repo document as committed at the commit it was indexed
-// from, in the project's newest work order workspace that has it, else in the
-// project's local repository. A document indexed without a commit is read from
-// the working tree, never through a symlink.
-func (s *KBDocs) readRepoDoc(ctx context.Context, d *model.KBDoc) (map[string]any, string, string, error) {
-	var roots []string
-	if wos, err := s.WO.List(ctx); err == nil {
-		sort.SliceStable(wos, func(a, b int) bool { return wos[a].CreatedAt.After(wos[b].CreatedAt) })
-		for _, wo := range wos {
-			if wo.ProjectID == d.ProjectID {
-				roots = append(roots, model.WorktreeDir(s.DataDir, wo.ProjectID, wo.ID))
-			}
-		}
-	}
-	if proj, err := s.Proj.Get(ctx, d.ProjectID); err == nil {
-		if info, err := os.Stat(proj.RepoURL); err == nil && info.IsDir() {
-			roots = append(roots, proj.RepoURL)
-		}
-	}
-	for _, root := range roots {
-		read := func() (map[string]any, string, error) { return kb.ReadMarkdown(root, d.Path) }
-		if d.CommitSHA != "" {
-			read = func() (map[string]any, string, error) { return kb.ReadGitMarkdown(root, d.CommitSHA, d.Path) }
-		}
-		if front, body, err := read(); err == nil {
-			return front, body, "", nil
-		}
-	}
-	return map[string]any{}, "", "The repository checkout holding this document is not available on this server.", nil
 }
 
 func (s *KBDocs) Update(ctx context.Context, u *model.User, id string, front map[string]any, body string) (*model.KBDoc, error) {
