@@ -1,46 +1,34 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { RouterLink, useRoute, useRouter } from "vue-router";
-import { ExternalLink, MessageSquarePlus } from "lucide-vue-next";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
+import { RouterLink, useRoute } from "vue-router";
+import { ExternalLink } from "lucide-vue-next";
 import "../../factory/factory.css";
 import "./pulls.css";
 import { eventTarget, usePRRefresh, useReviews } from "../../../stores/reviews";
 import { useToast } from "../../../composables/useToast";
 import { renderMarkdown } from "../../knowledge/notes";
-import { parsePatch, scrollToDraft } from "./diff";
+import { fileTree, scrollToDraft, scrollToFile } from "./diff";
+import DiffFile from "./DiffFile.vue";
 import DraftCard from "./DraftCard.vue";
-import { connectionsPath, type PRDraft } from "../../../types/review";
+import { connectionsPath } from "../../../types/review";
 
 const route = useRoute(),
-  router = useRouter(),
   store = useReviews(),
   { toast } = useToast();
 const projectId = computed(() => String(route.params.id));
 const number = computed(() => Number(route.params.number));
-const file = computed(() => {
-  const want = route.query.file ?? store.firstFile;
-  return (
-    store.files.find((f) => f.path === want) ?? store.files[0] ?? undefined
-  );
-});
-const hunks = computed(() => (file.value ? parsePatch(file.value.patch) : []));
-
-// The default file is pinned into the URL once loaded, so later draft changes never swap the diff under the reader.
-watch(
-  () =>
-    [
-      store.loading,
-      store.files.length,
-      store.number,
-      route.query.file,
-    ] as const,
-  ([loading, n, num, want]) => {
-    if (loading || !n || want || num !== number.value || !store.firstFile)
-      return;
-    void router.replace({ query: { ...route.query, file: store.firstFile } });
-  },
-  { immediate: true },
+// Same order as the Changes tree, so scrolling the diff walks the tree top to bottom.
+const files = computed(() =>
+  fileTree(store.files, new Set()).flatMap((r) => (r.file ? [r.file] : [])),
 );
+
 watch(
   [projectId, number],
   () => void store.load(projectId.value, number.value),
@@ -83,105 +71,112 @@ async function run() {
     toast(e instanceof Error ? e.message : String(e));
   }
 }
-
-const visible = (d: PRDraft) =>
-  d.status !== "superseded" || d.path === file.value?.path;
-const fileDrafts = computed(() =>
-  store.drafts.filter(
-    (d) => d.inline && d.path === file.value?.path && visible(d),
-  ),
-);
-const anchored = computed(() => {
-  const map = new Map<string, PRDraft[]>();
-  const loose: PRDraft[] = [];
-  for (const d of fileDrafts.value) {
-    let key = "";
-    hunks.value.forEach((h, hi) =>
-      h.lines.forEach((l, li) => {
-        if (key) return;
-        const hit =
-          d.side === "old"
-            ? l.t !== "add" && l.o === (d.old_line || d.line)
-            : l.t !== "del" && l.n === d.line;
-        if (hit) key = `${hi}:${li}`;
-      }),
-    );
-    if (key) map.set(key, [...(map.get(key) ?? []), d]);
-    else loose.push(d);
-  }
-  return { map, loose };
-});
 const general = computed(() => store.drafts.filter((d) => !d.inline));
 
-// ?draft= (set by the Review card's findings) scrolls to that card once, as soon as it is on screen.
-let scrolledTo = "";
+// Viewed files start collapsed; ticking Viewed later collapses, unticking reopens.
+const collapsed = ref(new Set<string>());
+const forced = ref(new Set<string>());
+let seededFor = "";
+const was = new Map<string, boolean>();
 watch(
-  () => [route.query.draft, file.value?.path, store.drafts.length] as const,
-  async ([id]) => {
-    if (typeof id !== "string" || !id || id === scrolledTo) return;
-    await nextTick();
-    if (scrollToDraft(id)) scrolledTo = id;
+  () => store.files,
+  (fs) => {
+    const key = `${store.projectId}#${store.number}`;
+    if (key !== seededFor) {
+      if (!fs.length) return;
+      seededFor = key;
+      was.clear();
+      collapsed.value = new Set(fs.filter((f) => f.viewed).map((f) => f.path));
+    } else {
+      const next = new Set(collapsed.value);
+      for (const f of fs) {
+        const prev = was.get(f.path);
+        if (prev === undefined || prev === f.viewed) continue;
+        if (f.viewed) next.add(f.path);
+        else next.delete(f.path);
+      }
+      collapsed.value = next;
+    }
+    for (const f of fs) was.set(f.path, f.viewed);
   },
-  { flush: "post" },
+  { immediate: true },
+);
+function toggle(path: string) {
+  const next = new Set(collapsed.value);
+  if (!next.delete(path)) next.add(path);
+  collapsed.value = next;
+}
+
+// ?file= and ?draft= (set by the tree and the findings) open that file and scroll to it.
+async function reveal(path: string, draft: string) {
+  if (!store.files.some((f) => f.path === path)) return;
+  if (collapsed.value.has(path)) toggle(path);
+  forced.value = new Set(forced.value).add(path);
+  await nextTick();
+  if (!(draft && scrollToDraft(draft))) scrollToFile(path);
+}
+watch(
+  () =>
+    [
+      !store.loading && store.files.length > 0,
+      route.query.file,
+      route.query.draft,
+      store.focusSeq,
+    ] as const,
+  ([ready, f, d]) => {
+    if (!ready) return;
+    const draft = typeof d === "string" ? d : "";
+    const path =
+      store.drafts.find((x) => x.id === draft && x.inline)?.path ??
+      (typeof f === "string" ? f : "");
+    if (path) void reveal(path, draft);
+    else if (draft) scrollToDraft(draft);
+  },
+  { immediate: true, flush: "post" },
 );
 
-// A comment of the user's own on one diff line: removed lines anchor on the old side, the rest on the new.
-type Line = { t: string; o?: number; n?: number };
-const composing = ref<{ side: "new" | "old"; line: number } | null>(null);
-// Placed by line, not row index, so a refreshed patch keeps the composer under its line.
-const composeKey = computed(() => {
-  const c = composing.value;
-  if (!c) return "";
-  for (const [hi, h] of hunks.value.entries())
-    for (const [li, l] of h.lines.entries())
-      if (
-        c.side === "old"
-          ? l.t === "del" && l.o === c.line
-          : l.t !== "del" && l.n === c.line
-      )
-        return `${hi}:${li}`;
-  return "";
+// The sticky header's height offsets file headers and scroll targets below it.
+const head = ref<HTMLElement>();
+const headH = ref(0);
+let ro: ResizeObserver | undefined;
+watch(head, (el) => {
+  ro?.disconnect();
+  if (!el || typeof ResizeObserver === "undefined") return;
+  ro = new ResizeObserver(() => (headH.value = el.offsetHeight));
+  ro.observe(el);
 });
-const composeLabel = computed(() =>
-  composing.value
-    ? `Your comment on ${composing.value.side === "old" ? "removed line" : "line"} ${composing.value.line}`
-    : "",
-);
-const lineLabel = (l: Line) =>
-  l.t === "del" ? `removed line ${l.o}` : `line ${l.n}`;
-const text = ref(""),
-  saving = ref(false);
-async function compose(l: Line) {
-  const side = l.t === "del" ? "old" : "new";
-  const line = side === "old" ? l.o : l.n;
-  if (line === undefined) return;
-  composing.value = { side, line };
-  text.value = "";
-  await nextTick();
-  document.querySelector<HTMLTextAreaElement>(".dv-compose textarea")?.focus();
+// The file at the top of the diff marks its tree row.
+let frame = 0;
+function spy() {
+  if (frame) return;
+  frame = requestAnimationFrame(() => {
+    frame = 0;
+    let cur = "";
+    const picked = route.query.file;
+    for (const el of document.querySelectorAll<HTMLElement>(
+      ".prv [data-path]",
+    )) {
+      const r = el.getBoundingClientRect();
+      // A picked file near the page end never reaches the top; keep it marked while on screen.
+      if (
+        el.dataset.path === picked &&
+        r.top < innerHeight &&
+        r.bottom > headH.value
+      ) {
+        cur = picked;
+        break;
+      }
+      if (r.top <= headH.value + 48) cur = el.dataset.path ?? "";
+    }
+    store.current = cur;
+  });
 }
-async function saveComment() {
-  const c = composing.value;
-  if (!c || !file.value || !text.value.trim() || saving.value) return;
-  saving.value = true;
-  try {
-    await store.addComment({
-      path: file.value.path,
-      side: c.side,
-      line: c.line,
-      body: text.value,
-    });
-    composing.value = null;
-  } catch (e) {
-    toast(e instanceof Error ? e.message : String(e));
-  } finally {
-    saving.value = false;
-  }
-}
-watch(
-  () => file.value?.path,
-  () => (composing.value = null),
-);
+onMounted(() => window.addEventListener("scroll", spy, { passive: true }));
+onBeforeUnmount(() => {
+  window.removeEventListener("scroll", spy);
+  cancelAnimationFrame(frame);
+  ro?.disconnect();
+});
 const ciLabel = (ci: string) =>
   ({
     passing: "CI passing",
@@ -191,7 +186,7 @@ const ciLabel = (ci: string) =>
   })[ci] ?? ci;
 </script>
 <template>
-  <div class="fx-page prv">
+  <div class="fx-page prv" :style="{ '--prv-head-h': `${headH}px` }">
     <p v-if="store.loading && !pr" class="notice" data-test="pr-loading">
       Loading…
     </p>
@@ -217,7 +212,7 @@ const ciLabel = (ci: string) =>
       </button>
     </div>
     <template v-else-if="pr && detail">
-      <section class="prv-card prv-head" data-test="pr-header">
+      <section ref="head" class="prv-card prv-head" data-test="pr-header">
         <div class="prv-title">
           <h1>
             {{ pr.title }} <span class="mono muted">#{{ pr.number }}</span>
@@ -292,122 +287,29 @@ const ciLabel = (ci: string) =>
         <DraftCard v-for="d in general" :key="d.id" :draft="d" />
       </section>
 
-      <section class="prv-card prv-diff" data-test="pr-diff">
+      <section
+        v-if="store.filesError || !files.length"
+        class="prv-card prv-diff"
+        data-test="pr-diff"
+      >
         <p v-if="store.filesError" class="notice warn" role="alert">
           Could not load files. {{ store.filesError }}
         </p>
-        <p v-else-if="!file" class="notice">No changed files.</p>
-        <template v-else>
-          <h2 class="prv-h mono" data-test="diff-file">
-            {{ file.path }}
-            <span v-if="file.status === 'renamed'" class="muted small"
-              >(from {{ file.old_path }})</span
-            >
-          </h2>
-          <p v-if="!file.patch" class="notice" data-test="diff-empty">
-            {{
-              file.truncated
-                ? "This diff is too large to show here."
-                : "No text diff for this file (binary or empty)."
-            }}
-            <a
-              v-if="safeUrl(pr.url)"
-              :href="safeUrl(pr.url)"
-              target="_blank"
-              rel="noopener noreferrer"
-              >View on host</a
-            >
-          </p>
-          <div v-if="anchored.loose.length" class="prv-loose">
-            <p class="small muted">Comments not on a visible line</p>
-            <DraftCard v-for="d in anchored.loose" :key="d.id" :draft="d" />
-          </div>
-          <div v-for="(h, hi) in hunks" :key="hi" class="dv">
-            <div class="dv-hunk mono">{{ h.header }}</div>
-            <template v-for="(l, li) in h.lines" :key="li">
-              <div class="dv-line mono" :class="l.t">
-                <button
-                  type="button"
-                  class="dv-add"
-                  :aria-label="`Comment on ${lineLabel(l)}`"
-                  data-test="diff-add-comment"
-                  @click="compose(l)"
-                >
-                  <MessageSquarePlus class="icon" aria-hidden="true" />
-                </button>
-                <span class="dv-no">{{ l.o ?? "" }}</span>
-                <span class="dv-no">{{ l.n ?? "" }}</span>
-                <span class="dv-mark">{{
-                  l.t === "add" ? "+" : l.t === "del" ? "−" : " "
-                }}</span>
-                <span class="dv-code"
-                  >{{ l.s
-                  }}<RouterLink
-                    v-if="l.n !== undefined"
-                    class="dv-open"
-                    :to="{
-                      path: `/projects/${projectId}/code`,
-                      query: {
-                        file: file.path,
-                        line: String(l.n),
-                        pr_head: pr.head,
-                      },
-                    }"
-                    data-test="open-in-code"
-                    >Open in Code</RouterLink
-                  ></span
-                >
-              </div>
-              <div
-                v-if="
-                  anchored.map.get(`${hi}:${li}`) ||
-                  composeKey === `${hi}:${li}`
-                "
-                class="dv-slot"
-              >
-                <DraftCard
-                  v-for="d in anchored.map.get(`${hi}:${li}`) ?? []"
-                  :key="d.id"
-                  :draft="d"
-                />
-                <form
-                  v-if="composeKey === `${hi}:${li}`"
-                  class="dv-compose"
-                  data-test="diff-compose"
-                  @submit.prevent="saveComment"
-                >
-                  <textarea
-                    v-model="text"
-                    rows="3"
-                    :aria-label="composeLabel"
-                    placeholder="Leave a comment. It posts with your review."
-                    @keydown.meta.enter.prevent="saveComment"
-                    @keydown.ctrl.enter.prevent="saveComment"
-                    @keydown.esc="composing = null"
-                  ></textarea>
-                  <div class="dc-actions">
-                    <button
-                      type="submit"
-                      class="lg-btn small primary"
-                      data-test="diff-compose-save"
-                      :disabled="saving || !text.trim()"
-                    >
-                      Add comment
-                    </button>
-                    <button
-                      type="button"
-                      class="lg-btn small ghost"
-                      @click="composing = null"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              </div>
-            </template>
-          </div>
-        </template>
+        <p v-else class="notice">No changed files.</p>
       </section>
+      <div v-else class="prv-files" data-test="pr-diff">
+        <DiffFile
+          v-for="f in files"
+          :key="f.path"
+          :file="f"
+          :project-id="projectId"
+          :head="pr.head"
+          :host-url="safeUrl(pr.url)"
+          :collapsed="collapsed.has(f.path)"
+          :force="forced.has(f.path)"
+          @toggle="toggle(f.path)"
+        />
+      </div>
     </template>
   </div>
 </template>

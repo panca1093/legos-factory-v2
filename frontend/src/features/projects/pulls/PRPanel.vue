@@ -6,8 +6,7 @@ import "./pulls.css";
 import { useReviews } from "../../../stores/reviews";
 import { useToast } from "../../../composables/useToast";
 import AppDialog from "../../../components/ui/AppDialog.vue";
-import PanelCard from "../PanelCard.vue";
-import { fileTree, scrollToDraft } from "./diff";
+import { fileTree } from "./diff";
 import type { PostConflict } from "../../../stores/reviews";
 import type { PostExpect, Verdict } from "../../../types/review";
 
@@ -18,8 +17,17 @@ const route = useRoute(),
 const closed = ref(new Set<string>());
 const rows = computed(() => fileTree(store.files, closed.value));
 const current = computed(
-  () => (route.query.file as string | undefined) ?? store.firstFile,
+  () => store.current || (route.query.file as string | undefined) || "",
 );
+type Tab = "changes" | "review";
+const tab = computed<Tab>(() => {
+  const q = route.query.tab;
+  if (q === "changes" || q === "review") return q;
+  return store.pending.length ? "review" : "changes";
+});
+function setTab(t: Tab) {
+  void router.replace({ query: { ...route.query, tab: t } });
+}
 const draftCount = (path: string) =>
   store.drafts.filter(
     (d) =>
@@ -37,6 +45,7 @@ function pick(path: string) {
   const query: LocationQueryRaw = { ...route.query, file: path };
   delete query.draft;
   void router.push({ query });
+  store.focusSeq++;
 }
 async function viewed(path: string, v: boolean) {
   try {
@@ -70,10 +79,7 @@ const where = (d: { path: string; line: number; inline: boolean }) =>
   d.inline ? `${d.path.split("/").pop()}:${d.line}` : "General";
 function goTo(d: { id: string; path: string; inline: boolean }) {
   const known = d.inline && store.files.some((f) => f.path === d.path);
-  if (route.query.draft === d.id && (!known || route.query.file === d.path)) {
-    scrollToDraft(d.id);
-    return;
-  }
+  store.focusSeq++;
   void router.push({
     query: {
       ...route.query,
@@ -213,197 +219,250 @@ const postedHere = computed(
 </script>
 <template>
   <template v-if="store.pr">
-    <PanelCard id="pr-changes" title="Changes">
-      <p class="small muted" data-test="viewed-count">
-        {{ store.viewedCount }} / {{ store.files.length }} viewed
-      </p>
-      <ul class="ft" data-test="file-tree">
-        <li
-          v-for="r in rows"
-          :key="r.kind + r.path"
-          :style="{ '--d': r.depth }"
+    <section class="pc prp" data-card="pr">
+      <div class="prp-tabs" role="tablist" aria-label="Pull request panel">
+        <button
+          id="prp-tab-changes"
+          type="button"
+          role="tab"
+          :aria-selected="tab === 'changes'"
+          aria-controls="prp-changes"
+          data-test="tab-changes"
+          @click="setTab('changes')"
         >
-          <button
-            v-if="r.kind === 'dir'"
-            type="button"
-            class="ft-dir"
-            :aria-expanded="!closed.has(r.path)"
-            @click="toggleDir(r.path)"
+          Changes
+          <span class="prp-badge" data-test="tab-changes-badge"
+            >{{ store.viewedCount }}/{{ store.files.length }}</span
           >
-            <ChevronRight v-if="closed.has(r.path)" class="icon" /><ChevronDown
-              v-else
-              class="icon"
-            />{{ r.name }}
-          </button>
-          <div
-            v-else-if="r.file"
-            class="ft-file"
-            :class="{ cur: r.path === current }"
+        </button>
+        <button
+          id="prp-tab-review"
+          type="button"
+          role="tab"
+          :aria-selected="tab === 'review'"
+          aria-controls="prp-review"
+          data-test="tab-review"
+          @click="setTab('review')"
+        >
+          Review
+          <span
+            v-if="store.pending.length"
+            class="prp-badge hot"
+            data-test="tab-review-badge"
+            >{{ store.pending.length }}</span
+          >
+        </button>
+      </div>
+      <div
+        v-show="tab === 'changes'"
+        id="prp-changes"
+        class="prp-body"
+        role="tabpanel"
+        aria-labelledby="prp-tab-changes"
+      >
+        <p class="small muted" data-test="viewed-count">
+          {{ store.viewedCount }} / {{ store.files.length }} viewed
+        </p>
+        <ul class="ft" data-test="file-tree">
+          <li
+            v-for="r in rows"
+            :key="r.kind + r.path"
+            :style="{ '--d': r.depth }"
+          >
+            <button
+              v-if="r.kind === 'dir'"
+              type="button"
+              class="ft-dir"
+              :aria-expanded="!closed.has(r.path)"
+              @click="toggleDir(r.path)"
+            >
+              <ChevronRight
+                v-if="closed.has(r.path)"
+                class="icon"
+              /><ChevronDown v-else class="icon" />{{ r.name }}
+            </button>
+            <div
+              v-else-if="r.file"
+              class="ft-file"
+              :class="{ cur: r.path === current }"
+            >
+              <input
+                type="checkbox"
+                :checked="r.file.viewed"
+                :aria-label="`Viewed ${r.path}`"
+                data-test="file-viewed"
+                @change="
+                  viewed(r.path, ($event.target as HTMLInputElement).checked)
+                "
+              />
+              <button
+                type="button"
+                class="ft-name"
+                :class="{ unseen: !r.file.viewed }"
+                :title="r.path"
+                :aria-current="r.path === current ? 'true' : undefined"
+                data-test="file-pick"
+                @click="pick(r.path)"
+              >
+                <span
+                  class="ft-st"
+                  :data-st="r.file.status"
+                  aria-hidden="true"
+                  >{{
+                    { added: "A", modified: "M", deleted: "D", renamed: "R" }[
+                      r.file.status
+                    ]
+                  }}</span>{{ r.name }}
+              </button>
+              <span
+                v-if="draftCount(r.path)"
+                class="ft-cnt"
+                data-test="file-drafts"
+                >{{ draftCount(r.path) }}</span
+              >
+              <span class="ft-diff"
+                ><b class="prv-add">+{{ r.file.additions }}</b>
+                <b class="prv-del">−{{ r.file.deletions }}</b></span
+              >
+            </div>
+          </li>
+        </ul>
+        <p v-if="!rows.length" class="small muted">No changed files.</p>
+      </div>
+      <div
+        v-show="tab === 'review'"
+        id="prp-review"
+        class="prp-body"
+        role="tabpanel"
+        aria-labelledby="prp-tab-review"
+      >
+        <p v-if="store.running" class="small" data-test="review-running">
+          AI review running…
+        </p>
+        <p
+          v-else-if="store.run?.summary"
+          class="pr-counts"
+          data-test="review-counts"
+        >
+          <span
+            v-for="k in ['blocker', 'major', 'minor', 'info'] as const"
+            :key="k"
+            class="dc-sev"
+            :data-sev="k"
+            :class="{ zero: !counts[k] }"
+            >{{ counts[k] }} {{ k }}</span
+          >
+        </p>
+        <div v-if="findings.length" class="pr-finds" data-test="findings">
+          <p class="pc-lbl">Findings</p>
+          <ul>
+            <li v-for="d in findings" :key="d.id">
+              <button
+                type="button"
+                class="pr-find"
+                :class="d.status"
+                :data-test="`finding-${d.id}`"
+                :title="`${d.run_id === '' ? d.body : d.title} · ${d.inline ? `${d.path}:${d.line}` : 'General'}`"
+                @click="goTo(d)"
+              >
+                <span v-if="d.run_id === ''" class="dc-you">You</span>
+                <span v-else class="dc-sev" :data-sev="d.severity">{{
+                  d.severity
+                }}</span>
+                <span class="pr-find-t">{{
+                  d.run_id === "" ? d.body : d.title
+                }}</span>
+                <span class="pr-find-at mono"
+                  >{{ where(d)
+                  }}<template v-if="d.status !== 'pending'">
+                    · {{ d.status }}</template
+                  ></span
+                >
+              </button>
+            </li>
+          </ul>
+        </div>
+        <label class="pc-lbl" for="pr-summary">Summary</label>
+        <textarea
+          id="pr-summary"
+          v-model="summary"
+          class="pr-summary"
+          rows="8"
+          data-test="review-summary"
+          @input="touched = true"
+          @blur="saveSummary"
+        ></textarea>
+        <fieldset class="pr-verdict">
+          <legend class="pc-lbl">Verdict</legend>
+          <label
+            v-for="o in verdictOpts"
+            :key="o.key"
+            :class="{ off: !o.ok }"
+            :title="o.ok ? undefined : o.reason"
           >
             <input
-              type="checkbox"
-              :checked="r.file.viewed"
-              :aria-label="`Viewed ${r.path}`"
-              data-test="file-viewed"
-              @change="
-                viewed(r.path, ($event.target as HTMLInputElement).checked)
-              "
+              type="radio"
+              name="pr-verdict"
+              :value="o.key"
+              :checked="verdict === o.key"
+              :disabled="!o.ok"
+              :data-test="`verdict-${o.key}`"
+              @change="setVerdict(o.key)"
             />
-            <button
-              type="button"
-              class="ft-name"
-              :class="{ unseen: !r.file.viewed }"
-              :title="r.path"
-              :aria-current="r.path === current ? 'true' : undefined"
-              data-test="file-pick"
-              @click="pick(r.path)"
-            >
-              <span class="ft-st" :data-st="r.file.status" aria-hidden="true">{{
-                { added: "A", modified: "M", deleted: "D", renamed: "R" }[
-                  r.file.status
-                ]
-              }}</span>{{ r.name }}
-            </button>
-            <span
-              v-if="draftCount(r.path)"
-              class="ft-cnt"
-              data-test="file-drafts"
-              >{{ draftCount(r.path) }}</span
-            >
-            <span class="ft-diff"
-              ><b class="prv-add">+{{ r.file.additions }}</b>
-              <b class="prv-del">−{{ r.file.deletions }}</b></span
-            >
-          </div>
-        </li>
-      </ul>
-      <p v-if="!rows.length" class="small muted">No changed files.</p>
-    </PanelCard>
-    <PanelCard id="pr-review" title="Review">
-      <p v-if="store.running" class="small" data-test="review-running">
-        AI review running…
-      </p>
-      <p
-        v-else-if="store.run?.summary"
-        class="pr-counts"
-        data-test="review-counts"
-      >
-        <span
-          v-for="k in ['blocker', 'major', 'minor', 'info'] as const"
-          :key="k"
-          class="dc-sev"
-          :data-sev="k"
-          :class="{ zero: !counts[k] }"
-          >{{ counts[k] }} {{ k }}</span
-        >
-      </p>
-      <div v-if="findings.length" class="pr-finds" data-test="findings">
-        <p class="pc-lbl">Findings</p>
-        <ul>
-          <li v-for="d in findings" :key="d.id">
-            <button
-              type="button"
-              class="pr-find"
-              :class="d.status"
-              :data-test="`finding-${d.id}`"
-              :title="`${d.run_id === '' ? d.body : d.title} · ${d.inline ? `${d.path}:${d.line}` : 'General'}`"
-              @click="goTo(d)"
-            >
-              <span v-if="d.run_id === ''" class="dc-you">You</span>
-              <span v-else class="dc-sev" :data-sev="d.severity">{{
-                d.severity
-              }}</span>
-              <span class="pr-find-t">{{
-                d.run_id === "" ? d.body : d.title
-              }}</span>
-              <span class="pr-find-at mono"
-                >{{ where(d)
-                }}<template v-if="d.status !== 'pending'">
-                  · {{ d.status }}</template
-                ></span
-              >
-            </button>
-          </li>
-        </ul>
-      </div>
-      <label class="pc-lbl" for="pr-summary">Summary</label>
-      <textarea
-        id="pr-summary"
-        v-model="summary"
-        class="pr-summary"
-        rows="8"
-        data-test="review-summary"
-        @input="touched = true"
-        @blur="saveSummary"
-      ></textarea>
-      <fieldset class="pr-verdict">
-        <legend class="pc-lbl">Verdict</legend>
-        <label
-          v-for="o in verdictOpts"
-          :key="o.key"
-          :class="{ off: !o.ok }"
-          :title="o.ok ? undefined : o.reason"
-        >
-          <input
-            type="radio"
-            name="pr-verdict"
-            :value="o.key"
-            :checked="verdict === o.key"
-            :disabled="!o.ok"
-            :data-test="`verdict-${o.key}`"
-            @change="setVerdict(o.key)"
-          />
-          {{ o.label }}
-          <small v-if="!o.ok" class="muted" data-test="verdict-reason">{{
-            o.reason
-          }}</small>
-        </label>
-      </fieldset>
-      <p class="small muted" data-test="accepted-count">
-        {{ count }} accepted comment{{ count === 1 ? "" : "s" }} ·
-        {{ store.pending.length }} to decide
-      </p>
-      <p v-if="postedHere" class="small" data-test="review-posted">
-        Posted as {{ store.review?.posted_as }} ·
-        {{ verdictLabel(store.review?.posted_verdict ?? "") }}
-      </p>
-      <div
-        v-if="store.posted"
-        class="pr-result"
-        role="status"
-        data-test="post-result"
-      >
-        <p class="small">
-          Posted {{ Object.keys(store.posted.comments ?? {}).length }}
-          comment(s).
+            {{ o.label }}
+            <small v-if="!o.ok" class="muted" data-test="verdict-reason">{{
+              o.reason
+            }}</small>
+          </label>
+        </fieldset>
+        <p class="small muted" data-test="accepted-count">
+          {{ count }} accepted comment{{ count === 1 ? "" : "s" }} ·
+          {{ store.pending.length }} to decide
         </p>
-        <p v-if="store.posted.verdict_err" class="small prv-bad">
-          Verdict not applied: {{ store.posted.verdict_err }}
+        <p v-if="postedHere" class="small" data-test="review-posted">
+          Posted as {{ store.review?.posted_as }} ·
+          {{ verdictLabel(store.review?.posted_verdict ?? "") }}
         </p>
-        <ul
-          v-if="Object.keys(store.posted.failed ?? {}).length"
-          class="pr-fail"
+        <div
+          v-if="store.posted"
+          class="pr-result"
+          role="status"
+          data-test="post-result"
         >
-          <li v-for="(msg, id) in store.posted.failed" :key="id">
-            <strong>{{ titleOf(String(id)) }}</strong>: {{ msg }}
-          </li>
-        </ul>
+          <p class="small">
+            Posted {{ Object.keys(store.posted.comments ?? {}).length }}
+            comment(s).
+          </p>
+          <p v-if="store.posted.verdict_err" class="small prv-bad">
+            Verdict not applied: {{ store.posted.verdict_err }}
+          </p>
+          <ul
+            v-if="Object.keys(store.posted.failed ?? {}).length"
+            class="pr-fail"
+          >
+            <li v-for="(msg, id) in store.posted.failed" :key="id">
+              <strong>{{ titleOf(String(id)) }}</strong>: {{ msg }}
+            </li>
+          </ul>
+        </div>
+        <button
+          type="button"
+          class="lg-btn primary"
+          data-test="post-open"
+          :disabled="!canPost || store.posting"
+          :title="
+            detail?.identity ? undefined : 'Connect a review account first'
+          "
+          @click="openConfirm"
+        >
+          {{
+            failedCount
+              ? `Retry ${failedCount} failed…`
+              : `Post review… · ${count} comment${count === 1 ? "" : "s"}`
+          }}
+        </button>
       </div>
-      <button
-        type="button"
-        class="lg-btn primary"
-        data-test="post-open"
-        :disabled="!canPost || store.posting"
-        :title="detail?.identity ? undefined : 'Connect a review account first'"
-        @click="openConfirm"
-      >
-        {{
-          failedCount
-            ? `Retry ${failedCount} failed…`
-            : `Post review… · ${count} comment${count === 1 ? "" : "s"}`
-        }}
-      </button>
-    </PanelCard>
+    </section>
     <AppDialog
       :open="confirming"
       title="Post this review?"

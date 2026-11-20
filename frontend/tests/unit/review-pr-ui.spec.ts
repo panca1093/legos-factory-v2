@@ -2,12 +2,18 @@ import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../src/features/projects/pulls/highlight", async (orig) => ({
+  ...(await orig<object>()),
+  highlightHunks: async () => null,
+}));
 import ProjectRail from "../../src/features/projects/ProjectRail.vue";
 import PullsView from "../../src/features/projects/pulls/PullsView.vue";
 import PRView from "../../src/features/projects/pulls/PRView.vue";
 import PRPanel from "../../src/features/projects/pulls/PRPanel.vue";
 import ReviewsView from "../../src/features/projects/ReviewsView.vue";
 import { fileTree, parsePatch } from "../../src/features/projects/pulls/diff";
+import { segments } from "../../src/features/projects/pulls/highlight";
 import { useFactory } from "../../src/stores/factory";
 import {
   chipText,
@@ -212,6 +218,27 @@ describe("pure helpers", () => {
     ]);
     expect(fileTree(files, new Set(["internal/adapter"]))).toHaveLength(2);
   });
+  it("splits a line into token segments by kind", () => {
+    expect(
+      segments('func x() "s"', [
+        { offset: 0, type: "keyword.go" },
+        { offset: 4, type: "white.go" },
+        { offset: 5, type: "identifier.go" },
+        { offset: 6, type: "delimiter.parenthesis.go" },
+        { offset: 8, type: "white.go" },
+        { offset: 9, type: "string.go" },
+      ]),
+    ).toEqual([
+      { t: "func", c: "tk-keyword" },
+      { t: " ", c: "" },
+      { t: "x", c: "" },
+      { t: "()", c: "" },
+      { t: " ", c: "" },
+      { t: '"s"', c: "tk-string" },
+    ]);
+    expect(segments("plain", [])).toEqual([{ t: "plain", c: "" }]);
+  });
+
   it("maps labels and filters", () => {
     const r = { label: "ai" as const, pending_drafts: 3, running: false };
     expect(chipText(r)).toBe("AI · 3");
@@ -515,7 +542,13 @@ describe("pull request selection", () => {
     );
     expect(w.find('[data-test="pr-identity"]').text()).toContain("me");
     expect(w.find("script").exists()).toBe(false);
-    expect(w.find('[data-test="diff-file"]').text()).toBe("a.go");
+    expect(w.findAll('[data-test="diff-file"]').map((h) => h.text())).toEqual([
+      "pkg/b.go",
+      "a.go",
+    ]);
+    const toggles = w.findAll('[data-test="diff-toggle"]');
+    expect(toggles[0].attributes("aria-expanded")).toBe("false");
+    expect(toggles[1].attributes("aria-expanded")).toBe("true");
     const lines = w.findAll(".dv-line");
     expect(lines).toHaveLength(5);
     const slot = w.find(".dv-slot");
@@ -527,7 +560,7 @@ describe("pull request selection", () => {
     w.unmount();
   });
 
-  it("opens the first file with findings and lists them; a finding opens its file and draft", async () => {
+  it("lists findings; a finding opens its (collapsed) file and scrolls to its draft", async () => {
     drafts = [
       draft("b1", { path: "pkg/b.go", severity: "minor", title: "Minor on b" }),
       draft("b2", {
@@ -568,15 +601,45 @@ describe("pull request selection", () => {
     w.unmount();
   });
 
-  it("pins the default file into the URL so a later draft change keeps the diff", async () => {
-    drafts = [draft("b1", { path: "pkg/b.go" })];
-    const { w, router } = await mountPR();
-    expect(router.currentRoute.value.query.file).toBe("pkg/b.go");
-    await w
-      .find('[data-test="draft-b1"] [data-test="draft-discard"]')
+  it("shows every file, viewed ones collapsed; ticking Viewed collapses and unticking reopens", async () => {
+    const { w } = await mountPR();
+    const section = (p: string) =>
+      w
+        .findAll('[data-test="diff-section"]')
+        .find((x) => x.attributes("data-path") === p)!;
+    expect(section("pkg/b.go").find(".dv").exists()).toBe(false);
+    await section("pkg/b.go")
+      .find('[data-test="diff-toggle"]')
       .trigger("click");
+    expect(section("pkg/b.go").find(".dv").exists()).toBe(true);
+    routes["PUT /review/viewed"] = () => ({ viewed: 2, total: 2 });
+    await section("a.go").find('[data-test="diff-viewed"]').setValue(true);
     await flushPromises();
-    expect(w.find('[data-test="diff-file"]').text()).toBe("pkg/b.go");
+    expect(section("a.go").find(".dv").exists()).toBe(false);
+    expect(section("pkg/b.go").find(".dv").exists()).toBe(true);
+    routes["PUT /review/viewed"] = () => ({ viewed: 1, total: 2 });
+    await section("a.go").find('[data-test="diff-viewed"]').setValue(false);
+    await flushPromises();
+    expect(section("a.go").find(".dv").exists()).toBe(true);
+    w.unmount();
+  });
+
+  it("puts Changes and Review in tabs, Review first while findings wait", async () => {
+    const { w, router } = await mountPR();
+    const shown = (id: string) =>
+      (w.find(`#${id}`).element as HTMLElement).style.display !== "none";
+    expect(w.find('[data-test="tab-review"]').attributes("aria-selected")).toBe(
+      "true",
+    );
+    expect(w.find('[data-test="tab-review-badge"]').text()).toBe("3");
+    expect(w.find('[data-test="tab-changes-badge"]').text()).toBe("1/2");
+    expect(shown("prp-review")).toBe(true);
+    expect(shown("prp-changes")).toBe(false);
+    await w.find('[data-test="tab-changes"]').trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query.tab).toBe("changes");
+    expect(shown("prp-changes")).toBe(true);
+    expect(shown("prp-review")).toBe(false);
     w.unmount();
   });
 

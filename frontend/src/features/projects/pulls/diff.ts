@@ -108,3 +108,11 @@ export function scrollToDraft(id: string): boolean {
   el?.scrollIntoView?.({ block: "center", behavior: "smooth" });
   return !!el;
 }
+
+export function scrollToFile(path: string): boolean {
+  const el = [
+    ...document.querySelectorAll<HTMLElement>(".prv [data-path]"),
+  ].find((e) => e.dataset.path === path);
+  el?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  return !!el;
+}
