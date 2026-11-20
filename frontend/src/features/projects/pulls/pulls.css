@@ -709,25 +709,6 @@
   margin: var(--space-3) var(--space-4);
 }
 
-/* Syntax colours; token kinds come from the Monaco tokenizer. */
-.prv {
-  --sx-keyword: #cf222e;
-  --sx-string: #0a3069;
-  --sx-number: #0550ae;
-  --sx-comment: #6e7781;
-  --sx-type: #8250df;
-  --sx-tag: #116329;
-  --sx-regexp: #953800;
-}
-[data-theme="dark"] .prv {
-  --sx-keyword: #ff7b72;
-  --sx-string: #a5d6ff;
-  --sx-number: #79c0ff;
-  --sx-comment: #8b949e;
-  --sx-type: #d2a8ff;
-  --sx-tag: #7ee787;
-  --sx-regexp: #ffa657;
-}
 .tk-keyword {
   color: var(--sx-keyword);
 }
