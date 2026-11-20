@@ -240,6 +240,7 @@ export interface UsageTotals {
   tokens_in: number;
   tokens_out: number;
   cost_micros: number;
+  cost_partial?: boolean;
   runs: number;
 }
 export interface UsageAccount {

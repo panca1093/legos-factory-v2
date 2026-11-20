@@ -342,3 +342,10 @@
     border-radius: 2px;
   }
 }
+.lg-stat .value small,
+.agent-row .cost small {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+}

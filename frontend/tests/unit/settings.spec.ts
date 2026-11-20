@@ -1153,12 +1153,43 @@ it("an API-key account card shows this week's tokens and runs from the usage sum
   expect(sent("GET", "/api/v1/usage/summary")).toHaveLength(1);
   const claude = w.find('[data-agent="claude"]');
   expect(claude.find('[data-test="week-line"]').text()).toBe(
-    "This week: 1.2K tokens · 3 runs",
+    "Last 7 days: 1.2K tokens · 3 runs",
   );
   expect(w.find('[data-agent="codex"] [data-test="week-line"]').exists()).toBe(
     false,
   );
   w.unmount();
+});
+
+it("a subscription account with bars still renders the usage block, and an API account with usage_error still says unavailable", async () => {
+  routes["GET /api/v1/usage/summary"] = () => json({ days: 7, accounts: [] });
+  agentsBody.agents[0].accounts = [
+    acct({ usage: { session: { used_pct: 58 }, week: { used_pct: 10 } } }),
+  ];
+  let r = await render();
+  expect(r.w.find('[data-meter="session"]').exists()).toBe(true);
+  expect(r.w.find('[data-test="week-line"]').exists()).toBe(false);
+  r.w.unmount();
+
+  agentsBody.agents[0].accounts = [
+    dsAcct({
+      active: true,
+      usage_error: "unavailable",
+      api: {
+        provider: "deepseek",
+        base_url: "https://api.deepseek.com/anthropic",
+        host: "api.deepseek.com",
+        models: {},
+        has_key: true,
+      },
+    }),
+  ];
+  r = await render();
+  expect(r.w.find('[data-test="usage-error"]').text()).toBe(
+    "Usage unavailable",
+  );
+  expect(r.w.find('[data-test="week-line"]').exists()).toBe(true);
+  r.w.unmount();
 });
 
 it("an API-key account with no usage this week says zero", async () => {
@@ -1177,7 +1208,7 @@ it("an API-key account with no usage this week says zero", async () => {
   ];
   const { w } = await render();
   expect(w.find('[data-test="week-line"]').text()).toBe(
-    "This week: 0 tokens · 0 runs",
+    "Last 7 days: 0 tokens · 0 runs",
   );
   w.unmount();
 });

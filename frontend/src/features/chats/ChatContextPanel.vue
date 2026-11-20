@@ -167,6 +167,9 @@ function toggle(key: string) {
   saveOpen({ ...open });
 }
 const ctx = computed(() => info.value?.context);
+const apiChat = computed(() =>
+  props.messages.some((m) => m.usage?.provider_host),
+);
 const bars = computed(() =>
   ctx.value ? partBars(ctx.value.parts, ctx.value.used, ctx.value.window) : [],
 );
@@ -532,7 +535,8 @@ onBeforeUnmount(() => {
             {{ info.totals.turns }} turn{{ info.totals.turns === 1 ? "" : "s" }}
             ·
             {{ fmtTokens(info.totals.tokens_in + info.totals.tokens_out) }}
-            tokens · {{ money(info.totals.cost_micros) }}
+            tokens ·
+            {{ apiChat ? "—" : money(info.totals.cost_micros) }}
           </dd>
         </dl>
       </template>

@@ -60,6 +60,8 @@ const activeDays = computed(
 const roles = computed(() =>
   [...(factory.usage?.roles ?? [])].sort((a, b) => b.runs - a.runs),
 );
+const partialTitle =
+  "Excludes API-key accounts; provider pricing isn't tracked";
 const accounts = computed(() => factory.usage?.accounts ?? []);
 const accountKind = (a: UsageAccount) =>
   a.kind === "api" ? `API · ${a.host}` : "Subscription";
@@ -151,6 +153,12 @@ onMounted(() => {
       ><div class="label"><Gauge class="icon" />This month</div>
       <div class="value">
         {{ mtd ? money(mtd.cost_micros) : "—" }}
+        <small
+          v-if="mtd?.cost_partial"
+          :title="partialTitle"
+          data-test="partial"
+          >partial</small
+        >
       </div>
       <div class="note">
         {{
@@ -299,7 +307,15 @@ onMounted(() => {
             <b>{{ r.role.charAt(0).toUpperCase() + r.role.slice(1) }}</b>
             <span class="aj">{{ r.runs }} runs · {{ tokens(r) }} tokens</span>
           </div>
-          <span class="cost">{{ money(r.cost_micros) }}</span>
+          <span class="cost"
+            >{{ money(r.cost_micros)
+            }}<small
+              v-if="r.cost_partial"
+              :title="partialTitle"
+              data-test="partial"
+              >partial</small
+            ></span
+          >
         </div>
         <p v-if="!roles.length" class="empty-note">
           {{ factory.usage ? "No agent usage yet." : "Usage unavailable." }}

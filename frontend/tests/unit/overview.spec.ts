@@ -80,6 +80,21 @@ it("renders usage by agent, the month-to-date card and heatmap modes", async () 
   expect(w.findAll(".heat i")[9].attributes("title")).toContain("6 total");
   w.unmount();
 });
+it("marks month-to-date and role cost partial when API-key rows are in the total", async () => {
+  const f = useFactory();
+  f.usage = structuredClone(usage);
+  f.usage.month_to_date.cost_partial = true;
+  f.usage.roles[0].cost_partial = true;
+  const w = render();
+  await flushPromises();
+  const marks = w.findAll('[data-test="partial"]');
+  expect(marks).toHaveLength(2);
+  expect(marks[0].attributes("title")).toBe(
+    "Excludes API-key accounts; provider pricing isn't tracked",
+  );
+  expect(w.find(".agent-row").text()).toContain("$0.45");
+  w.unmount();
+});
 it("shows empty states when there is no usage", async () => {
   const f = useFactory();
   f.usage = { ...usage, activity: [], roles: [] };

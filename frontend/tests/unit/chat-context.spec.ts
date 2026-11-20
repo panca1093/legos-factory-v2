@@ -262,6 +262,41 @@ describe("chat context panel", () => {
     w.unmount();
   });
 
+  it("shows a dash instead of $0.00 for a chat on an API-key account", async () => {
+    const session = {
+      project: null,
+      context: { model: "m", window: 1000, used: 100, parts: [], cache: null },
+      totals: {
+        turns: 1,
+        tokens_in: 10,
+        tokens_out: 5,
+        cache_read: 0,
+        cache_write: 0,
+        cost_micros: 0,
+      },
+      mcp: [],
+    };
+    handlers["GET /api/v1/chats/c1/session"] = () => session;
+    const api = [
+      msg(1, "user"),
+      msg(2, "assistant", {
+        usage: {
+          model: "m",
+          tokens_in: 10,
+          tokens_out: 5,
+          cost_micros: 0,
+          provider_host: "api.deepseek.com",
+        },
+      }),
+    ];
+    const a = await mountPanel({ messages: api });
+    expect(a.w.text()).toContain("1 turn · 15 tokens · —");
+    a.w.unmount();
+    const b = await mountPanel();
+    expect(b.w.text()).toContain("$0.00");
+    b.w.unmount();
+  });
+
   it("refreshes the session after a turn completes", async () => {
     const { w } = await mountPanel();
     const count = () => calls.filter((c) => c.url.endsWith("/session")).length;
