@@ -54,15 +54,6 @@ func sameOrigin(a, b string) bool {
 	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
 }
 
-// foreignOrigin answers 403 and reports true when the request carries an Origin that is not allowed.
-func (s *Server) foreignOrigin(c echo.Context) bool {
-	if o := c.Request().Header.Get("Origin"); o != "" && !s.editorOrigin(c.Request()) {
-		_ = errorJSON(c, http.StatusForbidden, "FORBIDDEN_ORIGIN", "this origin may not call the editor")
-		return true
-	}
-	return false
-}
-
 // preUpgrade runs every check that can still answer with a plain HTTP status.
 func (s *Server) preUpgrade(c echo.Context) (model.EditorFolder, error) {
 	r := c.Request()

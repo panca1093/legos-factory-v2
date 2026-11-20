@@ -8,7 +8,7 @@ Revised 2026-11-19 for the v2 project workspace layout.
 
 ## Why
 
-Legos produces code, but to read or touch it the user leaves for another editor: to fix one line before a PR, to check what the Builder wrote, or to look something up while chatting with an agent. The workspace's Code selection puts a real editor on the project's own folder inside Legos — Monaco, git markers and the language servers the user already has installed — so small edits and code reading stay in the same place as the work orders that produce the code.
+Legos produces code, but to read or touch it the user leaves for another editor: to fix one line before a PR, to check what the Builder wrote, or to look something up while chatting with an agent. The workspace's Code selection puts a real editor on the project's own folder inside Legos — Monaco and git markers — so small edits and code reading stay in the same place as the work orders that produce the code.
 
 ## Goals
 
@@ -32,12 +32,12 @@ Legos produces code, but to read or touch it the user leaves for another editor:
 
 | # | Decision |
 |---|---|
-| D1 | (Revised 2026-11-19, v2 workspace) The Editor is the **Code** selection of the project workspace (`/projects/:id/code`) and opens the project's local folder. Center = editor card; right context panel = **Explorer**, **Problems** and **Language server** cards; the project rail's **Code · N open** section lists the files open in the editor (§Open files). No tabs row on the project page and no shrinking header |
-| D2 | (Revised 2026-11-19) In-app editing is required: Monaco in an editor card with file tabs (unsaved dot), Save button, breadcrumb and footer (language, language server state, Ln/Col, save state); Explorer card with branch, Find files, collapsible tree with git markers (M modified, U untracked/new) and per-file error badges; Problems card; Language server card |
+| D1 | (Revised 2026-11-19, v2 workspace) The Editor is the **Code** selection of the project workspace (`/projects/:id/code`) and opens the project's local folder. Center = editor card; right context panel = **Explorer** card; the project rail's **Code · N open** section lists the files open in the editor (§Open files). No tabs row on the project page and no shrinking header |
+| D2 | (Revised 2026-11-19) In-app editing is required: Monaco in an editor card with file tabs (unsaved dot), Save button, breadcrumb and footer (language, Ln/Col, save state); Explorer card with branch, Find files, collapsible tree with git markers (M modified, U untracked/new) |
 | D3 | (Removed 2026-11-20) ~~LSP is in v1: hover (signature + docs), go to definition, find references, diagnostics, completion, quick-fix code actions~~ |
 | D4 | (Removed 2026-11-20) ~~Language servers are those installed on the user's machine, never bundled. The backend spawns them per opened folder and proxies JSON-RPC to the browser. A "Language servers" panel shows found / not found per language, a copyable install command and "Check again"~~ |
 | D5 | Independent of work orders: no locking. A file watcher shows "`<file>` changed on disk · `<who>`" with Reload / Keep mine / Compare when the open file changes underneath |
-| D6 | (Revised 2026-11-19) No "Open a folder" screen. Only project folders (Code selection) and their WO worktrees (from the WO Details card) open; anything else becomes a local project first. The Language servers panel lives in **Settings › Editor**, reachable from the Language server card and the editor footer |
+| D6 | (Revised 2026-11-19) No "Open a folder" screen. Only project folders (Code selection) and their WO worktrees (from the WO Details card) open; anything else becomes a local project first. |
 | D7 | No in-app terminal in v1 |
 | D8 | Review PR's spec leaves the Code selection's content to this spec; the two features share UI pieces and the workspace shell only |
 
