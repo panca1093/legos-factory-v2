@@ -157,6 +157,7 @@ type ReviewStore interface {
 	LatestRun(ctx context.Context, reviewID string) (*model.PRReviewRun, error)
 	FailRunning(ctx context.Context, reason string) (int, error) // boot recovery
 	AddDrafts(ctx context.Context, reviewID, runID string, ds []model.PRDraft) error
+	AddUserDraft(ctx context.Context, d model.PRDraft) error
 	Drafts(ctx context.Context, reviewID string) ([]model.PRDraft, error)
 	UpdateDraft(ctx context.Context, reviewID, id string, status, body *string) (*model.PRDraft, error)
 	SupersedePending(ctx context.Context, reviewID, keepRunID string) error

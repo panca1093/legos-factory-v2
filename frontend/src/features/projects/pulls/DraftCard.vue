@@ -19,12 +19,13 @@ const collapsed = computed(
     d.value.status === "superseded" ||
     d.value.status === "outdated",
 );
-const edited = computed(() => d.value.body !== d.value.ai_body);
+const own = computed(() => d.value.run_id === "");
+const edited = computed(() => !own.value && d.value.body !== d.value.ai_body);
 const html = computed(() => renderMarkdown(d.value.body));
 const stateNote = computed(
   () =>
     ({
-      discarded: "Discarded",
+      discarded: own.value ? "Deleted" : "Discarded",
       superseded: "Superseded by a newer run",
       outdated: "Outdated: the file changed since this draft",
     })[d.value.status as string] ?? "",
@@ -57,14 +58,16 @@ function startEdit() {
   >
     <template v-if="collapsed && !open">
       <div class="dc-row">
-        <span class="dc-note">{{ stateNote }} · {{ d.title }}</span>
+        <span class="dc-note"
+          >{{ stateNote }} · {{ own ? "your comment" : d.title }}</span
+        >
         <button
           v-if="d.status === 'discarded'"
           type="button"
           class="lg-btn small ghost"
           data-test="draft-undo"
           :disabled="busy"
-          @click="act({ status: 'pending' })"
+          @click="act({ status: own ? 'accepted' : 'pending' })"
         >
           Undo
         </button>
@@ -80,12 +83,20 @@ function startEdit() {
     </template>
     <template v-else>
       <header class="dc-head">
-        <span class="dc-sev" :data-sev="d.severity">{{ d.severity }}</span>
-        <strong class="dc-title">{{ d.title }}</strong>
+        <template v-if="own">
+          <span class="dc-you" data-test="draft-own">You</span>
+          <strong class="dc-title">Your comment</strong>
+        </template>
+        <template v-else>
+          <span class="dc-sev" :data-sev="d.severity">{{ d.severity }}</span>
+          <strong class="dc-title">{{ d.title }}</strong>
+        </template>
         <span v-if="edited" class="dc-edited" data-test="draft-edited"
           >edited</span
         >
-        <span v-if="d.status === 'accepted'" class="dc-ok">accepted</span>
+        <span v-if="d.status === 'accepted' && !own" class="dc-ok"
+          >accepted</span
+        >
         <span v-if="d.status === 'posted'" class="dc-ok">posted</span>
       </header>
       <p class="dc-place mono tiny muted">{{ place }}</p>
@@ -156,6 +167,17 @@ function startEdit() {
           Edit
         </button>
         <button
+          v-if="own"
+          type="button"
+          class="lg-btn small ghost"
+          data-test="draft-delete"
+          :disabled="busy"
+          @click="act({ status: 'discarded' })"
+        >
+          Delete
+        </button>
+        <button
+          v-else
           type="button"
           class="lg-btn small ghost"
           data-test="draft-unaccept"

@@ -47,6 +47,7 @@ const file = (
 });
 const draft = (id: string, over: Partial<PRDraft> = {}): PRDraft => ({
   id,
+  run_id: "r1",
   path: "a.go",
   old_path: "a.go",
   side: "new",
@@ -564,6 +565,63 @@ describe("pull request selection", () => {
     await card().find('[data-test="draft-undo"]').trigger("click");
     await flushPromises();
     expect(card().attributes("data-status")).toBe("pending");
+    w.unmount();
+  });
+
+  it("adds the user's own comment on a removed line, then deletes and restores it", async () => {
+    routes["POST /pull-requests/7/review/drafts"] = (c) => {
+      const b = c.body as {
+        path: string;
+        side: "old";
+        line: number;
+        body: string;
+      };
+      const d = draft("own1", {
+        run_id: "",
+        side: b.side,
+        line: b.line,
+        old_line: b.line,
+        body: b.body,
+        ai_body: "",
+        severity: "info",
+        title: "",
+        status: "accepted",
+      });
+      drafts.push(d);
+      return d;
+    };
+    const { w } = await mountPR();
+    const removed = w.findAll(".dv-line")[1];
+    expect(removed.classes()).toContain("del");
+    await removed.find('[data-test="diff-add-comment"]').trigger("click");
+    await flushPromises();
+    const form = w.find('[data-test="diff-compose"]');
+    expect(form.exists()).toBe(true);
+    await form.find("textarea").setValue("Why remove this?");
+    await form.trigger("submit");
+    await flushPromises();
+    expect(calls.at(-1)).toMatchObject({
+      method: "POST",
+      body: { path: "a.go", side: "old", line: 2, body: "Why remove this?" },
+    });
+    expect(w.find('[data-test="diff-compose"]').exists()).toBe(false);
+    const card = () => w.find('[data-test="draft-own1"]');
+    expect(card().find('[data-test="draft-own"]').text()).toBe("You");
+    expect(
+      card()
+        .element.closest(".dv-slot")
+        ?.previousElementSibling?.classList.contains("del"),
+    ).toBe(true);
+    expect(card().find('[data-test="draft-accept"]').exists()).toBe(false);
+
+    await card().find('[data-test="draft-delete"]').trigger("click");
+    await flushPromises();
+    expect(calls.at(-1)?.body).toEqual({ status: "discarded" });
+    expect(card().text()).toContain("Deleted");
+    await card().find('[data-test="draft-undo"]').trigger("click");
+    await flushPromises();
+    expect(calls.at(-1)?.body).toEqual({ status: "accepted" });
+    expect(card().attributes("data-status")).toBe("accepted");
     w.unmount();
   });
 

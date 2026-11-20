@@ -137,6 +137,7 @@ export type DraftStatus =
 
 export type PRDraft = {
   id: string;
+  run_id: string; // "" = the user's own comment
   path: string;
   old_path: string;
   side: "new" | "old";

@@ -260,6 +260,55 @@ var draftMoves = map[string]map[string]bool{
 	model.DraftAccepted:  {model.DraftPending: true},
 }
 
+// The user's own comments have no AI draft to decide on: they are accepted until deleted.
+var ownMoves = map[string]map[string]bool{
+	model.DraftAccepted:  {model.DraftDiscarded: true},
+	model.DraftDiscarded: {model.DraftAccepted: true},
+}
+
+// AddComment stores the user's own comment on a line of the diff, accepted, to post with the review.
+func (r *Reviews) AddComment(ctx context.Context, u *model.User, projectID string, number int, path, side string, line int, body string) (*model.PRDraft, error) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil, fmt.Errorf("%w: a comment needs text", ErrInvalid)
+	}
+	if side != "new" && side != "old" {
+		return nil, fmt.Errorf("%w: side must be new or old", ErrInvalid)
+	}
+	rc, err := r.open(ctx, u, projectID, false)
+	if err != nil {
+		return nil, err
+	}
+	d, err := r.detail(ctx, rc, number, false)
+	if err != nil {
+		return nil, err
+	}
+	files, err := r.files(ctx, rc, number, d.HeadSHA)
+	if err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(files, func(f model.PRFile) bool { return f.Path == path })
+	if i < 0 {
+		return nil, fmt.Errorf("%w: %s is not a changed file of this pull request", ErrInvalid, path)
+	}
+	aSide, aLine, aOld, ok := anchor(files[i], side, line)
+	if !ok {
+		return nil, fmt.Errorf("%w: line %d of %s is not in the diff", ErrInvalid, line, path)
+	}
+	rev, err := r.ensureReview(ctx, rc, number)
+	if err != nil {
+		return nil, err
+	}
+	now := r.now()
+	dr := model.PRDraft{ID: fmt.Sprintf("prc_%d", now.UnixNano()), ReviewID: rev.ID, Path: path, OldPath: files[i].OldPath,
+		Side: aSide, Line: aLine, OldLine: aOld, Inline: true, HeadSHA: d.HeadSHA, Severity: "info", Body: body,
+		Status: model.DraftAccepted, CreatedAt: now, UpdatedAt: now}
+	if err := r.Store.AddUserDraft(ctx, dr); err != nil {
+		return nil, err
+	}
+	return &dr, nil
+}
+
 // UpdateDraft applies a decision or an edit. Only pending ↔ accepted, pending ↔ discarded are legal;
 // posted, superseded and outdated drafts are fixed, and only open drafts take a new body.
 func (r *Reviews) UpdateDraft(ctx context.Context, u *model.User, projectID string, number int, draftID string, status, body *string) (*model.PRDraft, error) {
@@ -284,7 +333,11 @@ func (r *Reviews) UpdateDraft(ctx context.Context, u *model.User, projectID stri
 	if cur == nil {
 		return nil, ErrReviewNotFound
 	}
-	if status != nil && *status != cur.Status && !draftMoves[cur.Status][*status] {
+	moves := draftMoves
+	if cur.RunID == "" {
+		moves = ownMoves
+	}
+	if status != nil && *status != cur.Status && !moves[cur.Status][*status] {
 		return nil, fmt.Errorf("%w: a %s draft cannot become %s", ErrInvalid, cur.Status, *status)
 	}
 	if status != nil && !isDraftStatus(*status) {

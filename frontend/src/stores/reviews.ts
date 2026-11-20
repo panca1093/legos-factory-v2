@@ -190,6 +190,18 @@ export const useReviews = defineStore("reviews", {
       );
       if (this.detail) this.detail = { ...this.detail, run };
     },
+    async addComment(c: {
+      path: string;
+      side: "new" | "old";
+      line: number;
+      body: string;
+    }) {
+      const d = await api.post<PRDraft>(
+        `${base(this.projectId, this.number)}/review/drafts`,
+        c,
+      );
+      this.drafts = [...this.drafts, d];
+    },
     async patchDraft(id: string, patch: { status?: string; body?: string }) {
       const d = await api.patch<PRDraft>(
         `${base(this.projectId, this.number)}/review/drafts/${encodeURIComponent(id)}`,
