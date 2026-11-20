@@ -390,6 +390,33 @@ describe("editor store", () => {
     expect(model.disposed).toBe(true);
   });
 
+  it("ignores a stale read for a buffer that was released and reopened", async () => {
+    const { s, fid } = await open();
+    let first!: (v: unknown) => void;
+    let second!: (v: unknown) => void;
+    let n = 0;
+    api.read.mockImplementation((_f: string, p: string) =>
+      p !== "other.go"
+        ? Promise.resolve(file("x"))
+        : new Promise((r) => (n++ ? (second = r) : (first = r))),
+    );
+    void s.openFile(fid, "other.go");
+    await flushPromises();
+    void s.openFile(fid, "x.go");
+    void s.openFile(fid, "other.go");
+    await flushPromises();
+    first(file("old", "h-old"));
+    await flushPromises();
+    expect(s.folders[fid].buffers["other.go"].status).toBe("loading");
+    expect(s.modelOf(fid, "other.go")).toBeUndefined();
+    second(file("new", "h-new"));
+    await flushPromises();
+    const m = s.modelOf(fid, "other.go") as unknown as FakeModel;
+    expect(m.value).toBe("new");
+    expect(m.disposed).toBe(false);
+    expect(s.folders[fid].buffers["other.go"].baseHash).toBe("h-new");
+  });
+
   it("opens a worktree folder through the API and registers it", async () => {
     const s = useEditor();
     s.attach("atlas");
@@ -400,7 +427,7 @@ describe("editor store", () => {
         kind: "worktree",
         wo_id: "wo_1",
         project_id: "atlas",
-            },
+      },
     });
     const f = await s.openWorktree("wo_1");
     expect(f.id).toBe("w1");
