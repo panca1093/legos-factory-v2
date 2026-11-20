@@ -453,7 +453,7 @@
   align-items: start;
 }
 .pw.panel-open {
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 26vw, 420px);
 }
 .pw-main {
   display: grid;
@@ -490,7 +490,7 @@
     right: 12px;
     bottom: 12px;
     z-index: 40;
-    width: min(340px, calc(100vw - 24px));
+    width: min(400px, calc(100vw - 24px));
     max-height: none;
   }
   .pw-scrim {
@@ -502,43 +502,6 @@
   }
 }
 
-.pc {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-card);
-}
-.pc h3 {
-  margin: 0;
-}
-.pc-h {
-  display: flex;
-  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 14px 18px;
-  border: 0;
-  background: none;
-  color: var(--ink);
-  font: 600 14px var(--font-display);
-  cursor: pointer;
-}
-.pc-chev {
-  width: 16px;
-  height: 16px;
-  color: var(--muted);
-  transition: transform var(--dur-fast);
-}
-.pc-chev[data-closed="true"] {
-  transform: rotate(-90deg);
-}
-.pc-body {
-  display: grid;
-  gap: var(--space-3);
-  padding: 0 18px 18px;
-  min-width: 0;
-}
 .pc-sub {
   margin: var(--space-2) 0 0;
   font-size: 12px;
@@ -849,4 +812,81 @@
 .pk select {
   max-width: 100%;
   min-width: 0;
+}
+
+/* Right panel shell: one full-height card, tabs on top, each tab scrolling on its own. */
+.sp {
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 24px);
+  min-height: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-card);
+}
+.sp-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 8px 0;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.sp-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: none;
+  color: var(--muted);
+  font: 600 14px var(--font-display);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sp-tabs button[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+.sp-tabs button:hover {
+  color: var(--ink);
+}
+.sp-badge {
+  padding: 0 7px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--muted);
+  font: 700 11px/18px var(--font-mono);
+}
+.sp-badge.hot {
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+.sp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  padding: 14px 18px 18px;
+}
+/* A titled block inside a tab; blocks are split by a hairline instead of nested cards. */
+.sp-sec {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.sp-sec + .sp-sec {
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--line);
+}
+.sp-h {
+  margin: 0;
+  color: var(--muted);
+  font: 700 11px var(--font-display);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }

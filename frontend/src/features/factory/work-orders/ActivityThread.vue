@@ -3,8 +3,6 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { ChevronRight, Download, FileText, Send } from "lucide-vue-next";
 import type { Run, Task, WOEvent, WorkOrder } from "../../../types/api";
 import ActorBadge from "../ActorBadge.vue";
-import PanelCard from "../../projects/PanelCard.vue";
-import { woPanelSlots } from "../../projects/woPanelSlots";
 import BlueprintSection from "./BlueprintSection.vue";
 import {
   groupActivity,
@@ -12,11 +10,7 @@ import {
   liveVerb,
   type AgentRunGroup,
 } from "../runs/agentActivity";
-import {
-  activityThread,
-  handoffs,
-  type ThreadItem,
-} from "../runs/activityThread";
+import { activityThread, type ThreadItem } from "../runs/activityThread";
 const props = withDefaults(
   defineProps<{
     order: WorkOrder;
@@ -70,8 +64,6 @@ const shown = computed(() =>
       ),
 );
 
-const slot = computed(() => woPanelSlots.mid.value);
-const pairs = computed(() => handoffs(items.value));
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const who = (a: string) => (a === "you" ? "You" : cap(a));
 const time = (iso: string) =>
@@ -355,24 +347,6 @@ async function send() {
         <p v-if="sendError" class="form-error" role="alert">{{ sendError }}</p>
       </form>
     </section>
-    <Teleport :to="slot ?? 'body'" :disabled="!slot">
-      <PanelCard id="handoffs" title="Handoffs &amp; loops">
-        <div class="loop">
-          <div v-for="h in pairs" :key="h.from + h.to" class="loop-row">
-            <span>{{ who(h.from) }} → {{ who(h.to) }}</span>
-            <span class="tiny muted"
-              ><template v-if="h.tasks"
-                >{{ h.tasks }} task{{ h.tasks === 1 ? "" : "s" }}</template
-              ><template v-if="h.tasks && h.feedback"> · </template
-              ><template v-if="h.feedback"
-                >{{ h.feedback }} feedback</template
-              ></span
-            >
-          </div>
-          <p v-if="!pairs.length" class="tiny muted">No handoffs yet.</p>
-        </div>
-      </PanelCard>
-    </Teleport>
   </div>
 </template>
 <style scoped>
@@ -780,19 +754,6 @@ async function send() {
 }
 .steer-dock .form-error {
   margin: 0;
-}
-.loop {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
-}
-.loop-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
 }
 @media (max-width: 720px) {
   .msgs,

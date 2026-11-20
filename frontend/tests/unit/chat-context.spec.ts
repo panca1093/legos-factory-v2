@@ -245,7 +245,9 @@ describe("chat context panel", () => {
   it("lists only work orders created from this chat, with status", async () => {
     const { w } = await mountPanel();
     const links = w.findAll('ul[aria-label="Work orders from this chat"] a');
-    expect(links.map((a) => a.attributes("href"))).toEqual(["/projects/p1/wo/w1"]);
+    expect(links.map((a) => a.attributes("href"))).toEqual([
+      "/projects/p1/wo/w1",
+    ]);
     expect(links[0].text()).toContain("Make retries safe");
     expect(links[0].text()).toContain("Draft");
     w.unmount();

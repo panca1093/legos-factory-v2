@@ -16,6 +16,7 @@ import NewWorkOrderDrawer from "../factory/work-orders/NewWorkOrderDrawer.vue";
 import ProjectDetailsCard from "./ProjectDetailsCard.vue";
 import WorkOrderPanel from "./WorkOrderPanel.vue";
 import PRPanel from "./pulls/PRPanel.vue";
+import SidePanel from "./SidePanel.vue";
 import { useReviews } from "../../stores/reviews";
 import { readStored, woPath, writeStored } from "./rail";
 import CodePanel from "../editor/CodePanel.vue";
@@ -199,11 +200,7 @@ onMounted(settle);
       >Back to projects</RouterLink
     >
   </div>
-  <div
-    v-else
-    class="pw"
-    :class="{ 'panel-open': showPanel, 'pw-pull': kind === 'pull' }"
-  >
+  <div v-else class="pw" :class="{ 'panel-open': showPanel }">
     <div class="pw-main">
       <div class="pw-bar">
         <span class="lg-kind">{{ label }}</span>
@@ -237,13 +234,23 @@ onMounted(settle);
       class="pw-panel"
       aria-label="Context"
     >
-      <ProjectDetailsCard
+      <SidePanel
         v-if="kind === 'overview'"
-        :project="project"
-        :reveal="revealChecks"
-      />
+        :tabs="[{ key: 'details', label: 'Details' }]"
+        label="Project panel"
+      >
+        <template #details>
+          <ProjectDetailsCard :project="project" :reveal="revealChecks" />
+        </template>
+      </SidePanel>
       <PRPanel v-else-if="kind === 'pull'" />
-      <CodePanel v-else-if="kind === 'code'" />
+      <SidePanel
+        v-else-if="kind === 'code'"
+        :tabs="[{ key: 'explorer', label: 'Explorer' }]"
+        label="Code panel"
+      >
+        <template #explorer><CodePanel /></template>
+      </SidePanel>
       <WorkOrderPanel v-else />
     </aside>
   </div>

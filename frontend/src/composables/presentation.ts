@@ -270,9 +270,10 @@ export const publishLabel = (p: {
       : "Local only";
 
 // What Approve does for a project, by how it publishes.
-export function publishNote(
-  p?: Pick<Project, "publish_via" | "github_repo">,
-): { text: string; remote: boolean } {
+export function publishNote(p?: Pick<Project, "publish_via" | "github_repo">): {
+  text: string;
+  remote: boolean;
+} {
   const via = p?.publish_via ?? "none";
   if (via === "gh")
     return {

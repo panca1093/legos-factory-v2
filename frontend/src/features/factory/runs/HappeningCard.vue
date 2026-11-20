@@ -102,7 +102,6 @@ const taskTitle = computed(
       tag="div"
       class="timeline fx-tl"
       role="region"
-      :tabindex="shown.length ? 0 : undefined"
       aria-label="Activity events"
       ><template v-for="it in shown"
         ><article v-if="it.type === 'run'" :key="it.id" class="event">
@@ -237,10 +236,7 @@ const taskTitle = computed(
   padding: 12px;
 }
 .fx-tl {
-  max-height: min(420px, 50dvh);
   overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
   margin: 0 -8px;
   padding: 4px 8px 0;
 }
@@ -276,11 +272,6 @@ const taskTitle = computed(
 }
 .fx-tl:empty {
   display: none;
-}
-.fx-tl:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus);
-  border-radius: var(--radius-md);
 }
 .fx-tl :deep(.view-leave-active) {
   position: absolute;

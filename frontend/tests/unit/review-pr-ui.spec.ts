@@ -633,13 +633,21 @@ describe("pull request selection", () => {
     );
     expect(w.find('[data-test="tab-review-badge"]').text()).toBe("3");
     expect(w.find('[data-test="tab-changes-badge"]').text()).toBe("1/2");
-    expect(shown("prp-review")).toBe(true);
-    expect(shown("prp-changes")).toBe(false);
+    expect(shown("sp-review")).toBe(true);
+    expect(shown("sp-changes")).toBe(false);
     await w.find('[data-test="tab-changes"]').trigger("click");
     await flushPromises();
-    expect(router.currentRoute.value.query.tab).toBe("changes");
-    expect(shown("prp-changes")).toBe(true);
-    expect(shown("prp-review")).toBe(false);
+    expect(router.currentRoute.value.query.side).toBe("changes");
+    expect(shown("sp-changes")).toBe(true);
+    expect(shown("sp-review")).toBe(false);
+    w.unmount();
+  });
+
+  it("falls back to the load-time tab when ?side= names another page's tab", async () => {
+    const { w } = await mountPR("/projects/p1/pulls/7?side=plan");
+    expect(w.find('[data-test="tab-review"]').attributes("aria-selected")).toBe(
+      "true",
+    );
     w.unmount();
   });
 

@@ -391,7 +391,9 @@ onBeforeUnmount(() => {
             Running now <span>{{ sp.running.length }}</span>
             <RouterLink
               class="rail-link"
-              :to="chat.project_id ? `/projects/${chat.project_id}` : '/projects'"
+              :to="
+                chat.project_id ? `/projects/${chat.project_id}` : '/projects'
+              "
               >Open factory</RouterLink
             >
           </h5>

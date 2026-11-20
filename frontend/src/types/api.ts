@@ -55,7 +55,11 @@ export interface CheckProfile {
   version?: number;
   language?: string;
   sources?: { path: string; sha256: string }[];
-  services?: { compose: string; names: string[]; ports?: Record<string, number> };
+  services?: {
+    compose: string;
+    names: string[];
+    ports?: Record<string, number>;
+  };
   database?: { service: string; admin_url: string };
   env?: Record<string, string>;
   setup?: CheckStep[];

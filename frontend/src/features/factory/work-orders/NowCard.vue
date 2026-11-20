@@ -66,7 +66,9 @@ const paused = computed(() => !!props.order.paused_at),
         .length,
   );
 const openFailure = computed(
-  () => [...props.events].reverse().find((e) => e.kind === "pr_open_failed")?.message ?? "",
+  () =>
+    [...props.events].reverse().find((e) => e.kind === "pr_open_failed")
+      ?.message ?? "",
 );
 const asking = computed(
   () =>
@@ -295,7 +297,11 @@ const headline = computed(() => {
           The factory can no longer read this pull request; check it on the
           provider.
         </p>
-        <p v-if="ship.key === 'open_failed' && openFailure" class="small muted" data-test="open-failure">
+        <p
+          v-if="ship.key === 'open_failed' && openFailure"
+          class="small muted"
+          data-test="open-failure"
+        >
           {{ openFailure }}
         </p>
       </template>

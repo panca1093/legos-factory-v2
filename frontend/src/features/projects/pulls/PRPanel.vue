@@ -6,6 +6,7 @@ import "./pulls.css";
 import { useReviews } from "../../../stores/reviews";
 import { useToast } from "../../../composables/useToast";
 import AppDialog from "../../../components/ui/AppDialog.vue";
+import SidePanel, { type SideTab } from "../SidePanel.vue";
 import { fileTree } from "./diff";
 import type { PostConflict } from "../../../stores/reviews";
 import type { PostExpect, Verdict } from "../../../types/review";
@@ -33,18 +34,19 @@ watch(
   },
   { immediate: true },
 );
-const tab = computed<Tab>(() => {
-  const q = route.query.tab;
-  return q === "changes" || q === "review" ? q : firstTab.value;
-});
-function setTab(t: Tab) {
-  void router.replace({ query: { ...route.query, tab: t } });
-}
-function arrow() {
-  const t: Tab = tab.value === "changes" ? "review" : "changes";
-  setTab(t);
-  document.getElementById(`prp-tab-${t}`)?.focus();
-}
+const tabs = computed<SideTab[]>(() => [
+  {
+    key: "changes",
+    label: "Changes",
+    badge: `${store.viewedCount}/${store.files.length}`,
+  },
+  {
+    key: "review",
+    label: "Review",
+    badge: store.pending.length || "",
+    hot: true,
+  },
+]);
 const draftCount = (path: string) =>
   store.drafts.filter(
     (d) =>
@@ -234,55 +236,8 @@ const postedHere = computed(
 </script>
 <template>
   <template v-if="store.pr">
-    <section class="pc prp" data-card="pr">
-      <div
-        class="prp-tabs"
-        role="tablist"
-        aria-label="Pull request panel"
-        @keydown.left.prevent="arrow"
-        @keydown.right.prevent="arrow"
-      >
-        <button
-          id="prp-tab-changes"
-          type="button"
-          role="tab"
-          :aria-selected="tab === 'changes'"
-          :tabindex="tab === 'changes' ? 0 : -1"
-          aria-controls="prp-changes"
-          data-test="tab-changes"
-          @click="setTab('changes')"
-        >
-          Changes
-          <span class="prp-badge" data-test="tab-changes-badge"
-            >{{ store.viewedCount }}/{{ store.files.length }}</span
-          >
-        </button>
-        <button
-          id="prp-tab-review"
-          type="button"
-          role="tab"
-          :aria-selected="tab === 'review'"
-          :tabindex="tab === 'review' ? 0 : -1"
-          aria-controls="prp-review"
-          data-test="tab-review"
-          @click="setTab('review')"
-        >
-          Review
-          <span
-            v-if="store.pending.length"
-            class="prp-badge hot"
-            data-test="tab-review-badge"
-            >{{ store.pending.length }}</span
-          >
-        </button>
-      </div>
-      <div
-        v-show="tab === 'changes'"
-        id="prp-changes"
-        class="prp-body"
-        role="tabpanel"
-        aria-labelledby="prp-tab-changes"
-      >
+    <SidePanel :tabs="tabs" :initial="firstTab" label="Pull request panel">
+      <template #changes>
         <p class="small muted" data-test="viewed-count">
           {{ store.viewedCount }} / {{ store.files.length }} viewed
         </p>
@@ -351,14 +306,8 @@ const postedHere = computed(
           </li>
         </ul>
         <p v-if="!rows.length" class="small muted">No changed files.</p>
-      </div>
-      <div
-        v-show="tab === 'review'"
-        id="prp-review"
-        class="prp-body"
-        role="tabpanel"
-        aria-labelledby="prp-tab-review"
-      >
+      </template>
+      <template #review>
         <p v-if="store.running" class="small" data-test="review-running">
           AI review running…
         </p>
@@ -484,8 +433,8 @@ const postedHere = computed(
               : `Post review… · ${count} comment${count === 1 ? "" : "s"}`
           }}
         </button>
-      </div>
-    </section>
+      </template>
+    </SidePanel>
     <AppDialog
       :open="confirming"
       title="Post this review?"

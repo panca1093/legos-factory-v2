@@ -55,7 +55,12 @@ async function fixture(page: Page, role: string = user.role) {
         },
       };
     } else if (p.endsWith("/checks"))
-      body = { profile: null, proposal: null, run: { status: "idle" }, stale: false };
+      body = {
+        profile: null,
+        proposal: null,
+        run: { status: "idle" },
+        stale: false,
+      };
     else if (p.endsWith("/overview")) body = overview;
     else if (p.endsWith("/usage/summary")) body = usage;
     else if (p.endsWith("/models")) body = { models };
