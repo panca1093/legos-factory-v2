@@ -99,6 +99,7 @@ func (t *UsageTracker) UserSummary(ctx context.Context, userID string, days int,
 		idx[d] = i
 	}
 	roles := map[string]*model.UsageRole{}
+	accounts := map[[2]string]*accountAgg{}
 	for _, r := range recs {
 		at := r.CreatedAt.In(loc)
 		if !at.Before(monthStart) {
@@ -116,7 +117,28 @@ func (t *UsageTracker) UserSummary(ctx context.Context, userID string, days int,
 			roles[r.Role] = ro
 		}
 		ro.TokensIn, ro.TokensOut, ro.CostMicros, ro.Runs = ro.TokensIn+r.TokensIn, ro.TokensOut+r.TokensOut, ro.CostMicros+r.CostMicros, ro.Runs+1
+
+		key := [2]string{r.Agent, r.AccountID}
+		ag := accounts[key]
+		if ag == nil {
+			ag = &accountAgg{models: map[string]bool{}}
+			ag.Agent, ag.AccountID = r.Agent, r.AccountID
+			accounts[key] = ag
+		}
+		ag.TokensIn, ag.TokensOut, ag.Runs = ag.TokensIn+r.TokensIn, ag.TokensOut+r.TokensOut, ag.Runs+1
+		ag.cost += r.CostMicros
+		if r.ProviderHost != "" {
+			ag.Host = r.ProviderHost
+		}
+		if r.ServedModel != "" {
+			ag.models[r.ServedModel] = true
+		}
 	}
+	labels, err := t.Repo.AccountLabels(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	s.Accounts = accountRows(accounts, labels)
 	for _, ro := range roles {
 		s.Roles = append(s.Roles, *ro)
 	}
@@ -127,4 +149,58 @@ func (t *UsageTracker) UserSummary(ctx context.Context, userID string, days int,
 		return s.Roles[a].Role < s.Roles[b].Role
 	})
 	return s, nil
+}
+
+type accountAgg struct {
+	model.UsageAccount
+	cost   int64
+	models map[string]bool
+}
+
+const (
+	labelSystemDefault = "System default"
+	labelDeleted       = "Deleted account"
+	labelUntracked     = "Before account tracking"
+)
+
+// accountRows turns per-account sums into rows, busiest first. A row that ever ran on an API-key provider has no
+// cost: the rate behind those numbers is not known here.
+func accountRows(m map[[2]string]*accountAgg, labels map[string]model.UsageAccountLabel) []model.UsageAccount {
+	out := make([]model.UsageAccount, 0, len(m))
+	for _, ag := range m {
+		row := ag.UsageAccount
+		row.Kind = "subscription"
+		if row.Host != "" {
+			row.Kind = "api"
+		} else {
+			c := ag.cost
+			row.CostMicros = &c
+		}
+		switch l, ok := labels[row.AccountID]; {
+		case row.AccountID == "":
+			row.Label, row.Untracked = labelUntracked, true
+		case row.AccountID == SystemAccountID:
+			row.Label = labelSystemDefault
+		case ok:
+			row.Label = l.Label
+		default:
+			row.Label, row.Deleted = labelDeleted, true
+		}
+		row.ServedModels = make([]string, 0, len(ag.models))
+		for k := range ag.models {
+			row.ServedModels = append(row.ServedModels, k)
+		}
+		sort.Strings(row.ServedModels)
+		out = append(out, row)
+	}
+	sort.Slice(out, func(a, b int) bool {
+		if out[a].Runs != out[b].Runs {
+			return out[a].Runs > out[b].Runs
+		}
+		if out[a].Agent != out[b].Agent {
+			return out[a].Agent < out[b].Agent
+		}
+		return out[a].AccountID < out[b].AccountID
+	})
+	return out
 }

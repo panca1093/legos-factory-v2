@@ -102,6 +102,8 @@ type CheckSuggester struct {
 	SourceDir func(ctx context.Context, projectID string) (string, error)
 	// Agent runs one read-only prompt in dir with the Builder-tier model and names the model it used.
 	Agent func(ctx context.Context, userID, dir, prompt string) (modelRef string, res model.AgentResult, err error)
+	// Account names the account Agent will run on, for the usage record. nil records no account.
+	Account func(ctx context.Context, userID string) RunAccount
 	// DryRun runs the profile's checks in dir.
 	DryRun  func(ctx context.Context, projectID, runName, dir string, p model.Profile) ([]model.CheckResult, error)
 	Timeout time.Duration
@@ -212,8 +214,12 @@ func (s *CheckSuggester) suggest(ctx context.Context, userID, projectID string) 
 		}
 		var res model.AgentResult
 		var rerr error
+		var acct RunAccount
+		if s.Account != nil {
+			acct = s.Account(ctx, userID)
+		}
 		ref, res, rerr = s.Agent(ctx, userID, dir, p)
-		s.record(ctx, userID, ref, res)
+		s.record(ctx, userID, ref, acct, res)
 		if rerr != nil {
 			return nil, rerr
 		}
@@ -277,16 +283,18 @@ func (s *CheckSuggester) dryRun(ctx context.Context, projectID, dir string, p mo
 	return out, nil
 }
 
-func (s *CheckSuggester) record(ctx context.Context, userID, ref string, res model.AgentResult) {
+func (s *CheckSuggester) record(ctx context.Context, userID, ref string, acct RunAccount, res model.AgentResult) {
 	if s.Usage == nil || (res.TokensIn == 0 && res.TokensOut == 0 && res.CostMicros == 0) {
 		return
 	}
 	provider, modelID := SplitModelRef(ref)
-	_ = s.Usage.Record(context.WithoutCancel(ctx), model.UsageRecord{
+	rec := model.UsageRecord{
 		UserID: userID, Role: suggestUsageRole, Provider: provider, Model: modelID,
 		TokensIn: res.TokensIn, TokensOut: res.TokensOut, CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
 		CostMicros: res.CostMicros, Source: res.CostSource,
-	})
+	}
+	acct.Stamp(&rec)
+	_ = s.Usage.Record(context.WithoutCancel(ctx), rec)
 }
 
 func (s *CheckSuggester) playbook(ctx context.Context, projectID, dir, sha string) string {

@@ -60,6 +60,8 @@ type Factory struct {
 	JudgeFn func() Judge
 	// RunEnv gives the environment and extra agent arguments for a run: the account of the work order's creator. nil means none.
 	RunEnv func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) (env, args []string, err error)
+	// RunAccount names the account RunEnv picked, for the usage record. nil records no account.
+	RunAccount func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) RunAccount
 	DataDir      string
 	Docker       DockerCLI // nil: the docker binary on PATH
 	stacks       *stackMgr
@@ -240,10 +242,14 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	if harnessTakesMCP(h) {
 		mcpAudit = f.applyMCP(ctx, &req)
 	}
+	var acct RunAccount
 	if f.RunEnv != nil {
 		var eerr error
 		if req.Env, req.Args, eerr = f.RunEnv(ctx, role, wo); eerr != nil {
 			return model.AgentResult{}, "", eerr
+		}
+		if f.RunAccount != nil {
+			acct = f.RunAccount(ctx, role, wo)
 		}
 	}
 	req.Env = append(req.Env, opts.Env...)
@@ -293,7 +299,7 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 		}
 		f.failRun(ctx, wo.ID, role, runID, err)
 		if errors.Is(err, model.ErrToolCallAsText) {
-			f.recordUsage(ctx, wo, role, provider, modelID, res)
+			f.recordUsage(ctx, wo, role, provider, modelID, acct, res)
 		}
 		return model.AgentResult{}, runID, err
 	}
@@ -302,24 +308,26 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 			return model.AgentResult{}, runID, err
 		}
 	}
-	f.recordUsage(ctx, wo, role, provider, modelID, res)
+	f.recordUsage(ctx, wo, role, provider, modelID, acct, res)
 	if !opts.Hold {
 		f.event(wo.ID, string(role), "agent_completed", fmt.Sprintf("%s agent finished", role), runRef)
 	}
 	return res, runID, nil
 }
 
-func (f *Factory) recordUsage(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID string, res model.AgentResult) {
+func (f *Factory) recordUsage(ctx context.Context, wo *model.WorkOrder, role model.AgentRole, provider, modelID string, acct RunAccount, res model.AgentResult) {
 	if f.Usage == nil {
 		return
 	}
-	_ = f.Usage.Record(ctx, model.UsageRecord{
+	u := model.UsageRecord{
 		WOID: wo.ID, UserID: wo.CreatedBy, Role: string(role),
 		Provider: provider, Model: modelID,
 		TokensIn: res.TokensIn, TokensOut: res.TokensOut,
 		CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
 		CostMicros: res.CostMicros, Source: res.CostSource,
-	})
+	}
+	acct.Stamp(&u)
+	_ = f.Usage.Record(ctx, u)
 }
 
 func (f *Factory) wsLock(woID string) *sync.Mutex       { return lockFor(&f.wsMu, woID) }

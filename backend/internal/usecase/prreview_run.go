@@ -505,9 +505,11 @@ func (r *Reviews) ask(ctx context.Context, ag ReviewAgent, userID, dir, prompt s
 	}
 	res, err := ag.Harness.Result(ctx, ses.ID())
 	if r.Usage != nil && (err == nil || res.TokensIn+res.TokensOut > 0) {
-		_ = r.Usage.Record(context.WithoutCancel(ctx), model.UsageRecord{UserID: userID, Role: string(model.AgentInspector), Provider: ag.Provider,
+		rec := model.UsageRecord{UserID: userID, Role: string(model.AgentInspector), Provider: ag.Provider,
 			Model: ag.Model, TokensIn: res.TokensIn, TokensOut: res.TokensOut, CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
-			CostMicros: res.CostMicros, Source: res.CostSource})
+			CostMicros: res.CostMicros, Source: res.CostSource}
+		ag.Account.Stamp(&rec)
+		_ = r.Usage.Record(context.WithoutCancel(ctx), rec)
 	}
 	return res, err
 }

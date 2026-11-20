@@ -92,6 +92,8 @@ type Chat struct {
 	ModelKey func(ctx context.Context) string
 	// Served names the provider model and host behind a model ref of the chat account; empty for a login account.
 	Served func(ctx context.Context, userID, modelRef string) (served, host string)
+	// Account names the account serving a user's chat role, for usage records. nil records no account.
+	Account func(ctx context.Context, userID string) RunAccount
 	// Dir is the empty directory chat agents run in.
 	Dir string
 	// Repo returns the project's checkout and its HEAD, refreshed first when asked; nil means chats never read code.
@@ -616,6 +618,7 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	}
 	send(ChatEvent{Kind: "user_message", Message: um})
 
+	acct := c.account(ctx, ch.UserID)
 	res, info, err := c.answer(ctx, gone, ch, history, prompt, files, func(t string) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -628,11 +631,13 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	_ = c.Store.Touch(ctx, id)
 	if c.Usage != nil && (res.TokensIn != 0 || res.TokensOut != 0 || res.CostMicros != 0) {
 		provider, modelID := SplitModelRef(c.resolve(ctx, ch))
-		_ = c.Usage.Record(ctx, model.UsageRecord{
+		rec := model.UsageRecord{
 			UserID: u.ID, Role: string(model.AgentChat), Provider: provider, Model: modelID,
 			TokensIn: res.TokensIn, TokensOut: res.TokensOut, CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
 			CostMicros: res.CostMicros, Source: res.CostSource,
-		})
+		}
+		acct.Stamp(&rec)
+		_ = c.Usage.Record(ctx, rec)
 	}
 	if titled != nil {
 		var expired <-chan time.Time
@@ -659,7 +664,16 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	}
 	am := &model.ChatMessage{ChatID: id, Role: "assistant", Attachments: []model.ChatAttachment{}, CreatedAt: time.Now()}
 	am.Usage = info.usage(c.resolve(ctx, ch), res)
-	if c.Served != nil {
+	if c.Account != nil {
+		_, id := SplitModelRef(am.Usage.Model)
+		if acct.Models != nil {
+			am.Usage.ServedModel = acct.Models.get(modelFamily(id))
+		}
+		am.Usage.ProviderHost = acct.Host
+		if acct.Host != "" {
+			am.Usage.CostMicros = 0
+		}
+	} else if c.Served != nil {
 		am.Usage.ServedModel, am.Usage.ProviderHost = c.Served(ctx, ch.UserID, am.Usage.Model)
 	}
 	if err != nil {
@@ -1050,4 +1064,11 @@ func ChatUser(ctx context.Context) string {
 func harnessTakesMCP(h Harness) bool {
 	m, ok := h.(interface{ SupportsMCP() bool })
 	return !ok || m.SupportsMCP()
+}
+
+func (c *Chat) account(ctx context.Context, userID string) RunAccount {
+	if c.Account == nil {
+		return RunAccount{}
+	}
+	return c.Account(ctx, userID)
 }

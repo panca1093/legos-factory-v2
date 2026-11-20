@@ -218,6 +218,8 @@ func (a *Agents) claudeAccountEnv(acc model.AgentAccount) ([]string, error) {
 
 // RoleAPI is the provider side of the account serving a role: Models is nil for a login account.
 type RoleAPI struct {
+	// AccountID is the account serving the role, SystemAccountID for the system default; empty when no user is known.
+	AccountID string
 	// Sig changes whenever the account, its endpoint or its model map change, so it keys caches of model lists.
 	Sig    string
 	Host   string
@@ -229,10 +231,13 @@ func (a *Agents) RoleAPI(ctx context.Context, agent, userID string, role model.A
 		return RoleAPI{}, nil
 	}
 	acc, err := a.roleAccount(ctx, userID, agent, role)
-	if err != nil || acc == nil {
+	if err != nil {
 		return RoleAPI{}, err
 	}
-	r := RoleAPI{Sig: acc.ID}
+	if acc == nil {
+		return RoleAPI{AccountID: SystemAccountID}, nil
+	}
+	r := RoleAPI{Sig: acc.ID, AccountID: acc.ID}
 	switch {
 	case acc.APIBaseURL != "":
 		m := parseAPIModels(acc.APIModels).filled()
@@ -291,6 +296,32 @@ func (a *Agents) Served(ctx context.Context, agent, userID string, role model.Ag
 	}
 	_, id := SplitModelRef(modelRef)
 	return r.Models.get(modelFamily(id)), r.Host
+}
+
+// RunAccount is the account that serves one run, taken when the run starts: the account can change while it runs.
+type RunAccount struct {
+	Agent, AccountID, Host string
+	Models                 *APIModels
+}
+
+func (a *Agents) RunAccount(ctx context.Context, agent, userID string, role model.AgentRole) RunAccount {
+	r, err := a.RoleAPI(ctx, agent, userID, role)
+	if err != nil || r.AccountID == "" {
+		return RunAccount{}
+	}
+	return RunAccount{Agent: agent, AccountID: r.AccountID, Host: r.Host, Models: r.Models}
+}
+
+// Stamp records the account on u. A run on an API-key account has no provider pricing, so its cost is dropped
+// rather than shown at the rate of the Claude model the agent believes it called.
+func (ra RunAccount) Stamp(u *model.UsageRecord) {
+	u.Agent, u.AccountID, u.ProviderHost = ra.Agent, ra.AccountID, ra.Host
+	if ra.Models != nil {
+		u.ServedModel = ra.Models.get(modelFamily(u.Model))
+	}
+	if ra.Host != "" {
+		u.CostMicros, u.Source = 0, "unknown"
+	}
 }
 
 // MigrateAPIAccounts moves the API settings of hand-made Claude accounts from their settings.json into the database and

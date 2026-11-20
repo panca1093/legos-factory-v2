@@ -219,6 +219,9 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		factory.RunEnv = func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) ([]string, []string, error) {
 			return agents.RunEnv(ctx, roleAgent(role, wo), wo.CreatedBy, role)
 		}
+		factory.RunAccount = func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) usecase.RunAccount {
+			return agents.RunAccount(ctx, roleAgent(role, wo), wo.CreatedBy, role)
+		}
 	}
 
 	sched := scheduler.New(jobRepo, log, cfg.MaxConcurrentRuns)
@@ -343,6 +346,12 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		}
 		return usecase.ResolveAgentModel(model.AgentChat, &model.WorkOrder{}, s, cat)
 	}
+	var chatAccount func(ctx context.Context, userID string) usecase.RunAccount
+	if acpMode {
+		chatAccount = func(ctx context.Context, userID string) usecase.RunAccount {
+			return agents.RunAccount(ctx, chatAgent(), userID, model.AgentChat)
+		}
+	}
 	srv.Chat = &usecase.Chat{
 		Store: &store.ChatRepo{DB: db}, Docs: srv.KBDocs, Related: srv.KBDocs, Projects: projects,
 		Settings: settingsRepo, Usage: usageTracker, Harness: chatH, MCP: mcpServers,
@@ -355,6 +364,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		Served: func(ctx context.Context, userID, modelRef string) (string, string) {
 			return agents.Served(ctx, chatAgent(), userID, model.AgentChat, modelRef)
 		},
+		Account: chatAccount,
 		Default:     func(ctx context.Context) string { return chatModel(ctx, model.AgentArchitect) },
 		RepoDefault: func(ctx context.Context) string { return chatModel(ctx, model.AgentBuilder) },
 		Runner:      chatRunner,
@@ -388,6 +398,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			if err != nil {
 				return usecase.ReviewAgent{}, err
 			}
+			acct := agents.RunAccount(ctx, id, userID, model.AgentInspector)
 			s, _ := ws.Get(ctx)
 			var cat []string
 			if agents.Ready(ctx, id) == nil {
@@ -395,7 +406,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 				cat = refs(ms)
 			}
 			p, m := usecase.SplitModelRef(usecase.ResolveAgentModel(model.AgentInspector, &model.WorkOrder{}, s, cat))
-			return usecase.ReviewAgent{Harness: h, Agent: id, Provider: p, Model: m, Env: env, Args: args}, nil
+			return usecase.ReviewAgent{Harness: h, Agent: id, Provider: p, Model: m, Env: env, Args: args, Account: acct}, nil
 		},
 	}
 	if cfg.AuthMode == "dev" {
@@ -416,6 +427,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	srv.Rail.Reviews = reviews
 
 	srv.Checks = &usecase.CheckSuggester{
+		Account: chatAccount,
 		Projects: projects, Proj: projRepo, Store: &store.CheckProposalRepo{DB: db}, Usage: usageTracker, KB: know, Log: log,
 		DryRun: factory.DryRunChecks, StopStack: factory.StopStack,
 		Checkout: func(ctx context.Context, projectID string) (dir, sha string, cleanup func(), err error) {
