@@ -1161,6 +1161,40 @@ it("an API-key account card shows this week's tokens and runs from the usage sum
   w.unmount();
 });
 
+it("an API-key account that is not active shows its last 7 days on its own row", async () => {
+  routes["GET /api/v1/usage/summary"] = () =>
+    json({
+      days: 7,
+      accounts: [
+        {
+          agent: "claude",
+          account_id: "ds",
+          tokens_in: 1000,
+          tokens_out: 234,
+          runs: 3,
+        },
+      ],
+    });
+  agentsBody.agents[0].accounts = [
+    acct({ active: true }),
+    dsAcct({
+      active: false,
+      api: {
+        provider: "deepseek",
+        base_url: "https://api.deepseek.com/anthropic",
+        host: "api.deepseek.com",
+        models: {},
+        has_key: true,
+      },
+    }),
+  ];
+  const { w } = await render();
+  expect(w.find('[data-test="account-week-line"]').text()).toBe(
+    "Last 7 days: 1.2K tokens · 3 runs",
+  );
+  w.unmount();
+});
+
 it("a subscription account with bars still renders the usage block, and an API account with usage_error still says unavailable", async () => {
   routes["GET /api/v1/usage/summary"] = () => json({ days: 7, accounts: [] });
   agentsBody.agents[0].accounts = [
