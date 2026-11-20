@@ -95,6 +95,9 @@ func (s AgentSpec) accountArgs() []string { return nil }
 
 const SystemAccountID = "system"
 
+// UntrackedAccountID marks usage rows written before accounts were recorded; migration 037 stamps them.
+const UntrackedAccountID = "untracked"
+
 type AgentAccountStore interface {
 	Create(ctx context.Context, a *model.AgentAccount) error
 	Get(ctx context.Context, userID, agent, id string) (*model.AgentAccount, error)
@@ -288,8 +291,35 @@ func (a *Agents) RunEnv(ctx context.Context, id, userID string, role model.Agent
 		return nil, nil, nil
 	}
 	acc, err := a.roleAccount(ctx, userID, id, role)
-	if err != nil || acc == nil {
+	if err != nil {
 		return nil, nil, err
+	}
+	return a.envFor(spec, acc)
+}
+
+// RunEnvAccount is RunEnv plus the account it picked, resolved once so the usage record names the account that ran.
+func (a *Agents) RunEnvAccount(ctx context.Context, id, userID string, role model.AgentRole) (env, args []string, acct RunAccount, err error) {
+	spec, ok := AgentByID(id)
+	if !ok {
+		return nil, nil, RunAccount{}, fmt.Errorf("%w: %q", model.ErrAgentUnknown, id)
+	}
+	if userID == "" {
+		return nil, nil, RunAccount{}, nil
+	}
+	acc, err := a.roleAccount(ctx, userID, id, role)
+	if err != nil {
+		return nil, nil, RunAccount{}, err
+	}
+	if env, args, err = a.envFor(spec, acc); err != nil {
+		return nil, nil, RunAccount{}, err
+	}
+	r := roleAPIOf(id, acc)
+	return env, args, RunAccount{Agent: id, AccountID: r.AccountID, Host: r.Host, Models: r.Models}, nil
+}
+
+func (a *Agents) envFor(spec AgentSpec, acc *model.AgentAccount) (env, args []string, err error) {
+	if acc == nil {
+		return nil, nil, nil
 	}
 	env = spec.accountEnv(acc.HomeDir)
 	if spec.ID == "claude" {

@@ -216,11 +216,8 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		JudgeFn:     jv.get,
 	}
 	if acpMode {
-		factory.RunEnv = func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) ([]string, []string, error) {
-			return agents.RunEnv(ctx, roleAgent(role, wo), wo.CreatedBy, role)
-		}
-		factory.RunAccount = func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) usecase.RunAccount {
-			return agents.RunAccount(ctx, roleAgent(role, wo), wo.CreatedBy, role)
+		factory.RunEnv = func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) ([]string, []string, usecase.RunAccount, error) {
+			return agents.RunEnvAccount(ctx, roleAgent(role, wo), wo.CreatedBy, role)
 		}
 	}
 
@@ -394,11 +391,10 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 				return usecase.ReviewAgent{Harness: h, Agent: h.Name(), Provider: p, Model: m}, nil
 			}
 			id := roleAgent(model.AgentInspector, nil)
-			env, args, err := agents.RunEnv(ctx, id, userID, model.AgentInspector)
+			env, args, acct, err := agents.RunEnvAccount(ctx, id, userID, model.AgentInspector)
 			if err != nil {
 				return usecase.ReviewAgent{}, err
 			}
-			acct := agents.RunAccount(ctx, id, userID, model.AgentInspector)
 			s, _ := ws.Get(ctx)
 			var cat []string
 			if agents.Ready(ctx, id) == nil {

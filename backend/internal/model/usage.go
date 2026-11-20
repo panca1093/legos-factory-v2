@@ -39,7 +39,9 @@ type UsageRole struct {
 	TokensIn   int64  `json:"tokens_in"`
 	TokensOut  int64  `json:"tokens_out"`
 	CostMicros int64  `json:"cost_micros"`
-	Runs       int    `json:"runs"`
+	// CostPartial is set when some of the rows ran on an API-key account, whose provider pricing is not tracked.
+	CostPartial bool `json:"cost_partial,omitempty"`
+	Runs        int  `json:"runs"`
 }
 
 // UsageAccount is one account's usage in the period. CostMicros is nil when provider pricing is not tracked.
@@ -62,7 +64,9 @@ type UsagePeriod struct {
 	TokensIn   int64 `json:"tokens_in"`
 	TokensOut  int64 `json:"tokens_out"`
 	CostMicros int64 `json:"cost_micros"`
-	Runs       int   `json:"runs"`
+	// CostPartial is set when some of the rows ran on an API-key account, whose provider pricing is not tracked.
+	CostPartial bool `json:"cost_partial,omitempty"`
+	Runs        int  `json:"runs"`
 }
 
 // UsageSummary is one user's agent usage: daily activity, per-role totals, month-to-date.

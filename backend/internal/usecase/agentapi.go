@@ -234,8 +234,12 @@ func (a *Agents) RoleAPI(ctx context.Context, agent, userID string, role model.A
 	if err != nil {
 		return RoleAPI{}, err
 	}
+	return roleAPIOf(agent, acc), nil
+}
+
+func roleAPIOf(agent string, acc *model.AgentAccount) RoleAPI {
 	if acc == nil {
-		return RoleAPI{AccountID: SystemAccountID}, nil
+		return RoleAPI{AccountID: SystemAccountID}
 	}
 	r := RoleAPI{Sig: acc.ID, AccountID: acc.ID}
 	switch {
@@ -260,7 +264,7 @@ func (a *Agents) RoleAPI(ctx context.Context, agent, userID string, role model.A
 		mj, _ := json.Marshal(m)
 		r.Sig += "\x00" + host + "\x00" + string(mj)
 	}
-	return r, nil
+	return r
 }
 
 // FoldModels keeps, for each family the provider maps, one listed model of that family and names it after the mapped

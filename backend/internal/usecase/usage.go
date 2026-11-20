@@ -105,6 +105,7 @@ func (t *UsageTracker) UserSummary(ctx context.Context, userID string, days int,
 		if !at.Before(monthStart) {
 			m := &s.MonthToDate
 			m.TokensIn, m.TokensOut, m.CostMicros, m.Runs = m.TokensIn+r.TokensIn, m.TokensOut+r.TokensOut, m.CostMicros+r.CostMicros, m.Runs+1
+			m.CostPartial = m.CostPartial || r.ProviderHost != ""
 		}
 		i, ok := idx[at.Format(time.DateOnly)]
 		if !ok {
@@ -117,6 +118,7 @@ func (t *UsageTracker) UserSummary(ctx context.Context, userID string, days int,
 			roles[r.Role] = ro
 		}
 		ro.TokensIn, ro.TokensOut, ro.CostMicros, ro.Runs = ro.TokensIn+r.TokensIn, ro.TokensOut+r.TokensOut, ro.CostMicros+r.CostMicros, ro.Runs+1
+		ro.CostPartial = ro.CostPartial || r.ProviderHost != ""
 
 		key := [2]string{r.Agent, r.AccountID}
 		ag := accounts[key]
@@ -161,6 +163,7 @@ const (
 	labelSystemDefault = "System default"
 	labelDeleted       = "Deleted account"
 	labelUntracked     = "Before account tracking"
+	labelUnknown       = "Unknown account"
 )
 
 // accountRows turns per-account sums into rows, busiest first. A row that ever ran on an API-key provider has no
@@ -177,8 +180,10 @@ func accountRows(m map[[2]string]*accountAgg, labels map[string]model.UsageAccou
 			row.CostMicros = &c
 		}
 		switch l, ok := labels[row.AccountID]; {
-		case row.AccountID == "":
+		case row.AccountID == UntrackedAccountID:
 			row.Label, row.Untracked = labelUntracked, true
+		case row.AccountID == "":
+			row.Label = labelUnknown
 		case row.AccountID == SystemAccountID:
 			row.Label = labelSystemDefault
 		case ok:

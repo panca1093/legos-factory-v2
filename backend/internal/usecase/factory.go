@@ -58,10 +58,8 @@ type Factory struct {
 	Judge        Judge // a fixed judge that overrides JudgeFn; nil when none
 	// JudgeFn, when set, supplies the judge at call time so Jev follows its toggle; it returns nil when Jev is off.
 	JudgeFn func() Judge
-	// RunEnv gives the environment and extra agent arguments for a run: the account of the work order's creator. nil means none.
-	RunEnv func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) (env, args []string, err error)
-	// RunAccount names the account RunEnv picked, for the usage record. nil records no account.
-	RunAccount func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) RunAccount
+	// RunEnv gives the environment, extra agent arguments and serving account for a run: the account of the work order's creator. nil means none.
+	RunEnv func(ctx context.Context, role model.AgentRole, wo *model.WorkOrder) (env, args []string, acct RunAccount, err error)
 	DataDir      string
 	Docker       DockerCLI // nil: the docker binary on PATH
 	stacks       *stackMgr
@@ -245,11 +243,8 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	var acct RunAccount
 	if f.RunEnv != nil {
 		var eerr error
-		if req.Env, req.Args, eerr = f.RunEnv(ctx, role, wo); eerr != nil {
+		if req.Env, req.Args, acct, eerr = f.RunEnv(ctx, role, wo); eerr != nil {
 			return model.AgentResult{}, "", eerr
-		}
-		if f.RunAccount != nil {
-			acct = f.RunAccount(ctx, role, wo)
 		}
 	}
 	req.Env = append(req.Env, opts.Env...)
@@ -293,6 +288,9 @@ func (f *Factory) runAgent(ctx context.Context, wo *model.WorkOrder, role model.
 	res, err := h.Result(ctx, ses.ID())
 	f.live.Delete(runID)
 	stopWatch()
+	if acct.Host != "" {
+		res.CostMicros = 0
+	}
 	if err != nil {
 		if opts.Planning {
 			f.closePlanning(wo.ID)

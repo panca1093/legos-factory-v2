@@ -37,6 +37,26 @@ func (*costHarness) Result(context.Context, string) (model.AgentResult, error) {
 	return model.AgentResult{Text: "{}", TokensIn: 100, TokensOut: 20, CostMicros: 5000, CostSource: "measured"}, nil
 }
 
+func TestRunEnvAccountNamesTheAccountThatGotTheEnv(t *testing.T) {
+	a := sealedAgents(t)
+	ctx := context.Background()
+	in := deepseekInput()
+	api, err := a.CreateAccount(ctx, &model.User{ID: "u1"}, "claude", "DeepSeek", &in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Store.SetRoleAccounts(ctx, "u1", "claude", api.Account.ID, []string{"builder"}); err != nil {
+		t.Fatal(err)
+	}
+	env, _, acct, err := a.RunEnvAccount(ctx, "claude", "u1", model.AgentBuilder)
+	if err != nil || len(env) == 0 || acct.AccountID != api.Account.ID || acct.Host == "" || acct.Models == nil {
+		t.Fatalf("%v %v %+v", err, env, acct)
+	}
+	if _, _, acct, _ = a.RunEnvAccount(ctx, "claude", "", model.AgentBuilder); acct.AccountID != "" {
+		t.Fatalf("no user, no account: %+v", acct)
+	}
+}
+
 func TestRunAccountFollowsTheRoleAccount(t *testing.T) {
 	a := sealedAgents(t)
 	ctx := context.Background()
@@ -99,8 +119,9 @@ func TestFactoryRunRecordsTheAccountPickedAtStart(t *testing.T) {
 		model.AgentBuilder:   {Agent: "claude", AccountID: "api1", Host: "api.deepseek.com", Models: &m},
 		model.AgentInspector: {Agent: "codex", AccountID: "cx1"},
 	}
-	f.RunEnv = func(context.Context, model.AgentRole, *model.WorkOrder) ([]string, []string, error) { return nil, nil, nil }
-	f.RunAccount = func(_ context.Context, role model.AgentRole, _ *model.WorkOrder) RunAccount { return accts[role] }
+	f.RunEnv = func(_ context.Context, role model.AgentRole, _ *model.WorkOrder) ([]string, []string, RunAccount, error) {
+		return nil, nil, accts[role], nil
+	}
 
 	var wg sync.WaitGroup
 	for _, role := range []model.AgentRole{model.AgentBuilder, model.AgentInspector} {
@@ -123,6 +144,22 @@ func TestFactoryRunRecordsTheAccountPickedAtStart(t *testing.T) {
 	}
 	if i.AccountID != "cx1" || i.Agent != "codex" || i.ProviderHost != "" || i.CostMicros != 5000 || i.Source != "measured" {
 		t.Fatalf("inspector: %+v", i)
+	}
+	runs, err := f.Runs.(*store.RunRepo).List(context.Background(), wo.ID)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("runs: %v %+v", err, runs)
+	}
+	var zero, full int
+	for _, r := range runs {
+		switch r.CostMicros {
+		case 0:
+			zero++
+		case 5000:
+			full++
+		}
+	}
+	if zero != 1 || full != 1 {
+		t.Fatalf("the API run must store no cost in the runs table and the login run its own: %+v", runs)
 	}
 }
 
@@ -200,7 +237,8 @@ func TestUserSummaryByAccount(t *testing.T) {
 	add("u1", h, model.UsageRecord{Agent: "claude", AccountID: "sub1", TokensIn: 7, TokensOut: 1, CostMicros: 700})
 	add("u1", h, model.UsageRecord{Agent: "codex", AccountID: SystemAccountID, TokensIn: 3, TokensOut: 1, CostMicros: 30})
 	add("u1", h, model.UsageRecord{Agent: "claude", AccountID: "gone", TokensIn: 2, TokensOut: 2, CostMicros: 20})
-	add("u1", h, model.UsageRecord{TokensIn: 1, TokensOut: 1, CostMicros: 10})
+	add("u1", h, model.UsageRecord{AccountID: UntrackedAccountID, TokensIn: 1, TokensOut: 1, CostMicros: 10})
+	add("u1", h, model.UsageRecord{TokensIn: 4, TokensOut: 1, CostMicros: 40})
 	add("u1", now.AddDate(0, 0, -20), model.UsageRecord{Agent: "claude", AccountID: "sub1", TokensIn: 1000, TokensOut: 1, CostMicros: 1})
 	add("u2", h, model.UsageRecord{Agent: "claude", AccountID: "other", TokensIn: 999, TokensOut: 1, CostMicros: 99})
 
@@ -213,7 +251,7 @@ func TestUserSummaryByAccount(t *testing.T) {
 	for _, a := range s.Accounts {
 		by[a.Agent+"/"+a.AccountID] = a
 	}
-	if len(by) != 5 {
+	if len(by) != 6 {
 		t.Fatalf("rows: %+v", s.Accounts)
 	}
 	api := by["claude/api1"]
@@ -231,14 +269,25 @@ func TestUserSummaryByAccount(t *testing.T) {
 	if g := by["claude/gone"]; g.Label != "Deleted account" || !g.Deleted {
 		t.Fatalf("deleted: %+v", g)
 	}
-	if o := by["/"]; o.Label != "Before account tracking" || !o.Untracked || o.CostMicros == nil || *o.CostMicros != 10 {
+	if o := by["/"+UntrackedAccountID]; o.Label != "Before account tracking" || !o.Untracked || o.CostMicros == nil || *o.CostMicros != 10 {
 		t.Fatalf("old rows: %+v", o)
+	}
+	if u := by["/"]; u.Label != "Unknown account" || u.Untracked || u.CostMicros == nil || *u.CostMicros != 40 {
+		t.Fatalf("new rows without an account: %+v", u)
+	}
+	if !s.MonthToDate.CostPartial {
+		t.Fatalf("month to date holds API rows: %+v", s.MonthToDate)
+	}
+	for _, r := range s.Roles {
+		if r.Role == "builder" && !r.CostPartial {
+			t.Fatalf("builder role holds API rows: %+v", r)
+		}
 	}
 	var runs int
 	for _, r := range s.Roles {
 		runs += r.Runs
 	}
-	if runs != 6 {
+	if runs != 7 {
 		t.Fatalf("roles still count every run: %d", runs)
 	}
 	if _, ok := by["claude/other"]; ok {

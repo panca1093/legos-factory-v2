@@ -504,6 +504,9 @@ func (r *Reviews) ask(ctx context.Context, ag ReviewAgent, userID, dir, prompt s
 		return model.AgentResult{}, err
 	}
 	res, err := ag.Harness.Result(ctx, ses.ID())
+	if ag.Account.Host != "" {
+		res.CostMicros = 0
+	}
 	if r.Usage != nil && (err == nil || res.TokensIn+res.TokensOut > 0) {
 		rec := model.UsageRecord{UserID: userID, Role: string(model.AgentInspector), Provider: ag.Provider,
 			Model: ag.Model, TokensIn: res.TokensIn, TokensOut: res.TokensOut, CacheRead: res.CacheRead, CacheWrite: res.CacheWrite,
