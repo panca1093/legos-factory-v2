@@ -82,6 +82,9 @@
 .settings-main .settings-section .help {
   font-size: 12px;
 }
+.settings-section p.form-error {
+  color: var(--danger);
+}
 .sec-actions {
   display: flex;
   align-items: center;

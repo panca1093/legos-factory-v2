@@ -320,6 +320,19 @@ it("highlights the nav item of the section scrolled into view", async () => {
   window.dispatchEvent(new Event("scroll"));
   await flushPromises();
   expect(current()).toBe("Advanced");
+
+  await w
+    .findAll("nav a")
+    .find((x) => x.text() === "Connections")!
+    .trigger("click");
+  await flushPromises();
+  window.dispatchEvent(new Event("scroll"));
+  await flushPromises();
+  expect(current()).toBe("Connections");
+
+  const off = vi.spyOn(window, "removeEventListener");
+  w.unmount();
+  expect(off).toHaveBeenCalledWith("scroll", expect.any(Function));
 });
 
 it("gives every checkbox and select an accessible name", async () => {
