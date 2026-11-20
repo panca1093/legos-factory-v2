@@ -126,8 +126,12 @@ it("lists API-key accounts with their last 7 days of usage", async () => {
   await flushPromises();
   const row = w.find('[data-api-account="claude/ds"]');
   expect(row.text()).toContain("deepseek");
-  expect(row.text()).toContain("api.deepseek.com");
-  expect(row.text()).toContain("7d · 270K tokens · 2 runs");
+  expect(row.findAll(".uc-mini").map((m) => m.text())).toEqual([
+    "7d 270K",
+    "2 runs",
+  ]);
+  expect(row.attributes("title")).toContain("api.deepseek.com");
+  expect(row.find(".uc-ava").text()).toBe("D");
   expect(row.text()).not.toContain("$");
   w.unmount();
 });
