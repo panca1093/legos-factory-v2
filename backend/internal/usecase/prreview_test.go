@@ -1263,3 +1263,31 @@ func TestPostSendsTheUsersOwnCommentInline(t *testing.T) {
 		t.Fatalf("submission: %+v", sub)
 	}
 }
+
+func TestOwnCommentGoesOutdatedOnAPushWithoutAnAIRun(t *testing.T) {
+	ctx := context.Background()
+	g := newRvRig(t)
+	d, err := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 2, "first line\nmore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := g.r.AddComment(ctx, g.ana, "p1", 7, "a.go", "new", 2, "again")
+	if err != nil || other.ID == d.ID {
+		t.Fatalf("each comment gets its own id even on the same clock tick: %v %q", err, other.ID)
+	}
+	if got := earlierTitles([]model.PRDraft{*d}); len(got) != 1 || got[0] != "your comment: first line" {
+		t.Fatalf("a re-run hears what the user already said: %v", got)
+	}
+	rv := g.rv["c1"]
+	rv.detail.HeadSHA = "h2"
+	rv.files[0].Patch = patchA + "+more\n"
+	g.now = g.now.Add(2 * time.Minute)
+	if _, err := g.r.Files(ctx, g.ana, "p1", 7); err != nil {
+		t.Fatal(err)
+	}
+	for _, dr := range g.st.drafts {
+		if dr.Status != model.DraftOutdated {
+			t.Fatalf("own comments on a changed file go outdated after a push: %+v", dr)
+		}
+	}
+}

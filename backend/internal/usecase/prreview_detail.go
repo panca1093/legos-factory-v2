@@ -138,7 +138,8 @@ func (r *Reviews) Files(ctx context.Context, u *model.User, projectID string, nu
 // outdateDrafts marks undecided and accepted drafts outdated when the PR head moved and their file's
 // patch is not provably the same: only files the user viewed keep a hash to compare with.
 func (r *Reviews) outdateDrafts(ctx context.Context, rev *model.PRReview, head string, files []model.PRFile, viewed map[string]string) error {
-	if rev.HeadSHA == "" || rev.HeadSHA == head {
+	// Each draft carries its own head: the user's own comments exist on reviews that never had an AI run.
+	if head == "" {
 		return nil
 	}
 	ds, err := r.Store.Drafts(ctx, rev.ID)
@@ -300,7 +301,7 @@ func (r *Reviews) AddComment(ctx context.Context, u *model.User, projectID strin
 		return nil, err
 	}
 	now := r.now()
-	dr := model.PRDraft{ID: fmt.Sprintf("prc_%d", now.UnixNano()), ReviewID: rev.ID, Path: path, OldPath: files[i].OldPath,
+	dr := model.PRDraft{ID: fmt.Sprintf("prc_%d_%d", now.UnixNano(), reviewRunSeq.Add(1)), ReviewID: rev.ID, Path: path, OldPath: files[i].OldPath,
 		Side: aSide, Line: aLine, OldLine: aOld, Inline: true, HeadSHA: d.HeadSHA, Severity: "info", Body: body,
 		Status: model.DraftAccepted, CreatedAt: now, UpdatedAt: now}
 	if err := r.Store.AddUserDraft(ctx, dr); err != nil {
@@ -358,6 +359,18 @@ func (r *Reviews) UpdateDraft(ctx context.Context, u *model.User, projectID stri
 		return cur, nil
 	}
 	return r.Store.UpdateDraft(ctx, rev.ID, draftID, status, body)
+}
+
+// draftLabel names a draft in messages and prompts: its title, or the start of the user's own comment.
+func draftLabel(d model.PRDraft) string {
+	if d.Title != "" || d.RunID != "" {
+		return d.Title
+	}
+	line, _, _ := strings.Cut(d.Body, "\n")
+	if r := []rune(line); len(r) > 60 {
+		line = string(r[:60]) + "…"
+	}
+	return "your comment: " + line
 }
 
 func isDraftStatus(s string) bool {
@@ -451,7 +464,7 @@ func (r *Reviews) Post(ctx context.Context, u *model.User, projectID string, num
 	var stale []string
 	for _, dr := range slices.Concat(inline, general) {
 		if dr.HeadSHA != d.HeadSHA {
-			stale = append(stale, fmt.Sprintf("%q on %s", dr.Title, dr.Path))
+			stale = append(stale, fmt.Sprintf("%q on %s", draftLabel(dr), dr.Path))
 		}
 	}
 	if len(stale) > 0 {

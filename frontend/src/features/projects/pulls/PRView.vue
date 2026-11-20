@@ -98,25 +98,42 @@ const general = computed(() => store.drafts.filter((d) => !d.inline));
 
 // A comment of the user's own on one diff line: removed lines anchor on the old side, the rest on the new.
 type Line = { t: string; o?: number; n?: number };
-const composing = ref<{
-  key: string;
-  side: "new" | "old";
-  line: number;
-} | null>(null);
+const composing = ref<{ side: "new" | "old"; line: number } | null>(null);
+// Placed by line, not row index, so a refreshed patch keeps the composer under its line.
+const composeKey = computed(() => {
+  const c = composing.value;
+  if (!c) return "";
+  for (const [hi, h] of hunks.value.entries())
+    for (const [li, l] of h.lines.entries())
+      if (
+        c.side === "old"
+          ? l.t === "del" && l.o === c.line
+          : l.t !== "del" && l.n === c.line
+      )
+        return `${hi}:${li}`;
+  return "";
+});
+const composeLabel = computed(() =>
+  composing.value
+    ? `Your comment on ${composing.value.side === "old" ? "removed line" : "line"} ${composing.value.line}`
+    : "",
+);
+const lineLabel = (l: Line) =>
+  l.t === "del" ? `removed line ${l.o}` : `line ${l.n}`;
 const text = ref(""),
   saving = ref(false);
-async function compose(key: string, l: Line) {
+async function compose(l: Line) {
   const side = l.t === "del" ? "old" : "new";
   const line = side === "old" ? l.o : l.n;
   if (line === undefined) return;
-  composing.value = { key, side, line };
+  composing.value = { side, line };
   text.value = "";
   await nextTick();
   document.querySelector<HTMLTextAreaElement>(".dv-compose textarea")?.focus();
 }
 async function saveComment() {
   const c = composing.value;
-  if (!c || !file.value || !text.value.trim()) return;
+  if (!c || !file.value || !text.value.trim() || saving.value) return;
   saving.value = true;
   try {
     await store.addComment({
@@ -283,9 +300,9 @@ const ciLabel = (ci: string) =>
                 <button
                   type="button"
                   class="dv-add"
-                  :aria-label="`Comment on line ${l.t === 'del' ? l.o : l.n}`"
+                  :aria-label="`Comment on ${lineLabel(l)}`"
                   data-test="diff-add-comment"
-                  @click="compose(`${hi}:${li}`, l)"
+                  @click="compose(l)"
                 >
                   <MessageSquarePlus class="icon" aria-hidden="true" />
                 </button>
@@ -315,7 +332,7 @@ const ciLabel = (ci: string) =>
               <div
                 v-if="
                   anchored.map.get(`${hi}:${li}`) ||
-                  composing?.key === `${hi}:${li}`
+                  composeKey === `${hi}:${li}`
                 "
                 class="dv-slot"
               >
@@ -325,7 +342,7 @@ const ciLabel = (ci: string) =>
                   :draft="d"
                 />
                 <form
-                  v-if="composing?.key === `${hi}:${li}`"
+                  v-if="composeKey === `${hi}:${li}`"
                   class="dv-compose"
                   data-test="diff-compose"
                   @submit.prevent="saveComment"
@@ -333,7 +350,7 @@ const ciLabel = (ci: string) =>
                   <textarea
                     v-model="text"
                     rows="3"
-                    :aria-label="`Your comment on line ${composing.line}`"
+                    :aria-label="composeLabel"
                     placeholder="Leave a comment. It posts with your review."
                     @keydown.meta.enter.prevent="saveComment"
                     @keydown.ctrl.enter.prevent="saveComment"

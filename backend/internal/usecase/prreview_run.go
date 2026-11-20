@@ -254,8 +254,9 @@ func (r *Reviews) focus(ctx context.Context, projectID string, files []string) [
 func earlierTitles(ds []model.PRDraft) []string {
 	var out []string
 	for _, d := range slices.Backward(ds) {
-		if (d.Status == model.DraftAccepted || d.Status == model.DraftDiscarded || d.Status == model.DraftPosted) && d.Title != "" && !slices.Contains(out, d.Title) {
-			if out = append(out, d.Title); len(out) == maxEarlierPR {
+		t := draftLabel(d)
+		if (d.Status == model.DraftAccepted || d.Status == model.DraftDiscarded || d.Status == model.DraftPosted) && t != "" && !slices.Contains(out, t) {
+			if out = append(out, t); len(out) == maxEarlierPR {
 				break
 			}
 		}
