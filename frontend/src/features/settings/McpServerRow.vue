@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toneOf } from "./tone";
 import { computed, reactive, ref } from "vue";
 import { MoreHorizontal } from "lucide-vue-next";
 import Popover from "../../components/ui/Popover.vue";
@@ -146,7 +147,12 @@ function whyLocked(t: McpServer["tools"][number]) {
 </script>
 <template>
   <div class="connection" :data-mcp="server.name">
-    <span class="provider-logo">M</span>
+    <span
+      class="provider-logo"
+      :data-tone="toneOf(server.name)"
+      aria-hidden="true"
+      >{{ server.name[0]?.toUpperCase() || "M" }}</span
+    >
     <div class="grow">
       <h3>{{ server.name }}</h3>
       <p>

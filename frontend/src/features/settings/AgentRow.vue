@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toneOf } from "./tone";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Copy, MoreHorizontal } from "lucide-vue-next";
 import Popover from "../../components/ui/Popover.vue";
@@ -184,7 +185,12 @@ const showBars = computed(() => {
 <template>
   <div class="agent-acct" :data-agent="agent.id">
     <div class="agent-head">
-      <span class="provider-logo" aria-hidden="true">{{ agent.name[0] }}</span>
+      <span
+        class="provider-logo"
+        :data-tone="toneOf(agent.name)"
+        aria-hidden="true"
+        >{{ agent.name[0] }}</span
+      >
       <div class="grow">
         <h3>
           {{ agent.name }} <span class="mono">{{ agent.command }}</span>
@@ -292,9 +298,10 @@ const showBars = computed(() => {
           <b>{{ a.label }}</b>
           <span class="help">
             {{ a.who
-            }}<template v-if="a.status === 'signed_out'">
-              · signed out</template
-            ><template v-if="a.status_note"> · {{ a.status_note }}</template></span
+            }}<template v-if="a.status === 'signed_out'"> · signed out</template
+            ><template v-if="a.status_note">
+              · {{ a.status_note }}</template
+            ></span
           >
         </div>
         <button

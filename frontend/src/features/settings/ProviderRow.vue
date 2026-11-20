@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toneOf } from "./tone";
 import { computed, reactive, ref } from "vue";
 import { MoreHorizontal } from "lucide-vue-next";
 import Popover from "../../components/ui/Popover.vue";
@@ -129,7 +130,12 @@ const state = (c: Connection) =>
 <template>
   <div class="provider" :data-connection="id">
     <div class="agent-head">
-      <span class="provider-logo" aria-hidden="true">{{ meta.name[0] }}</span>
+      <span
+        class="provider-logo"
+        :data-tone="toneOf(meta.name)"
+        aria-hidden="true"
+        >{{ meta.name[0] }}</span
+      >
       <div class="grow">
         <h3>{{ meta.name }}</h3>
         <p>{{ meta.desc }}</p>

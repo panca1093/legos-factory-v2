@@ -1,5 +1,12 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  watch,
+} from "vue";
 import { useRoute } from "vue-router";
 import { Lock, TriangleAlert } from "lucide-vue-next";
 import { useFactory } from "../../stores/factory";
@@ -46,6 +53,30 @@ async function scrollToTarget() {
   document.getElementById(target.value)?.scrollIntoView?.({ block: "start" });
 }
 
+// The current section is the last one whose top passed a third of the viewport; at the bottom, the last section.
+let frame = 0;
+function spy() {
+  frame = 0;
+  const line = window.innerHeight / 3;
+  const atBottom =
+    window.innerHeight + window.scrollY >=
+    document.documentElement.scrollHeight - 2;
+  let id = sections[0].id;
+  for (const s of sections) {
+    const el = document.getElementById(s.id);
+    if (el && (atBottom || el.getBoundingClientRect().top <= line)) id = s.id;
+  }
+  current.value = id;
+}
+function onScroll() {
+  frame ||= requestAnimationFrame(spy);
+}
+onMounted(() => window.addEventListener("scroll", onScroll, { passive: true }));
+onBeforeUnmount(() => {
+  window.removeEventListener("scroll", onScroll);
+  if (frame) cancelAnimationFrame(frame);
+});
+
 async function load() {
   loading.value = true;
   error.value = "";
@@ -78,27 +109,24 @@ const credentialsOK = computed(
 );
 </script>
 <template>
-  <div class="page-heading">
-    <div>
-      <h1>Settings</h1>
-      <p class="subtitle">
-        Agents and accounts are yours. Connections and Advanced apply to the
-        whole workspace.
-      </p>
-    </div>
-    <span class="pill purple">{{ session.user?.role }}</span>
-  </div>
   <div class="settings-layout">
-    <nav class="settings-nav" aria-label="Settings sections">
-      <RouterLink
-        v-for="s in sections"
-        :key="s.id"
-        :to="{ hash: `#${s.id}` }"
-        :aria-current="current === s.id ? 'true' : undefined"
-        @click="current = s.id"
-        >{{ s.label }}</RouterLink
-      >
-    </nav>
+    <aside class="settings-side">
+      <h1>Settings</h1>
+      <nav class="settings-nav" aria-label="Settings sections">
+        <RouterLink
+          v-for="s in sections"
+          :key="s.id"
+          :to="{ hash: `#${s.id}` }"
+          :aria-current="current === s.id ? 'true' : undefined"
+          @click="current = s.id"
+          >{{ s.label }}</RouterLink
+        >
+      </nav>
+      <p class="settings-who">
+        Signed in as
+        <span class="pill purple">{{ session.user?.role }}</span>
+      </p>
+    </aside>
     <div class="detail-content settings-main">
       <div v-if="loading" class="panel empty" aria-busy="true">
         Loading workspace settings…

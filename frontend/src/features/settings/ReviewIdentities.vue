@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toneOf } from "./tone";
 import { onMounted, ref } from "vue";
 import { api } from "../../types/api";
 import {
@@ -79,6 +80,12 @@ onMounted(load);
         :data-identity="`${g.provider}@${g.host}`"
       >
         <div class="agent-head">
+          <span
+            class="provider-logo"
+            :data-tone="toneOf(g.provider)"
+            aria-hidden="true"
+            >{{ g.provider[0]?.toUpperCase() }}</span
+          >
           <div class="grow">
             <h3>{{ g.provider }} · {{ g.host }}</h3>
             <p data-test="pinned">
