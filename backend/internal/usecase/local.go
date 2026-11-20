@@ -36,7 +36,7 @@ type Local struct {
 	aborted    bool               // CancelPick, not the request, ended it
 }
 
-var githubRemote = regexp.MustCompile(`(?i)^(?:https?://(?:[^@/]+@)?|ssh://(?:[^@/]+@)?|git://|[^@/\s]+@)github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$`)
+var githubRemote = regexp.MustCompile(`(?i)^(?:https?://(?:[^@/]+@)?|ssh://(?:[^@/]+@)?|git://|[^@/\s]+@)(?:ssh\.)?github\.com(?::\d+)?[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$`)
 
 // ParseGitHubRepo returns "owner/repo" for a github.com https, ssh or scp-style
 // remote URL, else "".

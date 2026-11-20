@@ -273,6 +273,12 @@ func (in *Integrations) origin(ctx context.Context, p *model.Project) string {
 var (
 	urlRemote = regexp.MustCompile(`^(?:https?|ssh|git)://(?:[^@/]+@)?([^/:]+)(?::\d+)?/(.+)$`)
 	scpRemote = regexp.MustCompile(`^(?:[^@/\s]+@)?([^:/\s]+):(.+)$`)
+	// sshAliases are the hosts' published SSH endpoints; accounts are keyed by the main host.
+	sshAliases = map[string]string{
+		"ssh.bitbucket.org":    "bitbucket.org",
+		"altssh.bitbucket.org": "bitbucket.org",
+		"ssh.github.com":       "github.com",
+	}
 )
 
 // parseRemote splits a git remote URL (https, ssh or scp-style) into its host and "owner/repo" path.
@@ -286,7 +292,11 @@ func parseRemote(origin string) (host, repo string) {
 		return "", ""
 	}
 	repo = strings.Trim(strings.TrimSuffix(strings.Trim(m[2], "/"), ".git"), "/")
-	return strings.ToLower(m[1]), repo
+	host = strings.ToLower(m[1])
+	if main, ok := sshAliases[host]; ok {
+		host = main
+	}
+	return host, repo
 }
 
 // connectionHost is the git host a connection's API base URL serves (api.github.com serves github.com).

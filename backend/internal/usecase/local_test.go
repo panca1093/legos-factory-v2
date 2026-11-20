@@ -53,6 +53,9 @@ func TestParseGitHubRepo(t *testing.T) {
 		"git@github.com:acme/greeter.git":           "acme/greeter",
 		"git@github.com:acme/greeter":               "acme/greeter",
 		"ssh://git@github.com/acme/greeter.git":     "acme/greeter",
+		"ssh://git@ssh.github.com:443/acme/greeter": "acme/greeter",
+		"git@ssh.github.com:acme/greeter.git":       "acme/greeter",
+		"git@github.com:123/greeter.git":            "123/greeter",
 		"HTTPS://GitHub.com/Acme/Greeter.git":       "Acme/Greeter",
 		"https://gitlab.com/acme/greeter.git":       "",
 		"https://github.com.evil.com/acme/greeter":  "",
@@ -123,6 +126,9 @@ func TestParseRemote(t *testing.T) {
 		"https://tok@gitlab.example.com/g/sub/app":     {"gitlab.example.com", "g/sub/app"},
 		"git@bitbucket.org:team/repo.git":              {"bitbucket.org", "team/repo"},
 		"ssh://git@git.corp.example:2222/team/app.git": {"git.corp.example", "team/app"},
+		"git@ssh.bitbucket.org:team/repo.git":          {"bitbucket.org", "team/repo"},
+		"ssh://git@altssh.bitbucket.org:443/team/repo": {"bitbucket.org", "team/repo"},
+		"ssh://git@ssh.github.com:443/acme/greeter":    {"github.com", "acme/greeter"},
 		"/Users/me/code/x":                             {"", ""},
 	} {
 		if h, r := parseRemote(in); h != want[0] || r != want[1] {
