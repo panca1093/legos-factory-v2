@@ -113,6 +113,7 @@ export const useReviews = defineStore("reviews", {
     drafts: [] as PRDraft[],
     viewed: { viewed: 0, total: 0 },
     loading: false,
+    refetching: false,
     error: "",
     notFound: false,
     posting: false,
@@ -143,7 +144,7 @@ export const useReviews = defineStore("reviews", {
       s.detail.review.head_sha !== s.detail.pr.head_sha,
   },
   actions: {
-    async load(project: string, n: number, silent = false) {
+    async load(project: string, n: number, silent = false, fresh = false) {
       const switched = project !== this.projectId || n !== this.number;
       if (switched) {
         this.$reset();
@@ -153,7 +154,9 @@ export const useReviews = defineStore("reviews", {
       const mine = ++this.seq;
       if (!silent) this.loading = true;
       try {
-        const detail = await api.get<PRDetailResponse>(base(project, n));
+        const detail = await api.get<PRDetailResponse>(
+          `${base(project, n)}${fresh ? "?fresh=1" : ""}`,
+        );
         const [files, drafts] = await Promise.all([
           api
             .get<PRFile[]>(`${base(project, n)}/files`)
@@ -184,9 +187,22 @@ export const useReviews = defineStore("reviews", {
       }
     },
     refresh() {
-      return this.projectId
+      return this.projectId && !this.refetching
         ? this.load(this.projectId, this.number, true)
         : Promise.resolve();
+    },
+    // Returns its own load's error, "" when fine or superseded.
+    async refetch() {
+      if (!this.projectId || this.refetching) return "";
+      const [p, n] = [this.projectId, this.number];
+      this.refetching = true;
+      const mine = this.seq + 1;
+      try {
+        await this.load(p, n, true, true);
+        return this.seq === mine ? this.error : "";
+      } finally {
+        if (this.projectId === p && this.number === n) this.refetching = false;
+      }
     },
     async runAI() {
       const run = await api.post<PRReviewRun>(

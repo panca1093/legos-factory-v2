@@ -76,13 +76,13 @@ func aiAvailability(rc *reviewCtx, d model.PRDetail) model.Availability {
 	return model.Availability{OK: true}
 }
 
-// Detail is the PR with the user's local review state, run and what each verdict allows.
-func (r *Reviews) Detail(ctx context.Context, u *model.User, projectID string, number int) (*model.PRDetailView, error) {
+// Detail is the PR with the user's local review state, run and what each verdict allows; fresh skips the cached PR.
+func (r *Reviews) Detail(ctx context.Context, u *model.User, projectID string, number int, fresh bool) (*model.PRDetailView, error) {
 	rc, err := r.open(ctx, u, projectID, false)
 	if err != nil {
 		return nil, err
 	}
-	d, err := r.detail(ctx, rc, number, false)
+	d, err := r.detail(ctx, rc, number, fresh)
 	if err != nil {
 		return nil, err
 	}
