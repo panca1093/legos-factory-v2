@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, ref } from "vue";
 import { RouterLink, useRouter } from "vue-router";
 import ActorBadge from "../factory/ActorBadge.vue";
 import { groupActivity } from "../factory/runs/agentActivity";
-import { woPanelSlots } from "./woPanelSlots";
-import { crew } from "../../composables/presentation";
+import { activityThread, handoffs } from "../factory/runs/activityThread";
+import PlanProgressCard from "../factory/runs/PlanProgressCard.vue";
+import HappeningCard from "../factory/runs/HappeningCard.vue";
+import { useSession } from "../../stores/session";
+import SidePanel, { type SideTab } from "./SidePanel.vue";
+import { crew, taskState } from "../../composables/presentation";
 import { useFactory } from "../../stores/factory";
-import PanelCard from "./PanelCard.vue";
 import { pullPath } from "../../types/review";
 import { useToast } from "../../composables/useToast";
 import { useEditor } from "../editor/editorStore";
@@ -78,14 +81,57 @@ const roles = computed(() =>
       return { ...c, state, on: state === "working" };
     }),
 );
-const setTop = (el: unknown) =>
-  (woPanelSlots.top.value = el as HTMLElement | null);
-const setMid = (el: unknown) =>
-  (woPanelSlots.mid.value = el as HTMLElement | null);
-onBeforeUnmount(() => {
-  woPanelSlots.top.value = null;
-  woPanelSlots.mid.value = null;
-});
+const session = useSession();
+const tasks = computed(() => factory.detail?.plan ?? []);
+const id = computed(() => order.value?.id ?? "");
+const canRetry = computed(
+  () => session.canWrite && order.value?.state === "IMPLEMENTING",
+);
+const steer = computed(() =>
+  session.canWrite
+    ? (runID: string, m: string) => factory.steer(id.value, runID, m)
+    : undefined,
+);
+const busy = ref(false);
+async function act(fn: () => Promise<unknown>) {
+  if (busy.value || !session.canWrite) return;
+  busy.value = true;
+  try {
+    await fn();
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e));
+  } finally {
+    busy.value = false;
+  }
+}
+const pairs = computed(() =>
+  order.value
+    ? handoffs(
+        activityThread(factory.events, order.value, tasks.value, runs.value),
+      )
+    : [],
+);
+const who = (a: string) =>
+  a === "you" ? "You" : a.charAt(0).toUpperCase() + a.slice(1);
+const live = computed(
+  () => runs.value.filter((r) => r.state === "running").length,
+);
+const tabs = computed<SideTab[]>(() => [
+  { key: "details", label: "Details" },
+  {
+    key: "plan",
+    label: "Plan Progress",
+    badge: tasks.value.length
+      ? `${tasks.value.filter((t) => taskState(t.id, runs.value) === "completed").length}/${tasks.value.length}`
+      : "",
+  },
+  {
+    key: "happening",
+    label: "What’s Happening",
+    badge: live.value || "",
+    hot: true,
+  },
+]);
 const date = (iso: string) =>
   new Intl.DateTimeFormat("en-US", {
     month: "short",
@@ -95,62 +141,132 @@ const date = (iso: string) =>
   }).format(new Date(iso));
 </script>
 <template>
-  <template v-if="order">
-    <div :ref="setTop" class="wp-slot"></div>
-    <PanelCard id="crew" title="Crew">
-      <ul class="pc-crew">
-        <li v-for="c in roles" :key="c.id" :data-role="c.id">
-          <ActorBadge :actor="c.id" small />
-          <span class="pc-name">{{ c.name }}</span>
-          <span class="pc-state" :class="{ on: c.on }">{{ c.state }}</span>
-        </li>
-      </ul>
-    </PanelCard>
-    <div :ref="setMid" class="wp-slot"></div>
-    <PanelCard id="wo-details" title="Details">
-      <dl class="pc-dl">
-        <div>
-          <dt>Branch</dt>
-          <dd class="mono">legos/{{ order.id }}</dd>
+  <SidePanel
+    v-if="order"
+    :tabs="tabs"
+    initial="happening"
+    label="Work order panel"
+  >
+    <template #details>
+      <section class="sp-sec" data-card="wo-details">
+        <h4 class="sp-h">Details</h4>
+        <dl class="pc-dl">
+          <div>
+            <dt>Branch</dt>
+            <dd class="mono">legos/{{ order.id }}</dd>
+          </div>
+          <div>
+            <dt>Base branch</dt>
+            <dd class="mono">{{ order.base_branch || "default" }}</dd>
+          </div>
+          <div>
+            <dt>Started</dt>
+            <dd>{{ date(order.created_at) }}</dd>
+          </div>
+          <div v-if="order.pr_url">
+            <dt>Pull request</dt>
+            <dd>
+              <a
+                :href="order.pr_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                >{{ order.pr_ref || "Open on host" }}</a
+              >
+            </dd>
+          </div>
+        </dl>
+        <div class="wp-actions">
+          <RouterLink
+            v-if="prNumber"
+            :to="pullPath(order.project_id, prNumber)"
+            class="lg-btn small"
+            data-test="wo-review-pr"
+            >Review PR #{{ prNumber }}</RouterLink
+          >
+          <button
+            type="button"
+            class="lg-btn small"
+            data-test="wo-open-code"
+            :disabled="opening"
+            @click="openInCode"
+          >
+            Open in Code
+          </button>
         </div>
-        <div>
-          <dt>Base branch</dt>
-          <dd class="mono">{{ order.base_branch || "default" }}</dd>
+      </section>
+      <section class="sp-sec" data-card="crew">
+        <h4 class="sp-h">Crew</h4>
+        <ul class="pc-crew">
+          <li v-for="c in roles" :key="c.id" :data-role="c.id">
+            <ActorBadge :actor="c.id" small />
+            <span class="pc-name">{{ c.name }}</span>
+            <span class="pc-state" :class="{ on: c.on }">{{ c.state }}</span>
+          </li>
+        </ul>
+      </section>
+    </template>
+    <template #plan>
+      <section class="sp-sec" data-card="plan-progress">
+        <h4 class="sp-h">Tasks</h4>
+        <PlanProgressCard
+          v-if="tasks.length"
+          bare
+          :tasks="tasks"
+          :runs="runs"
+          :can-retry="canRetry"
+          :revision="order.revision"
+          @retry="(taskID) => act(() => factory.retryTask(id, taskID))"
+          @retry-remediation="act(() => factory.retryRemediation(id))"
+        />
+        <p v-else class="tiny muted">No plan yet.</p>
+      </section>
+      <section class="sp-sec" data-card="handoffs">
+        <h4 class="sp-h">Handoffs &amp; loops</h4>
+        <div class="wp-loop">
+          <div v-for="h in pairs" :key="h.from + h.to" class="wp-loop-row">
+            <span>{{ who(h.from) }} → {{ who(h.to) }}</span>
+            <span class="tiny muted"
+              ><template v-if="h.tasks"
+                >{{ h.tasks }} task{{ h.tasks === 1 ? "" : "s" }}</template
+              ><template v-if="h.tasks && h.feedback"> · </template
+              ><template v-if="h.feedback"
+                >{{ h.feedback }} feedback</template
+              ></span
+            >
+          </div>
+          <p v-if="!pairs.length" class="tiny muted">No handoffs yet.</p>
         </div>
-        <div>
-          <dt>Started</dt>
-          <dd>{{ date(order.created_at) }}</dd>
-        </div>
-        <div v-if="order.pr_url">
-          <dt>Pull request</dt>
-          <dd>
-            <a :href="order.pr_url" target="_blank" rel="noopener noreferrer">{{
-              order.pr_ref || "Open on host"
-            }}</a>
-          </dd>
-        </div>
-      </dl>
-      <RouterLink
-        v-if="order && prNumber"
-        :to="pullPath(order.project_id, prNumber)"
-        class="lg-btn small"
-        data-test="wo-review-pr"
-        >Review PR #{{ prNumber }}</RouterLink
-      >
-      <button
-        type="button"
-        class="lg-btn small"
-        data-test="wo-open-code"
-        :disabled="opening"
-        @click="openInCode"
-      >
-        Open in Code
-      </button>
-    </PanelCard>
-  </template>
+      </section>
+    </template>
+    <template #happening>
+      <HappeningCard
+        bare
+        :events="factory.events"
+        :runs="runs"
+        :tasks="tasks"
+        :has-more="factory.eventsHasMore"
+        :steer="steer"
+      />
+    </template>
+  </SidePanel>
 </template>
 <style scoped>
-.wp-slot {
-  display: contents;
+.wp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.wp-loop {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}
+.wp-loop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 </style>

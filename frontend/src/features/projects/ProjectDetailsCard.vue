@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import { api, type LocalInspect, type Project } from "../../types/api";
-import PanelCard from "./PanelCard.vue";
 import ProjectChecks from "../factory/ProjectChecks.vue";
 import { publishLabel } from "../../composables/presentation";
 import { repoLabel } from "./rail";
@@ -38,7 +37,7 @@ watch(
 );
 </script>
 <template>
-  <PanelCard id="details" title="Details" :reveal="reveal">
+  <div class="sp-sec" data-card="details">
     <dl class="pc-dl">
       <div>
         <dt>Repository</dt>
@@ -60,5 +59,5 @@ watch(
     <div ref="checksAnchor" class="pc-checks" tabindex="-1">
       <ProjectChecks :project-id="project.id" />
     </div>
-  </PanelCard>
+  </div>
 </template>

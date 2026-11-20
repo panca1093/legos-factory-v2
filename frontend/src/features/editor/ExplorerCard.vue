@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from "vue";
 import { FilePlus, FolderPlus, GitBranch, Search } from "lucide-vue-next";
-import PanelCard from "../projects/PanelCard.vue";
 import FileTree from "../../components/files/FileTree.vue";
 import {
   dirMarker,
@@ -118,7 +117,7 @@ const baseOf = (row: TreeRow) =>
 </script>
 
 <template>
-  <PanelCard id="explorer" title="Explorer">
+  <div class="sp-sec" data-card="explorer">
     <div v-if="st" class="ex" data-test="explorer">
       <div class="ex-head">
         <span class="mono ex-branch" :title="st.folder.path"
@@ -257,7 +256,7 @@ const baseOf = (row: TreeRow) =>
       </div>
     </div>
     <p v-else class="small muted">Open a folder to browse its files.</p>
-  </PanelCard>
+  </div>
 </template>
 
 <style scoped>

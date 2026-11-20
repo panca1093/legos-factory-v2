@@ -352,8 +352,7 @@ const primaryDisabled = computed(
     (step.value === "clone" && !clone.url.trim()) ||
     (step.value === "create" && !fresh.name.trim()) ||
     (["confirm", "manual"].includes(step.value) &&
-      (!session.canWrite ||
-        (step.value === "confirm" && !addable.value))),
+      (!session.canWrite || (step.value === "confirm" && !addable.value))),
 );
 function primary() {
   if (step.value === "paste") return void inspect(pasted.value.trim());

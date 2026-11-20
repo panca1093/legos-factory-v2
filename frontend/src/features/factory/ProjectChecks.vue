@@ -12,9 +12,13 @@ import type { CheckStep } from "../../types/api";
 const props = defineProps<{ projectId: string }>();
 const checks = useChecks(),
   session = useSession();
-watch(() => props.projectId, (id) => void checks.load(id), {
-  immediate: true,
-});
+watch(
+  () => props.projectId,
+  (id) => void checks.load(id),
+  {
+    immediate: true,
+  },
+);
 onBeforeUnmount(() => checks.stop());
 
 const approved = computed(() => checks.status?.profile ?? null);
@@ -90,7 +94,12 @@ const tailOf = (s: CheckStep) =>
         </button>
       </span>
     </div>
-    <p v-if="checks.stopped" class="small muted" role="status" data-test="services-stopped">
+    <p
+      v-if="checks.stopped"
+      class="small muted"
+      role="status"
+      data-test="services-stopped"
+    >
       Check services stopped. They start again on the next run.
     </p>
     <p v-if="checks.status?.stale" class="notice" data-test="checks-stale">
@@ -110,8 +119,7 @@ const tailOf = (s: CheckStep) =>
       role="status"
       data-test="checks-running"
     >
-      Reading the repository and dry-running the checks on the default
-      branch…
+      Reading the repository and dry-running the checks on the default branch…
     </p>
     <p
       v-else-if="run?.status === 'failed'"
@@ -133,8 +141,7 @@ const tailOf = (s: CheckStep) =>
         data-test="proposal-warnings"
       >
         <div v-for="[k, w] in warnings" :key="k">
-          <strong class="mono">{{ k }}</strong
-          >: {{ w }}
+          <strong class="mono">{{ k }}</strong>: {{ w }}
         </div>
       </div>
       <div class="small muted">
@@ -232,7 +239,8 @@ const tailOf = (s: CheckStep) =>
             "
           />
           <div class="small muted">
-            in {{ target(s) }}<template v-if="s.source"> · {{ s.source }}</template>
+            in {{ target(s)
+            }}<template v-if="s.source"> · {{ s.source }}</template>
           </div>
           <div v-if="proposal.notes?.[s.name]" class="small muted">
             {{ proposal.notes[s.name] }}
@@ -260,14 +268,13 @@ const tailOf = (s: CheckStep) =>
               :disabled="!session.canWrite"
               @change="
                 checks.setSmoke(($event.target as HTMLInputElement).checked)
-              "
-            /><span></span
+              " /><span></span
           ></span>
         </label>
         <template v-if="smoke">
           <p class="notice" data-test="smoke-warning">
-            Env and login values here are handed to the app and the browser:
-            use test values only (throwaway secrets, seed accounts), never real
+            Env and login values here are handed to the app and the browser: use
+            test values only (throwaway secrets, seed accounts), never real
             credentials.
           </p>
           <label class="row small">
@@ -399,9 +406,7 @@ const tailOf = (s: CheckStep) =>
         </div>
         <div v-if="env.length">
           <strong>Env the checks receive</strong>
-          <div v-for="[k, v] in env" :key="k" class="mono">
-            {{ k }}={{ v }}
-          </div>
+          <div v-for="[k, v] in env" :key="k" class="mono">{{ k }}={{ v }}</div>
         </div>
       </div>
       <div v-if="session.canWrite" class="row">
@@ -446,7 +451,8 @@ const tailOf = (s: CheckStep) =>
           </div>
           <div class="pk-cmd">{{ s.command }}</div>
           <div class="pk-meta">
-            in {{ target(s) }}<template v-if="s.source"> · {{ s.source }}</template>
+            in {{ target(s)
+            }}<template v-if="s.source"> · {{ s.source }}</template>
           </div>
         </div>
         <div v-if="approved.smoke" class="pk-item" data-test="approved-smoke">

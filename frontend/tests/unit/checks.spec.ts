@@ -5,7 +5,13 @@ import { createMemoryHistory, createRouter } from "vue-router";
 import ProjectChecks from "../../src/features/factory/ProjectChecks.vue";
 import WorkOrderView from "../../src/features/factory/work-orders/WorkOrderView.vue";
 import { useFactory } from "../../src/stores/factory";
-import { dryRunOf, failsOnMain, mapToText, textToMap, useChecks } from "../../src/stores/checks";
+import {
+  dryRunOf,
+  failsOnMain,
+  mapToText,
+  textToMap,
+  useChecks,
+} from "../../src/stores/checks";
 import { useSession } from "../../src/stores/session";
 import { orders, projects, tasks, user } from "../fixtures/workspace";
 import type {
@@ -21,11 +27,36 @@ const apiTest: CheckStep = {
   command: "go test ./...",
   source: ".github/workflows/ci.yml:68",
 };
-const webLint: CheckStep = { name: "web lint", dir: "web", command: "npm run lint" };
+const webLint: CheckStep = {
+  name: "web lint",
+  dir: "web",
+  command: "npm run lint",
+};
 const results: CheckDryRun[] = [
-  { name: "web deps", kind: "setup", command: "npm ci", outcome: "PASS", exit_code: 0, output_tail: "" },
-  { name: "api test", kind: "check", command: "go test ./...", outcome: "FAIL", exit_code: 1, output_tail: "emoji assertion failed" },
-  { name: "web lint", kind: "check", command: "npm run lint", outcome: "PASS", exit_code: 0, output_tail: "" },
+  {
+    name: "web deps",
+    kind: "setup",
+    command: "npm ci",
+    outcome: "PASS",
+    exit_code: 0,
+    output_tail: "",
+  },
+  {
+    name: "api test",
+    kind: "check",
+    command: "go test ./...",
+    outcome: "FAIL",
+    exit_code: 1,
+    output_tail: "emoji assertion failed",
+  },
+  {
+    name: "web lint",
+    kind: "check",
+    command: "npm run lint",
+    outcome: "PASS",
+    exit_code: 0,
+    output_tail: "",
+  },
 ];
 const proposal = (): CheckProposal => ({
   profile: {
@@ -41,7 +72,12 @@ const proposal = (): CheckProposal => ({
   model: "anthropic/sonnet",
   created_at: "2026-11-17T10:00:00Z",
 });
-const idle: ChecksStatus = { profile: null, proposal: null, run: { status: "idle" }, stale: false };
+const idle: ChecksStatus = {
+  profile: null,
+  proposal: null,
+  run: { status: "idle" },
+  stale: false,
+};
 
 let status: ChecksStatus;
 const fetchMock = vi.fn();
@@ -56,7 +92,9 @@ beforeEach(() => {
     const method = init?.method ?? "GET";
     if (method === "POST") {
       status = { ...status, run: { status: "running" } };
-      return new Response(JSON.stringify({ run: { status: "running" } }), { status: 202 });
+      return new Response(JSON.stringify({ run: { status: "running" } }), {
+        status: 202,
+      });
     }
     if (method === "PUT" || method === "DELETE") {
       if (method === "PUT")
@@ -80,7 +118,9 @@ describe("fails-on-main logic", () => {
   it("flags a FAIL dry-run result of a check, not of a passing or setup step", () => {
     expect(failsOnMain(results, apiTest)).toBe(true);
     expect(failsOnMain(results, webLint)).toBe(false);
-    expect(failsOnMain(results, { name: "web deps", command: "npm ci" })).toBe(false);
+    expect(failsOnMain(results, { name: "web deps", command: "npm ci" })).toBe(
+      false,
+    );
     expect(failsOnMain(undefined, apiTest)).toBe(false);
   });
 
@@ -156,7 +196,10 @@ describe("checks store", () => {
   it("surfaces an API error and does not poll", async () => {
     fetchMock.mockImplementationOnce(
       async () =>
-        new Response(JSON.stringify({ error: { code: "X", message: "boom" } }), { status: 500 }),
+        new Response(
+          JSON.stringify({ error: { code: "X", message: "boom" } }),
+          { status: 500 },
+        ),
     );
     const c = useChecks();
     await c.load("p1");
@@ -168,7 +211,10 @@ describe("checks store", () => {
 describe("ProjectChecks", () => {
   const mountIt = async () => {
     useSession().user = user;
-    const w = mount(ProjectChecks, { props: { projectId: "p1" }, attachTo: document.body });
+    const w = mount(ProjectChecks, {
+      props: { projectId: "p1" },
+      attachTo: document.body,
+    });
     await flushPromises();
     return w;
   };
@@ -181,7 +227,9 @@ describe("ProjectChecks", () => {
     await flushPromises();
     expect(calls("POST")).toHaveLength(1);
     expect(w.find('[data-test="checks-running"]').exists()).toBe(true);
-    expect(w.get('[data-test="suggest-checks"]').attributes("disabled")).toBeDefined();
+    expect(
+      w.get('[data-test="suggest-checks"]').attributes("disabled"),
+    ).toBeDefined();
     useChecks().stop();
   });
 
@@ -191,15 +239,29 @@ describe("ProjectChecks", () => {
     const row = w.get('[data-test="check-api test"]');
     expect(row.find('[data-test="fails-on-main"]').exists()).toBe(true);
     expect(row.text()).toContain("emoji assertion failed");
-    expect(w.get('[data-test="check-web lint"]').find('[data-test="fails-on-main"]').exists()).toBe(false);
+    expect(
+      w
+        .get('[data-test="check-web lint"]')
+        .find('[data-test="fails-on-main"]')
+        .exists(),
+    ).toBe(false);
     expect(w.text()).toContain("postgres");
-    expect(w.text()).toContain("DATABASE_URL=postgres://u:p@{{postgres}}/{{db}}");
+    expect(w.text()).toContain(
+      "DATABASE_URL=postgres://u:p@{{postgres}}/{{db}}",
+    );
     await row.get('[data-test="make-optional"]').trigger("click");
-    expect(w.get('[data-test="check-api test"]').find('[data-test="make-optional"]').exists()).toBe(false);
+    expect(
+      w
+        .get('[data-test="check-api test"]')
+        .find('[data-test="make-optional"]')
+        .exists(),
+    ).toBe(false);
     expect(w.get('[data-test="check-api test"]').text()).toContain("optional");
     await w.get('[data-test="approve-checks"]').trigger("click");
     await flushPromises();
-    expect(JSON.parse(calls("PUT")[0][1].body).profile.checks[0].optional).toBe(true);
+    expect(JSON.parse(calls("PUT")[0][1].body).profile.checks[0].optional).toBe(
+      true,
+    );
     expect(w.find('[data-test="approved"]').exists()).toBe(true);
   });
 
@@ -221,15 +283,22 @@ describe("ProjectChecks", () => {
       run: { status: "failed", error: "model unavailable" },
     };
     const w = await mountIt();
-    expect(w.get('[data-test="checks-stale"]').text()).toContain("Checks may be stale");
-    expect(w.get('[data-test="checks-failed"]').text()).toContain("model unavailable");
+    expect(w.get('[data-test="checks-stale"]').text()).toContain(
+      "Checks may be stale",
+    );
+    expect(w.get('[data-test="checks-failed"]').text()).toContain(
+      "model unavailable",
+    );
     expect(w.get('[data-test="approved"]').text()).toContain("go test ./...");
   });
 
   it("hides actions from a viewer", async () => {
     status = { ...idle, proposal: proposal(), run: { status: "ready" } };
     useSession().user = { ...user, role: "VIEWER" } as unknown as typeof user;
-    const w = mount(ProjectChecks, { props: { projectId: "p1" }, attachTo: document.body });
+    const w = mount(ProjectChecks, {
+      props: { projectId: "p1" },
+      attachTo: document.body,
+    });
     await flushPromises();
     expect(w.find('[data-test="suggest-checks"]').exists()).toBe(false);
     expect(w.find('[data-test="approve-checks"]').exists()).toBe(false);
@@ -241,11 +310,28 @@ describe("smoke section", () => {
     const p = proposal();
     p.profile.smoke = {
       start: [
-        { name: "api", dir: "api", command: "go run .", port_env: "PORT", ready: "/healthz", env: { APP_URL: "http://localhost:{{port.web}}" } },
-        { name: "web", dir: "web", command: "npm run dev", port_env: "PORT", ready: "/" },
+        {
+          name: "api",
+          dir: "api",
+          command: "go run .",
+          port_env: "PORT",
+          ready: "/healthz",
+          env: { APP_URL: "http://localhost:{{port.web}}" },
+        },
+        {
+          name: "web",
+          dir: "web",
+          command: "npm run dev",
+          port_env: "PORT",
+          ready: "/",
+        },
       ],
       base: "web",
-      login: { path: "/login", user_env: "SMOKE_USER", password_env: "SMOKE_PASSWORD" },
+      login: {
+        path: "/login",
+        user_env: "SMOKE_USER",
+        password_env: "SMOKE_PASSWORD",
+      },
       routes_from: "web/app/**/page.tsx",
       params: { id: "sql:SELECT id FROM t" },
       ready_timeout_sec: 90,
@@ -255,7 +341,10 @@ describe("smoke section", () => {
   };
   const mountIt = async () => {
     useSession().user = user;
-    const w = mount(ProjectChecks, { props: { projectId: "p1" }, attachTo: document.body });
+    const w = mount(ProjectChecks, {
+      props: { projectId: "p1" },
+      attachTo: document.body,
+    });
     await flushPromises();
     return w;
   };
@@ -270,7 +359,9 @@ describe("smoke section", () => {
     const w = await mountIt();
     expect(w.find('[data-test="smoke-warning"]').exists()).toBe(false);
     await w.get('[data-test="smoke-toggle"]').setValue(true);
-    expect(w.get('[data-test="smoke-warning"]').text()).toContain("test values only");
+    expect(w.get('[data-test="smoke-warning"]').text()).toContain(
+      "test values only",
+    );
     expect(useChecks().draft?.smoke?.blocking).toBe(false);
     await w.get('[data-test="smoke-toggle"]').setValue(false);
     expect(useChecks().draft?.smoke).toBeNull();
@@ -283,12 +374,16 @@ describe("smoke section", () => {
     status = { ...idle, proposal: withSmoke(), run: { status: "ready" } };
     const w = await mountIt();
     await w.get('[data-test="smoke-blocking"]').setValue(true);
-    await w.get('[aria-label="web command"]').setValue("npm run dev -- --turbo");
+    await w
+      .get('[aria-label="web command"]')
+      .setValue("npm run dev -- --turbo");
     await w.get('[aria-label="Routes from"]').setValue("web/src/**/page.tsx");
     await w.get('[aria-label="Login user env"]').setValue("E2E_USER");
     await w.get('[aria-label="Ready timeout"]').setValue("120");
     const env = w.get('[aria-label="api env"]');
-    await env.setValue("APP_URL=http://localhost:{{port.web}}\nJWT_SECRET=test-only");
+    await env.setValue(
+      "APP_URL=http://localhost:{{port.web}}\nJWT_SECRET=test-only",
+    );
     await env.trigger("change");
     const params = w.get('[aria-label="Route params"]');
     await params.setValue("id=sql:SELECT 1");
@@ -299,9 +394,16 @@ describe("smoke section", () => {
     const sent = JSON.parse(calls("PUT")[0][1].body).profile.smoke;
     expect(sent.blocking).toBe(true);
     expect(sent.start[1].command).toBe("npm run dev -- --turbo");
-    expect(sent.start[0].env).toEqual({ APP_URL: "http://localhost:{{port.web}}", JWT_SECRET: "test-only" });
+    expect(sent.start[0].env).toEqual({
+      APP_URL: "http://localhost:{{port.web}}",
+      JWT_SECRET: "test-only",
+    });
     expect(sent.routes_from).toBe("web/src/**/page.tsx");
-    expect(sent.login).toEqual({ path: "/login", user_env: "E2E_USER", password_env: "SMOKE_PASSWORD" });
+    expect(sent.login).toEqual({
+      path: "/login",
+      user_env: "E2E_USER",
+      password_env: "SMOKE_PASSWORD",
+    });
     expect(sent.params).toEqual({ id: "sql:SELECT 1" });
     expect(sent.ready_timeout_sec).toBe(120);
     expect(sent.start).toHaveLength(3);
@@ -310,9 +412,15 @@ describe("smoke section", () => {
   it("removing the base process moves base to the first remaining one", async () => {
     status = { ...idle, proposal: withSmoke(), run: { status: "ready" } };
     const w = await mountIt();
-    await w.get('[data-test="smoke-proc-1"] [data-test="smoke-remove-proc"]').trigger("click");
+    await w
+      .get('[data-test="smoke-proc-1"] [data-test="smoke-remove-proc"]')
+      .trigger("click");
     expect(useChecks().draft?.smoke?.base).toBe("api");
-    expect(w.get('[data-test="smoke-proc-0"] [data-test="smoke-remove-proc"]').attributes("disabled")).toBeDefined();
+    expect(
+      w
+        .get('[data-test="smoke-proc-0"] [data-test="smoke-remove-proc"]')
+        .attributes("disabled"),
+    ).toBeDefined();
   });
 
   it("shows warning notes that belong to no check", async () => {
@@ -342,9 +450,18 @@ describe("work order banner", () => {
     f.projects = projects;
     vi.spyOn(f, "loadDetail").mockImplementation(async (oid) => {
       f.selectedID = oid;
-      f.detail = { work_order: structuredClone(orders[0]), plan: tasks, runs: [] };
+      f.detail = {
+        work_order: structuredClone(orders[0]),
+        plan: tasks,
+        runs: [],
+      };
       f.events = kinds.map((kind, i) => ({
-        id: i + 1, work_order_id: oid, actor: "factory", kind, message: kind, created_at: "t",
+        id: i + 1,
+        work_order_id: oid,
+        actor: "factory",
+        kind,
+        message: kind,
+        created_at: "t",
       }));
     });
     vi.spyOn(f, "reloadDetail").mockResolvedValue();
@@ -357,21 +474,36 @@ describe("work order banner", () => {
     });
     await router.push(`/projects/atlas/wo/${orders[0].id}`);
     await router.isReady();
-    const w = mount(WorkOrderView, { global: { plugins: [router] }, attachTo: document.body });
+    const w = mount(WorkOrderView, {
+      global: { plugins: [router] },
+      attachTo: document.body,
+    });
     await flushPromises();
     return w;
   }
   beforeEach(() => {
-    vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
+    vi.stubGlobal(
+      "EventSource",
+      class {
+        addEventListener() {}
+        close() {}
+      },
+    );
   });
 
   it("offers Suggest checks only when verification was skipped", async () => {
     const w = await renderOrder(["verification_skipped"]);
-    const btn = w.get('[data-test="checks-banner"] [data-test="suggest-checks"]');
+    const btn = w.get(
+      '[data-test="checks-banner"] [data-test="suggest-checks"]',
+    );
     await btn.trigger("click");
     await flushPromises();
-    expect(calls("POST")[0][0]).toBe(`/api/v1/projects/${orders[0].project_id}/checks/suggest`);
-    expect(w.get('[data-test="checks-banner"]').text()).toContain("Suggesting checks");
+    expect(calls("POST")[0][0]).toBe(
+      `/api/v1/projects/${orders[0].project_id}/checks/suggest`,
+    );
+    expect(w.get('[data-test="checks-banner"]').text()).toContain(
+      "Suggesting checks",
+    );
     useChecks().stop();
     w.unmount();
   });

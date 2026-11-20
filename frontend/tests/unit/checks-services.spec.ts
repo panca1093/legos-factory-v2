@@ -10,12 +10,24 @@ import { useSession } from "../../src/stores/session";
 import { orders, projects, tasks, user } from "../fixtures/workspace";
 import type { CheckProposal, ChecksStatus } from "../../src/types/api";
 
-const migrate = { name: "migrate", dir: "api", command: "make migrate-up", per_run: true };
+const migrate = {
+  name: "migrate",
+  dir: "api",
+  command: "make migrate-up",
+  per_run: true,
+};
 const proposal = (results: CheckProposal["results"] = []): CheckProposal => ({
   profile: {
     version: 2,
-    services: { compose: "docker-compose.yml", names: ["postgres"], ports: { postgres: 5432 } },
-    setup: [{ name: "web deps", dir: "web", command: "npm ci" }, structuredClone(migrate)],
+    services: {
+      compose: "docker-compose.yml",
+      names: ["postgres"],
+      ports: { postgres: 5432 },
+    },
+    setup: [
+      { name: "web deps", dir: "web", command: "npm ci" },
+      structuredClone(migrate),
+    ],
     checks: [{ name: "api test", dir: "api", command: "go test ./..." }],
   },
   results,
@@ -23,18 +35,27 @@ const proposal = (results: CheckProposal["results"] = []): CheckProposal => ({
   model: "m",
   created_at: "2026-11-17T10:00:00Z",
 });
-const idle: ChecksStatus = { profile: null, proposal: null, run: { status: "idle" }, stale: false };
+const idle: ChecksStatus = {
+  profile: null,
+  proposal: null,
+  run: { status: "idle" },
+  stale: false,
+};
 
 let status: ChecksStatus;
 const fetchMock = vi.fn();
-const calls = (method: string) => fetchMock.mock.calls.filter((c) => (c[1]?.method ?? "GET") === method);
+const calls = (method: string) =>
+  fetchMock.mock.calls.filter((c) => (c[1]?.method ?? "GET") === method);
 
 beforeEach(() => {
   setActivePinia(createPinia());
   status = structuredClone(idle);
   fetchMock.mockReset();
   fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-    if ((init?.method ?? "GET") === "POST" && String(url).endsWith("/checks/stop"))
+    if (
+      (init?.method ?? "GET") === "POST" &&
+      String(url).endsWith("/checks/stop")
+    )
       return new Response(null, { status: 204 });
     return new Response(JSON.stringify(status));
   });
@@ -47,7 +68,10 @@ afterEach(() => {
 
 const mountIt = async () => {
   useSession().user = user;
-  const w = mount(ProjectChecks, { props: { projectId: "p1" }, attachTo: document.body });
+  const w = mount(ProjectChecks, {
+    props: { projectId: "p1" },
+    attachTo: document.body,
+  });
   await flushPromises();
   return w;
 };
@@ -59,14 +83,20 @@ describe("per-run setup steps", () => {
     const row = w.get('[data-test="per-run-migrate"]');
     expect(row.text()).toContain("per run");
     await row.get("input").setValue("make migrate-up ENV=test");
-    expect(useChecks().draft?.setup?.[1].command).toBe("make migrate-up ENV=test");
+    expect(useChecks().draft?.setup?.[1].command).toBe(
+      "make migrate-up ENV=test",
+    );
   });
 
   it("lists the approved per-run step", async () => {
     status = { ...idle, profile: proposal().profile, run: { status: "idle" } };
     const w = await mountIt();
-    expect(w.get('[data-test="approved"] [data-test="per-run-migrate"]').text()).toContain("per run");
-    expect(w.get('[data-test="approved"] [data-test="setup-web deps"]').text()).toContain("npm ci");
+    expect(
+      w.get('[data-test="approved"] [data-test="per-run-migrate"]').text(),
+    ).toContain("per run");
+    expect(
+      w.get('[data-test="approved"] [data-test="setup-web deps"]').text(),
+    ).toContain("npm ci");
   });
 
   it("shows the services-unavailable text next to the per-run step", async () => {
@@ -74,12 +104,23 @@ describe("per-run setup steps", () => {
     status = {
       ...idle,
       proposal: proposal([
-        { name: "api test", kind: "check", command: "go test ./...", outcome: "UNVERIFIED", exit_code: null, output_tail: msg },
+        {
+          name: "api test",
+          kind: "check",
+          command: "go test ./...",
+          outcome: "UNVERIFIED",
+          exit_code: null,
+          output_tail: msg,
+        },
       ]),
       run: { status: "ready" },
     };
     const w = await mountIt();
-    expect(w.get('[data-test="per-run-migrate"] [data-test="services-unavailable"]').text()).toContain(msg);
+    expect(
+      w
+        .get('[data-test="per-run-migrate"] [data-test="services-unavailable"]')
+        .text(),
+    ).toContain(msg);
     expect(w.findAll('[data-test="services-unavailable"]')).toHaveLength(1);
   });
 });
@@ -95,7 +136,11 @@ describe("stop check services", () => {
   });
 
   it("is absent for a project without services", async () => {
-    status = { ...idle, profile: { checks: [{ name: "vet", command: "go vet ./..." }] }, run: { status: "idle" } };
+    status = {
+      ...idle,
+      profile: { checks: [{ name: "vet", command: "go vet ./..." }] },
+      run: { status: "idle" },
+    };
     const w = await mountIt();
     expect(w.find('[data-test="stop-services"]').exists()).toBe(false);
   });
@@ -108,11 +153,30 @@ describe("work order fallback banner", () => {
     f.projects = projects;
     vi.spyOn(f, "loadDetail").mockImplementation(async (oid) => {
       f.selectedID = oid;
-      f.detail = { work_order: structuredClone(orders[0]), plan: tasks, runs: [] };
-      f.events = [{ id: 1, work_order_id: oid, actor: "factory", kind: "checks_fallback", message: "m", created_at: "t" }];
+      f.detail = {
+        work_order: structuredClone(orders[0]),
+        plan: tasks,
+        runs: [],
+      };
+      f.events = [
+        {
+          id: 1,
+          work_order_id: oid,
+          actor: "factory",
+          kind: "checks_fallback",
+          message: "m",
+          created_at: "t",
+        },
+      ];
     });
     vi.spyOn(f, "reloadDetail").mockResolvedValue();
-    vi.stubGlobal("EventSource", class { addEventListener() {} close() {} });
+    vi.stubGlobal(
+      "EventSource",
+      class {
+        addEventListener() {}
+        close() {}
+      },
+    );
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -122,9 +186,14 @@ describe("work order fallback banner", () => {
     });
     await router.push(`/projects/atlas/wo/${orders[0].id}`);
     await router.isReady();
-    const w = mount(WorkOrderView, { global: { plugins: [router] }, attachTo: document.body });
+    const w = mount(WorkOrderView, {
+      global: { plugins: [router] },
+      attachTo: document.body,
+    });
     await flushPromises();
-    expect(w.get('[data-test="checks-banner"] [data-test="checks-fallback"]').text()).toContain("not approved");
+    expect(
+      w.get('[data-test="checks-banner"] [data-test="checks-fallback"]').text(),
+    ).toContain("not approved");
     useChecks().stop();
     w.unmount();
   });

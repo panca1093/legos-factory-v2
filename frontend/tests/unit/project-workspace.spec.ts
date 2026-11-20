@@ -523,6 +523,41 @@ describe("project workspace", () => {
     w.unmount();
   });
 
+  it("work order panel: Details, Plan Progress and What's Happening, the same on every work order tab", async () => {
+    const f = useFactory();
+    f.detail = {
+      work_order: structuredClone(orders[1]),
+      plan: [{ id: "t1", seq: 1, title: "Do it" }] as never,
+      runs: [
+        { id: "r1", task_id: "t1", kind: "builder", state: "succeeded" },
+      ] as never,
+    };
+    for (const tab of ["activity", "progress", "review"]) {
+      const { w, router } = await mountWorkspace(
+        `/projects/atlas/wo/LF-127?tab=${tab}`,
+      );
+      const tabs = w.findAll('#pw-panel [role="tab"]').map((t) => t.text());
+      expect(tabs).toEqual([
+        "Details",
+        "Plan Progress 0/1",
+        "What’s Happening",
+      ]);
+      expect(
+        w.find('[data-test="tab-happening"]').attributes("aria-selected"),
+      ).toBe("true");
+      expect(w.findAll("#pw-panel [data-card='crew']")).toHaveLength(1);
+      expect(w.findAll("#pw-panel [data-card='handoffs']")).toHaveLength(1);
+      expect(w.findAll("[data-card='handoffs']")).toHaveLength(1);
+      await w.find('[data-test="tab-details"]').trigger("click");
+      await flushPromises();
+      expect(router.currentRoute.value.query).toMatchObject({
+        tab,
+        side: "details",
+      });
+      w.unmount();
+    }
+  });
+
   it("Open in Code opens the work order's worktree folder", async () => {
     const f = useFactory();
     f.detail = { work_order: structuredClone(orders[1]), plan: [], runs: [] };
@@ -545,15 +580,6 @@ describe("project workspace", () => {
     ) as unknown as [string, { method: string; body: string }];
     expect(call[1].method).toBe("POST");
     expect(JSON.parse(call[1].body)).toEqual({ wo_id: "LF-127" });
-    w.unmount();
-  });
-
-  it("collapses a card and remembers it", async () => {
-    const { w } = await mountWorkspace("/projects/atlas");
-    await w.find('[data-card="details"] .pc-h').trigger("click");
-    expect(JSON.parse(store["legos-project-panel-cards"])).toEqual({
-      details: true,
-    });
     w.unmount();
   });
 
@@ -634,13 +660,12 @@ describe("project workspace", () => {
     w.unmount();
   });
 
-  it("?checks=1 opens a hidden panel and an expanded Details card", async () => {
+  it("?checks=1 opens a hidden panel on the Details tab", async () => {
     store["legos-project-panel"] = "0";
-    store["legos-project-panel-cards"] = JSON.stringify({ details: true });
     vi.stubGlobal("innerWidth", 1100);
     const { w } = await mountWorkspace("/projects/atlas?checks=1");
     expect(w.find("#pw-panel").exists()).toBe(true);
-    expect(w.find("#pc-details").attributes("style") ?? "").not.toContain(
+    expect(w.find("#sp-details").attributes("style") ?? "").not.toContain(
       "display: none",
     );
     w.unmount();

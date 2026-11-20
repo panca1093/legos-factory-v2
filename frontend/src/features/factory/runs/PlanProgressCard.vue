@@ -128,8 +128,6 @@ const done = computed(
   padding: 0;
   display: grid;
   gap: 6px;
-  max-height: 280px;
-  overflow-y: auto;
 }
 .pp-tasks li {
   border: 1px solid var(--line);

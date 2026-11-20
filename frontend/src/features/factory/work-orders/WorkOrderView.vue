@@ -22,12 +22,8 @@ import ActivityThread from "./ActivityThread.vue";
 import StageTrack from "./StageTrack.vue";
 import NowCard from "./NowCard.vue";
 import TaskGraph from "../task-graph/TaskGraph.vue";
-import ActivityPanel from "../runs/ActivityPanel.vue";
 import ReviewPanel from "../reviews/ReviewPanel.vue";
-import {
-  architectReport,
-  changeRequestDraft,
-} from "../runs/agentActivity";
+import { architectReport, changeRequestDraft } from "../runs/agentActivity";
 const factory = useFactory(),
   checks = useChecks(),
   session = useSession(),
@@ -275,8 +271,8 @@ function download() {
       /></RouterLink>
       <div class="grow">
         <div class="fx-crumb">
-          <RouterLink :to="`/projects/${order.project_id}`">Factory</RouterLink> /
-          {{ project?.name || "Project" }} ·
+          <RouterLink :to="`/projects/${order.project_id}`">Factory</RouterLink>
+          / {{ project?.name || "Project" }} ·
           <span class="mono">{{ order.id }}</span>
         </div>
         <h1>{{ order.title }}</h1>
@@ -327,8 +323,7 @@ function download() {
       <span v-if="checks.running" role="status">Suggesting checks…</span>
       <span v-else-if="checks.status?.proposal"
         >Checks suggested.
-        <RouterLink
-          :to="`/projects/${order.project_id}`"
+        <RouterLink :to="`/projects/${order.project_id}`"
           >Review them</RouterLink
         ></span
       >
@@ -407,22 +402,6 @@ function download() {
       />
       <div v-else-if="tab === 'progress'" class="fx-progress">
         <TaskGraph :tasks="tasks" :runs="runs" />
-        <ActivityPanel
-          in-panel
-          :events="factory.events"
-          :runs="runs"
-          :tasks="tasks"
-          :can-retry="session.canWrite && order.state === 'IMPLEMENTING'"
-          :revision="order.revision"
-          :has-more="factory.eventsHasMore"
-          :steer="
-            session.canWrite
-              ? (runID: string, m: string) => factory.steer(id, runID, m)
-              : undefined
-          "
-          @retry="(taskID) => act(() => factory.retryTask(id, taskID))"
-          @retry-remediation="act(() => factory.retryRemediation(id))"
-        />
       </div>
       <ReviewPanel
         v-else

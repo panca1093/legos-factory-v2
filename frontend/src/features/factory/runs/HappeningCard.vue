@@ -237,10 +237,7 @@ const taskTitle = computed(
   padding: 12px;
 }
 .fx-tl {
-  max-height: min(420px, 50dvh);
   overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
   margin: 0 -8px;
   padding: 4px 8px 0;
 }

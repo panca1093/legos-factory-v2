@@ -246,7 +246,9 @@ describe("work order delete", () => {
     dom<HTMLButtonElement>('[data-test="confirm-delete"]').click();
     await flushPromises();
     expect(deletes()[0][0]).toBe("/api/v1/work-orders/LF-121");
-    expect(router.currentRoute.value.path).toBe(`/projects/${orders.find((o) => o.id === "LF-121")!.project_id}`);
+    expect(router.currentRoute.value.path).toBe(
+      `/projects/${orders.find((o) => o.id === "LF-121")!.project_id}`,
+    );
     expect(useFactory().workOrders.map((o) => o.id)).not.toContain("LF-121");
     w.unmount();
   });
