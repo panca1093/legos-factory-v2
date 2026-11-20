@@ -34,8 +34,8 @@ func routingUsed(d model.KBDoc) map[string]any {
 	return map[string]any{"id": d.ID, "status": d.Status, "source": d.Source}
 }
 
-// reviewers resolves the specialists for the changed files. Order: the repo's
-// Reviewer Routing doc, the project's factory doc, then a draft proposed from
+// reviewers resolves the specialists for the changed files. Order: the
+// project's factory doc, then a draft proposed from
 // the path heuristics (still used until a human replaces it). The second
 // result describes the routing doc used, for the audit event.
 func (f *Factory) reviewers(ctx context.Context, wo *model.WorkOrder, files []string) ([]SpecialistPick, map[string]any) {
@@ -44,17 +44,6 @@ func (f *Factory) reviewers(ctx context.Context, wo *model.WorkOrder, files []st
 		return SelectSpecialists(files), nil
 	}
 	pid := wo.ProjectID
-	repoDocs, err := k.Idx.List(ctx, model.KBQuery{
-		ProjectID: pid, Sources: []string{model.KBSourceRepo}, Types: []string{model.KBTypeReviewerRoute}, Limit: 50,
-	})
-	if err != nil {
-		f.Log.Warn("routing: repo lookup failed", "wo", wo.ID, "err", err)
-	}
-	for _, d := range repoDocs {
-		if r := routesOf(d.Meta); len(r) > 0 {
-			return MatchReviewers(r, files), routingUsed(d)
-		}
-	}
 	rel := "projects/" + pid + "/reviewer-routing.md"
 	d, err := k.Idx.Get(ctx, kb.DocID(model.KBSourceFactory, pid, rel))
 	if err != nil {

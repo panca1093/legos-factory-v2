@@ -102,8 +102,6 @@ describe("groupFolders", () => {
       doc({ id: "t1", type: "Task DAG" }),
       doc({ id: "t2", type: "Task Summary" }),
       doc({ id: "n", type: "Note" }),
-      doc({ id: "r", type: "Guide", source: "repo" }),
-      doc({ id: "rs", type: "Spec", source: "repo" }),
       doc({ id: "d", type: "Note", status: "draft" }),
       doc({ id: "dep", type: "Note", status: "deprecated", indexed_at: 0 }),
       doc({ id: "rr", type: "Reviewer Routing", indexed_at: 0 }),
@@ -114,7 +112,6 @@ describe("groupFolders", () => {
       ["spec", ["s"]],
       ["task", ["t1", "t2"]],
       ["notes", ["n", "dep", "rr"]],
-      ["repo", ["r", "rs"]],
       ["review", ["d"]],
     ]);
     expect(out.flatMap((f) => f.docs)).toHaveLength(docs.length);
@@ -125,7 +122,6 @@ describe("groupFolders", () => {
       "Spec",
       "Task",
       "Notes",
-      "Repository",
       "Needs review",
     ]);
     const out = groupFolders([doc({ id: "x", type: "Weird" })], true);

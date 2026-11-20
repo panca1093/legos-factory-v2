@@ -25,7 +25,7 @@ func ProjectOf(rel string) string {
 // fails (for example one the database does not know) does not stop the others.
 // A project folder whose project is not live (live returns false) is skipped and listed in Skipped; nil live keeps all.
 func SyncFactory(ctx context.Context, idx Index, emb Embedder, b *Bundle, live func(projectID string) bool) (SyncStats, error) {
-	files, err := collect(b.root, true)
+	files, err := collect(b.root)
 	if err != nil {
 		return SyncStats{}, err
 	}

@@ -349,8 +349,7 @@ func (f *Factory) handleInspect(ctx context.Context, job model.Job) error {
 	criteria := splitCriteria(wo.Acceptance)
 	for _, p := range picks {
 		var out findingsReply
-		kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentInspector), p.Specialty,
-			woQuery(wo)+" "+strings.Join(files, " ")+" "+p.Specialty, f.workspaceDir(wo), wo.KBBaseSHA)
+		kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentInspector), p.Specialty, f.workspaceDir(wo), wo.KBBaseSHA)
 		_, runID, err := f.runStructured(ctx, wo, model.AgentInspector, inspectPrompt(wo, p, files, builderNotes, f.earlierFindingTitles(ctx, wo.ID, p.Specialty))+kbText,
 			map[string]string{"specialty": p.Specialty}, "", &out, runOpts{Audit: audit})
 		if err != nil {
@@ -522,8 +521,7 @@ func (f *Factory) converge(ctx context.Context, wo model.WorkOrder, files []stri
 		round = appends + 1
 	}
 	checks, _ := f.checksText(ctx, &wo)
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "",
-		woQuery(&wo)+" "+strings.Join(files, " "), dir, wo.KBBaseSHA)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "", dir, wo.KBBaseSHA)
 	var r convergeReply
 	_, runID, err := f.runStructured(ctx, &wo, model.AgentArchitect, convergePrompt(&wo, tasks, diff, checks, builderNotes)+kbText,
 		map[string]string{"stage": "converge"}, "", &r, runOpts{Audit: audit})

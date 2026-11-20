@@ -18,8 +18,6 @@ export interface Project {
   remote_repo?: string;
   publish_via?: "remote" | "gh" | "none";
   github_repo?: string;
-  kb_include?: string[];
-  kb_exclude?: string[];
   created_at: string;
 }
 

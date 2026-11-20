@@ -201,7 +201,6 @@ const PROJECT_FOLDERS = [
     label: "Notes",
     types: ["Note", "Code Map", "Reviewer Routing"],
   },
-  { key: "repo", label: "Repository", types: [] as string[] },
   { key: "review", label: "Needs review", types: [] as string[] },
 ];
 const FACTORY_FOLDERS = [
@@ -218,12 +217,7 @@ export function groupFolders(docs: KBDoc[], project: boolean): Folder[] {
   const at = (k: string) => out.find((f) => f.key === k)!;
   for (const d of [...docs].sort((a, b) => ts(b) - ts(a))) {
     const byType = defs.find((f) => f.types.includes(d.type))?.key;
-    const key =
-      d.status === "draft"
-        ? "review"
-        : project && d.source === "repo"
-          ? "repo"
-          : (byType ?? "other");
+    const key = d.status === "draft" ? "review" : (byType ?? "other");
     at(key).docs.push(d);
   }
   return out.filter((f) => f.key !== "other" || f.docs.length);

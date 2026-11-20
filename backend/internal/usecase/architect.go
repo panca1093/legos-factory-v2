@@ -38,7 +38,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 	default:
 		return fmt.Errorf("plan job for WO in state %s", wo.State)
 	}
-	f.syncRepo(ctx, wo, true)
+	f.recordKBBase(ctx, wo)
 	facts := repoFacts(ctx, f.workspaceDir(wo))
 	if (wo.State == model.StateRequirement && wo.Brief == "") || wo.IntakePending {
 		if err := f.intake(ctx, wo, facts); err != nil || wo.State == model.StateWaitingForHuman {
@@ -62,7 +62,7 @@ func (f *Factory) handlePlan(ctx context.Context, job model.Job) (err error) {
 			fmt.Sprintf("%d prior project document(s) provided to the Architect", len(prior)), map[string]any{"refs": priorRefs})
 	}
 
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "plan", woQuery(wo), f.workspaceDir(wo), wo.KBBaseSHA)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentArchitect), "plan", f.workspaceDir(wo), wo.KBBaseSHA)
 	if ids, ok := audit["kb_docs"].([]string); ok {
 		for _, d := range prior {
 			ids = append(ids, d.ID)
@@ -247,7 +247,7 @@ func unresolved(qs []openQuestion) []string {
 // it parks the order for a human, one question at a time; the answer re-enters here and updates the brief.
 func (f *Factory) intake(ctx context.Context, wo *model.WorkOrder, facts string) error {
 	f.event(wo.ID, "foreman", "intake_started", "Foreman briefing the Architect", nil)
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "intake", woQuery(wo), f.workspaceDir(wo), wo.KBBaseSHA)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "intake", f.workspaceDir(wo), wo.KBBaseSHA)
 	var r intakeReply
 	prompt := intakePrompt(wo, facts) + kbText
 	extra := map[string]string{"stage": "intake"}
@@ -344,7 +344,7 @@ func (f *Factory) foremanAnswers(ctx context.Context, wo *model.WorkOrder, quest
 // Only planning questions share the Foreman's planning session; parallel Builders each get their own run.
 func (f *Factory) askForeman(ctx context.Context, wo *model.WorkOrder, actor, question, note, facts string, planning bool) (foremanAnswerReply, string, error) {
 	f.event(wo.ID, actor, "clarification_asked", question, nil)
-	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", woQuery(wo)+" "+question, f.workspaceDir(wo), wo.KBBaseSHA)
+	kbText, audit := f.KB.Context(ctx, wo.ProjectID, string(model.AgentForeman), "", f.workspaceDir(wo), wo.KBBaseSHA)
 	opts := runOpts{Audit: audit}
 	if planning {
 		opts.Planning, opts.Prime = true, foremanPrime(wo)
