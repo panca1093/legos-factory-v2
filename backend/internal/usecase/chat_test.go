@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -250,6 +251,9 @@ func TestChatSendStreamsAndPersists(t *testing.T) {
 		}
 	}
 	last := evs[len(evs)-1].Message
+	if last.Usage.ServedModel != "" || last.Usage.ProviderHost != "" {
+		t.Fatalf("a chat without a mapped account carries no served model: %+v", last.Usage)
+	}
 	if streamed != "Four is the answer" || last.Content != streamed || last.Usage.TokensOut != 5 || last.Usage.Model != "anthropic/opus" {
 		t.Fatalf("streamed %q, done %+v", streamed, last)
 	}
@@ -768,5 +772,29 @@ func TestChatDSMLTurnStoresNoMarkupAndRecordsUsage(t *testing.T) {
 	}
 	if len(r.usage.recs) != 1 || r.usage.recs[0].TokensIn != 7 {
 		t.Fatalf("usage %+v", r.usage.recs)
+	}
+}
+
+func TestChatUsageRecordsTheServedModel(t *testing.T) {
+	ctx := context.Background()
+	r := newChatRig(t, &chatPlain{reply: "ok"})
+	r.chat.Served = func(_ context.Context, userID, ref string) (string, string) {
+		if userID != "ana" || ref != "anthropic/opus" {
+			t.Errorf("served asked for %q %q", userID, ref)
+		}
+		return "deepseek-flash", "api.deepseek.com"
+	}
+	ch, _ := r.chat.Create(ctx, r.ana, "", "", "")
+	evs, err := r.send(t, r.ana, ch.ID, ChatSend{Content: "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := evs[len(evs)-1].Message.Usage
+	if u.ServedModel != "deepseek-flash" || u.ProviderHost != "api.deepseek.com" || u.Model != "anthropic/opus" {
+		t.Fatalf("%+v", u)
+	}
+	raw, _ := json.Marshal(u)
+	if !strings.Contains(string(raw), `"served_model":"deepseek-flash"`) || !strings.Contains(string(raw), `"provider_host":"api.deepseek.com"`) {
+		t.Fatalf("%s", raw)
 	}
 }

@@ -88,6 +88,10 @@ type Chat struct {
 	// Models lists what the harness can run; Default is the "provider/model" auto resolves to.
 	Models  func(ctx context.Context) ([]model.ModelInfo, error)
 	Default func(ctx context.Context) string
+	// ModelKey scopes the model-list cache beyond the user: it changes when the chat account or its model map does.
+	ModelKey func(ctx context.Context) string
+	// Served names the provider model and host behind a model ref of the chat account; empty for a login account.
+	Served func(ctx context.Context, userID, modelRef string) (served, host string)
 	// Dir is the empty directory chat agents run in.
 	Dir string
 	// Repo returns the project's checkout and its HEAD, refreshed first when asked; nil means chats never read code.
@@ -414,6 +418,9 @@ func (c *Chat) allowedModels(ctx context.Context) map[string]bool {
 
 func (c *Chat) listModels(ctx context.Context) ([]model.ModelInfo, error) {
 	user := ChatUser(ctx)
+	if c.ModelKey != nil {
+		user += "\x00" + c.ModelKey(ctx)
+	}
 	c.lmu.Lock()
 	if l, ok := c.listed[user]; ok && time.Since(l.at) < modelListTTL {
 		defer c.lmu.Unlock()
@@ -652,6 +659,9 @@ func (c *Chat) Send(ctx context.Context, u *model.User, id string, in ChatSend, 
 	}
 	am := &model.ChatMessage{ChatID: id, Role: "assistant", Attachments: []model.ChatAttachment{}, CreatedAt: time.Now()}
 	am.Usage = info.usage(c.resolve(ctx, ch), res)
+	if c.Served != nil {
+		am.Usage.ServedModel, am.Usage.ProviderHost = c.Served(ctx, ch.UserID, am.Usage.Model)
+	}
 	if err != nil {
 		am.Content, am.Error = partial(), err.Error()
 		if errors.Is(err, model.ErrToolCallAsText) {

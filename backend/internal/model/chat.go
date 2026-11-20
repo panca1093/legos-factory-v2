@@ -57,6 +57,9 @@ type ChatFileRec struct {
 
 type ChatUsage struct {
 	Model      string `json:"model,omitempty"`
+	// ServedModel and ProviderHost name what really answered when the chat account is an API-key account.
+	ServedModel  string `json:"served_model,omitempty"`
+	ProviderHost string `json:"provider_host,omitempty"`
 	TokensIn   int64  `json:"tokens_in"`
 	TokensOut  int64  `json:"tokens_out"`
 	CostMicros int64  `json:"cost_micros"`
