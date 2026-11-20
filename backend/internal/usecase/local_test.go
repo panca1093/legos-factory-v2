@@ -123,6 +123,9 @@ func TestParseRemote(t *testing.T) {
 		"https://tok@gitlab.example.com/g/sub/app":     {"gitlab.example.com", "g/sub/app"},
 		"git@bitbucket.org:team/repo.git":              {"bitbucket.org", "team/repo"},
 		"ssh://git@git.corp.example:2222/team/app.git": {"git.corp.example", "team/app"},
+		"git@ssh.bitbucket.org:team/repo.git":          {"bitbucket.org", "team/repo"},
+		"ssh://git@altssh.bitbucket.org:443/team/repo": {"bitbucket.org", "team/repo"},
+		"ssh://git@ssh.github.com:443/acme/greeter":    {"github.com", "acme/greeter"},
 		"/Users/me/code/x":                             {"", ""},
 	} {
 		if h, r := parseRemote(in); h != want[0] || r != want[1] {
