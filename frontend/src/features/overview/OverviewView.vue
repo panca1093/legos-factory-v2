@@ -17,6 +17,7 @@ import {
   Factory,
 } from "lucide-vue-next";
 import { useFactory } from "../../stores/factory";
+import type { UsageAccount } from "../../types/api";
 import { useSession } from "../../stores/session";
 import BrickBot from "../../components/agents/BrickBot.vue";
 import StatusBadge from "../../components/ui/StatusBadge.vue";
@@ -59,6 +60,9 @@ const activeDays = computed(
 const roles = computed(() =>
   [...(factory.usage?.roles ?? [])].sort((a, b) => b.runs - a.runs),
 );
+const accounts = computed(() => factory.usage?.accounts ?? []);
+const accountKind = (a: UsageAccount) =>
+  a.kind === "api" ? `API · ${a.host}` : "Subscription";
 const compact = new Intl.NumberFormat("en-US", { notation: "compact" });
 const tokens = (t: { tokens_in: number; tokens_out: number }) =>
   compact.format(t.tokens_in + t.tokens_out);
@@ -304,4 +308,53 @@ onMounted(() => {
       <div class="small muted foot">Last 12 months</div>
     </section>
   </div>
+  <section class="lg-card by-account" aria-labelledby="by-account">
+    <div class="lg-card-head">
+      <h2 id="by-account">By account</h2>
+      <span class="lg-count">{{ accounts.length }}</span>
+    </div>
+    <div v-if="accounts.length" class="table-wrap">
+      <table class="acct-table">
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th>Agent</th>
+            <th>Kind</th>
+            <th>Models</th>
+            <th class="num">Runs</th>
+            <th class="num">Tokens in</th>
+            <th class="num">Tokens out</th>
+            <th class="num">Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="a in accounts"
+            :key="`${a.agent}/${a.account_id}`"
+            data-test="account-row"
+          >
+            <td>{{ a.label }}</td>
+            <td>{{ a.agent || "—" }}</td>
+            <td>{{ a.untracked ? "—" : accountKind(a) }}</td>
+            <td>{{ a.served_models.join(", ") || "—" }}</td>
+            <td class="num">{{ a.runs }}</td>
+            <td class="num">{{ compact.format(a.tokens_in) }}</td>
+            <td class="num">{{ compact.format(a.tokens_out) }}</td>
+            <td class="num">
+              <template v-if="a.cost_micros === null">
+                <span title="Provider pricing isn't tracked" data-test="no-cost"
+                  >—</span
+                >
+              </template>
+              <template v-else>{{ money(a.cost_micros) }}</template>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p v-else class="empty-note">
+      {{ factory.usage ? "No agent usage yet." : "Usage unavailable." }}
+    </p>
+    <div class="small muted foot">Last 12 months</div>
+  </section>
 </template>

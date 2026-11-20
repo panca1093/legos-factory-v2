@@ -29,6 +29,7 @@ const usage: UsageSummary = {
       runs: 12,
     },
   ],
+  accounts: [],
   month_to_date: {
     month: "2026-11",
     tokens_in: 1000,
@@ -182,4 +183,75 @@ it("accumulates in cumulative mode and offsets a mid-week start", () => {
   const mid = heatCells(days.slice(2), "Daily");
   expect(mid.cells[0]).toMatchObject({ row: 2, col: 0 });
   expect(heatCells([], "Daily")).toMatchObject({ cells: [], weeks: 0 });
+});
+
+it("By account lists one row per account and shows a dash where pricing is not tracked", async () => {
+  useFactory().usage = {
+    ...structuredClone(usage),
+    accounts: [
+      {
+        agent: "claude",
+        account_id: "ds",
+        label: "DeepSeek",
+        kind: "api",
+        host: "api.deepseek.com",
+        served_models: ["deepseek-chat", "deepseek-flash[1m]"],
+        tokens_in: 150,
+        tokens_out: 15,
+        cost_micros: null,
+        runs: 2,
+      },
+      {
+        agent: "claude",
+        account_id: "sub",
+        label: "Work",
+        kind: "subscription",
+        served_models: [],
+        tokens_in: 2000,
+        tokens_out: 100,
+        cost_micros: 700000,
+        runs: 1,
+      },
+      {
+        agent: "claude",
+        account_id: "gone",
+        label: "Deleted account",
+        kind: "subscription",
+        deleted: true,
+        served_models: [],
+        tokens_in: 1,
+        tokens_out: 1,
+        cost_micros: 0,
+        runs: 1,
+      },
+      {
+        agent: "",
+        account_id: "",
+        label: "Before account tracking",
+        kind: "subscription",
+        untracked: true,
+        served_models: [],
+        tokens_in: 1,
+        tokens_out: 1,
+        cost_micros: 10,
+        runs: 4,
+      },
+    ],
+  };
+  const w = render();
+  await flushPromises();
+  const rows = w.findAll('[data-test="account-row"]');
+  expect(rows).toHaveLength(4);
+  expect(rows[0].text()).toContain("DeepSeek");
+  expect(rows[0].text()).toContain("API · api.deepseek.com");
+  expect(rows[0].text()).toContain("deepseek-chat, deepseek-flash[1m]");
+  expect(rows[0].text()).not.toContain("$");
+  expect(rows[0].find('[data-test="no-cost"]').attributes("title")).toBe(
+    "Provider pricing isn't tracked",
+  );
+  expect(rows[1].text()).toContain("Subscription");
+  expect(rows[1].text()).toContain("$0.70");
+  expect(rows[1].find('[data-test="no-cost"]').exists()).toBe(false);
+  expect(rows[2].text()).toContain("Deleted account");
+  expect(rows[3].text()).toContain("Before account tracking");
 });

@@ -2,7 +2,12 @@
 import { computed, onMounted, ref } from "vue";
 import { Copy, HelpCircle, RefreshCw } from "lucide-vue-next";
 import Popover from "../../components/ui/Popover.vue";
-import { api, type AgentInfo, type AgentsResponse } from "../../types/api";
+import {
+  api,
+  type AgentInfo,
+  type AgentsResponse,
+  type UsageSummary,
+} from "../../types/api";
 import type { Settings, SettingsPatch } from "../../types/api";
 import AgentRow from "./AgentRow.vue";
 import RolesTable from "./RolesTable.vue";
@@ -20,7 +25,28 @@ const error = ref(""),
   loading = ref(true),
   help = ref(false);
 
+const week = ref<Record<string, { tokens: number; runs: number }>>({});
+async function loadWeek() {
+  try {
+    const tz = encodeURIComponent(
+      Intl.DateTimeFormat().resolvedOptions().timeZone,
+    );
+    const res = await api.get<UsageSummary>(
+      `/api/v1/usage/summary?days=7&tz=${tz}`,
+    );
+    week.value = Object.fromEntries(
+      (res.accounts ?? []).map((a) => [
+        `${a.agent}/${a.account_id}`,
+        { tokens: a.tokens_in + a.tokens_out, runs: a.runs },
+      ]),
+    );
+  } catch {
+    week.value = {};
+  }
+}
+
 async function load() {
+  void loadWeek();
   try {
     const res = await api.get<AgentsResponse>("/api/v1/agents");
     agents.value = (res.agents ?? []).map((a) => ({
@@ -71,6 +97,7 @@ const copy = (text: string) => void navigator.clipboard?.writeText(text);
         :agent="a"
         :can-write="canWrite"
         :credentials-configured="credentialsConfigured"
+        :week="week"
         @changed="load"
         @error="error = $event"
       />

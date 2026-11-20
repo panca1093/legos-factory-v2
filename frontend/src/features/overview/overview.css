@@ -270,6 +270,32 @@
   margin-top: auto;
   padding-top: var(--space-4);
 }
+.by-account {
+  margin-top: var(--space-4);
+}
+.by-account .table-wrap {
+  overflow-x: auto;
+}
+.acct-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.acct-table th,
+.acct-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.acct-table th {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.acct-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 @media (max-width: 1100px) {
   .kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));

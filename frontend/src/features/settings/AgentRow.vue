@@ -17,6 +17,7 @@ const props = defineProps<{
   agent: AgentInfo;
   canWrite: boolean;
   credentialsConfigured: boolean;
+  week?: Record<string, { tokens: number; runs: number }>;
 }>();
 const emit = defineEmits<{ changed: []; error: [string] }>();
 
@@ -303,6 +304,13 @@ const signInTarget = computed(() =>
       ? undefined
       : props.agent.accounts.find((a) => a.status === "signed_out"),
 );
+const weekLine = computed(() => {
+  const a = active.value;
+  if (!a?.api) return "";
+  const w = props.week?.[`${props.agent.id}/${a.id}`] ?? { tokens: 0, runs: 0 };
+  return `This week: ${compact.format(w.tokens)} tokens · ${w.runs} runs`;
+});
+const compact = new Intl.NumberFormat("en-US", { notation: "compact" });
 const showBars = computed(() => {
   const a = active.value;
   if (!a) return false;
@@ -383,6 +391,7 @@ const showBars = computed(() => {
       <p v-if="!showBars" class="help" data-test="plan-line">
         {{ planLine(active) }}
       </p>
+      <p v-if="weekLine" class="help" data-test="week-line">{{ weekLine }}</p>
       <div v-else class="usage">
         <p v-if="active.usage_error" class="help" data-test="usage-error">
           Usage unavailable

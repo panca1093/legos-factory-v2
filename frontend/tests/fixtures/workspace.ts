@@ -112,6 +112,7 @@ export const usage: UsageSummary = {
       runs: 5,
     },
   ],
+  accounts: [],
   month_to_date: {
     month: "2026-10",
     tokens_in: 20000,
