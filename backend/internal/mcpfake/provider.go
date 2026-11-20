@@ -77,6 +77,16 @@ func (p *Provider) wait(endpoint string) {
 	}
 }
 
+// Grant issues an access token for /mcp without the OAuth dance.
+func (p *Provider) Grant() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.seq++
+	at := fmt.Sprintf("access-%d", p.seq)
+	p.access[at] = true
+	return at
+}
+
 func (p *Provider) MCPURL() string { return p.Server.URL + "/mcp" }
 
 func (p *Provider) DCRCalls() int {
@@ -164,6 +174,10 @@ func (p *Provider) mcp(w http.ResponseWriter, r *http.Request) {
 	var m struct {
 		ID     any    `json:"id"`
 		Method string `json:"method"`
+		Params struct {
+			Name      string         `json:"name"`
+			Arguments map[string]any `json:"arguments"`
+		} `json:"params"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&m)
 	p.mu.Lock()
@@ -189,6 +203,13 @@ func (p *Provider) mcp(w http.ResponseWriter, r *http.Request) {
 		res = map[string]any{"tools": []any{
 			map[string]any{"name": "search", "description": "find", "inputSchema": map[string]any{}, "annotations": map[string]any{"readOnlyHint": true}},
 		}}
+	}
+	if m.Method == "tools/call" {
+		args, _ := json.Marshal(m.Params.Arguments)
+		res = map[string]any{"content": []any{map[string]any{"type": "text", "text": m.Params.Name + " " + string(args)}}, "isError": m.Params.Name == "fail"}
+		if m.Params.Name == "structured" {
+			res["structuredContent"] = m.Params.Arguments
+		}
 	}
 	writeJSON(w, map[string]any{"jsonrpc": "2.0", "id": m.ID, "result": res})
 }
