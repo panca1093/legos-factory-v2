@@ -335,7 +335,7 @@ const postedHere = computed(
                     { added: "A", modified: "M", deleted: "D", renamed: "R" }[
                       r.file.status
                     ]
-                  }}</span>{{ r.name }}
+                  }}</span><span class="ft-label">{{ r.name }}</span>
               </button>
               <span
                 v-if="draftCount(r.path)"

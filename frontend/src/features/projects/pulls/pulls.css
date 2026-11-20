@@ -795,3 +795,8 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+.ft-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
