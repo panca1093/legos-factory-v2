@@ -82,7 +82,7 @@ function statusLine(w: WorkOrder) {
 }
 function tone(w: WorkOrder) {
   if (isNeedsYou(w)) return "t-warn";
-  if (w.state === "CANCELLED" || w.pr_closed_at) return "t-off";
+  if (w.state === "CANCELLED") return "t-off";
   return isFinished(w) ? "t-ok" : "t-run";
 }
 const stageLabel = (w: WorkOrder) =>
@@ -181,7 +181,7 @@ async function confirmDelete() {
         <RouterLink
           :to="woPath(projectId, w.id)"
           class="fx-order"
-          :class="[tone(w), { attn: isNeedsYou(w) }]"
+          :class="tone(w)"
           data-test="order-row"
           :aria-labelledby="`wo-title-${w.id}`"
           :aria-describedby="`wo-status-${w.id}`"

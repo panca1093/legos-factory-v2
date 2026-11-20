@@ -307,6 +307,9 @@
 .pj-orders .fx-stages .done i {
   background: color-mix(in srgb, var(--tone) 70%, var(--surface));
 }
+.pj-orders .fx-stages .stop i {
+  background: var(--danger);
+}
 .pj-orders .fx-stages .cur i,
 .pj-orders .fx-stages .wait i {
   background: var(--tone);
@@ -330,6 +333,7 @@
   flex: none;
   width: 8px;
   height: 8px;
+  margin-left: 3px;
   border-radius: 50%;
   background: var(--tone);
 }
