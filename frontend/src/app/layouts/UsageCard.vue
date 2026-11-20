@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { RouterLink } from "vue-router";
-import { ChevronRight, RefreshCw, UserCog } from "lucide-vue-next";
+import { RefreshCw, UserCog } from "lucide-vue-next";
 import {
   api,
   type AgentAccount,
@@ -48,7 +48,8 @@ const apiRows = computed(() =>
             key: `${a.id}/${acc.id}`,
             label: acc.label,
             host: acc.api!.host,
-            line: `7d · ${compact.format(w.tokens)} tokens · ${w.runs} runs`,
+            tokens: compact.format(w.tokens),
+            runs: w.runs,
           };
         }),
     ),
@@ -187,28 +188,25 @@ onBeforeUnmount(() => {
       :class="{ on: openId === r.agent.id }"
       :aria-expanded="openId === r.agent.id"
       :data-agent="r.agent.id"
+      :title="
+        r.acc.usage?.session?.resets_at
+          ? `${r.agent.name} · ${resetsIn(r.acc.usage.session.resets_at)}`
+          : r.agent.name
+      "
       @click="toggle(r.agent.id)"
     >
       <span class="uc-ava" aria-hidden="true">{{
-        r.agent.name.slice(0, 1)
+        r.agent.name.slice(0, 1).toUpperCase()
       }}</span>
-      <span class="uc-main">
-        <span class="uc-name"
-          >{{ r.agent.name
-          }}<small v-if="r.acc.usage?.session?.resets_at">{{
-            resetsIn(r.acc.usage.session.resets_at)
-          }}</small></span
-        >
-        <span class="uc-minis">
-          <span v-for="m in windows(r.acc)" :key="m.key" class="uc-mini">
-            {{ m.key }}
-            <span class="bar"
-              ><i :class="tone(m.w)" :style="{ width: width(m.w) }"></i></span
-            ><b>{{ pct(m.w) }}%</b>
-          </span>
+      <span class="uc-name">{{ r.agent.name }}</span>
+      <span class="uc-minis">
+        <span v-for="m in windows(r.acc)" :key="m.key" class="uc-mini">
+          {{ m.key }}
+          <span class="bar"
+            ><i :class="tone(m.w)" :style="{ width: width(m.w) }"></i></span
+          ><b>{{ pct(m.w) }}%</b>
         </span>
       </span>
-      <ChevronRight class="icon uc-chev" />
     </button>
     <RouterLink
       v-for="r in apiRows"
@@ -216,15 +214,20 @@ onBeforeUnmount(() => {
       class="uc-row"
       to="/settings#agents"
       :data-api-account="r.key"
+      :title="`${r.label} · ${r.host} · last 7 days`"
     >
-      <span class="uc-ava" aria-hidden="true">{{ r.label.slice(0, 1) }}</span>
-      <span class="uc-main">
-        <span class="uc-name"
-          >{{ r.label }}<small>{{ r.host }}</small></span
+      <span class="uc-ava" aria-hidden="true">{{
+        r.label.slice(0, 1).toUpperCase()
+      }}</span>
+      <span class="uc-name">{{ r.label }}</span>
+      <span class="uc-minis">
+        <span class="uc-mini"
+          >7d <b>{{ r.tokens }}</b></span
         >
-        <span class="uc-minis">{{ r.line }}</span>
+        <span class="uc-mini"
+          ><b>{{ r.runs }}</b> runs</span
+        >
       </span>
-      <ChevronRight class="icon uc-chev" />
     </RouterLink>
     <p v-if="!rows.length && !apiRows.length" class="num">
       No agent limits yet. Sign in to Claude or Codex in Settings.
