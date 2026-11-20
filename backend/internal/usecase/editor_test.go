@@ -80,12 +80,12 @@ func put(t *testing.T, dir, rel string, b []byte) {
 	}
 }
 
-func TestEditorProjectFolderIsTrustedAndPerUser(t *testing.T) {
+func TestEditorProjectFolderIsPerUser(t *testing.T) {
 	r := newEditorRig(t)
 	ctx := context.Background()
 	f := r.open(t)
 	real, _ := filepath.EvalSymlinks(r.project)
-	if f.Kind != model.FolderProject || !f.Trusted || f.Path != real || f.ProjectID != "p1" {
+	if f.Kind != model.FolderProject || f.Path != real || f.ProjectID != "p1" {
 		t.Fatalf("%+v", f)
 	}
 	again := r.open(t)
@@ -197,7 +197,7 @@ func TestEditorWorktreeFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	f, err := r.ed.WorktreeFolder(ctx, r.ana, "wo_1", "")
-	if err != nil || f.Kind != model.FolderWorktree || !f.Trusted || f.WOID != "wo_1" || f.TaskID != "" || f.ProjectID != "p1" {
+	if err != nil || f.Kind != model.FolderWorktree || f.WOID != "wo_1" || f.TaskID != "" || f.ProjectID != "p1" {
 		t.Fatalf("%+v %v", f, err)
 	}
 	tf, err := r.ed.WorktreeFolder(ctx, r.ana, "wo_1", "t1")
@@ -429,14 +429,4 @@ func TestEditorTreeMkdirRenameFilesAndTrust(t *testing.T) {
 		t.Fatalf("quick open: %v %v", files, err)
 	}
 
-	tf, err := r.ed.SetTrusted(ctx, r.ana, f.ID, false)
-	if err != nil || tf.Trusted {
-		t.Fatalf("%+v %v", tf, err)
-	}
-	if got, _ := r.ed.Folder(ctx, r.ana, f.ID); got.Trusted {
-		t.Fatal("trust revocation not stored")
-	}
-	if _, err := r.ed.SetTrusted(ctx, r.bob, f.ID, true); !errors.Is(err, model.ErrEditorFolderNotFound) {
-		t.Fatalf("another user's trust: %v", err)
-	}
 }

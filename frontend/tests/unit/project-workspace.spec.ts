@@ -532,7 +532,7 @@ describe("project workspace", () => {
       text: async () =>
         String(url).endsWith("/editor/folders")
           ? JSON.stringify({
-              folder: { id: "w9", path: "/d/wt", kind: "worktree", trusted: true },
+              folder: { id: "w9", path: "/d/wt", kind: "worktree" },
             })
           : "{}",
     }));

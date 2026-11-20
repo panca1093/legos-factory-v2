@@ -69,8 +69,6 @@ var (
 	ErrTooLarge      = errors.New("file is too large to open")
 	ErrBinary        = errors.New("binary file")
 	ErrFolderGone    = errors.New("folder no longer exists")
-	ErrUntrusted     = errors.New("folder is not trusted")
-	ErrTooManyLSP    = errors.New("too many language servers running")
 )
 
 // EditorConflict is returned by a write whose base hash no longer matches the disk.

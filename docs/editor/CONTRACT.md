@@ -1,5 +1,7 @@
 # Editor — build contract
 
+> 2026-11-20: language servers, the LSP UI and folder trust were removed after the build (see the note at the top of `SPEC.md`); rows about them below are history.
+
 Status: 2026-11-20, written before the parallel build. `SPEC.md` is the design; this file pins shared names, answers to the open questions taken in full-auto mode (the user delegated them; each is the spec's recommendation or the safest option), and file ownership.
 
 ## Answers to open questions (auto, 2026-11-20)

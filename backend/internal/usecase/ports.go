@@ -188,20 +188,10 @@ type EditorFS interface {
 	Watch(root string) (model.Watcher, error)
 }
 
-// LSPHost discovers and starts allowlisted language servers.
-type LSPHost interface {
-	Discover(ctx context.Context, servers []model.LSPServerSpec, custom map[string]string) []model.LSPServerState
-	Start(ctx context.Context, spec model.LSPServerSpec, bin, root string) (model.LSPProcess, error)
-}
-
 type EditorStore interface {
 	Folder(ctx context.Context, userID, id string) (*model.EditorFolder, error)
 	UpsertFolder(ctx context.Context, f model.EditorFolder) (*model.EditorFolder, error) // by (user, path)
 	DeleteFolder(ctx context.Context, userID, id string) error
-	SetTrusted(ctx context.Context, userID, id string, trusted bool) error
-	ServerPath(ctx context.Context, userID, server string) (string, error)
-	SetServerPath(ctx context.Context, userID, server, path string) error
-	ServerPaths(ctx context.Context, userID string) (map[string]string, error)
 }
 
 // IssueTracker reads issues; it never modifies them.

@@ -17,19 +17,14 @@ import (
 )
 
 const (
-	lspFrameLimit     = 16 << 20
 	controlFrameLimit = 1 << 20
 	wsWriteTimeout    = 30 * time.Second
 )
 
-// editorLiveRoutes registers the language server routes and both editor WebSockets. They are gated like every
-// editor route: dev auth mode, Engineer, loopback Host.
+// editorLiveRoutes registers the editor control WebSocket. It is gated like every editor route: dev auth mode,
+// Engineer, loopback Host.
 func (s *Server) editorLiveRoutes(g *echo.Group) {
-	g.GET("/editor/servers", s.editorLive(s.handleEditorServers))
-	g.POST("/editor/servers/check", s.editorLive(s.handleEditorServersCheck))
-	g.PUT("/editor/servers/:id", s.editorLive(s.handleEditorServerPath))
 	g.GET("/editor/folders/:fid/ws", s.editorLive(s.handleEditorControlWS))
-	g.GET("/editor/folders/:fid/lsp/:server", s.editorLive(s.handleEditorLSPWS))
 }
 
 func (s *Server) editorLive(h echo.HandlerFunc) echo.HandlerFunc {
@@ -57,58 +52,6 @@ func sameOrigin(a, b string) bool {
 		return false
 	}
 	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
-}
-
-// foreignOrigin answers 403 and reports true when the request carries an Origin that is not allowed.
-func (s *Server) foreignOrigin(c echo.Context) bool {
-	if o := c.Request().Header.Get("Origin"); o != "" && !s.editorOrigin(c.Request()) {
-		_ = errorJSON(c, http.StatusForbidden, "FORBIDDEN_ORIGIN", "this origin may not call the editor")
-		return true
-	}
-	return false
-}
-
-func (s *Server) handleEditorServers(c echo.Context) error {
-	states, err := s.EditorLive.ServerStates(c.Request().Context(), currentUser(c).ID)
-	if err != nil {
-		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", err.Error())
-	}
-	return c.JSON(http.StatusOK, states)
-}
-
-func (s *Server) handleEditorServersCheck(c echo.Context) error {
-	if s.foreignOrigin(c) {
-		return nil
-	}
-	states, err := s.EditorLive.CheckServers(c.Request().Context(), currentUser(c).ID)
-	if err != nil {
-		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", err.Error())
-	}
-	return c.JSON(http.StatusOK, states)
-}
-
-func (s *Server) handleEditorServerPath(c echo.Context) error {
-	if s.foreignOrigin(c) {
-		return nil
-	}
-	if !strings.HasPrefix(c.Request().Header.Get(echo.HeaderContentType), echo.MIMEApplicationJSON) {
-		return errorJSON(c, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "send application/json")
-	}
-	var req struct {
-		Path    string `json:"path"`
-		Confirm bool   `json:"confirm"`
-	}
-	if err := c.Bind(&req); err != nil {
-		return errorJSON(c, http.StatusBadRequest, "INVALID_REQUEST", "invalid JSON body")
-	}
-	st, err := s.EditorLive.SetServerPath(c.Request().Context(), currentUser(c).ID, c.Param("id"), req.Path, req.Confirm)
-	if errors.Is(err, usecase.ErrInvalid) {
-		return errorJSON(c, http.StatusBadRequest, "VALIDATION_FAILED", err.Error())
-	}
-	if err != nil {
-		return errorJSON(c, http.StatusInternalServerError, "INTERNAL", err.Error())
-	}
-	return c.JSON(http.StatusOK, st)
 }
 
 // preUpgrade runs every check that can still answer with a plain HTTP status.
@@ -203,96 +146,4 @@ func (s *Server) handleEditorControlWS(c echo.Context) error {
 			}
 		}
 	}
-}
-
-func lspCloseFor(err error) (int, string) {
-	var crashed *usecase.LSPCrashedError
-	switch {
-	case errors.Is(err, model.ErrUntrusted):
-		return usecase.CloseUntrusted, "folder is not trusted"
-	case errors.Is(err, usecase.ErrLSPUnknown), errors.Is(err, usecase.ErrLSPNotFound):
-		return usecase.CloseNotFound, "language server not found"
-	case errors.Is(err, model.ErrTooManyLSP):
-		return usecase.CloseTooMany, "too many language servers running"
-	case errors.As(err, &crashed):
-		return usecase.CloseCrashed, "language server crashed"
-	case errors.Is(err, model.ErrFolderGone):
-		return int(websocket.StatusGoingAway), "folder gone"
-	}
-	return int(websocket.StatusInternalError), "cannot start the language server"
-}
-
-func (s *Server) handleEditorLSPWS(c echo.Context) error {
-	f, err := s.preUpgrade(c)
-	if err != nil || c.Response().Committed {
-		return err
-	}
-	user := currentUser(c)
-	conn, err := s.acceptEditorWS(c)
-	if err != nil {
-		return nil
-	}
-	defer conn.CloseNow()
-	conn.SetReadLimit(lspFrameLimit)
-	client, err := s.EditorLive.OpenLSP(c.Request().Context(), user, f.ID, c.Param("server"))
-	if err != nil {
-		code, reason := lspCloseFor(err)
-		_ = conn.Close(websocket.StatusCode(code), reason)
-		return nil
-	}
-	defer client.Close()
-
-	ctx, cancel := context.WithCancel(c.Request().Context())
-	defer cancel()
-	go func() {
-		defer cancel()
-		for {
-			typ, data, err := conn.Read(ctx)
-			if err != nil {
-				return
-			}
-			if typ != websocket.MessageText {
-				_ = conn.Close(websocket.StatusUnsupportedData, "text frames only")
-				return
-			}
-			if err := client.Send(data); err != nil {
-				if !errors.Is(err, usecase.ErrLSPClosed) {
-					_ = conn.Close(websocket.StatusInvalidFramePayloadData, "invalid JSON-RPC message")
-				}
-				return
-			}
-		}
-	}()
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-client.Done():
-			code := client.CloseCode()
-			if code == 0 {
-				code = int(websocket.StatusNormalClosure)
-			}
-			_ = conn.Close(websocket.StatusCode(code), closeReason(code))
-			return nil
-		case msg := <-client.Messages():
-			wctx, wc := context.WithTimeout(ctx, wsWriteTimeout)
-			err := conn.Write(wctx, websocket.MessageText, msg)
-			wc()
-			if err != nil {
-				return nil
-			}
-		}
-	}
-}
-
-func closeReason(code int) string {
-	switch code {
-	case usecase.CloseTakenOver:
-		return "Opened in another tab"
-	case usecase.CloseCrashed:
-		return "language server crashed"
-	case usecase.CloseSlowClient:
-		return "client too slow"
-	}
-	return ""
 }

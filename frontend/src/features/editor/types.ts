@@ -5,7 +5,6 @@ export interface EditorFolder {
   project_id?: string;
   wo_id?: string;
   task_id?: string;
-  trusted: boolean;
   branch?: string;
   opened_at?: string;
 }
@@ -57,14 +56,6 @@ export interface GitFrame {
   too_many: boolean;
 }
 
-export interface ServerState {
-  server: string;
-  state: string;
-  version?: string;
-  progress?: number;
-  error?: string;
-}
-
 export type ControlFrame =
   | {
       type: "file_changed";
@@ -76,20 +67,7 @@ export type ControlFrame =
     }
   | { type: "dir_changed"; dir: string }
   | ({ type: "git_status" } & GitFrame)
-  | ({ type: "server_state" } & ServerState)
   | { type: "folder_gone" };
-
-// Structurally the LSP `Diagnostic`, so the language client can store its own without a shared import.
-export interface Diagnostic {
-  range: {
-    start: { line: number; character: number };
-    end: { line: number; character: number };
-  };
-  severity?: 1 | 2 | 3 | 4;
-  message: string;
-  source?: string;
-  code?: string | number;
-}
 
 export interface ChangeInfo {
   kind: "changed" | "deleted";

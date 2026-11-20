@@ -105,12 +105,6 @@ function key(e: KeyboardEvent) {
   }
 }
 
-const lspModules = import.meta.glob<{
-  connectLanguageServers: (s: unknown) => unknown;
-}>("./lsp.ts");
-let disposeLsp: (() => void) | null = null;
-let unmounted = false;
-
 onMounted(async () => {
   document.addEventListener("keydown", key);
   try {
@@ -118,25 +112,9 @@ onMounted(async () => {
   } catch {
     return;
   }
-  const load = lspModules["./lsp.ts"];
-  if (!load || unmounted) return;
-  try {
-    const mod = await load();
-    const d = mod.connectLanguageServers(store);
-    if (typeof d === "function") disposeLsp = d as () => void;
-    if (unmounted) disposeLsp?.();
-  } catch {
-    /* The language client is optional. */
-  }
 });
 onBeforeUnmount(() => {
-  unmounted = true;
   document.removeEventListener("keydown", key);
-  try {
-    disposeLsp?.();
-  } catch {
-    /* A failing disposer must not block unmount. */
-  }
 });
 
 const sizeText = (n?: number) =>

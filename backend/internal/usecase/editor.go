@@ -121,7 +121,7 @@ func (e *Editor) register(ctx context.Context, u *model.User, f model.EditorFold
 	return out, nil
 }
 
-// ProjectFolder opens the project's local folder (its repo_url). Project folders are trusted.
+// ProjectFolder opens the project's local folder (its repo_url).
 func (e *Editor) ProjectFolder(ctx context.Context, u *model.User, projectID string) (*model.EditorFolder, error) {
 	if err := e.Projects.Authorize(ctx, u, projectID); err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func (e *Editor) ProjectFolder(ctx context.Context, u *model.User, projectID str
 	if err := e.checkRoot(real, false); err != nil {
 		return nil, err
 	}
-	return e.register(ctx, u, model.EditorFolder{Path: real, Kind: model.FolderProject, ProjectID: projectID, Trusted: true})
+	return e.register(ctx, u, model.EditorFolder{Path: real, Kind: model.FolderProject, ProjectID: projectID})
 }
 
 func validSegment(s string) bool {
@@ -179,7 +179,7 @@ func (e *Editor) WorktreeFolder(ctx context.Context, u *model.User, woID, taskID
 	if err := e.checkRoot(real, true); err != nil {
 		return nil, err
 	}
-	return e.register(ctx, u, model.EditorFolder{Path: real, Kind: model.FolderWorktree, ProjectID: wo.ProjectID, WOID: woID, TaskID: taskID, Trusted: true})
+	return e.register(ctx, u, model.EditorFolder{Path: real, Kind: model.FolderWorktree, ProjectID: wo.ProjectID, WOID: woID, TaskID: taskID})
 }
 
 // Folder returns the caller's registered folder when it still exists and the caller still has
@@ -210,18 +210,6 @@ func (e *Editor) Open(ctx context.Context, u *model.User, id string) (*model.Edi
 	if gs, err := e.FS.GitStatus(ctx, f.Path); err == nil && gs.Repo {
 		f.Branch = gs.Branch
 	}
-	return f, nil
-}
-
-func (e *Editor) SetTrusted(ctx context.Context, u *model.User, id string, trusted bool) (*model.EditorFolder, error) {
-	f, err := e.Folder(ctx, u, id)
-	if err != nil {
-		return nil, err
-	}
-	if err := e.Store.SetTrusted(ctx, u.ID, id, trusted); err != nil {
-		return nil, err
-	}
-	f.Trusted = trusted
 	return f, nil
 }
 

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path"
@@ -21,30 +20,16 @@ type editorFolders interface {
 	Folder(ctx context.Context, u *model.User, id string) (*model.EditorFolder, error)
 }
 
-type editorServerPaths interface {
-	ServerPaths(ctx context.Context, userID string) (map[string]string, error)
-	SetServerPath(ctx context.Context, userID, server, path string) error
-}
-
 type editorRuns interface {
 	RunningByWO(ctx context.Context, woID string) ([]model.RunningRun, error)
 	List(ctx context.Context, woID string) ([]model.Run, error)
 }
 
-// goplsChecker is implemented by the sandbox host: gopls built with a Go older than the folder's go.mod needs.
-type goplsChecker interface {
-	GoplsOutdated(ctx context.Context, bin, root string) (outdated bool, builtWith, need string)
-}
-
-// EditorLive is the live half of the editor: change watching, actor attribution and language servers.
+// EditorLive is the live half of the editor: change watching, and actor attribution.
 type EditorLive struct {
 	Folders editorFolders
 	FS      EditorFS
-	Host    LSPHost
-	Servers []model.LSPServerSpec
-	Store   editorServerPaths
 	Runs    editorRuns
-	Reg     *LSPRegistry
 
 	GitDebounce time.Duration
 	GitMinGap   time.Duration
@@ -52,7 +37,6 @@ type EditorLive struct {
 	Now         func() time.Time
 
 	mu       sync.Mutex
-	disc     map[string][]model.LSPServerState
 	sessions map[[2]string]map[*ControlSession]struct{}
 }
 
@@ -77,125 +61,6 @@ func (l *EditorLive) folder(ctx context.Context, u *model.User, id string) (mode
 // OwnedFolder resolves a folder the user opened; another user's folder looks like a missing one.
 func (l *EditorLive) OwnedFolder(ctx context.Context, u *model.User, folderID string) (model.EditorFolder, error) {
 	return l.folder(ctx, u, folderID)
-}
-
-// ---- language servers ----
-
-func (l *EditorLive) spec(id string) (model.LSPServerSpec, bool) {
-	for _, s := range l.Servers {
-		if s.ID == id {
-			return s, true
-		}
-	}
-	return model.LSPServerSpec{}, false
-}
-
-func (l *EditorLive) discover(ctx context.Context, userID string) ([]model.LSPServerState, error) {
-	custom, err := l.Store.ServerPaths(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	states := l.Host.Discover(ctx, l.Servers, custom)
-	l.mu.Lock()
-	if l.disc == nil {
-		l.disc = map[string][]model.LSPServerState{}
-	}
-	l.disc[userID] = states
-	l.mu.Unlock()
-	return states, nil
-}
-
-// ServerStates lists the allowlisted servers for the user; discovery is cached until CheckServers.
-func (l *EditorLive) ServerStates(ctx context.Context, userID string) ([]model.LSPServerState, error) {
-	l.mu.Lock()
-	c, ok := l.disc[userID]
-	l.mu.Unlock()
-	if !ok {
-		return l.discover(ctx, userID)
-	}
-	return append([]model.LSPServerState(nil), c...), nil
-}
-
-// CheckServers rediscovers the servers (Check again).
-func (l *EditorLive) CheckServers(ctx context.Context, userID string) ([]model.LSPServerState, error) {
-	return l.discover(ctx, userID)
-}
-
-// SetServerPath probes a custom binary once and stores it for the user when it runs.
-func (l *EditorLive) SetServerPath(ctx context.Context, userID, id, binPath string, confirm bool) (model.LSPServerState, error) {
-	spec, ok := l.spec(id)
-	if !ok {
-		return model.LSPServerState{}, fmt.Errorf("%w: unknown language server %q", ErrInvalid, id)
-	}
-	if !confirm {
-		return model.LSPServerState{}, fmt.Errorf("%w: confirm must be true to run %s", ErrInvalid, binPath)
-	}
-	if binPath != "" {
-		if !filepath.IsAbs(binPath) || filepath.Clean(binPath) != binPath {
-			return model.LSPServerState{}, fmt.Errorf("%w: path must be absolute and clean", ErrInvalid)
-		}
-		probe := l.Host.Discover(ctx, []model.LSPServerSpec{spec}, map[string]string{id: binPath})
-		if len(probe) != 1 || (probe[0].State != model.LSPFound && probe[0].State != model.LSPOutdated) {
-			msg := "the file did not run as " + spec.Binary
-			if len(probe) == 1 && probe[0].Error != "" {
-				msg = probe[0].Error
-			}
-			return model.LSPServerState{}, fmt.Errorf("%w: %s", ErrInvalid, msg)
-		}
-	}
-	if err := l.Store.SetServerPath(ctx, userID, id, binPath); err != nil {
-		return model.LSPServerState{}, err
-	}
-	states, err := l.discover(ctx, userID)
-	if err != nil {
-		return model.LSPServerState{}, err
-	}
-	for _, s := range states {
-		if s.ID == id {
-			return s, nil
-		}
-	}
-	return model.LSPServerState{}, fmt.Errorf("%w: unknown language server %q", ErrInvalid, id)
-}
-
-// OpenLSP attaches the caller to a language server for a trusted folder, starting it when needed.
-func (l *EditorLive) OpenLSP(ctx context.Context, u *model.User, folderID, server string) (*LSPClient, error) {
-	userID := u.ID
-	f, err := l.folder(ctx, u, folderID)
-	if err != nil {
-		return nil, err
-	}
-	if !f.Trusted {
-		return nil, model.ErrUntrusted
-	}
-	spec, ok := l.spec(server)
-	if !ok {
-		return nil, ErrLSPUnknown
-	}
-	states, err := l.ServerStates(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	bin := ""
-	for _, s := range states {
-		if s.ID == server && (s.State == model.LSPFound || s.State == model.LSPOutdated) {
-			bin = s.Path
-		}
-	}
-	if bin == "" {
-		return nil, ErrLSPNotFound
-	}
-	c, err := l.Reg.Attach(ctx, LSPKey{User: userID, Folder: f.ID, Server: server}, spec, bin, f.Path)
-	if err != nil {
-		var crashed *LSPCrashedError
-		if !errors.As(err, &crashed) && !errors.Is(err, model.ErrTooManyLSP) && ctx.Err() == nil {
-			l.mu.Lock()
-			delete(l.disc, userID)
-			l.mu.Unlock()
-		}
-		return nil, err
-	}
-	return c, nil
 }
 
 // ---- actor attribution ----
@@ -335,15 +200,6 @@ type GitStatusMsg struct {
 	model.GitStatus
 }
 
-type ServerStateMsg struct {
-	Type     string `json:"type"`
-	Server   string `json:"server"`
-	State    string `json:"state"`
-	Version  string `json:"version,omitempty"`
-	Progress *int   `json:"progress,omitempty"` // percent
-	Error    string `json:"error,omitempty"`
-}
-
 type FolderGoneMsg struct {
 	Type string `json:"type"`
 }
@@ -362,13 +218,10 @@ type ControlSession struct {
 	once   sync.Once
 	cancel context.CancelFunc
 	ctx    context.Context
-	unsub  func()
 
 	mu     sync.Mutex
 	files  map[string]bool
 	headAt time.Time
-
-	versions map[string]string // server id -> version, from the initial state; registry events carry none
 }
 
 // OpenControl starts watching the folder for the user.
@@ -390,8 +243,6 @@ func (l *EditorLive) OpenControl(ctx context.Context, u *model.User, folderID st
 		_ = w.Close()
 		return nil, err
 	}
-	var stateCh <-chan LSPStateEvent
-	stateCh, s.unsub = l.Reg.Watch(userID, f.ID)
 	l.mu.Lock()
 	if l.sessions == nil {
 		l.sessions = map[[2]string]map[*ControlSession]struct{}{}
@@ -402,8 +253,7 @@ func (l *EditorLive) OpenControl(ctx context.Context, u *model.User, folderID st
 	}
 	l.sessions[k][s] = struct{}{}
 	l.mu.Unlock()
-	go s.run(stateCh)
-	go s.initialServerStates()
+	go s.run()
 	return s, nil
 }
 
@@ -414,7 +264,6 @@ func (s *ControlSession) Close() {
 	s.once.Do(func() {
 		close(s.done)
 		s.cancel()
-		s.unsub()
 		_ = s.w.Close()
 		l := s.live
 		l.mu.Lock()
@@ -480,7 +329,7 @@ func (s *ControlSession) isOpen(rel string) bool {
 	return s.files[rel]
 }
 
-func (s *ControlSession) run(states <-chan LSPStateEvent) {
+func (s *ControlSession) run() {
 	debounce := orDefaultDur(s.live.GitDebounce, 500*time.Millisecond)
 	minGap := orDefaultDur(s.live.GitMinGap, 2*time.Second)
 	goneEvery := orDefaultDur(s.live.GoneEvery, 5*time.Second)
@@ -518,11 +367,6 @@ func (s *ControlSession) run(states <-chan LSPStateEvent) {
 			}
 			s.onFSEvent(ev)
 			schedule()
-		case ev := <-states:
-			s.mu.Lock()
-			ver := s.versions[ev.Server]
-			s.mu.Unlock()
-			s.emit(ServerStateMsg{Type: "server_state", Server: ev.Server, State: ev.State, Version: ver, Error: ev.Error})
 		case <-gitC:
 			gitC = nil
 			lastGit = time.Now()
@@ -605,35 +449,6 @@ func (s *ControlSession) sendGit() {
 	s.emit(GitStatusMsg{Type: "git_status", GitStatus: st})
 }
 
-func (s *ControlSession) initialServerStates() {
-	l := s.live
-	states, err := l.ServerStates(s.ctx, s.user)
-	if err != nil {
-		return
-	}
-	running := l.Reg.Running(s.user, s.folder.ID)
-	chk, _ := l.Host.(goplsChecker)
-	vers := map[string]string{}
-	for _, st := range states {
-		vers[st.ID] = st.Version
-	}
-	s.mu.Lock()
-	s.versions = vers
-	s.mu.Unlock()
-	for _, st := range states {
-		msg := ServerStateMsg{Type: "server_state", Server: st.ID, State: st.State, Version: st.Version, Error: st.Error}
-		if running[st.ID] {
-			msg.State = model.LSPRunning
-		} else if st.ID == "gopls" && st.State == model.LSPFound && chk != nil {
-			if out, built, need := chk.GoplsOutdated(s.ctx, st.Path, s.folder.Path); out {
-				msg.State = model.LSPOutdated
-				msg.Error = fmt.Sprintf("gopls is built with %s but this module needs %s", built, need)
-			}
-		}
-		s.emit(msg)
-	}
-}
-
 type hashSuppressor interface{ Suppress(rel, hash string) }
 
 // NoteWrite tells the user's open control sockets for the folder that the editor itself just wrote rel, so the
@@ -652,5 +467,9 @@ func (l *EditorLive) NoteWrite(userID, folderID, rel, hash string) {
 	}
 }
 
-// KillAll stops every language server; the app calls it on shutdown.
-func (l *EditorLive) KillAll() { l.Reg.Shutdown() }
+func orDefaultDur(v, d time.Duration) time.Duration {
+	if v > 0 {
+		return v
+	}
+	return d
+}

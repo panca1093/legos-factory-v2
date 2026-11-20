@@ -11,7 +11,6 @@ type EditorFolder struct {
 	ProjectID string    `json:"project_id,omitempty"`
 	WOID      string    `json:"wo_id,omitempty"`
 	TaskID    string    `json:"task_id,omitempty"`
-	Trusted   bool      `json:"trusted"`
 	Branch    string    `json:"branch,omitempty"`
 	OpenedAt  time.Time `json:"opened_at"`
 }
@@ -78,43 +77,6 @@ type Watcher interface {
 	Set(dirs []string) error
 	Events() <-chan FSEvent
 	Close() error
-}
-
-// LSPServerSpec is one allowlisted language server.
-type LSPServerSpec struct {
-	ID        string   `json:"id"`
-	Languages []string `json:"languages"`
-	Binary    string   `json:"binary"`
-	Args      []string `json:"args"`
-	Install   string   `json:"install"`
-	NeedsNode bool     `json:"needs_node"`
-}
-
-const (
-	LSPFound    = "found"
-	LSPNotFound = "not_found"
-	LSPOutdated = "outdated"
-	LSPRunning  = "running"
-	LSPCrashed  = "crashed"
-)
-
-type LSPServerState struct {
-	ID        string   `json:"id"`
-	Languages []string `json:"languages"`
-	State     string   `json:"state"`
-	Version   string   `json:"version,omitempty"`
-	Path      string   `json:"path,omitempty"`
-	Install   string   `json:"install"`
-	Error     string   `json:"error,omitempty"`
-}
-
-// LSPProcess is a running language server speaking JSON-RPC with Content-Length framing on stdio.
-type LSPProcess interface {
-	ReadMessage() ([]byte, error)
-	WriteMessage(msg []byte) error
-	Wait() error
-	Kill() error
-	StderrTail() string
 }
 
 // EditorActor is who most likely changed a file on disk; nil means unknown.

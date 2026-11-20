@@ -9,7 +9,6 @@ import "./settings.css";
 import AdvancedSection from "./AdvancedSection.vue";
 import AgentsSection from "./AgentsSection.vue";
 import ConnectionsSection from "./ConnectionsSection.vue";
-import ServersPanel from "../editor/ServersPanel.vue";
 
 const factory = useFactory(),
   session = useSession(),
@@ -28,7 +27,6 @@ const loading = ref(true),
 const sections = [
   { id: "agents", label: "Agents" },
   { id: "connections", label: "Connections" },
-  { id: "editor", label: "Editor" },
   { id: "advanced", label: "Advanced" },
 ];
 const legacyTabs: Record<string, string> = {
@@ -134,7 +132,6 @@ const credentialsOK = computed(
           @saved="merge"
         />
         <ConnectionsSection :credentials-configured="credentialsOK" />
-        <ServersPanel />
         <AdvancedSection
           :settings="config"
           :runtime="runtime"

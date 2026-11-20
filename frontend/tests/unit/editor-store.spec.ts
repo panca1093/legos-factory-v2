@@ -89,7 +89,6 @@ const folder = {
   path: "/work/atlas",
   kind: "project" as const,
   project_id: "atlas",
-  trusted: true,
   branch: "main",
 };
 const file = (content: string, hash = "h1") => ({
@@ -144,25 +143,14 @@ async function open() {
 }
 
 describe("editor store", () => {
-  it("opens a file into a model keyed by its file:// URI and announces it", async () => {
-    const s = useEditor();
-    const seen: string[] = [];
-    s.onModelOpened((i) => seen.push(i.uri));
-    const { model } = await open();
+  it("opens a file into a model keyed by its file:// URI", async () => {
+    const { s, model } = await open();
     expect(model.value).toBe("package main");
-    expect(seen).toEqual(["file:///work/atlas/main.go"]);
     expect(s.models.has("file:///work/atlas/main.go")).toBe(true);
     expect(s.locate("file:///work/atlas/main.go")).toEqual({
       folderId: "f1",
       path: "main.go",
     });
-  });
-
-  it("replays open models to a late subscriber", async () => {
-    const { s } = await open();
-    const seen: string[] = [];
-    s.onModelOpened((i) => seen.push(i.path));
-    expect(seen).toEqual(["main.go"]);
   });
 
   it("marks dirty on edit, saves with the base hash and goes clean", async () => {
@@ -402,32 +390,6 @@ describe("editor store", () => {
     expect(model.disposed).toBe(true);
   });
 
-  it("serves the seam the language client uses", async () => {
-    const { s, fid } = await open();
-    const m = await s.ensureModel("file:///work/atlas/other.go");
-    expect(m).not.toBeNull();
-    expect(s.folders[fid].tabs.some((t) => t.path === "other.go")).toBe(true);
-    expect(await s.ensureModel("file:///elsewhere/x.go")).toBeNull();
-    const saved: string[] = [];
-    s.onModelSaved((u) => saved.push(u));
-    (s.modelOf(fid, "main.go") as unknown as FakeModel).type("x");
-    await s.save(fid, "main.go");
-    expect(saved).toEqual(["file:///work/atlas/main.go"]);
-    await s.openFileAt("file:///work/atlas/main.go", { line: 7, column: 3 });
-    expect(s.reveal).toMatchObject({ path: "main.go", line: 7, col: 3 });
-    s.diagnostics.set("file:///work/atlas/main.go", [
-      {
-        range: {
-          start: { line: 0, character: 0 },
-          end: { line: 0, character: 1 },
-        },
-        severity: 1,
-        message: "bad",
-      },
-    ]);
-    expect(s.errorCounts(fid).get("main.go")).toBe(1);
-  });
-
   it("opens a worktree folder through the API and registers it", async () => {
     const s = useEditor();
     s.attach("atlas");
@@ -438,8 +400,7 @@ describe("editor store", () => {
         kind: "worktree",
         wo_id: "wo_1",
         project_id: "atlas",
-        trusted: true,
-      },
+            },
     });
     const f = await s.openWorktree("wo_1");
     expect(f.id).toBe("w1");

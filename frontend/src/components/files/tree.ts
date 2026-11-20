@@ -173,21 +173,3 @@ export function dirMarker(m: Markers, path: string): Marker | undefined {
     (m.untrackedDirs.some((d) => path.startsWith(`${d}/`)) ? "U" : undefined)
   );
 }
-
-// Per-file error counts, rolled up to every ancestor folder.
-export function rollupCounts(
-  perFile: Map<string, number>,
-): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const [path, n] of perFile) {
-    if (!n) continue;
-    out.set(path, (out.get(path) ?? 0) + n);
-    let i = path.lastIndexOf("/");
-    while (i > 0) {
-      const d = path.slice(0, i);
-      out.set(d, (out.get(d) ?? 0) + n);
-      i = d.lastIndexOf("/");
-    }
-  }
-  return out;
-}

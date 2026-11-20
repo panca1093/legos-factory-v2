@@ -491,9 +491,6 @@ func (a *App) Start(ctx context.Context) error {
 		}
 	}
 	a.Sched.Start(ctx)
-	if a.Server.EditorLive != nil {
-		go func() { <-ctx.Done(); a.Server.EditorLive.KillAll() }()
-	}
 	go a.warm()
 	a.Server.Factory.RemoveLegacyWorkspaces(ctx)
 	if err := a.Server.Factory.ResumeOnStart(ctx); err != nil {

@@ -105,7 +105,7 @@ func (b *editorBoot) folder(t *testing.T) string {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 	f := decode[struct{ Folder model.EditorFolder }](t, rec)
-	if f.Folder.Kind != "project" || !f.Folder.Trusted {
+	if f.Folder.Kind != "project" {
 		t.Fatalf("%+v", f)
 	}
 	return f.Folder.ID
@@ -121,7 +121,6 @@ func TestEditorRoutesAre404OutsideDevMode(t *testing.T) {
 	routes := [][2]string{
 		{"GET", "/api/v1/projects/p1/editor"},
 		{"POST", "/api/v1/editor/folders"},
-		{"POST", "/api/v1/editor/folders/" + fid + "/trust"},
 		{"GET", "/api/v1/editor/folders/" + fid + "/tree"},
 		{"GET", "/api/v1/editor/folders/" + fid + "/files"},
 		{"GET", "/api/v1/editor/folders/" + fid + "/file?path=a"},
@@ -161,7 +160,7 @@ func TestEditorMutationsNeedJSONContentType(t *testing.T) {
 	base := "/api/v1/editor/folders/" + fid
 	for _, r := range [][2]string{
 		{"PUT", base + "/file"}, {"POST", base + "/mkdir"}, {"POST", base + "/rename"},
-		{"POST", base + "/trust"}, {"POST", "/api/v1/editor/folders"},
+		{"POST", "/api/v1/editor/folders"},
 	} {
 		for _, ct := range []string{"application/x-www-form-urlencoded", "text/plain", "multipart/form-data; boundary=x", ""} {
 			rec := b.do("ana", r[0], r[1], `path=x`, "Content-Type", ct)
@@ -211,7 +210,6 @@ func TestEditorFolderOfAnotherUserIs404(t *testing.T) {
 		{"GET", base + "/tree", ""}, {"GET", base + "/files", ""}, {"GET", base + "/file?path=a", ""},
 		{"PUT", base + "/file", `{"path":"a","content":"x","create":true}`},
 		{"POST", base + "/mkdir", `{"path":"d"}`}, {"POST", base + "/rename", `{"from":"a","to":"b"}`},
-		{"POST", base + "/trust", `{"trusted":false}`},
 	} {
 		if rec := b.do("bob", r[0], r[1], r[2]); rec.Code != 404 || !hasCode(rec, "NOT_FOUND") {
 			t.Errorf("%s %s: %d %s", r[0], r[1], rec.Code, rec.Body)
@@ -302,9 +300,6 @@ func TestEditorFileFlow(t *testing.T) {
 	}
 	if rec = b.do("bob", "GET", base, ""); rec.Code != 404 {
 		t.Fatalf("other user's folder: %d", rec.Code)
-	}
-	if rec = b.do("ana", "POST", base+"/trust", `{"trusted":false}`); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"trusted":false`) {
-		t.Fatalf("trust: %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -399,7 +394,7 @@ func TestEditorWorktreeFolderRoute(t *testing.T) {
 	}
 	rec := b.do("ana", "POST", "/api/v1/editor/folders", `{"wo_id":"wo_1","task_id":"t1"}`)
 	f := decode[struct{ Folder model.EditorFolder }](t, rec)
-	if rec.Code != 200 || f.Folder.Kind != "worktree" || f.Folder.TaskID != "t1" || !f.Folder.Trusted {
+	if rec.Code != 200 || f.Folder.Kind != "worktree" || f.Folder.TaskID != "t1" {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 	if rec = b.do("bob", "POST", "/api/v1/editor/folders", `{"wo_id":"wo_1","task_id":"t1"}`); rec.Code != 404 {

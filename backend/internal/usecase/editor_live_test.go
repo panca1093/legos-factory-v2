@@ -147,73 +147,16 @@ func (f fakeFolders) Folder(_ context.Context, u *model.User, id string) (*model
 
 func usr(id string) *model.User { return &model.User{ID: id} }
 
-type fakePaths struct {
-	mu sync.Mutex
-	m  map[string]string
-}
-
-func (p *fakePaths) ServerPaths(context.Context, string) (map[string]string, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	out := map[string]string{}
-	for k, v := range p.m {
-		out[k] = v
-	}
-	return out, nil
-}
-func (p *fakePaths) SetServerPath(_ context.Context, _, id, path string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.m == nil {
-		p.m = map[string]string{}
-	}
-	p.m[id] = path
-	return nil
-}
-
-type probeHost struct {
-	lspFakeHost
-	discoverCalls atomic.Int32
-	outdated      bool
-}
-
-func (h *probeHost) Discover(_ context.Context, servers []model.LSPServerSpec, custom map[string]string) []model.LSPServerState {
-	h.discoverCalls.Add(1)
-	var out []model.LSPServerState
-	for _, s := range servers {
-		st := model.LSPServerState{ID: s.ID, State: model.LSPFound, Path: "/bin/" + s.Binary, Version: "1.0.0", Install: s.Install}
-		if p := custom[s.ID]; p != "" {
-			st.Path = p
-			if p == "/bad" {
-				st.State, st.Error = model.LSPNotFound, "custom path is not an executable file"
-			}
-		} else if s.ID == "tsls" && os.Getenv("NO_TSLS") != "" {
-			st.State = model.LSPNotFound
-		}
-		out = append(out, st)
-	}
-	return out
-}
-
-func (h *probeHost) GoplsOutdated(context.Context, string, string) (bool, string, string) {
-	return h.outdated, "go1.24.0", "go1.26.0"
-}
-
-var testServers = []model.LSPServerSpec{{ID: "gopls", Binary: "gopls", Install: "go install x"}, {ID: "tsls", Binary: "typescript-language-server", Install: "npm i x"}}
-
-func newLive(t *testing.T, trusted bool) (*EditorLive, *fakeEditorFS, *probeHost, string) {
+func newLive(t *testing.T) (*EditorLive, *fakeEditorFS, string) {
 	t.Helper()
 	root, _ := filepath.EvalSymlinks(t.TempDir())
 	fs := &fakeEditorFS{w: &fakeWatcher{ev: make(chan model.FSEvent, 16)}}
-	host := &probeHost{}
 	l := &EditorLive{
-		Folders: fakeFolders{"u1/f1": {ID: "f1", Path: root, Kind: model.FolderProject, Trusted: trusted}},
-		FS:      fs, Host: host, Servers: testServers, Store: &fakePaths{}, Runs: &fakeRuns{},
-		Reg:         &LSPRegistry{Host: host},
+		Folders: fakeFolders{"u1/f1": {ID: "f1", Path: root, Kind: model.FolderProject}},
+		FS:      fs, Runs: &fakeRuns{},
 		GitDebounce: 20 * time.Millisecond, GitMinGap: 60 * time.Millisecond, GoneEvery: time.Hour,
 	}
-	t.Cleanup(l.KillAll)
-	return l, fs, host, root
+	return l, fs, root
 }
 
 func nextEvent[T any](t *testing.T, s *ControlSession, match func(T) bool) T {
@@ -236,7 +179,7 @@ func nextEvent[T any](t *testing.T, s *ControlSession, match func(T) bool) T {
 func always[T any](T) bool { return true }
 
 func TestControlSessionReportsOpenFileChangesWithHashAndActor(t *testing.T) {
-	l, fs, _, root := newLive(t, true)
+	l, fs, root := newLive(t)
 	s, err := l.OpenControl(context.Background(), usr("u1"), "f1")
 	if err != nil {
 		t.Fatal(err)
@@ -264,7 +207,7 @@ func TestControlSessionReportsOpenFileChangesWithHashAndActor(t *testing.T) {
 }
 
 func TestControlSessionAttributesGitCheckoutAndIgnoresUnopenedFiles(t *testing.T) {
-	l, fs, _, root := newLive(t, true)
+	l, fs, root := newLive(t)
 	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	os.WriteFile(filepath.Join(root, "a.txt"), []byte("x"), 0o644)
@@ -279,7 +222,7 @@ func TestControlSessionAttributesGitCheckoutAndIgnoresUnopenedFiles(t *testing.T
 }
 
 func TestControlSessionDirChangedRootIsEmptyString(t *testing.T) {
-	l, fs, _, _ := newLive(t, true)
+	l, fs, _ := newLive(t)
 	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	fs.w.ev <- model.FSEvent{Path: ".", Kind: "dir"}
@@ -293,7 +236,7 @@ func TestControlSessionDirChangedRootIsEmptyString(t *testing.T) {
 }
 
 func TestControlSessionGitStatusIsDebouncedAndRateLimited(t *testing.T) {
-	l, fs, _, _ := newLive(t, true)
+	l, fs, _ := newLive(t)
 	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	first := nextEvent(t, s, always[GitStatusMsg])
@@ -318,7 +261,7 @@ func TestControlSessionGitStatusIsDebouncedAndRateLimited(t *testing.T) {
 }
 
 func TestControlSessionWatchSetOrderingAndCap(t *testing.T) {
-	l, fs, _, _ := newLive(t, true)
+	l, fs, _ := newLive(t)
 	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	var dirs []string
@@ -343,7 +286,7 @@ func TestControlSessionWatchSetOrderingAndCap(t *testing.T) {
 }
 
 func TestControlSessionReportsFolderGoneAndClosesWatcher(t *testing.T) {
-	l, fs, _, root := newLive(t, true)
+	l, fs, root := newLive(t)
 	l.GoneEvery = 20 * time.Millisecond
 	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	os.RemoveAll(root)
@@ -356,23 +299,8 @@ func TestControlSessionReportsFolderGoneAndClosesWatcher(t *testing.T) {
 	}
 }
 
-func TestControlSessionSendsServerStatesIncludingOutdatedGopls(t *testing.T) {
-	l, _, host, _ := newLive(t, true)
-	host.outdated = true
-	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
-	defer s.Close()
-	g := nextEvent(t, s, func(m ServerStateMsg) bool { return m.Server == "gopls" })
-	if g.State != model.LSPOutdated || g.Error == "" {
-		t.Fatalf("%+v", g)
-	}
-	ts := nextEvent(t, s, func(m ServerStateMsg) bool { return m.Server == "tsls" })
-	if ts.State != model.LSPFound {
-		t.Fatalf("%+v", ts)
-	}
-}
-
 func TestOpenControlRejectsOtherUsersAndMissingFolders(t *testing.T) {
-	l, _, _, root := newLive(t, true)
+	l, _, root := newLive(t)
 	if _, err := l.OpenControl(context.Background(), usr("u2"), "f1"); !errors.Is(err, model.ErrEditorFolderNotFound) {
 		t.Fatalf("other user's folder: %v", err)
 	}
@@ -383,7 +311,7 @@ func TestOpenControlRejectsOtherUsersAndMissingFolders(t *testing.T) {
 }
 
 func TestNoteWriteReachesTheWatcherOfThatFolderOnly(t *testing.T) {
-	l, fs, _, _ := newLive(t, true)
+	l, fs, _ := newLive(t)
 	s, _ := l.OpenControl(context.Background(), usr("u1"), "f1")
 	defer s.Close()
 	l.NoteWrite("u1", "f1", "a.go", "abc")
@@ -392,70 +320,5 @@ func TestNoteWriteReachesTheWatcherOfThatFolderOnly(t *testing.T) {
 	defer fs.w.mu.Unlock()
 	if len(fs.w.suppress) != 1 || fs.w.suppress[0] != [2]string{"a.go", "abc"} {
 		t.Fatalf("%v", fs.w.suppress)
-	}
-}
-
-func TestOpenLSPRefusesUntrustedUnknownAndMissingServers(t *testing.T) {
-	l, _, _, _ := newLive(t, false)
-	if _, err := l.OpenLSP(context.Background(), usr("u1"), "f1", "gopls"); !errors.Is(err, model.ErrUntrusted) {
-		t.Fatalf("untrusted: %v", err)
-	}
-	l, _, _, _ = newLive(t, true)
-	if _, err := l.OpenLSP(context.Background(), usr("u1"), "f1", "rust-analyzer"); !errors.Is(err, ErrLSPUnknown) {
-		t.Fatalf("outside the allowlist: %v", err)
-	}
-	if _, err := l.OpenLSP(context.Background(), usr("u2"), "f1", "gopls"); !errors.Is(err, model.ErrEditorFolderNotFound) {
-		t.Fatalf("other user's folder: %v", err)
-	}
-	t.Setenv("NO_TSLS", "1")
-	l.disc = nil
-	if _, err := l.OpenLSP(context.Background(), usr("u1"), "f1", "tsls"); !errors.Is(err, ErrLSPNotFound) {
-		t.Fatalf("not installed: %v", err)
-	}
-	c, err := l.OpenLSP(context.Background(), usr("u1"), "f1", "gopls")
-	if err != nil {
-		t.Fatal(err)
-	}
-	c.Close()
-}
-
-func TestServerListIsCachedUntilCheckAndCustomPathProbesOnce(t *testing.T) {
-	l, _, host, _ := newLive(t, true)
-	ctx := context.Background()
-	if _, err := l.ServerStates(ctx, "u1"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := l.ServerStates(ctx, "u1"); err != nil {
-		t.Fatal(err)
-	}
-	if host.discoverCalls.Load() != 1 {
-		t.Fatalf("list not cached: %d", host.discoverCalls.Load())
-	}
-	l.CheckServers(ctx, "u1")
-	if host.discoverCalls.Load() != 2 {
-		t.Fatalf("check must rediscover")
-	}
-
-	if _, err := l.SetServerPath(ctx, "u1", "gopls", "/opt/mine/gopls", false); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("confirm required: %v", err)
-	}
-	if _, err := l.SetServerPath(ctx, "u1", "gopls", "relative/gopls", true); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("absolute path required: %v", err)
-	}
-	if _, err := l.SetServerPath(ctx, "u1", "nope", "/opt/x", true); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("allowlist: %v", err)
-	}
-	if _, err := l.SetServerPath(ctx, "u1", "gopls", "/bad", true); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("a path that does not run must not be stored: %v", err)
-	}
-	if got, _ := l.Store.ServerPaths(ctx, "u1"); got["gopls"] != "" {
-		t.Fatalf("stored a bad path: %v", got)
-	}
-	st, err := l.SetServerPath(ctx, "u1", "gopls", "/opt/mine/gopls", true)
-	if err != nil || st.Path != "/opt/mine/gopls" || st.State != model.LSPFound {
-		t.Fatalf("%+v %v", st, err)
-	}
-	if got, _ := l.Store.ServerPaths(ctx, "u1"); got["gopls"] != "/opt/mine/gopls" {
-		t.Fatalf("not stored: %v", got)
 	}
 }

@@ -89,7 +89,7 @@ Each rail selection is a path segment, so selections are deep-linkable and back/
 | `/projects/:id/wo/:wo[?tab=]` | existing work-order view (`WorkOrderView.vue`; its `?tab=` handling unchanged) | Crew, Details |
 | `/projects/:id/pulls[?filter=]` | full PR list for the project (§PR list row), filter chips | — (panel hidden, toggle disabled) |
 | `/projects/:id/pulls/:number[?file=<path>]` | PR header + diff card | Changes, Review |
-| `/projects/:id/code[?file=&line=]`, `/projects/:id/code/:folder_id[?file=&line=]` | editor card (Editor spec) | Explorer, Problems, Language server (Editor spec) |
+| `/projects/:id/code[?file=&line=]`, `/projects/:id/code/:folder_id[?file=&line=]` | editor card (Editor spec) | Explorer (Editor spec) |
 
 Redirects (client-side, `replace`): `/factory` → `/projects`; `/factory?project=X` → `/projects/X`; `/factory/:wo` → `/projects/<wo.project_id>/wo/:wo` (resolved via the existing `GET /work-orders/:id`; not found → `/projects`); hub URLs from the earlier draft `/projects/:id?tab=factory|pull-requests|code` → `/projects/:id`, `/projects/:id/pulls`, `/projects/:id/code`. A WO id that belongs to another project redirects to its own project.
 

@@ -31,9 +31,6 @@ const rows = computed<TreeRow[]>(() => {
     }));
   return flattenTree((d) => s.listings[d], new Set(s.expanded));
 });
-const errors = computed(() =>
-  fid.value ? store.errorCounts(fid.value) : new Map<string, number>(),
-);
 const changed = computed(() => st.value?.git?.entries.length ?? 0);
 const onlyChanged = ref(false);
 const truncated = computed(() =>
@@ -195,14 +192,6 @@ const baseOf = (row: TreeRow) =>
         @select="select"
         @menu="openMenu"
       >
-        <template #badge="{ row }">
-          <span
-            v-if="errors.get(row.path)"
-            class="ex-err-badge"
-            data-test="tree-errors"
-            >{{ errors.get(row.path) }}</span
-          >
-        </template>
         <template #marker="{ row }">
           <span
             v-if="marker(row)"
@@ -355,15 +344,6 @@ const baseOf = (row: TreeRow) =>
 }
 .ex-err {
   color: var(--danger);
-}
-.ex-err-badge {
-  min-width: 16px;
-  padding: 0 5px;
-  border-radius: var(--radius-full);
-  background: var(--danger-soft);
-  color: var(--danger);
-  font: 700 10.5px var(--font-sans);
-  text-align: center;
 }
 .ex-mk {
   font: 700 11px var(--font-mono);
