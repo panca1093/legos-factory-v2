@@ -111,7 +111,7 @@ func (s *Server) handleProjectsSummary(c echo.Context) error {
 }
 
 func (s *Server) handlePullDetail(c echo.Context, n int) error {
-	v, err := s.Reviews.Detail(c.Request().Context(), currentUser(c), c.Param("id"), n)
+	v, err := s.Reviews.Detail(c.Request().Context(), currentUser(c), c.Param("id"), n, c.QueryParam("fresh") == "1")
 	return s.reply(c, http.StatusOK, v, err)
 }
 

@@ -560,6 +560,23 @@ describe("pull request selection", () => {
     w.unmount();
   });
 
+  it("Refresh refetches the PR past the server cache and shows the update", async () => {
+    const { w } = await mountPR();
+    expect(count("GET", "/pull-requests/7?fresh=1")).toBe(0);
+    detail.pr.title = "Retry jobs v2";
+    await w.find('[data-test="pr-refetch"]').trigger("click");
+    expect(
+      w.find('[data-test="pr-refetch"]').attributes("disabled"),
+    ).toBeDefined();
+    await flushPromises();
+    expect(count("GET", "/pull-requests/7?fresh=1")).toBe(1);
+    expect(w.find('[data-test="pr-header"]').text()).toContain("Retry jobs v2");
+    expect(
+      w.find('[data-test="pr-refetch"]').attributes("disabled"),
+    ).toBeUndefined();
+    w.unmount();
+  });
+
   it("lists findings; a finding opens its (collapsed) file and scrolls to its draft", async () => {
     drafts = [
       draft("b1", { path: "pkg/b.go", severity: "minor", title: "Minor on b" }),

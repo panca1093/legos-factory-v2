@@ -57,6 +57,36 @@
   gap: var(--space-1) var(--space-3);
   align-items: center;
 }
+.prv-refetch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.prv-refetch:hover:not(:disabled) {
+  color: var(--ink);
+}
+.prv-refetch:disabled {
+  cursor: progress;
+}
+.prv-refetch .spin {
+  animation: prv-spin 0.9s linear infinite;
+}
+@keyframes prv-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prv-refetch .spin {
+    animation: none;
+  }
+}
 .prs-draft,
 .prs-factory {
   padding: 1px 8px;

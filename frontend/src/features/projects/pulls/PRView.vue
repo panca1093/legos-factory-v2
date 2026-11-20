@@ -8,7 +8,7 @@ import {
   watch,
 } from "vue";
 import { RouterLink, useRoute } from "vue-router";
-import { ExternalLink } from "lucide-vue-next";
+import { ExternalLink, RefreshCw } from "lucide-vue-next";
 import "../../factory/factory.css";
 import "./pulls.css";
 import { eventTarget, usePRRefresh, useReviews } from "../../../stores/reviews";
@@ -70,6 +70,10 @@ async function run() {
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e));
   }
+}
+async function refetch() {
+  await store.refetch();
+  if (store.error) toast(store.error);
 }
 const general = computed(() => store.drafts.filter((d) => !d.inline));
 
@@ -237,6 +241,19 @@ const ciLabel = (ci: string) =>
                 data-test="pr-host-link"
                 >Open on host<ExternalLink class="icon"
               /></a>
+              <button
+                type="button"
+                class="prv-refetch"
+                data-test="pr-refetch"
+                :disabled="store.refetching"
+                @click="refetch"
+              >
+                <RefreshCw
+                  class="icon"
+                  :class="{ spin: store.refetching }"
+                  aria-hidden="true"
+                />{{ store.refetching ? "Refreshing…" : "Refresh" }}
+              </button>
             </div>
             <p
               v-if="detail.identity"

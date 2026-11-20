@@ -917,7 +917,7 @@ func TestPostRefusesVerdictsTheProviderOrRoleCannotDo(t *testing.T) {
 	rv := g.rv["c1"]
 	rv.detail.Author = model.HostUser{Login: "ana", ID: "id-ana"}
 	g.st.SetDecision(ctx, rev.ID, "s", "approve")
-	d, _ := g.r.Detail(ctx, g.ana, "p1", 7)
+	d, _ := g.r.Detail(ctx, g.ana, "p1", 7, false)
 	if d.Verdicts.Approve.OK || d.Verdicts.RequestChanges.OK || !d.AI.OK {
 		t.Fatalf("own PR on GitHub: %+v", d.Verdicts)
 	}
@@ -1057,7 +1057,7 @@ func TestSecondRunWhileRunningIsRefusedAndForkPRsAreUnavailable(t *testing.T) {
 	if _, err := g.r.StartRun(ctx, g.ana, "p1", 7); !errors.Is(err, ErrReviewRunning) {
 		t.Fatalf("second run: %v", err)
 	}
-	d, _ := g.r.Detail(ctx, g.ana, "p1", 7)
+	d, _ := g.r.Detail(ctx, g.ana, "p1", 7, false)
 	if d.Run == nil || d.Run.State != "running" {
 		t.Fatalf("%+v", d.Run)
 	}
@@ -1073,7 +1073,7 @@ func TestSecondRunWhileRunningIsRefusedAndForkPRsAreUnavailable(t *testing.T) {
 	if _, err := g.r.StartRun(ctx, g.ana, "p1", 7); !errors.Is(err, ErrAIUnavailable) {
 		t.Fatalf("fork: %v", err)
 	}
-	d, _ = g.r.Detail(ctx, g.ana, "p1", 7)
+	d, _ = g.r.Detail(ctx, g.ana, "p1", 7, false)
 	if d.AI.OK || d.AI.Reason == "" {
 		t.Fatalf("%+v", d.AI)
 	}
@@ -1313,5 +1313,23 @@ func TestOwnCommentGoesOutdatedOnAPushWithoutAnAIRun(t *testing.T) {
 		if dr.Status != model.DraftOutdated {
 			t.Fatalf("own comments on a changed file go outdated after a push: %+v", dr)
 		}
+	}
+}
+
+func TestDetailFreshSkipsTheCache(t *testing.T) {
+	ctx := context.Background()
+	g := newRvRig(t)
+	rv := g.rv["c1"]
+	if _, err := g.r.Detail(ctx, g.ana, "p1", 7, false); err != nil {
+		t.Fatal(err)
+	}
+	rv.mu.Lock()
+	rv.detail.Title = "updated on the host"
+	rv.mu.Unlock()
+	if d, _ := g.r.Detail(ctx, g.ana, "p1", 7, false); d.PR.Title == "updated on the host" {
+		t.Fatal("a cached detail must not call the provider again")
+	}
+	if d, err := g.r.Detail(ctx, g.ana, "p1", 7, true); err != nil || d.PR.Title != "updated on the host" {
+		t.Fatalf("fresh must refetch: %v %q", err, d.PR.Title)
 	}
 }
