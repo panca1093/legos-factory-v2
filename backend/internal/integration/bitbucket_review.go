@@ -117,7 +117,7 @@ func (b *Bitbucket) TokenInfo(ctx context.Context) (model.TokenInfo, error) {
 		for _, s := range strings.Split(v, ",") {
 			if s = strings.TrimSpace(s); s != "" {
 				info.Scopes = append(info.Scopes, s)
-				write = write || s == "pullrequest:write"
+				write = write || s == "pullrequest:write" || s == "pullrequest"
 			}
 		}
 		info.CanWrite = model.TriNo
@@ -145,7 +145,11 @@ func bbPage[T any](ctx context.Context, b *Bitbucket, first string, maxItems int
 				out = append(out, v)
 			}
 		}
-		return out, page.Next, nil
+		next := page.Next
+		if b.proxy {
+			next = strings.Replace(next, "https://api.bitbucket.org/2.0", "", 1)
+		}
+		return out, next, nil
 	})
 }
 
@@ -172,7 +176,7 @@ func (b *Bitbucket) ListPullRequests(ctx context.Context, repo string, f model.P
 		for _, q := range queries {
 			target := base
 			if q != "" {
-				target += "&q=" + url.QueryEscape(q)
+				target += "&q=" + url.QueryEscape(`state="OPEN" AND `+q)
 			}
 			page, err := bbPage[bbPRFull](ctx, b, target, maxListPRs, nil)
 			var pe *model.ProviderError

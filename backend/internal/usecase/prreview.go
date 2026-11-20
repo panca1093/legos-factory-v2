@@ -63,7 +63,8 @@ type Reviews struct {
 	Projects     *Projects
 	Integrations *Integrations
 	WO           WorkOrderStore
-	CLI          CLIAuth // nil: no CLI borrowing
+	CLI          CLIAuth    // nil: no CLI borrowing
+	Workbench    *Workbench // nil: no Bitbucket via workbench
 	NewReviewer  NewReviewerFunc
 	Bus          Publisher
 	Usage        Budget
@@ -314,6 +315,15 @@ func (r *Reviews) bind(ctx context.Context, rc *reviewCtx, source, connectionID,
 			return err
 		}
 		rc.rv, rc.cliUser, rc.token = rv, login, token
+	case model.IdentitySourceWorkbench:
+		if !r.Workbench.ready() || rc.provider != model.ProviderBitbucket || rc.host != workbenchHost {
+			return fmt.Errorf("%w: %v", ErrNoReviewIdentity, ErrWorkbenchUnavailable)
+		}
+		rv, err := r.Workbench.reviewer(ctx, connectionID)
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrNoReviewIdentity, err)
+		}
+		rc.rv, rc.connectionID = rv, connectionID
 	default:
 		return fmt.Errorf("%w: unsupported identity source %q", ErrNoReviewIdentity, source)
 	}

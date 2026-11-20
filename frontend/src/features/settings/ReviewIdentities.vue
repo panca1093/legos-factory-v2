@@ -58,7 +58,11 @@ async function startLogin(g: IdentityGroup) {
 const isPinnedConn = (g: IdentityGroup, id: string) =>
   g.pinned?.source === "connection" &&
   g.connections.find((c) => c.id === id)?.login === g.pinned.login;
-const isPinnedCli = (g: IdentityGroup, user: string) =>
+const isPinnedWb = (g: IdentityGroup, id: string) =>
+  g.pinned?.source === "workbench" && g.pinned.connection_id === id;
+const pinnedWbName = (g: IdentityGroup) =>
+  g.workbench?.find((w) => w.id === g.pinned?.connection_id)?.name;
+const isPinnedCli =(g: IdentityGroup, user: string) =>
   g.pinned?.source === "gh" && g.pinned.login === user;
 onMounted(load);
 </script>
@@ -90,7 +94,10 @@ onMounted(load);
             <h3>{{ g.provider }} · {{ g.host }}</h3>
             <p data-test="pinned">
               <template v-if="g.pinned"
-                >Posting as <b>{{ g.pinned.login }}</b></template
+                >Posting as <b>{{ g.pinned.login }}</b
+                ><template v-if="g.pinned.source === 'workbench'">
+                  via {{ pinnedWbName(g) ?? "workbench" }} (workbench)</template
+                ></template
               >
               <template v-else>Not set</template>
             </p>
@@ -119,6 +126,30 @@ onMounted(load);
             @click="pin(g, { source: 'connection', connection_id: c.id }, c.id)"
           >
             {{ isPinnedConn(g, c.id) ? "In use" : "Use this" }}
+          </button>
+        </div>
+        <div
+          v-for="w in g.workbench"
+          :key="w.id"
+          class="acct"
+          :data-workbench-row="w.id"
+        >
+          <div class="grow">
+            <b>via {{ w.name }} (workbench)</b>
+            <span class="help"
+              >Uses your workbench Bitbucket sign-in, no API token needed</span
+            >
+          </div>
+          <button
+            v-if="session.canWrite"
+            class="btn small"
+            type="button"
+            :disabled="!!busy || isPinnedWb(g, w.id)"
+            @click="
+              pin(g, { source: 'workbench', connection_id: w.id }, `wb-${w.id}`)
+            "
+          >
+            {{ isPinnedWb(g, w.id) ? "In use" : "Use this" }}
           </button>
         </div>
         <template v-if="g.cli">

@@ -15,6 +15,56 @@ type Bitbucket struct {
 	api      api
 	username string
 	token    string
+	proxy    bool
+}
+
+// BitbucketTokenFunc returns a bearer token; force asks for a fresh one after the proxy rejected the last.
+type BitbucketTokenFunc func(ctx context.Context, force bool) (string, error)
+
+// NewBitbucketProxy talks to Bitbucket through the workbench curl_session proxy (baseURL is <proxyBaseUrl>/atlassian-bitbucket).
+func NewBitbucketProxy(baseURL string, token BitbucketTokenFunc, hc *http.Client) *Bitbucket {
+	if hc == nil {
+		hc = defaultHTTP
+	}
+	base := hc.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	c := *hc
+	c.Transport = &proxyTransport{base: base, token: token}
+	return &Bitbucket{api: newAPI("bitbucket", baseURL, &c, func(*http.Request) {}), proxy: true}
+}
+
+// proxyTransport signs each request and retries once with a fresh token on a 401.
+// Accept-Encoding identity: the proxy labels plain JSON as gzip, which Go's transparent decoding turns into an empty body.
+type proxyTransport struct {
+	base  http.RoundTripper
+	token BitbucketTokenFunc
+}
+
+func (t *proxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.send(req, false)
+	if err != nil || resp.StatusCode != http.StatusUnauthorized || (req.Body != nil && req.GetBody == nil) {
+		return resp, err
+	}
+	resp.Body.Close()
+	return t.send(req, true)
+}
+
+func (t *proxyTransport) send(req *http.Request, force bool) (*http.Response, error) {
+	tok, err := t.token(req.Context(), force)
+	if err != nil {
+		return nil, err
+	}
+	r := req.Clone(req.Context())
+	if req.GetBody != nil {
+		if r.Body, err = req.GetBody(); err != nil {
+			return nil, err
+		}
+	}
+	r.Header.Set("Authorization", "Bearer "+tok)
+	r.Header.Set("Accept-Encoding", "identity")
+	return t.base.RoundTrip(r)
 }
 
 func NewBitbucket(baseURL, username, token string, hc *http.Client) *Bitbucket {
@@ -38,6 +88,9 @@ func (b *Bitbucket) CheckAuth(ctx context.Context) (string, error) {
 // GitAuth reuses the REST credential for HTTPS push.
 // TODO: uncertain — Atlassian API tokens may require a different git username than the REST username, verify against a real workspace before prod
 func (b *Bitbucket) GitAuth() model.GitAuth {
+	if b.proxy {
+		return model.GitAuth{}
+	}
 	return model.GitAuth{Username: b.username, Password: b.token}
 }
 

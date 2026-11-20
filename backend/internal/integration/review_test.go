@@ -675,7 +675,7 @@ func TestBitbucketListQueriesAndDedup(t *testing.T) {
 	s := newRev(t)
 	s.on("GET /repositories/ws/repo/pullrequests", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query().Get("q")
-		if q != `author.uuid="{me}"` && q != `reviewers.uuid="{me}"` {
+		if q != `state="OPEN" AND author.uuid="{me}"` && q != `state="OPEN" AND reviewers.uuid="{me}"` {
 			t.Errorf("unexpected q %q", q)
 		}
 		io.WriteString(w, `{"values":[`+bbPRJSON+`]}`)

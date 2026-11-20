@@ -42,7 +42,7 @@ func (s *Server) reviewError(c echo.Context, err error) error {
 		return errorJSON(c, http.StatusConflict, "RUN_IN_PROGRESS", err.Error())
 	case errors.Is(err, usecase.ErrAIUnavailable):
 		return errorJSON(c, http.StatusUnprocessableEntity, "AI_UNAVAILABLE", err.Error())
-	case errors.Is(err, usecase.ErrCLIUnavailable):
+	case errors.Is(err, usecase.ErrCLIUnavailable), errors.Is(err, usecase.ErrWorkbenchUnavailable):
 		return errorJSON(c, http.StatusForbidden, "FORBIDDEN", err.Error())
 	case errors.Is(err, usecase.ErrReadOnlyToken):
 		return errorJSON(c, http.StatusForbidden, "READ_ONLY_TOKEN", err.Error())

@@ -382,6 +382,10 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 	}
 	if cfg.AuthMode == "dev" {
 		reviews.CLI = integration.NewGHAuth(nil, nil)
+		reviews.Workbench = &usecase.Workbench{MCP: mcpServers, Call: agent.CallMCPTool,
+			NewReviewer: func(baseURL string, token func(context.Context, bool) (string, error)) usecase.PRReviewer {
+				return integration.NewBitbucketProxy(baseURL, token, nil)
+			}}
 	}
 	srv.Reviews = reviews
 	if cfg.AuthMode == "dev" {

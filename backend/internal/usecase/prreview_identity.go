@@ -44,6 +44,9 @@ func (r *Reviews) reviewHosts(ctx context.Context, u *model.User, conns []model.
 	if r.cliAllowed() {
 		add(hostKey{model.ProviderGitHub, "github.com"})
 	}
+	if len(r.Workbench.choices(ctx)) > 0 {
+		add(hostKey{model.ProviderBitbucket, workbenchHost})
+	}
 	slices.SortFunc(out, func(a, b hostKey) int { return strings.Compare(a.provider+a.host, b.provider+b.host) })
 	return out
 }
@@ -87,6 +90,9 @@ func (r *Reviews) Identities(ctx context.Context, u *model.User) ([]model.Identi
 				cli.Users = users
 			}
 			opt.CLI = cli
+		}
+		if k.provider == model.ProviderBitbucket && k.host == workbenchHost {
+			opt.Workbench = r.Workbench.choices(ctx)
 		}
 		out = append(out, opt)
 	}
@@ -140,8 +146,21 @@ func (r *Reviews) Pin(ctx context.Context, u *model.User, req model.PinRequest) 
 		if err := r.bind(ctx, rc, req.Source, "", req.Login, nil); err != nil {
 			return nil, err
 		}
+	case model.IdentitySourceWorkbench:
+		if !r.Workbench.ready() {
+			return nil, ErrWorkbenchUnavailable
+		}
+		if req.Provider != model.ProviderBitbucket || rc.host != workbenchHost {
+			return nil, fmt.Errorf("%w: workbench serves bitbucket.org only", ErrInvalid)
+		}
+		if err := r.Workbench.candidate(ctx, req.ConnectionID); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+		if err := r.bind(ctx, rc, req.Source, req.ConnectionID, "", nil); err != nil {
+			return nil, err
+		}
 	default:
-		return nil, fmt.Errorf("%w: source must be connection or gh", ErrInvalid)
+		return nil, fmt.Errorf("%w: source must be connection, gh or workbench", ErrInvalid)
 	}
 	me, err := r.me(ctx, rc, true)
 	if err != nil {
