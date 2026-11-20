@@ -631,7 +631,8 @@ export const useEditor = defineStore("editor", () => {
       return cur && toRaw(cur) === mine ? cur : undefined;
     };
     const key = fid + "\0" + path;
-    const p = (async () => {
+    const own: { p?: Promise<boolean> } = {};
+    const p = (own.p = (async () => {
       try {
         monaco.value ??= await loadMonaco();
         const r = await fsApi.read(fid, path);
@@ -668,9 +669,9 @@ export const useEditor = defineStore("editor", () => {
         buf.error = msg(e);
         return false;
       } finally {
-        if (live() || !folders[fid]?.buffers[path]) inflight.delete(key);
+        if (inflight.get(key) === own.p) inflight.delete(key);
       }
-    })();
+    })());
     inflight.set(key, p);
     return p;
   }
