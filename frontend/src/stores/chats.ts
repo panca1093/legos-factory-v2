@@ -22,6 +22,8 @@ export interface ChatUsage {
   tokens_in: number;
   tokens_out: number;
   cost_micros: number;
+  served_model?: string;
+  provider_host?: string;
 }
 export interface Chat {
   id: string;
