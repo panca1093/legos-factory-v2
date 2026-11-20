@@ -1,29 +1,46 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ExternalLink, MessageSquarePlus } from "lucide-vue-next";
 import "../../factory/factory.css";
 import "./pulls.css";
 import { eventTarget, usePRRefresh, useReviews } from "../../../stores/reviews";
 import { useToast } from "../../../composables/useToast";
 import { renderMarkdown } from "../../knowledge/notes";
-import { parsePatch } from "./diff";
+import { parsePatch, scrollToDraft } from "./diff";
 import DraftCard from "./DraftCard.vue";
 import { connectionsPath, type PRDraft } from "../../../types/review";
 
 const route = useRoute(),
+  router = useRouter(),
   store = useReviews(),
   { toast } = useToast();
 const projectId = computed(() => String(route.params.id));
 const number = computed(() => Number(route.params.number));
 const file = computed(() => {
-  const want = route.query.file;
+  const want = route.query.file ?? store.firstFile;
   return (
     store.files.find((f) => f.path === want) ?? store.files[0] ?? undefined
   );
 });
 const hunks = computed(() => (file.value ? parsePatch(file.value.patch) : []));
 
+// The default file is pinned into the URL once loaded, so later draft changes never swap the diff under the reader.
+watch(
+  () =>
+    [
+      store.loading,
+      store.files.length,
+      store.number,
+      route.query.file,
+    ] as const,
+  ([loading, n, num, want]) => {
+    if (loading || !n || want || num !== number.value || !store.firstFile)
+      return;
+    void router.replace({ query: { ...route.query, file: store.firstFile } });
+  },
+  { immediate: true },
+);
 watch(
   [projectId, number],
   () => void store.load(projectId.value, number.value),
@@ -95,6 +112,18 @@ const anchored = computed(() => {
   return { map, loose };
 });
 const general = computed(() => store.drafts.filter((d) => !d.inline));
+
+// ?draft= (set by the Review card's findings) scrolls to that card once, as soon as it is on screen.
+let scrolledTo = "";
+watch(
+  () => [route.query.draft, file.value?.path, store.drafts.length] as const,
+  async ([id]) => {
+    if (typeof id !== "string" || !id || id === scrolledTo) return;
+    await nextTick();
+    if (scrollToDraft(id)) scrolledTo = id;
+  },
+  { flush: "post" },
+);
 
 // A comment of the user's own on one diff line: removed lines anchor on the old side, the rest on the new.
 type Line = { t: string; o?: number; n?: number };

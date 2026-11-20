@@ -189,10 +189,9 @@
 }
 .dv-line {
   display: grid;
-  grid-template-columns: 28px 52px 52px 18px 1fr;
+  grid-template-columns: 28px 52px 52px 18px minmax(0, 1fr);
   font-size: 12px;
   line-height: 1.5;
-  min-width: max-content;
 }
 .dv-line.add {
   background: var(--success-soft);
@@ -207,7 +206,8 @@
   user-select: none;
 }
 .dv-code {
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   padding-right: var(--space-3);
 }
 .dv-open {
@@ -288,6 +288,89 @@
   background: var(--canvas);
 }
 
+.dc.flash {
+  animation: dc-flash 1.6s var(--ease-out);
+}
+@keyframes dc-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+  100% {
+    box-shadow: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dc.flash {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+}
+.pr-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+.pr-counts .dc-sev.zero {
+  opacity: 0.6;
+}
+.pr-finds {
+  display: grid;
+  gap: 6px;
+}
+.pr-finds ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pr-find {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: start;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.pr-find:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--tint) 35%, var(--surface));
+}
+.pr-find:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.pr-find-t {
+  font-weight: 600;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pr-find-at {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.pr-find.discarded,
+.pr-find.outdated {
+  opacity: 0.6;
+}
+.pr-find.accepted {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--line));
+}
 .dc {
   display: grid;
   gap: var(--space-2);
@@ -377,6 +460,10 @@
 }
 .dc-edit,
 .pr-summary {
+  field-sizing: content;
+  min-height: 140px;
+  max-height: 420px;
+  line-height: 1.5;
   width: 100%;
   padding: var(--space-2);
   border: 1px solid var(--line);

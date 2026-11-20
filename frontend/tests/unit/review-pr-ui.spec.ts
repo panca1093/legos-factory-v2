@@ -527,6 +527,59 @@ describe("pull request selection", () => {
     w.unmount();
   });
 
+  it("opens the first file with findings and lists them; a finding opens its file and draft", async () => {
+    drafts = [
+      draft("b1", { path: "pkg/b.go", severity: "minor", title: "Minor on b" }),
+      draft("b2", {
+        path: "pkg/b.go",
+        severity: "blocker",
+        title: "Blocker on b",
+      }),
+      draft("g1", { inline: false, title: "General one", severity: "info" }),
+    ];
+    const { w, router } = await mountPR();
+    expect(w.find('[data-test="diff-file"]').text()).toBe("pkg/b.go");
+    const items = w.findAll('[data-test^="finding-"]');
+    expect(items.map((i) => i.attributes("data-test"))).toEqual([
+      "finding-b2",
+      "finding-b1",
+      "finding-g1",
+    ]);
+    expect(items[0].text()).toContain("Blocker on b");
+    expect(items[0].text()).toContain("b.go:2");
+    expect(items[2].text()).toContain("General");
+    await items[1].trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query).toMatchObject({
+      file: "pkg/b.go",
+      draft: "b1",
+    });
+    expect(w.find('[data-test="draft-b1"]').classes()).toContain("flash");
+
+    await w.findAll('[data-test="file-pick"]')[0].trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query.draft).toBeUndefined();
+    await w.find('[data-test="finding-b1"]').trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query).toMatchObject({
+      file: "pkg/b.go",
+      draft: "b1",
+    });
+    w.unmount();
+  });
+
+  it("pins the default file into the URL so a later draft change keeps the diff", async () => {
+    drafts = [draft("b1", { path: "pkg/b.go" })];
+    const { w, router } = await mountPR();
+    expect(router.currentRoute.value.query.file).toBe("pkg/b.go");
+    await w
+      .find('[data-test="draft-b1"] [data-test="draft-discard"]')
+      .trigger("click");
+    await flushPromises();
+    expect(w.find('[data-test="diff-file"]').text()).toBe("pkg/b.go");
+    w.unmount();
+  });
+
   it("selects the file from ?file= and pushes on pick", async () => {
     const { w, router } = await mountPR("/projects/p1/pulls/7?file=pkg%2Fb.go");
     expect(w.find('[data-test="diff-file"]').text()).toBe("pkg/b.go");
