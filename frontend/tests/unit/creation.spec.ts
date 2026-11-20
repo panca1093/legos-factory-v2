@@ -91,7 +91,7 @@ it("lists only each role's agent models for the overrides", async () => {
   await flushPromises();
   await intent(w);
   await w.find('[data-test="drawer-next"]').trigger("click");
-  expect(load).toHaveBeenCalledWith("codex");
+  expect(load).toHaveBeenCalledWith("codex", "builder");
   const names = (id: string) => w.findAll(`${id} option`).map((o) => o.text());
   expect(names("#wo-builder").slice(1)).toEqual(["GPT · codex"]);
   expect(names("#wo-inspector")).toHaveLength(2);

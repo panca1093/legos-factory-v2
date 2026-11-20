@@ -120,6 +120,7 @@ onMounted(async () => {
     for (const role of ["builder", "inspector"] as const)
       roleModels[role] = await factory.loadModels(
         config.value.role_agents?.[role] || "claude",
+        role,
       );
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);

@@ -337,9 +337,10 @@ export const useFactory = defineStore("factory", {
       this.credentialsConfigured = rt.credentials_configured;
       return rt;
     },
-    async loadModels(agent: string): Promise<ModelInfo[]> {
+    async loadModels(agent: string, role = ""): Promise<ModelInfo[]> {
+      const q = role ? `&role=${encodeURIComponent(role)}` : "";
       const res = await api.get<{ models: ModelInfo[] }>(
-        `/api/v1/models?agent=${encodeURIComponent(agent)}`,
+        `/api/v1/models?agent=${encodeURIComponent(agent)}${q}`,
       );
       return res.models ?? [];
     },
