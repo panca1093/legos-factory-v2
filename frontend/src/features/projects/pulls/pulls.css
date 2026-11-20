@@ -313,7 +313,7 @@
   margin: 0;
 }
 .pr-counts .dc-sev.zero {
-  opacity: 0.45;
+  opacity: 0.6;
 }
 .pr-finds {
   display: grid;

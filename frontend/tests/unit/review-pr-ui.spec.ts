@@ -555,6 +555,28 @@ describe("pull request selection", () => {
       draft: "b1",
     });
     expect(w.find('[data-test="draft-b1"]').classes()).toContain("flash");
+
+    await w.findAll('[data-test="file-pick"]')[0].trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query.draft).toBeUndefined();
+    await w.find('[data-test="finding-b1"]').trigger("click");
+    await flushPromises();
+    expect(router.currentRoute.value.query).toMatchObject({
+      file: "pkg/b.go",
+      draft: "b1",
+    });
+    w.unmount();
+  });
+
+  it("pins the default file into the URL so a later draft change keeps the diff", async () => {
+    drafts = [draft("b1", { path: "pkg/b.go" })];
+    const { w, router } = await mountPR();
+    expect(router.currentRoute.value.query.file).toBe("pkg/b.go");
+    await w
+      .find('[data-test="draft-b1"] [data-test="draft-discard"]')
+      .trigger("click");
+    await flushPromises();
+    expect(w.find('[data-test="diff-file"]').text()).toBe("pkg/b.go");
     w.unmount();
   });
 

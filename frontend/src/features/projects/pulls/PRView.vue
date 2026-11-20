@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { RouterLink, useRoute } from "vue-router";
+import { RouterLink, useRoute, useRouter } from "vue-router";
 import { ExternalLink, MessageSquarePlus } from "lucide-vue-next";
 import "../../factory/factory.css";
 import "./pulls.css";
@@ -12,6 +12,7 @@ import DraftCard from "./DraftCard.vue";
 import { connectionsPath, type PRDraft } from "../../../types/review";
 
 const route = useRoute(),
+  router = useRouter(),
   store = useReviews(),
   { toast } = useToast();
 const projectId = computed(() => String(route.params.id));
@@ -24,6 +25,22 @@ const file = computed(() => {
 });
 const hunks = computed(() => (file.value ? parsePatch(file.value.patch) : []));
 
+// The default file is pinned into the URL once loaded, so later draft changes never swap the diff under the reader.
+watch(
+  () =>
+    [
+      store.loading,
+      store.files.length,
+      store.number,
+      route.query.file,
+    ] as const,
+  ([loading, n, num, want]) => {
+    if (loading || !n || want || num !== number.value || !store.firstFile)
+      return;
+    void router.replace({ query: { ...route.query, file: store.firstFile } });
+  },
+  { immediate: true },
+);
 watch(
   [projectId, number],
   () => void store.load(projectId.value, number.value),

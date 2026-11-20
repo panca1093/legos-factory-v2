@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute, useRouter, type LocationQueryRaw } from "vue-router";
 import { ChevronDown, ChevronRight } from "lucide-vue-next";
 import "./pulls.css";
 import { useReviews } from "../../../stores/reviews";
@@ -34,7 +34,9 @@ function toggleDir(path: string) {
   closed.value = next;
 }
 function pick(path: string) {
-  void router.push({ query: { ...route.query, file: path } });
+  const query: LocationQueryRaw = { ...route.query, file: path };
+  delete query.draft;
+  void router.push({ query });
 }
 async function viewed(path: string, v: boolean) {
   try {
@@ -67,14 +69,15 @@ const findings = computed(() =>
 const where = (d: { path: string; line: number; inline: boolean }) =>
   d.inline ? `${d.path.split("/").pop()}:${d.line}` : "General";
 function goTo(d: { id: string; path: string; inline: boolean }) {
-  if (route.query.draft === d.id) {
+  const known = d.inline && store.files.some((f) => f.path === d.path);
+  if (route.query.draft === d.id && (!known || route.query.file === d.path)) {
     scrollToDraft(d.id);
     return;
   }
   void router.push({
     query: {
       ...route.query,
-      ...(d.inline ? { file: d.path } : {}),
+      ...(known ? { file: d.path } : {}),
       draft: d.id,
     },
   });
@@ -303,7 +306,7 @@ const postedHere = computed(
               class="pr-find"
               :class="d.status"
               :data-test="`finding-${d.id}`"
-              :title="d.inline ? `${d.path}:${d.line}` : 'General'"
+              :title="`${d.run_id === '' ? d.body : d.title} · ${d.inline ? `${d.path}:${d.line}` : 'General'}`"
               @click="goTo(d)"
             >
               <span v-if="d.run_id === ''" class="dc-you">You</span>
