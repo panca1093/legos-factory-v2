@@ -448,7 +448,7 @@ onMounted(async () => {
               <small
                 v-if="m.usage && m.usage.tokens_in + m.usage.tokens_out > 0"
                 class="ch-meta"
-                >{{ m.usage.model }} ·
+                >{{ m.usage.served_model || m.usage.model }} ·
                 {{ m.usage.tokens_in + m.usage.tokens_out }} tokens ·
                 {{ money(m.usage.cost_micros) }}</small
               >

@@ -320,6 +320,20 @@ export interface AgentAccount {
   status_note?: string;
   login_command?: string;
   roles: string[];
+  api?: AccountApi;
+}
+export type ApiProvider = "deepseek" | "glm" | "custom";
+export interface ApiModels {
+  opus?: string;
+  sonnet?: string;
+  haiku?: string;
+}
+export interface AccountApi {
+  provider: ApiProvider;
+  base_url: string;
+  host: string;
+  models: ApiModels;
+  has_key: boolean;
 }
 export interface AgentInfo {
   id: string;
