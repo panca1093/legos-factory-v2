@@ -112,7 +112,12 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		}
 	}
 	hs := &harnessSet{agents: agents, probe: filepath.Join(cfg.DataDir, "agent-probe")}
-	cats := &catalogs{hs: hs}
+	cats := &catalogs{hs: hs, allowed: func(ctx context.Context) []string {
+		if s, err := settingsRepo.Get(ctx); err == nil {
+			return s.AllowedModels
+		}
+		return nil
+	}}
 	ws := &usecase.WorkspaceSettings{Store: settingsRepo, EnvJevKey: cfg.TypeSafeKey, DefaultAgent: defaultAgent, DefaultWorkers: cfg.MaxConcurrentRuns}
 	if secrets != nil {
 		ws.Secrets = secrets
@@ -175,7 +180,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 		if agents.Ready(context.Background(), id) != nil {
 			return nil
 		}
-		ms, _ := cats.list(context.Background(), agents, id, wo.CreatedBy, "", false)
+		ms, _ := cats.list(context.Background(), agents, id, wo.CreatedBy, role, false)
 		return refs(ms)
 	}
 	modelFor := func(role model.AgentRole, wo *model.WorkOrder) (string, string) {
@@ -298,7 +303,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			if err := agents.Ready(c.Request().Context(), id); err != nil {
 				return nil, err
 			}
-			return cats.list(c.Request().Context(), agents, id, uid, "", false)
+			return cats.list(c.Request().Context(), agents, id, uid, model.AgentRole(c.QueryParam("role")), false)
 		}
 	} else {
 		srv.Models = func(c echo.Context) ([]model.ModelInfo, error) { return listModels(c.Request().Context()) }
@@ -386,7 +391,7 @@ func Build(cfg *model.Config, log *slog.Logger) (*App, error) {
 			s, _ := ws.Get(ctx)
 			var cat []string
 			if agents.Ready(ctx, id) == nil {
-				ms, _ := cats.list(ctx, agents, id, userID, "", false)
+				ms, _ := cats.list(ctx, agents, id, userID, model.AgentInspector, false)
 				cat = refs(ms)
 			}
 			p, m := usecase.SplitModelRef(usecase.ResolveAgentModel(model.AgentInspector, &model.WorkOrder{}, s, cat))

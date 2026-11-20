@@ -18,4 +18,5 @@ type AgentAccount struct {
 	APIBaseURL   string
 	APIKeySealed []byte
 	APIModels    string // JSON {opus,sonnet,haiku}
+	APIKeyHeader string // auth_token | api_key: which env var carries the key
 }

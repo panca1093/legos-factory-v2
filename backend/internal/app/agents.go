@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -59,9 +60,11 @@ type catalogs struct {
 	hs *harnessSet
 	// probe lists an agent's models under an account env; nil asks the agent itself.
 	probe func(ctx context.Context, id string, env, args []string) ([]agent.Model, error)
-	mu    sync.Mutex
-	m     map[string]*catalogEntry
-	locks map[string]*sync.Mutex
+	// allowed lists the workspace's allowed model refs; a folded family prefers one of them.
+	allowed func(ctx context.Context) []string
+	mu      sync.Mutex
+	m       map[string]*catalogEntry
+	locks   map[string]*sync.Mutex
 }
 
 type catalogEntry struct {
@@ -90,6 +93,21 @@ func (c *catalogs) list(ctx context.Context, agents *usecase.Agents, id, user st
 	api, err := agents.RoleAPI(ctx, id, user, role)
 	if err != nil {
 		return nil, err
+	}
+	var allowed map[string]bool
+	if c.allowed != nil && api.Models != nil {
+		allowed = map[string]bool{}
+		for _, a := range c.allowed(ctx) {
+			if a = strings.TrimSpace(a); a != "" {
+				allowed[a] = true
+			}
+		}
+		keys := make([]string, 0, len(allowed))
+		for a := range allowed {
+			keys = append(keys, a)
+		}
+		sort.Strings(keys)
+		api.Sig += "\x00" + strings.Join(keys, "\x00")
 	}
 	k := c.key(id, user, api.Sig)
 	c.mu.Lock()
@@ -139,7 +157,7 @@ func (c *catalogs) list(ctx context.Context, agents *usecase.Agents, id, user st
 		out = append(out, model.ModelInfo{ProviderID: m.ProviderID, ModelID: m.ModelID, Name: m.Name, Harness: id})
 	}
 	if api.Models != nil {
-		out = usecase.FoldModels(*api.Models, out)
+		out = usecase.FoldModels(*api.Models, out, allowed)
 	}
 	c.mu.Lock()
 	c.m[k] = &catalogEntry{at: time.Now(), models: out}

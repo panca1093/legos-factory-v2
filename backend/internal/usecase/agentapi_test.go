@@ -1,9 +1,11 @@
 package usecase
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -293,11 +295,11 @@ func TestFoldModels(t *testing.T) {
 		{ProviderID: "claude", ModelID: "sonnet", Name: "Sonnet"}, {ProviderID: "claude", ModelID: "claude-sonnet-5-5", Name: "S"},
 		{ProviderID: "claude", ModelID: "haiku", Name: "Haiku"}, {ProviderID: "claude", ModelID: "fable", Name: "Fable"},
 	}
-	got := FoldModels(APIModels{Opus: "ds-flash", Sonnet: "ds-pro"}, list)
+	got := FoldModels(APIModels{Opus: "ds-flash", Sonnet: "ds-pro"}, list, nil)
 	if len(got) != 2 || got[0].ModelID != "default" || got[0].Name != "ds-flash" || got[1].ModelID != "sonnet" || got[1].Name != "ds-pro" {
 		t.Fatalf("%+v", got)
 	}
-	if got := FoldModels(APIModels{Sonnet: "s", Haiku: "h"}, list); len(got) != 2 || got[0].ModelID != "sonnet" || got[1].ModelID != "haiku" {
+	if got := FoldModels(APIModels{Sonnet: "s", Haiku: "h"}, list, nil); len(got) != 2 || got[0].ModelID != "sonnet" || got[1].ModelID != "haiku" {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -327,5 +329,197 @@ func TestServedUsesTheRoleAccount(t *testing.T) {
 	_, _ = a.SetAccountAPI(ctx, u, "claude", api.Account.ID, in)
 	if r2, _ := a.RoleAPI(ctx, "claude", "u1", model.AgentChat); r1.Sig == r2.Sig {
 		t.Fatal("editing the model map must change the cache signature")
+	}
+}
+
+func TestFoldModelsPrefersAllowedAndFoldsOpusIds(t *testing.T) {
+	list := []model.ModelInfo{
+		{ProviderID: "claude", ModelID: "default"}, {ProviderID: "claude", ModelID: "claude-opus-5-5"},
+		{ProviderID: "claude", ModelID: "sonnet"}, {ProviderID: "claude", ModelID: "claude-sonnet-5-5"},
+	}
+	m := APIModels{Opus: "o", Sonnet: "s"}
+	if got := FoldModels(m, list, nil); len(got) != 2 || got[0].ModelID != "default" || got[1].ModelID != "sonnet" {
+		t.Fatalf("no allowed list takes the first: %+v", got)
+	}
+	got := FoldModels(m, list, map[string]bool{"claude/claude-opus-5-5": true, "claude/claude-sonnet-5-5": true})
+	if len(got) != 2 || got[0].ModelID != "claude-opus-5-5" || got[1].ModelID != "claude-sonnet-5-5" || got[0].Name != "o" {
+		t.Fatalf("allowed ids win: %+v", got)
+	}
+	got = FoldModels(m, list, map[string]bool{"claude/other": true})
+	if len(got) != 2 || got[0].ModelID != "default" {
+		t.Fatalf("nothing allowed in the family falls back to the first: %+v", got)
+	}
+	if modelFamily("claude-opus-5-5") != "opus" {
+		t.Fatal("opus ids fold")
+	}
+}
+
+func envHas(env []string, s string) bool {
+	for _, e := range env {
+		if e == s {
+			return true
+		}
+	}
+	return false
+}
+
+func TestAPIEnvFillsEmptyFamilies(t *testing.T) {
+	a := sealedAgents(t)
+	ctx := context.Background()
+	u := &model.User{ID: "u1"}
+	in := deepseekInput()
+	in.Models = APIModels{Opus: "o"}
+	n, err := a.CreateAccount(ctx, u, "claude", "DS", &in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = a.Activate(ctx, u, "claude", n.Account.ID)
+	env, _, _ := a.RunEnv(ctx, "claude", "u1", "")
+	for _, k := range apiModelVars {
+		if !envHas(env, k+"=o") {
+			t.Fatalf("%s must fall back to opus: %d", k, len(env))
+		}
+	}
+	if n.Account.API.Models != (APIModels{Opus: "o"}) {
+		t.Fatalf("the stored map stays as entered: %+v", n.Account.API.Models)
+	}
+	if s, _ := a.Served(ctx, "claude", "u1", model.AgentChat, "claude/haiku"); s != "o" {
+		t.Fatalf("served haiku %q", s)
+	}
+	for in, want := range map[APIModels]APIModels{
+		{Sonnet: "s"}:             {"s", "s", "s"},
+		{Haiku: "h"}:              {"h", "h", "h"},
+		{Opus: "o", Haiku: "h"}:   {"o", "o", "h"},
+		{Sonnet: "s", Haiku: "h"}: {"s", "s", "h"},
+	} {
+		if got := in.filled(); got != want {
+			t.Fatalf("%+v: %+v", in, got)
+		}
+	}
+}
+
+func TestLegacySettingsLiftFillsEmptyFamilies(t *testing.T) {
+	a, _ := newAgents(t)
+	apiAccount(t, a, `{"env":{"ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic","ANTHROPIC_AUTH_TOKEN":"k","ANTHROPIC_DEFAULT_SONNET_MODEL":"s"}}`)
+	env, _, err := a.RunEnv(context.Background(), "claude", "u1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range apiModelVars {
+		if !envHas(env, k+"=s") {
+			t.Fatalf("%s: %v", k, env)
+		}
+	}
+}
+
+func TestMigrationKeepsApiKeyHeader(t *testing.T) {
+	a := sealedAgents(t)
+	ctx := context.Background()
+	u := &model.User{ID: "u1"}
+	n, _ := a.CreateAccount(ctx, u, "claude", "Legacy", nil)
+	path := filepath.Join(a.DataDir, "accounts", "u1", "claude", n.Account.ID, "settings.json")
+	_ = os.WriteFile(path, []byte(`{"env":{"ANTHROPIC_BASE_URL":"https://api.example.com/anthropic","ANTHROPIC_API_KEY":"`+testKey+`","ANTHROPIC_DEFAULT_OPUS_MODEL":"o"}}`), 0o600)
+	if err := a.MigrateAPIAccounts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = a.Activate(ctx, u, "claude", n.Account.ID)
+	env, _, err := a.RunEnv(ctx, "claude", "u1", "")
+	if err != nil || !envHas(env, "ANTHROPIC_API_KEY="+testKey) || !envHas(env, "ANTHROPIC_AUTH_TOKEN=") {
+		t.Fatalf("a key that came from ANTHROPIC_API_KEY keeps that var: %d %v", len(env), err)
+	}
+	in := deepseekInput()
+	in.APIKey = ""
+	if _, err := a.SetAccountAPI(ctx, u, "claude", n.Account.ID, in); err != nil {
+		t.Fatal(err)
+	}
+	env, _, _ = a.RunEnv(ctx, "claude", "u1", "")
+	if !envHas(env, "ANTHROPIC_API_KEY="+testKey) {
+		t.Fatal("editing the account keeps the header")
+	}
+	fresh, _ := a.CreateAccount(ctx, u, "claude", "New", func() *APIInput { i := deepseekInput(); return &i }())
+	acc, _ := a.Store.Get(ctx, "u1", "claude", fresh.Account.ID)
+	if acc.APIKeyHeader != "auth_token" {
+		t.Fatalf("new accounts default to auth_token: %q", acc.APIKeyHeader)
+	}
+}
+
+func TestBlankKeyWriteNeverTouchesStoredKey(t *testing.T) {
+	a := sealedAgents(t)
+	ctx := context.Background()
+	u := &model.User{ID: "u1"}
+	in := deepseekInput()
+	n, _ := a.CreateAccount(ctx, u, "claude", "DS", &in)
+	stale, _ := a.Store.Get(ctx, "u1", "claude", n.Account.ID)
+	in.APIKey = "sk-second-key"
+	if _, err := a.SetAccountAPI(ctx, u, "claude", n.Account.ID, in); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := a.Store.Get(ctx, "u1", "claude", n.Account.ID)
+	if err := a.Store.SetAPI(ctx, "u1", "claude", n.Account.ID, "custom", stale.APIBaseURL, nil, stale.APIModels, ""); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := a.Store.Get(ctx, "u1", "claude", n.Account.ID)
+	if string(after.APIKeySealed) != string(fresh.APIKeySealed) || after.APIProvider != "custom" {
+		t.Fatal("a blank key must update the other columns and keep the stored key")
+	}
+}
+
+func TestMigrationAfterCrashStripsFileWithoutResealing(t *testing.T) {
+	a := sealedAgents(t)
+	ctx := context.Background()
+	u := &model.User{ID: "u1"}
+	in := deepseekInput()
+	in.APIKey = "sk-already-in-db"
+	n, _ := a.CreateAccount(ctx, u, "claude", "DS", &in)
+	before, _ := a.Store.Get(ctx, "u1", "claude", n.Account.ID)
+	path := filepath.Join(a.DataDir, "accounts", "u1", "claude", n.Account.ID, "settings.json")
+	_ = os.WriteFile(path, []byte(`{"theme":"dark","env":{"ANTHROPIC_BASE_URL":"https://old.example.com","ANTHROPIC_AUTH_TOKEN":"`+testKey+`","ANTHROPIC_DEFAULT_OPUS_MODEL":"old"}}`), 0o600)
+	if err := a.MigrateAPIAccounts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(path)
+	if strings.Contains(string(b), "ANTHROPIC_") || strings.Contains(string(b), testKey) || !strings.Contains(string(b), "dark") {
+		t.Fatalf("the file is stripped: %s", b)
+	}
+	after, _ := a.Store.Get(ctx, "u1", "claude", n.Account.ID)
+	if string(after.APIKeySealed) != string(before.APIKeySealed) || after.APIBaseURL != before.APIBaseURL || after.APIModels != before.APIModels {
+		t.Fatal("the database row must not be re-sealed or overwritten")
+	}
+}
+
+func TestKeyNeverReachesLogs(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	a := sealedAgents(t)
+	ctx := context.Background()
+	u := &model.User{ID: "u1"}
+	in := deepseekInput()
+	n, err := a.CreateAccount(ctx, u, "claude", "DS", &in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = a.Activate(ctx, u, "claude", n.Account.ID)
+	in.Models.Sonnet = "x"
+	if _, err := a.SetAccountAPI(ctx, u, "claude", n.Account.ID, in); err != nil {
+		t.Fatal(err)
+	}
+	bad := in
+	bad.BaseURL = "ftp://nope"
+	if _, err := a.SetAccountAPI(ctx, u, "claude", n.Account.ID, bad); err == nil {
+		t.Fatal("expected a validation error")
+	}
+	if _, _, err := a.RunEnv(ctx, "claude", "u1", model.AgentChat); err != nil {
+		t.Fatal(err)
+	}
+	m, _ := a.CreateAccount(ctx, u, "claude", "Legacy", nil)
+	path := filepath.Join(a.DataDir, "accounts", "u1", "claude", m.Account.ID, "settings.json")
+	_ = os.WriteFile(path, []byte(`{"env":{"ANTHROPIC_BASE_URL":"https://api.example.com","ANTHROPIC_AUTH_TOKEN":"`+testKey+`"}}`), 0o600)
+	if err := a.MigrateAPIAccounts(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), testKey) {
+		t.Fatalf("the key reached the logs: %s", buf.String())
 	}
 }

@@ -102,7 +102,7 @@ type AgentAccountStore interface {
 	Active(ctx context.Context, userID, agent string) (*model.AgentAccount, error)
 	Activate(ctx context.Context, userID, agent, id string) error
 	Delete(ctx context.Context, userID, agent, id string) error
-	SetAPI(ctx context.Context, userID, agent, id, provider, baseURL string, sealed []byte, models string) error
+	SetAPI(ctx context.Context, userID, agent, id, provider, baseURL string, sealed []byte, models, keyHeader string) error
 	ListAll(ctx context.Context, agent string) ([]model.AgentAccount, error)
 	RoleAccounts(ctx context.Context, userID, agent string) (map[string]string, error)
 	SetRoleAccounts(ctx context.Context, userID, agent, accountID string, roles []string) error
@@ -354,9 +354,10 @@ func claudeAPIEnv(home string) (env []string, host string, err error) {
 		// an empty value overrides the backend's own key, which os/exec would otherwise hand to this provider
 		env = append(env, k+"="+val(k))
 	}
-	for _, k := range apiModelVars {
-		if v := val(k); v != "" {
-			env = append(env, k+"="+v)
+	m := APIModels{Opus: val(apiModelVars[0]), Sonnet: val(apiModelVars[1]), Haiku: val(apiModelVars[2])}.filled()
+	for i, v := range []string{m.Opus, m.Sonnet, m.Haiku} {
+		if v != "" {
+			env = append(env, apiModelVars[i]+"="+v)
 		}
 	}
 	return env, hostOf(base), nil

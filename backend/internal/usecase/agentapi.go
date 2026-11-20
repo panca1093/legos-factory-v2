@@ -38,11 +38,25 @@ func (m APIModels) get(family string) string {
 	return ""
 }
 
+// filled lends an empty family the model of a set one (haiku from sonnet, sonnet and opus from each other), so all
+// three ANTHROPIC_DEFAULT_*_MODEL vars are set whenever any is. The stored map stays as entered.
+func (m APIModels) filled() APIModels {
+	first := func(vs ...string) string {
+		for _, v := range vs {
+			if v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	return APIModels{Opus: first(m.Opus, m.Sonnet, m.Haiku), Sonnet: first(m.Sonnet, m.Opus, m.Haiku), Haiku: first(m.Haiku, m.Sonnet, m.Opus)}
+}
+
 // modelFamily folds a Claude model id into opus, sonnet or haiku; "" when it belongs to none.
 func modelFamily(id string) string {
 	l := strings.ToLower(id)
 	switch {
-	case l == "default" || l == "" || strings.HasPrefix(l, "opus"):
+	case l == "default" || l == "" || strings.Contains(l, "opus"):
 		return "opus"
 	case strings.Contains(l, "sonnet"):
 		return "sonnet"
@@ -165,7 +179,7 @@ func (a *Agents) SetAccountAPI(ctx context.Context, u *model.User, agent, id str
 	if err := a.applyAPI(acc, spec, in); err != nil {
 		return nil, err
 	}
-	if err := a.Store.SetAPI(ctx, u.ID, agent, id, acc.APIProvider, acc.APIBaseURL, acc.APIKeySealed, acc.APIModels); err != nil {
+	if err := a.Store.SetAPI(ctx, u.ID, agent, id, acc.APIProvider, acc.APIBaseURL, acc.APIKeySealed, acc.APIModels, ""); err != nil {
 		return nil, err
 	}
 	a.forget(spec, *acc)
@@ -188,9 +202,12 @@ func (a *Agents) claudeAccountEnv(acc model.AgentAccount) ([]string, error) {
 	if err != nil {
 		return nil, errors.New("the stored API key cannot be opened")
 	}
-	// the blank ANTHROPIC_API_KEY overrides the backend's own key, which os/exec would otherwise hand to this provider
+	// the other key var is set blank: it overrides the backend's own key, which os/exec would otherwise hand to this provider
 	env := []string{"ANTHROPIC_BASE_URL=" + acc.APIBaseURL, "ANTHROPIC_AUTH_TOKEN=" + string(key), "ANTHROPIC_API_KEY="}
-	m := parseAPIModels(acc.APIModels)
+	if acc.APIKeyHeader == "api_key" {
+		env[1], env[2] = "ANTHROPIC_AUTH_TOKEN=", "ANTHROPIC_API_KEY="+string(key)
+	}
+	m := parseAPIModels(acc.APIModels).filled()
 	for i, v := range []string{m.Opus, m.Sonnet, m.Haiku} {
 		if v != "" {
 			env = append(env, apiModelVars[i]+"="+v)
@@ -218,7 +235,7 @@ func (a *Agents) RoleAPI(ctx context.Context, agent, userID string, role model.A
 	r := RoleAPI{Sig: acc.ID}
 	switch {
 	case acc.APIBaseURL != "":
-		m := parseAPIModels(acc.APIModels)
+		m := parseAPIModels(acc.APIModels).filled()
 		r.Models, r.Host = &m, hostOf(acc.APIBaseURL)
 		r.Sig += "\x00" + acc.APIBaseURL + "\x00" + acc.APIModels
 	case agent == "claude":
@@ -241,19 +258,27 @@ func (a *Agents) RoleAPI(ctx context.Context, agent, userID string, role model.A
 	return r, nil
 }
 
-// FoldModels keeps, for each family the provider maps, the first listed model of that family and names it after the
-// mapped model. The listed ids stay as they are so selecting one still matches what the agent offers.
-func FoldModels(m APIModels, ms []model.ModelInfo) []model.ModelInfo {
-	seen := map[string]bool{}
-	out := make([]model.ModelInfo, 0, 3)
-	for _, mi := range ms {
+// FoldModels keeps, for each family the provider maps, one listed model of that family and names it after the mapped
+// model: the first one in the allowed set when allowed is non-empty, else the first listed. The listed ids stay as they
+// are so selecting one still matches what the agent offers.
+func FoldModels(m APIModels, ms []model.ModelInfo, allowed map[string]bool) []model.ModelInfo {
+	byFam := map[string]int{}
+	for i, mi := range ms {
 		fam := modelFamily(mi.ModelID)
-		if fam == "" || seen[fam] || m.get(fam) == "" {
+		if fam == "" || m.get(fam) == "" {
 			continue
 		}
-		seen[fam] = true
-		mi.Name = m.get(fam)
-		out = append(out, mi)
+		j, ok := byFam[fam]
+		if !ok || (len(allowed) > 0 && !allowed[ms[j].ProviderID+"/"+ms[j].ModelID] && allowed[mi.ProviderID+"/"+mi.ModelID]) {
+			byFam[fam] = i
+		}
+	}
+	out := make([]model.ModelInfo, 0, 3)
+	for i, mi := range ms {
+		if fam := modelFamily(mi.ModelID); fam != "" && byFam[fam] == i && m.get(fam) != "" {
+			mi.Name = m.get(fam)
+			out = append(out, mi)
+		}
 	}
 	return out
 }
@@ -313,9 +338,9 @@ func (a *Agents) migrateAPIAccount(ctx context.Context, acc model.AgentAccount) 
 		return s
 	}
 	if acc.APIBaseURL == "" {
-		base, key := val("ANTHROPIC_BASE_URL"), val("ANTHROPIC_AUTH_TOKEN")
+		base, key, header := val("ANTHROPIC_BASE_URL"), val("ANTHROPIC_AUTH_TOKEN"), "auth_token"
 		if key == "" {
-			key = val("ANTHROPIC_API_KEY")
+			key, header = val("ANTHROPIC_API_KEY"), "api_key"
 		}
 		if base == "" || key == "" {
 			return nil
@@ -325,7 +350,7 @@ func (a *Agents) migrateAPIAccount(ctx context.Context, acc model.AgentAccount) 
 			return errors.New("could not seal the API key")
 		}
 		models, _ := json.Marshal(APIModels{Opus: val(apiModelVars[0]), Sonnet: val(apiModelVars[1]), Haiku: val(apiModelVars[2])})
-		if err := a.Store.SetAPI(ctx, acc.UserID, acc.Agent, acc.ID, guessProvider(base), base, sealed, string(models)); err != nil {
+		if err := a.Store.SetAPI(ctx, acc.UserID, acc.Agent, acc.ID, guessProvider(base), base, sealed, string(models), header); err != nil {
 			return err
 		}
 	}

@@ -384,7 +384,7 @@ func TestClaudeAPIKeyAccountLiftsEnvAndReportsSignedIn(t *testing.T) {
 	u, id := apiAccount(t, a, deepseekSettings)
 
 	env, _, err := a.RunEnv(ctx, "claude", "u1", "")
-	if err != nil || len(env) != 5 || env[1] != "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic" || env[2] != "ANTHROPIC_AUTH_TOKEN=sk-secret-1" || env[3] != "ANTHROPIC_API_KEY=" || env[4] != "ANTHROPIC_DEFAULT_OPUS_MODEL=x" {
+	if err != nil || len(env) != 7 || env[1] != "ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic" || env[2] != "ANTHROPIC_AUTH_TOKEN=sk-secret-1" || env[3] != "ANTHROPIC_API_KEY=" || env[4] != "ANTHROPIC_DEFAULT_OPUS_MODEL=x" {
 		t.Fatalf("env %v err %v", env, err)
 	}
 	list, _ := a.List(ctx, u)
