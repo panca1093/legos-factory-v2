@@ -187,17 +187,21 @@ export const useReviews = defineStore("reviews", {
       }
     },
     refresh() {
-      return this.projectId
+      return this.projectId && !this.refetching
         ? this.load(this.projectId, this.number, true)
         : Promise.resolve();
     },
+    // Returns its own load's error, "" when fine or superseded.
     async refetch() {
-      if (!this.projectId || this.refetching) return;
+      if (!this.projectId || this.refetching) return "";
+      const [p, n] = [this.projectId, this.number];
       this.refetching = true;
+      const mine = this.seq + 1;
       try {
-        await this.load(this.projectId, this.number, true, true);
+        await this.load(p, n, true, true);
+        return this.seq === mine ? this.error : "";
       } finally {
-        this.refetching = false;
+        if (this.projectId === p && this.number === n) this.refetching = false;
       }
     },
     async runAI() {

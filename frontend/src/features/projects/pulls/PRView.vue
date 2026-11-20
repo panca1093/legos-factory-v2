@@ -72,8 +72,8 @@ async function run() {
   }
 }
 async function refetch() {
-  await store.refetch();
-  if (store.error) toast(store.error);
+  const err = await store.refetch();
+  if (err) toast(err);
 }
 const general = computed(() => store.drafts.filter((d) => !d.inline));
 
